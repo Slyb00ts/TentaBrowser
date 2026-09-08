@@ -151,3 +151,91 @@ fn scripting_off_parses_noscript_content_as_markup() {
          extraction skips <noscript>"
     );
 }
+
+#[test]
+fn fragment_parsing_into_nonempty_document_preserves_existing_content() {
+    // Step 0 safety test for innerHTML: verify that parsing a fragment into
+    // an existing, non-empty Document arena does not corrupt pre-existing nodes.
+    // This test builds a document with known content, records node IDs and
+    // text, then parses a fragment into it with a context element, and
+    // verifies the original content is unchanged.
+
+    use tenta_core::atom::atoms;
+    use tenta_dom::Mutation;
+    use tenta_html::QualName;
+
+    // Build initial document: <html><body><div id="target">old</div></body></html>
+    let mut document = Document::new();
+    let html = document.create_html_element(atoms::HTML);
+    let body = document.create_html_element(atoms::BODY);
+    let target_div = document.create_html_element(atoms::DIV);
+    let old_text = document.create_text("old");
+
+    document
+        .mutate(Mutation::Append {
+            parent: document.document_node(),
+            child: html,
+        })
+        .expect("append html");
+    document
+        .mutate(Mutation::Append {
+            parent: html,
+            child: body,
+        })
+        .expect("append body");
+    document
+        .mutate(Mutation::Append {
+            parent: body,
+            child: target_div,
+        })
+        .expect("append div");
+    document
+        .mutate(Mutation::Append {
+            parent: target_div,
+            child: old_text,
+        })
+        .expect("append text");
+    document
+        .mutate(Mutation::SetAttribute {
+            element: target_div,
+            name: QualName::new(atoms::EMPTY, atoms::ID),
+            value: "target".to_owned(),
+        })
+        .expect("set id");
+
+    // Now parse a fragment into this document (not into a fresh one).
+    // This simulates what set_inner_html will do: we'll parse "<p>new</p>"
+    // with the div as context.
+    let div_qname = document
+        .element_name(target_div)
+        .expect("target_div is an element");
+    let opts = ParserOptions {
+        fragment_context: Some(div_qname),
+        scripting_enabled: false,
+        ..ParserOptions::default()
+    };
+
+    // Move the document to the parser and back
+    let mut parser = Parser::new(document, opts);
+    parser.feed_str("<p>new</p>");
+    let document = parser.finish();
+
+    // Verify existing nodes are still valid and accessible.
+    // The body should still be reachable (verifying the arena wasn't corrupted).
+    let body_inner = document.inner_html(body);
+    assert!(
+        !body_inner.is_empty(),
+        "body is still accessible after fragment parse; got: {body_inner}"
+    );
+
+    // Verify the target div is still accessible
+    let target_inner = document.inner_html(target_div);
+    assert!(
+        !target_inner.is_empty(),
+        "target div is still accessible after fragment parse; got: {target_inner}"
+    );
+    assert!(
+        target_inner.contains("old"),
+        "target div still contains original 'old' content; got: {target_inner}"
+    );
+}

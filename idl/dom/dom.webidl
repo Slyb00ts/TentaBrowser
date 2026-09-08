@@ -78,6 +78,9 @@ interface Element : Node {
   DOMString? getAttribute(DOMString name);
   undefined removeAttribute(DOMString name);
   boolean hasAttribute(DOMString name);
+
+  // Phase 2b-1: innerHTML (getter + setter - note: setter is fast-API eligible so non-throwing)
+  attribute DOMString innerHTML;
 };
 
 [Exposed=Window]

@@ -1907,6 +1907,64 @@ impl Document {
         }
     }
 
+    /// Parse an HTML fragment and set it as the innerHTML of an element.
+    ///
+    /// This method parses the given HTML string as a fragment in the context of
+    /// the specified element, then replaces all children of the element with
+    /// the parsed fragment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the element is not an Element node or if parsing
+    /// or mutation operations fail.
+    pub fn set_inner_html(&mut self, element: NodeId, html: &str) -> Result<()> {
+        use tenta_html::{Parser, ParserOptions};
+
+        // Verify that the node is an element
+        let ctx_name = self.element_name(element).ok_or_else(|| {
+            tenta_core::Error::invalid("cannot set innerHTML on non-Element node")
+        })?;
+
+        // Snapshot the document node's current children before parsing
+        let before: Vec<NodeId> = self.children(self.document_node()).collect();
+
+        // Parse the fragment into this Document's own arena.
+        // The parser consumes the sink by value, so we move self out and back.
+        let taken = std::mem::take(self);
+        let opts = ParserOptions {
+            fragment_context: Some(ctx_name),
+            scripting_enabled: false,
+            ..ParserOptions::default()
+        };
+        let mut parser = Parser::new(taken, opts);
+        parser.feed_str(html);
+        *self = parser.finish();
+
+        // Find the new fragment root: the bare <html> created by create_root
+        // that was appended to document_node after the snapshot.
+        let frag_root = self
+            .children(self.document_node())
+            .find(|c| !before.contains(c))
+            .ok_or_else(|| tenta_core::Error::invalid("fragment parsing produced no root"))?;
+
+        // Remove all existing children of the element
+        let child_ids: Vec<NodeId> = self.children(element).collect();
+        for child_id in child_ids {
+            self.mutate(Mutation::Remove { child: child_id })?;
+        }
+
+        // Reparent the fragment's children to the element
+        self.mutate(Mutation::ReparentChildren {
+            from: frag_root,
+            to: element,
+        })?;
+
+        // Remove the now-empty fragment root
+        self.mutate(Mutation::Remove { child: frag_root })?;
+
+        Ok(())
+    }
+
     fn bump(&mut self) {
         self.mutation_generation = self.mutation_generation.wrapping_add(1);
         self.mutations_since_sweep = self.mutations_since_sweep.wrapping_add(1);

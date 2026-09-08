@@ -751,6 +751,24 @@ impl ElementOps for HostObject {
         // Check if the attribute exists
         doc.borrow().attribute_str(id, &lower_name).is_some()
     }
+
+    fn inner_html(&self) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        Ok(doc.borrow().inner_html(id))
+    }
+
+    fn set_inner_html(&self, value: &str) {
+        // Note: This is a fast-API eligible operation, so it must return void.
+        // Errors are silently ignored to match the fast-API constraint.
+        // In practice, the HTML parser handles malformed input leniently per
+        // the HTML5 spec, so errors should be rare. If parsing the fragment
+        // fails, no mutation is applied; if a later tree mutation fails, the
+        // element may be left partially emptied (its old children are removed
+        // before the parsed fragment is reparented in).
+        let (doc, id) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        let _ = doc.set_inner_html(id, value);
+    }
 }
 
 impl DocumentOps for HostObject {
