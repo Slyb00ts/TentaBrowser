@@ -46,6 +46,15 @@ interface CharacterData : Node {
   // Phase 2: data is writable
   attribute DOMString data;
   readonly attribute unsigned long length;
+
+  // Phase 2b-2: substring/mutation ops. Offsets are UTF-16 code units;
+  // out-of-range offsets throw IndexSizeError. appendData cannot fail, so it
+  // stays fast-API eligible; the rest are [Throws] and take the fallible path.
+  [Throws] DOMString substringData(unsigned long offset, unsigned long count);
+  undefined appendData(DOMString data);
+  [Throws] undefined insertData(unsigned long offset, DOMString data);
+  [Throws] undefined deleteData(unsigned long offset, unsigned long count);
+  [Throws] undefined replaceData(unsigned long offset, unsigned long count, DOMString data);
 };
 
 [Exposed=Window]

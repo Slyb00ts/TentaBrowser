@@ -15,7 +15,7 @@ use crate::arena::{
     AttrName, AttrValue, DocTypeData, DomArena, NodeFlags, NodeKind, NodeList, PiData, StyleHandle,
     WrapperSlot,
 };
-use crate::error::{hierarchy_request, invalid_state, not_found};
+use crate::error::{hierarchy_request, index_size, invalid_state, not_found};
 use crate::interner::{DocInterner, LocalName};
 use crate::mutation::{Mutation, MutationObserverSink, MutationRecord, NoopObserverSink};
 use crate::selectors::SelectorCache;
@@ -55,6 +55,26 @@ pub type StopPredicate = Box<dyn FnMut(&Document, NodeId) -> bool + Send>;
 fn next_document_id() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The length of `s` in UTF-16 code units, as DOM `CharacterData` offsets are
+/// measured.
+fn utf16_len(s: &str) -> u32 {
+    s.chars().map(|c| c.len_utf16() as u32).sum()
+}
+
+/// The byte index in `s` at UTF-16 code-unit `offset`, or `None` when `offset`
+/// exceeds the UTF-16 length. An offset that falls inside an astral
+/// character's surrogate pair rounds up to the following character boundary.
+fn utf16_to_byte(s: &str, offset: u32) -> Option<usize> {
+    let mut units = 0u32;
+    for (index, ch) in s.char_indices() {
+        if units >= offset {
+            return Some(index);
+        }
+        units += ch.len_utf16() as u32;
+    }
+    (offset <= units).then_some(s.len())
 }
 
 /// A strong Rust reference to a node (`docs/spec/04-dom-and-css.md` §1.1).
@@ -2470,6 +2490,77 @@ impl Document {
         self.invalidate_keep(node);
         self.bump();
         Ok(())
+    }
+
+    /// The substring of a character-data node's data, `count` UTF-16 code
+    /// units starting at code-unit `offset`
+    /// (<https://dom.spec.whatwg.org/#dom-characterdata-substringdata>).
+    ///
+    /// Fails with `IndexSizeError` when `offset` is greater than the node's
+    /// length; `count` is clamped to the end of the data.
+    pub fn substring_data(&self, node: NodeId, offset: u32, count: u32) -> Result<String> {
+        if !self.kind(node).is_character_data() {
+            return Err(hierarchy_request("only character data nodes hold text"));
+        }
+        let data = self.text_data(node).unwrap_or_default();
+        let length = utf16_len(data);
+        let start = utf16_to_byte(data, offset)
+            .ok_or_else(|| index_size("offset is greater than the node's length"))?;
+        let count = count.min(length - offset);
+        let end =
+            utf16_to_byte(data, offset + count).expect("offset + clamped count is within length");
+        Ok(data[start..end].to_owned())
+    }
+
+    /// Replaces `count` UTF-16 code units at code-unit `offset` of a
+    /// character-data node with `data`
+    /// (<https://dom.spec.whatwg.org/#concept-cd-replace>). This is the
+    /// primitive behind `insertData`, `appendData`, `deleteData` and
+    /// `replaceData`.
+    ///
+    /// Fails with `IndexSizeError` when `offset` is greater than the node's
+    /// length; `count` is clamped to the end of the data.
+    ///
+    /// Offsets are UTF-16 code units, but the data is stored as UTF-8. An
+    /// offset that bisects a surrogate pair (only possible inside an astral
+    /// character) rounds up to the following character boundary, so astral
+    /// characters are treated atomically.
+    pub fn replace_data(
+        &mut self,
+        node: NodeId,
+        offset: u32,
+        count: u32,
+        data: &str,
+    ) -> Result<()> {
+        if !self.kind(node).is_character_data() {
+            return Err(hierarchy_request("only character data nodes hold text"));
+        }
+        let current = self.text_data(node).unwrap_or_default();
+        let length = utf16_len(current);
+        let start = utf16_to_byte(current, offset)
+            .ok_or_else(|| index_size("offset is greater than the node's length"))?;
+        let count = count.min(length - offset);
+        let end = utf16_to_byte(current, offset + count)
+            .expect("offset + clamped count is within length");
+        let mut replaced = String::with_capacity(current.len() - (end - start) + data.len());
+        replaced.push_str(&current[..start]);
+        replaced.push_str(data);
+        replaced.push_str(&current[end..]);
+        self.mutate(Mutation::SetText {
+            node,
+            text: replaced,
+        })
+    }
+
+    /// Appends `data` to a character-data node's data
+    /// (<https://dom.spec.whatwg.org/#dom-characterdata-appenddata>). Unlike
+    /// the other splice operations this cannot fail on a character-data node.
+    pub fn append_data(&mut self, node: NodeId, data: &str) -> Result<()> {
+        if !self.kind(node).is_character_data() {
+            return Err(hierarchy_request("only character data nodes hold text"));
+        }
+        let length = utf16_len(self.text_data(node).unwrap_or_default());
+        self.replace_data(node, length, 0, data)
     }
 
     /// Appends `text` to `parent`, merging with a trailing text node as the

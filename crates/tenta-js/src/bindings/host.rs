@@ -1059,6 +1059,42 @@ impl CharacterDataOps for HostObject {
             .map(|s| s.encode_utf16().count() as u32)
             .unwrap_or(0)
     }
+
+    fn substring_data(&self, offset: u32, count: u32) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        doc.borrow()
+            .substring_data(id, offset, count)
+            .map_err(|e| mutation_error(&e))
+    }
+
+    fn append_data(&self, data: &str) {
+        let (doc, id) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        // appendData cannot fail on a character-data node; the void signature
+        // has no way to report an error regardless.
+        let _ = doc.append_data(id, data);
+    }
+
+    fn insert_data(&self, offset: u32, data: &str) -> Result<(), JsError> {
+        let (doc, id) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        doc.replace_data(id, offset, 0, data)
+            .map_err(|e| mutation_error(&e))
+    }
+
+    fn delete_data(&self, offset: u32, count: u32) -> Result<(), JsError> {
+        let (doc, id) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        doc.replace_data(id, offset, count, "")
+            .map_err(|e| mutation_error(&e))
+    }
+
+    fn replace_data(&self, offset: u32, count: u32, data: &str) -> Result<(), JsError> {
+        let (doc, id) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        doc.replace_data(id, offset, count, data)
+            .map_err(|e| mutation_error(&e))
+    }
 }
 
 impl TextOps for HostObject {}

@@ -36,6 +36,12 @@ pub fn syntax(message: impl Into<String>) -> Error {
     dom("SyntaxError", message)
 }
 
+/// An index or offset is outside the allowed range (e.g. a `CharacterData`
+/// offset past the node's length).
+pub fn index_size(message: impl Into<String>) -> Error {
+    dom("IndexSizeError", message)
+}
+
 /// The DOM exception name of an error produced by this crate, if it has one.
 pub fn dom_exception_name(error: &Error) -> Option<&str> {
     match error {

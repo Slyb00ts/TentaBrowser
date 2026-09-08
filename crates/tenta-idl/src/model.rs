@@ -217,6 +217,9 @@ pub enum NotFastBecause {
     /// range check works on the C type, so the extra WebIDL narrowing could
     /// not report a `TypeError`.
     NarrowEnforceRange,
+    /// A `[Throws]` operation: it must be able to raise a JS exception, which
+    /// the fast-call path cannot do, so it takes the fallible regular path.
+    Throws,
 }
 
 impl fmt::Display for NotFastBecause {
@@ -232,6 +235,7 @@ impl fmt::Display for NotFastBecause {
             NotFastBecause::NarrowEnforceRange => {
                 "an `[EnforceRange]` argument narrower than 32 bits"
             }
+            NotFastBecause::Throws => "a `[Throws]` operation raises exceptions",
         };
         f.write_str(text)
     }

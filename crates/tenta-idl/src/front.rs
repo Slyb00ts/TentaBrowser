@@ -1312,6 +1312,9 @@ fn classify_operation(operation: &Operation, is_static: bool) -> FastApi {
     if operation.special.is_some() {
         return FastApi::Ineligible(NotFastBecause::Special);
     }
+    if operation.attrs.has("Throws") {
+        return FastApi::Ineligible(NotFastBecause::Throws);
+    }
     if !operation.return_type.is_fast_primitive() {
         return FastApi::Ineligible(NotFastBecause::ReturnType);
     }
