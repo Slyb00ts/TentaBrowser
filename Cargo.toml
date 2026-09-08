@@ -58,6 +58,9 @@ memchr = "2"
 encoding_rs = "0.8"
 selectors = "0.40"
 cssparser = "0.37"
+# V8 (rusty_v8), pinned to the release the snapshot and ICU data pack target
+# (docs/spec/05-javascript.md §1). Prebuilt static library by default.
+v8 = "152.2.0"
 precomputed-hash = "0.1"
 unicode-normalization = "0.1"
 

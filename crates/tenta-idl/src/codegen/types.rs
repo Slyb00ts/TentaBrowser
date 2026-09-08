@@ -433,7 +433,11 @@ fn union_code(union: &Union, out: &mut String) {
     }
     out.push_str("    }\n\n    /// Converts this union to a JavaScript value.\n    pub fn to_v8<'s>(\n        &self,\n        scope: &mut v8::PinScope<'s, '_>,\n    ) -> Result<v8::Local<'s, v8::Value>, JsError> {\n        match self {\n");
     for member in &union.members {
-        let owned = field_expr(&member.ty, "inner");
+        let owned = if is_copy(&member.ty) {
+            "*inner".to_string()
+        } else {
+            "inner.clone()".to_string()
+        };
         let conversion = convert::to_v8(&member.ty, "scope", "value");
         let _ = write!(
             out,

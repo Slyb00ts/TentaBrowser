@@ -424,9 +424,9 @@ fn constructor_callback(interface: &Interface, bound: &str, out: &mut String) {
             out,
             "\n/// `{name}` declares no `constructor`, so calling it throws, as WebIDL\n\
              /// requires for an interface without a constructor operation.\n\
-             fn construct_{snake}<T: {bound} + 'static>(\n    \
-             scope: &mut v8::PinScope<'_, '_>,\n    \
-             _args: v8::FunctionCallbackArguments,\n    \
+             fn construct_{snake}<'s, T: {bound} + 'static>(\n    \
+             scope: &mut v8::PinScope<'s, '_>,\n    \
+             _args: v8::FunctionCallbackArguments<'s>,\n    \
              _rv: v8::ReturnValue<v8::Value>,\n\
              ) {{\n    throw_type_error(scope, \"Illegal constructor\");\n}}\n"
         );
@@ -435,9 +435,9 @@ fn constructor_callback(interface: &Interface, bound: &str, out: &mut String) {
     let _ = write!(
         out,
         "\n/// The `{name}` constructor.\n\
-         fn construct_{snake}<T: {bound} + 'static>(\n    \
-         scope: &mut v8::PinScope<'_, '_>,\n    \
-         args: v8::FunctionCallbackArguments,\n    \
+         fn construct_{snake}<'s, T: {bound} + 'static>(\n    \
+         scope: &mut v8::PinScope<'s, '_>,\n    \
+         args: v8::FunctionCallbackArguments<'s>,\n    \
          mut rv: v8::ReturnValue<v8::Value>,\n\
          ) {{\n    \
          if !args.is_construct_call() {{\n        \
@@ -493,9 +493,9 @@ fn attribute_callbacks(
     let _ = write!(
         out,
         "\n/// Getter for `{name}.{}`.\n\
-         fn get_{snake}_{member}<T: {bound} + 'static>(\n    \
-         scope: &mut v8::PinScope<'_, '_>,\n    \
-         args: v8::FunctionCallbackArguments,\n    \
+         fn get_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+         scope: &mut v8::PinScope<'s, '_>,\n    \
+         args: v8::FunctionCallbackArguments<'s>,\n    \
          mut rv: v8::ReturnValue<v8::Value>,\n\
          ) {{\n{}",
         attribute.name,
@@ -520,10 +520,13 @@ fn attribute_callbacks(
             let conversion = convert::to_v8(&attribute.ty, "scope", "value");
             let _ = write!(
                 out,
-                "    match ({conversion}) {{\n        Ok(value) => rv.set(value),\n        Err(error) => throw_js_error(scope, &error),\n    }}\n}}\n"
+                "    match {conversion} {{\n        Ok(value) => rv.set(value),\n        Err(error) => throw_js_error(scope, &error),\n    }}\n}}\n"
             );
         }
     }
+
+    // Emit fast-accessor tables unconditionally (for both getter and setter if eligible).
+    fast_accessor_tables(interface, attribute, bound, out);
 
     // Setter.
     if attribute.replaceable() {
@@ -531,9 +534,9 @@ fn attribute_callbacks(
             out,
             "\n/// `[Replaceable]` setter for `{name}.{}`: defines an own data property\n\
              /// on the receiver, shadowing the accessor.\n\
-             fn set_{snake}_{member}<T: {bound} + 'static>(\n    \
-             scope: &mut v8::PinScope<'_, '_>,\n    \
-             args: v8::FunctionCallbackArguments,\n    \
+             fn set_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+             scope: &mut v8::PinScope<'s, '_>,\n    \
+             args: v8::FunctionCallbackArguments<'s>,\n    \
              _rv: v8::ReturnValue<v8::Value>,\n\
              ) {{\n    \
              let this = args.this();\n    \
@@ -550,9 +553,9 @@ fn attribute_callbacks(
             out,
             "\n/// `[PutForwards={forward}]` setter for `{name}.{}`: forwards the assignment\n\
              /// to the `{forward}` property of the object the getter returns.\n\
-             fn set_{snake}_{member}<T: {bound} + 'static>(\n    \
-             scope: &mut v8::PinScope<'_, '_>,\n    \
-             args: v8::FunctionCallbackArguments,\n    \
+             fn set_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+             scope: &mut v8::PinScope<'s, '_>,\n    \
+             args: v8::FunctionCallbackArguments<'s>,\n    \
              _rv: v8::ReturnValue<v8::Value>,\n\
              ) {{\n    \
              let this = args.this();\n    \
@@ -576,9 +579,9 @@ fn attribute_callbacks(
     let _ = write!(
         out,
         "\n/// Setter for `{name}.{}`.\n\
-         fn set_{snake}_{member}<T: {bound} + 'static>(\n    \
-         scope: &mut v8::PinScope<'_, '_>,\n    \
-         args: v8::FunctionCallbackArguments,\n    \
+         fn set_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+         scope: &mut v8::PinScope<'s, '_>,\n    \
+         args: v8::FunctionCallbackArguments<'s>,\n    \
          _rv: v8::ReturnValue<v8::Value>,\n\
          ) {{\n{}",
         attribute.name,
@@ -588,7 +591,7 @@ fn attribute_callbacks(
     let _ = write!(
         out,
         "    let raw = args.get(0);\n    \
-         let value = match ({conversion}) {{\n        Ok(value) => value,\n        Err(error) => {{\n            throw_js_error(scope, &error);\n            return;\n        }}\n    }};\n"
+         let value = match {conversion} {{\n        Ok(value) => value,\n        Err(error) => {{\n            throw_js_error(scope, &error);\n            return;\n        }}\n    }};\n"
     );
     let pass = borrow_expr(&attribute.ty, "value");
     match fast_setter {
@@ -602,8 +605,6 @@ fn attribute_callbacks(
             );
         }
     }
-
-    fast_accessor_tables(interface, attribute, bound, out);
 }
 
 fn attribute_callbacks_static(
@@ -618,9 +619,9 @@ fn attribute_callbacks_static(
     let _ = write!(
         out,
         "\n/// Static getter for `{interface}.{}`.\n\
-         fn get_{snake}_{member}<T: {bound} + 'static>(\n    \
-         scope: &mut v8::PinScope<'_, '_>,\n    \
-         _args: v8::FunctionCallbackArguments,\n    \
+         fn get_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+         scope: &mut v8::PinScope<'s, '_>,\n    \
+         _args: v8::FunctionCallbackArguments<'s>,\n    \
          mut rv: v8::ReturnValue<v8::Value>,\n\
          ) {{\n    \
          let value: {owned} = match T::{}() {{\n        Ok(value) => value,\n        Err(error) => {{\n            throw_js_error(scope, &error);\n            return;\n        }}\n    }};\n",
@@ -629,7 +630,7 @@ fn attribute_callbacks_static(
     let conversion = convert::to_v8(&attribute.ty, "scope", "value");
     let _ = write!(
         out,
-        "    match ({conversion}) {{\n        Ok(value) => rv.set(value),\n        Err(error) => throw_js_error(scope, &error),\n    }}\n}}\n"
+        "    match {conversion} {{\n        Ok(value) => rv.set(value),\n        Err(error) => throw_js_error(scope, &error),\n    }}\n}}\n"
     );
     if let Some(setter_name) = &attribute.setter_name {
         let conversion = convert::from_v8(&attribute.ty, "scope", "raw", IntegerMode::Modulo);
@@ -637,13 +638,13 @@ fn attribute_callbacks_static(
         let _ = write!(
             out,
             "\n/// Static setter for `{interface}.{}`.\n\
-             fn set_{snake}_{member}<T: {bound} + 'static>(\n    \
-             scope: &mut v8::PinScope<'_, '_>,\n    \
-             args: v8::FunctionCallbackArguments,\n    \
+             fn set_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+             scope: &mut v8::PinScope<'s, '_>,\n    \
+             args: v8::FunctionCallbackArguments<'s>,\n    \
              _rv: v8::ReturnValue<v8::Value>,\n\
              ) {{\n    \
              let raw = args.get(0);\n    \
-             let value = match ({conversion}) {{\n        Ok(value) => value,\n        Err(error) => {{\n            throw_js_error(scope, &error);\n            return;\n        }}\n    }};\n    \
+             let value = match {conversion} {{\n        Ok(value) => value,\n        Err(error) => {{\n            throw_js_error(scope, &error);\n            return;\n        }}\n    }};\n    \
              if let Err(error) = T::{setter_name}({pass}) {{\n        throw_js_error(scope, &error);\n    }}\n}}\n",
             attribute.name
         );
@@ -658,9 +659,9 @@ fn operation_callbacks(interface: &str, group: &OperationGroup, bound: &str, out
             out,
             "\n/// Overload dispatcher for `{interface}.{}`; WebIDL selects an overload by\n\
              /// argument count first.\n\
-             fn call_{snake}_{member}<T: {bound} + 'static>(\n    \
-             scope: &mut v8::PinScope<'_, '_>,\n    \
-             args: v8::FunctionCallbackArguments,\n    \
+             fn call_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+             scope: &mut v8::PinScope<'s, '_>,\n    \
+             args: v8::FunctionCallbackArguments<'s>,\n    \
              rv: v8::ReturnValue<v8::Value>,\n\
              ) {{\n    match args.length() {{\n",
             group.name
@@ -707,9 +708,9 @@ fn operation_callback(
     let _ = write!(
         out,
         "\n/// `{interface}.{}`.\n\
-         fn {function}<T: {bound} + 'static>(\n    \
-         scope: &mut v8::PinScope<'_, '_>,\n    \
-         {args}: v8::FunctionCallbackArguments,\n    \
+         fn {function}<'s, T: {bound} + 'static>(\n    \
+         scope: &mut v8::PinScope<'s, '_>,\n    \
+         {args}: v8::FunctionCallbackArguments<'s>,\n    \
          mut rv: v8::ReturnValue<v8::Value>,\n\
          ) {{\n",
         group.name
@@ -753,7 +754,7 @@ fn operation_callback(
                 let conversion = convert::to_v8(&operation.return_type, "scope", "value");
                 let _ = write!(
                     out,
-                    "    match ({conversion}) {{\n        Ok(value) => rv.set(value),\n        Err(error) => throw_js_error(scope, &error),\n    }}\n}}\n"
+                    "    match {conversion} {{\n        Ok(value) => rv.set(value),\n        Err(error) => throw_js_error(scope, &error),\n    }}\n}}\n"
                 );
             }
         }
@@ -768,10 +769,10 @@ fn indexed_getter_callback(interface: &str, operation: &Operation, bound: &str, 
         out,
         "\n/// Indexed property getter for `{interface}`, installed with\n\
          /// `ObjectTemplate::set_indexed_property_handler`.\n\
-         fn indexed_get_{snake}<T: {bound} + 'static>(\n    \
-         scope: &mut v8::PinScope<'_, '_>,\n    \
+         fn indexed_get_{snake}<'s, T: {bound} + 'static>(\n    \
+         scope: &mut v8::PinScope<'s, '_>,\n    \
          index: u32,\n    \
-         args: v8::PropertyCallbackArguments,\n    \
+         args: v8::PropertyCallbackArguments<'s>,\n    \
          mut rv: v8::ReturnValue<v8::Value>,\n\
          ) -> v8::Intercepted {{\n    \
          let this = args.holder();\n    \
@@ -792,7 +793,7 @@ fn indexed_getter_callback(interface: &str, operation: &Operation, bound: &str, 
         let _ = write!(
             out,
             "    let value: {owned} = match {call} {{\n        Ok(value) => value,\n        Err(error) => {{\n            throw_js_error(scope, &error);\n            return v8::Intercepted::kYes;\n        }}\n    }};\n    \
-             match ({conversion}) {{\n        Ok(value) => rv.set(value),\n        Err(error) => throw_js_error(scope, &error),\n    }}\n    v8::Intercepted::kYes\n}}\n"
+             match {conversion} {{\n        Ok(value) => rv.set(value),\n        Err(error) => throw_js_error(scope, &error),\n    }}\n    v8::Intercepted::kYes\n}}\n"
         );
     }
 }
@@ -824,7 +825,7 @@ fn argument_binding(argument: &Argument, index: usize, indent: &str, out: &mut S
             "{indent}let mut {name} = Vec::new();\n\
              {indent}for position in {index}..args.length() {{\n\
              {indent}    let raw = args.get(position);\n\
-             {indent}    match ({conversion}) {{\n\
+             {indent}    match {conversion} {{\n\
              {indent}        Ok(value) => {name}.push(value),\n\
              {indent}        Err(error) => {{\n\
              {indent}            throw_js_error(scope, &error);\n\
@@ -842,7 +843,7 @@ fn argument_binding(argument: &Argument, index: usize, indent: &str, out: &mut S
             out,
             "{indent}let {name} = if args.length() > {index} && !args.get({index}).is_undefined() {{\n\
              {indent}    let raw = args.get({index});\n\
-             {indent}    match ({conversion}) {{\n\
+             {indent}    match {conversion} {{\n\
              {indent}        Ok(value) => Some(value),\n\
              {indent}        Err(error) => {{\n\
              {indent}            throw_js_error(scope, &error);\n\
@@ -859,7 +860,7 @@ fn argument_binding(argument: &Argument, index: usize, indent: &str, out: &mut S
         out,
         "{indent}let {name} = {{\n\
          {indent}    let raw = args.get({index});\n\
-         {indent}    match ({conversion}) {{\n\
+         {indent}    match {conversion} {{\n\
          {indent}        Ok(value) => value,\n\
          {indent}        Err(error) => {{\n\
          {indent}            throw_js_error(scope, &error);\n\

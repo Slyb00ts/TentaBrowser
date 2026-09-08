@@ -10,4 +10,9 @@ publish = false
 
 [dependencies]
 tenta-core = { workspace = true }
-tenta-js = { workspace = true }
+tenta-dom = { workspace = true }
+tenta-js = { workspace = true, features = ["v8"] }
+v8 = { workspace = true }
+
+[dev-dependencies]
+tenta-html = { workspace = true }

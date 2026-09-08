@@ -12,12 +12,13 @@ publish = false
 # `format` runs the generated source through prettyplease. It changes only
 # whitespace, so golden files record the unformatted output.
 format = ["dep:prettyplease", "dep:syn"]
-# The generated prelude gates its engine glue on these names. tenta-idl has no
-# engine dependency of its own, so enabling them here only declares the cfgs
-# (which keeps `unexpected_cfgs` quiet when the tests compile generated code)
-# and switches the include test off; a consumer crate declares features with
-# the same names next to its `v8` and `rquickjs` dependencies.
-v8 = []
+# The generated prelude gates its engine glue on these names. Enabling `v8`
+# pulls the `v8` crate so the `compile_v8` test can type-check the generated V8
+# glue against the pinned rusty_v8 version (drift guard for the generator);
+# without it the plain `compile` include test runs instead. `quickjs` only
+# declares the cfg for now. A consumer crate declares features with the same
+# names next to its own `v8`/`rquickjs` dependencies.
+v8 = ["dep:v8"]
 quickjs = []
 
 [dependencies]
@@ -25,6 +26,7 @@ weedle = { package = "weedle4", version = "0.4" }
 thiserror.workspace = true
 prettyplease = { version = "0.2", optional = true }
 syn = { version = "2", features = ["full", "parsing"], optional = true }
+v8 = { workspace = true, optional = true }
 
 [dev-dependencies]
 syn = { version = "2", features = ["full", "parsing"] }

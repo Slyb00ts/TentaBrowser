@@ -1,0 +1,1267 @@
+//! The engine-independent host object that backs every DOM wrapper.
+//!
+//! [`HostObject`] implements the generated `*Ops` traits over a shared
+//! [`tenta_dom::Document`], so the same host serves both the V8 and QuickJS
+//! glue (`docs/spec/05-javascript.md` §3). It is a small enum: a `Node` host
+//! stands for one node, a `NodeList` host stands for the live child collection
+//! of one node. Both hold a shared handle to the context (containing the document
+//! and snapshot slab), so the arena and snapshots outlive every wrapper, and a
+//! generational [`tenta_core::NodeRef`] so a wrapper kept across a sweep fails
+//! the handle validation instead of aliasing a recycled slot.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use tenta_core::atom::atoms;
+use tenta_core::{Atom, NodeId, NodeRef};
+use tenta_dom::{Document, Mutation, NodeKind};
+use tenta_html::QualName;
+
+use super::{
+    CharacterDataOps, Comment, CommentOps, DocumentOps, Element, ElementOps, HTMLCollection,
+    HTMLCollectionOps, Handle, JsError, Node, NodeList, NodeListOps, NodeOps, Text, TextOps,
+};
+
+/// A document shared between the host objects of one world and the engine that
+/// drives it. Every `HostObject` for the document holds one of these clones, so
+/// the arena outlives every wrapper.
+pub type SharedDocument = Rc<RefCell<Document>>;
+
+/// A key referencing a static snapshot in the slab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SnapshotKey {
+    /// Index into the slab.
+    pub index: u32,
+    /// Generation counter to detect reuse.
+    pub generation: u16,
+}
+
+/// One slot in the snapshot slab.
+struct Slot {
+    generation: u16,
+    nodes: Option<Vec<NodeRef>>,
+}
+
+/// A slab backing static snapshot collections (querySelectorAll, getElementsByTagName, etc.).
+/// Reuses slots via a free list, with generation counters to detect stale snapshot keys.
+///
+/// NOTE: Like [`NodeRef`], the 16-bit generation counter wraps; a snapshot key older than
+/// ~65k reuses of the same slot can theoretically alias a new snapshot. This matches the
+/// node-handle TODO and is acceptable for this phase.
+pub struct SnapshotSlab {
+    slots: Vec<Slot>,
+    free: Vec<u32>,
+}
+
+impl SnapshotSlab {
+    /// Creates a new empty snapshot slab.
+    pub fn new() -> Self {
+        Self {
+            slots: Vec::new(),
+            free: Vec::new(),
+        }
+    }
+
+    /// Inserts a new snapshot, reusing a free slot if available.
+    pub fn insert(&mut self, nodes: Vec<NodeRef>) -> SnapshotKey {
+        let (index, slot) = if let Some(index) = self.free.pop() {
+            let slot = &mut self.slots[index as usize];
+            (index, slot)
+        } else {
+            let index = self.slots.len() as u32;
+            self.slots.push(Slot {
+                generation: 0,
+                nodes: None,
+            });
+            (index, &mut self.slots[index as usize])
+        };
+        let generation = slot.generation;
+        slot.nodes = Some(nodes);
+        SnapshotKey { index, generation }
+    }
+
+    /// Retrieves the nodes for a snapshot key, returning None if the key is stale or out of range.
+    pub fn get(&self, key: SnapshotKey) -> Option<&[NodeRef]> {
+        let slot = self.slots.get(key.index as usize)?;
+        if slot.generation != key.generation {
+            return None;
+        }
+        slot.nodes.as_deref()
+    }
+
+    /// Marks a snapshot as dead: bumps the generation, clears nodes, and returns the slot to the free list.
+    pub fn remove(&mut self, key: SnapshotKey) {
+        let slot = match self.slots.get_mut(key.index as usize) {
+            Some(s) => s,
+            None => return,
+        };
+        if slot.generation != key.generation {
+            return; // Already reused.
+        }
+        slot.generation = slot.generation.wrapping_add(1);
+        slot.nodes = None;
+        self.free.push(key.index);
+    }
+
+    /// Clears all snapshots and the free list.
+    pub fn clear(&mut self) {
+        self.slots.clear();
+        self.free.clear();
+    }
+}
+
+impl Default for SnapshotSlab {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The shared host context: document and snapshots for one wrapper world.
+pub struct HostContext {
+    /// The document all hosts point to.
+    pub doc: SharedDocument,
+    /// The snapshot slab for static collections.
+    pub snapshots: RefCell<SnapshotSlab>,
+}
+
+/// A context shared between the host objects of one world and the engine.
+pub type SharedContext = Rc<HostContext>;
+
+/// The Rust side of a DOM wrapper.
+///
+/// One `HostObject` is created per live wrapper and owned by the world's host
+/// map (`docs/spec/05-javascript.md` §3); the wrapper's internal field only
+/// borrows a pointer to it.
+pub enum HostObject {
+    /// A wrapper for a single node.
+    Node {
+        /// The context (document and snapshots) the node lives in.
+        ctx: SharedContext,
+        /// A generational reference to the node this wrapper stands for.
+        node: NodeRef,
+    },
+    /// A wrapper for the live child `NodeList` of `owner`.
+    NodeList {
+        /// The context the collection's owner lives in.
+        ctx: SharedContext,
+        /// A generational reference to the node whose children the list holds.
+        owner: NodeRef,
+    },
+    /// A wrapper for the live element-child `HTMLCollection` of `owner`.
+    HtmlCollection {
+        /// The context the collection's owner lives in.
+        ctx: SharedContext,
+        /// A generational reference to the node whose element children the collection holds.
+        owner: NodeRef,
+    },
+    /// A wrapper for a static snapshot of nodes (querySelectorAll result, etc.).
+    StaticNodeList {
+        /// The context holding the snapshot slab.
+        ctx: SharedContext,
+        /// The key to the snapshot in the slab.
+        key: SnapshotKey,
+    },
+    /// A wrapper for a static snapshot of elements (getElementsByTagName result, etc.).
+    StaticHtmlCollection {
+        /// The context holding the snapshot slab.
+        ctx: SharedContext,
+        /// The key to the snapshot in the slab.
+        key: SnapshotKey,
+    },
+}
+
+impl HostObject {
+    /// Builds a node host for `node` in `ctx`.
+    pub fn node(ctx: SharedContext, node: NodeRef) -> Self {
+        Self::Node { ctx, node }
+    }
+
+    /// Builds a `NodeList` host for the children of `owner` in `ctx`.
+    pub fn node_list(ctx: SharedContext, owner: NodeRef) -> Self {
+        Self::NodeList { ctx, owner }
+    }
+
+    /// Builds an `HTMLCollection` host for the element children of `owner` in `ctx`.
+    pub fn html_collection(ctx: SharedContext, owner: NodeRef) -> Self {
+        Self::HtmlCollection { ctx, owner }
+    }
+
+    /// Builds a `NodeList` host for a static snapshot.
+    pub fn static_node_list(ctx: SharedContext, key: SnapshotKey) -> Self {
+        Self::StaticNodeList { ctx, key }
+    }
+
+    /// Builds an `HTMLCollection` host for a static snapshot.
+    pub fn static_html_collection(ctx: SharedContext, key: SnapshotKey) -> Self {
+        Self::StaticHtmlCollection { ctx, key }
+    }
+
+    /// The opaque handle bits this host stands for, tagged by variant so a node
+    /// and its `NodeList` (and a recycled slot) never share a key.
+    pub fn handle_bits(&self) -> u64 {
+        match self {
+            HostObject::Node { node, .. } => encode_node(*node),
+            HostObject::NodeList { owner, .. } => encode_collection(*owner),
+            HostObject::HtmlCollection { owner, .. } => encode_html_collection(*owner),
+            HostObject::StaticNodeList { key, .. } => encode_snapshot(TAG_STATIC_NODE_LIST, *key),
+            HostObject::StaticHtmlCollection { key, .. } => {
+                encode_snapshot(TAG_STATIC_HTML_COLLECTION, *key)
+            }
+        }
+    }
+
+    /// The document and the node this host is anchored to: the node itself for
+    /// a `Node` host, the owner for a `NodeList` or `HtmlCollection` host.
+    /// For snapshot variants (StaticNodeList/StaticHtmlCollection), returns the document
+    /// and NodeId::NONE, as snapshot hosts never participate in node-navigation ops
+    /// (routing by signature brand ensures only live-collection ops call navigate).
+    fn anchor(&self) -> (&SharedDocument, NodeId) {
+        match self {
+            HostObject::Node { ctx, node } => (&ctx.doc, node.id),
+            HostObject::NodeList { ctx, owner } => (&ctx.doc, owner.id),
+            HostObject::HtmlCollection { ctx, owner } => (&ctx.doc, owner.id),
+            HostObject::StaticNodeList { ctx, .. } => (&ctx.doc, NodeId::NONE),
+            HostObject::StaticHtmlCollection { ctx, .. } => (&ctx.doc, NodeId::NONE),
+        }
+    }
+
+    /// Applies a navigation step to the anchored node and wraps the result as a
+    /// freshly read `Node` handle (never stale), or `None` at the tree edge.
+    fn navigate(&self, step: impl Fn(&Document, NodeId) -> NodeId) -> Option<Handle<Node>> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        let target = step(&doc, id);
+        target
+            .is_some()
+            .then(|| Handle::from_bits(encode_node(doc.node_ref(target))))
+    }
+}
+
+impl NodeOps for HostObject {
+    fn child_nodes(&self) -> Result<Handle<NodeList>, JsError> {
+        let (doc, id) = self.anchor();
+        let owner = doc.borrow().node_ref(id);
+        Ok(Handle::from_bits(encode_collection(owner)))
+    }
+
+    fn first_child(&self) -> Result<Option<Handle<Node>>, JsError> {
+        Ok(self.navigate(|doc, id| doc.first_child(id)))
+    }
+
+    fn last_child(&self) -> Result<Option<Handle<Node>>, JsError> {
+        Ok(self.navigate(|doc, id| doc.last_child(id)))
+    }
+
+    fn next_sibling(&self) -> Result<Option<Handle<Node>>, JsError> {
+        Ok(self.navigate(|doc, id| doc.next_sibling(id)))
+    }
+
+    fn node_name(&self) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        Ok(node_name(&doc.borrow(), id))
+    }
+
+    fn node_type(&self) -> u16 {
+        // The DOM `nodeType` codes (https://dom.spec.whatwg.org/#dom-node-nodetype).
+        // The `NodeOps` consts cover the kinds this slice exercises; the rest
+        // use the fixed spec values.
+        let (doc, id) = self.anchor();
+        match doc.borrow().kind(id) {
+            NodeKind::Element => <Self as NodeOps>::ELEMENT_NODE,
+            NodeKind::Text => <Self as NodeOps>::TEXT_NODE,
+            NodeKind::Comment => <Self as NodeOps>::COMMENT_NODE,
+            NodeKind::Document => <Self as NodeOps>::DOCUMENT_NODE,
+            NodeKind::CData => 4,
+            NodeKind::ProcessingInstruction => 7,
+            NodeKind::DocType => 10,
+            NodeKind::Fragment | NodeKind::ShadowRoot => 11,
+        }
+    }
+
+    fn parent_element(&self) -> Result<Option<Handle<Element>>, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        let parent = doc.parent(id);
+        Ok((parent.is_some() && doc.kind(parent) == NodeKind::Element)
+            .then(|| Handle::from_bits(encode_node(doc.node_ref(parent)))))
+    }
+
+    fn parent_node(&self) -> Result<Option<Handle<Node>>, JsError> {
+        Ok(self.navigate(|doc, id| doc.parent(id)))
+    }
+
+    fn previous_sibling(&self) -> Result<Option<Handle<Node>>, JsError> {
+        Ok(self.navigate(|doc, id| doc.previous_sibling(id)))
+    }
+
+    fn text_content(&self) -> Result<Option<String>, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        let kind = doc.kind(id);
+        Ok(match kind {
+            NodeKind::Document | NodeKind::DocType => None,
+            NodeKind::Text | NodeKind::CData | NodeKind::Comment => {
+                Some(doc.text_data(id).unwrap_or("").to_owned())
+            }
+            NodeKind::Element | NodeKind::Fragment | NodeKind::ShadowRoot => {
+                let mut result = String::new();
+                for child_id in doc.descendants(id) {
+                    if matches!(doc.kind(child_id), NodeKind::Text | NodeKind::CData)
+                        && let Some(data) = doc.text_data(child_id)
+                    {
+                        result.push_str(data);
+                    }
+                }
+                Some(result)
+            }
+            NodeKind::ProcessingInstruction => Some(String::new()),
+        })
+    }
+
+    fn set_text_content(&self, value: Option<&str>) -> Result<(), JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        let kind = doc.kind(id);
+
+        match kind {
+            NodeKind::Text | NodeKind::CData | NodeKind::Comment => {
+                let text = value.unwrap_or("");
+                drop(doc);
+                let mut doc = self.anchor().0.borrow_mut();
+                doc.mutate(Mutation::SetText {
+                    node: id,
+                    text: text.to_owned(),
+                })
+                .map_err(|e| mutation_error(&e))
+            }
+            NodeKind::Element | NodeKind::Fragment | NodeKind::ShadowRoot => {
+                // Remove all children
+                let child_ids: Vec<NodeId> = doc.children(id).collect();
+                drop(doc);
+                let mut doc = self.anchor().0.borrow_mut();
+                for child_id in child_ids {
+                    doc.mutate(Mutation::Remove { child: child_id })
+                        .map_err(|e| mutation_error(&e))?;
+                }
+                // If value is non-empty, append a text node
+                if let Some(text) = value
+                    && !text.is_empty()
+                {
+                    let text_node_id = doc.create_text(text);
+                    doc.mutate(Mutation::Append {
+                        parent: id,
+                        child: text_node_id,
+                    })
+                    .map_err(|e| mutation_error(&e))?;
+                }
+                Ok(())
+            }
+            NodeKind::Document | NodeKind::DocType | NodeKind::ProcessingInstruction => {
+                // No-op for Document and similar
+                Ok(())
+            }
+        }
+    }
+
+    fn node_value(&self) -> Result<Option<String>, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        match doc.kind(id) {
+            NodeKind::Text | NodeKind::CData | NodeKind::Comment => {
+                Ok(Some(doc.text_data(id).unwrap_or("").to_owned()))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn set_node_value(&self, value: Option<&str>) -> Result<(), JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        match doc.kind(id) {
+            NodeKind::Text | NodeKind::CData | NodeKind::Comment => {
+                let text = value.unwrap_or("");
+                drop(doc);
+                let mut doc = self.anchor().0.borrow_mut();
+                doc.mutate(Mutation::SetText {
+                    node: id,
+                    text: text.to_owned(),
+                })
+                .map_err(|e| mutation_error(&e))
+            }
+            _ => {
+                // No-op for other node types
+                Ok(())
+            }
+        }
+    }
+
+    fn append_child(&self, node: Handle<Node>) -> Result<Handle<Node>, JsError> {
+        let (doc, self_id) = self.anchor();
+        let decoded = decode(node.bits());
+        let child_id = decoded.node_id;
+
+        let mut doc = doc.borrow_mut();
+        doc.mutate(Mutation::Append {
+            parent: self_id,
+            child: child_id,
+        })
+        .map_err(|e| mutation_error(&e))?;
+        drop(doc);
+
+        // Return the argument node's Handle (identity preserved)
+        Ok(node)
+    }
+
+    fn insert_before(
+        &self,
+        node: Handle<Node>,
+        child: Option<Handle<Node>>,
+    ) -> Result<Handle<Node>, JsError> {
+        let (doc, self_id) = self.anchor();
+        let decoded = decode(node.bits());
+        let node_id = decoded.node_id;
+
+        let before = child
+            .map(|h| decode(h.bits()).node_id)
+            .unwrap_or(NodeId::NONE);
+
+        let mut doc = doc.borrow_mut();
+        doc.mutate(Mutation::InsertBefore {
+            parent: self_id,
+            child: node_id,
+            before,
+        })
+        .map_err(|e| mutation_error(&e))?;
+        drop(doc);
+
+        Ok(node)
+    }
+
+    fn remove_child(&self, child: Handle<Node>) -> Result<Handle<Node>, JsError> {
+        let (doc, _) = self.anchor();
+        let decoded = decode(child.bits());
+        let child_id = decoded.node_id;
+
+        let mut doc = doc.borrow_mut();
+        doc.mutate(Mutation::Remove { child: child_id })
+            .map_err(|e| mutation_error(&e))?;
+        drop(doc);
+
+        Ok(child)
+    }
+
+    fn replace_child(
+        &self,
+        node: Handle<Node>,
+        child: Handle<Node>,
+    ) -> Result<Handle<Node>, JsError> {
+        let (doc, self_id) = self.anchor();
+        let new_decoded = decode(node.bits());
+        let old_decoded = decode(child.bits());
+
+        let mut doc = doc.borrow_mut();
+        doc.mutate(Mutation::ReplaceChild {
+            parent: self_id,
+            new_child: new_decoded.node_id,
+            old_child: old_decoded.node_id,
+        })
+        .map_err(|e| mutation_error(&e))?;
+        drop(doc);
+
+        // Return the old child's Handle (per spec)
+        Ok(child)
+    }
+
+    fn clone_node(&self, deep: Option<bool>) -> Result<Handle<Node>, JsError> {
+        let (doc, self_id) = self.anchor();
+        let deep_flag = deep.unwrap_or(false);
+
+        let new_id = {
+            let mut doc = doc.borrow_mut();
+            doc.clone_node(self_id, deep_flag)
+                .map_err(|e| mutation_error(&e))?
+        };
+
+        let doc = doc.borrow();
+        Ok(Handle::from_bits(encode_node(doc.node_ref(new_id))))
+    }
+}
+
+impl ElementOps for HostObject {
+    fn child_element_count(&self) -> u32 {
+        let (doc, id) = self.anchor();
+        doc.borrow().element_children(id).count() as u32
+    }
+
+    fn children(&self) -> Result<Handle<HTMLCollection>, JsError> {
+        let (doc, id) = self.anchor();
+        let owner = doc.borrow().node_ref(id);
+        Ok(Handle::from_bits(encode_html_collection(owner)))
+    }
+
+    fn closest(&self, selectors: &str) -> Result<Option<Handle<Element>>, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        match doc.closest(id, selectors) {
+            Ok(Some(result_id)) => Ok(Some(Handle::from_bits(encode_node(
+                doc.node_ref(result_id),
+            )))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(JsError::syntax_error(e.to_string())),
+        }
+    }
+
+    fn first_element_child(&self) -> Result<Option<Handle<Element>>, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        Ok(doc
+            .element_children(id)
+            .next()
+            .map(|child| Handle::from_bits(encode_node(doc.node_ref(child)))))
+    }
+
+    fn get_elements_by_class_name(
+        &self,
+        class_names: &str,
+    ) -> Result<Handle<HTMLCollection>, JsError> {
+        let (doc, id) = self.anchor();
+        // For Element, scope the query to the element's subtree
+        let tokens: Vec<&str> = class_names.split_whitespace().collect();
+        let doc_ref = doc.borrow();
+        let descendants: Vec<NodeRef> = doc_ref
+            .descendants(id)
+            .filter(|node_id| {
+                // All tokens must be present on the element; an empty class
+                // list (an empty or whitespace-only argument) matches nothing,
+                // per the DOM `getElementsByClassName` definition.
+                !tokens.is_empty()
+                    && tokens
+                        .iter()
+                        .all(|token| doc_ref.has_class(*node_id, token))
+            })
+            .map(|node_id| doc_ref.node_ref(node_id))
+            .collect();
+        drop(doc_ref);
+
+        // Insert snapshot and return wrapped handle
+        let ctx = match self {
+            HostObject::Node { ctx, .. }
+            | HostObject::NodeList { ctx, .. }
+            | HostObject::HtmlCollection { ctx, .. }
+            | HostObject::StaticNodeList { ctx, .. }
+            | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
+        };
+        let key = ctx.snapshots.borrow_mut().insert(descendants);
+        Ok(Handle::from_bits(encode_snapshot(
+            TAG_STATIC_HTML_COLLECTION,
+            key,
+        )))
+    }
+
+    fn get_elements_by_tag_name(
+        &self,
+        qualified_name: &str,
+    ) -> Result<Handle<HTMLCollection>, JsError> {
+        let (doc, id) = self.anchor();
+        let doc_ref = doc.borrow();
+
+        // For elements: if tag is "*", match all elements; otherwise match by tag name
+        let descendants: Vec<NodeRef> = if qualified_name == "*" {
+            doc_ref
+                .descendants(id)
+                .filter(|node_id| doc_ref.is_element(*node_id))
+                .map(|node_id| doc_ref.node_ref(node_id))
+                .collect()
+        } else {
+            // Get the atom for the tag name; if it doesn't exist, return empty collection
+            use tenta_core::atom::Atom;
+            let tag_atom = match Atom::get(&qualified_name.to_ascii_lowercase()) {
+                Some(atom) => atom,
+                None => {
+                    drop(doc_ref);
+                    let ctx = match self {
+                        HostObject::Node { ctx, .. }
+                        | HostObject::NodeList { ctx, .. }
+                        | HostObject::HtmlCollection { ctx, .. }
+                        | HostObject::StaticNodeList { ctx, .. }
+                        | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
+                    };
+                    let key = ctx.snapshots.borrow_mut().insert(vec![]);
+                    return Ok(Handle::from_bits(encode_snapshot(
+                        TAG_STATIC_HTML_COLLECTION,
+                        key,
+                    )));
+                }
+            };
+
+            doc_ref
+                .descendants(id)
+                .filter(|node_id| doc_ref.tag(*node_id) == Some(tag_atom))
+                .map(|node_id| doc_ref.node_ref(node_id))
+                .collect()
+        };
+        drop(doc_ref);
+
+        let ctx = match self {
+            HostObject::Node { ctx, .. }
+            | HostObject::NodeList { ctx, .. }
+            | HostObject::HtmlCollection { ctx, .. }
+            | HostObject::StaticNodeList { ctx, .. }
+            | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
+        };
+        let key = ctx.snapshots.borrow_mut().insert(descendants);
+        Ok(Handle::from_bits(encode_snapshot(
+            TAG_STATIC_HTML_COLLECTION,
+            key,
+        )))
+    }
+
+    fn id(&self) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        Ok(doc.borrow().element_id(id).unwrap_or("").to_owned())
+    }
+
+    fn last_element_child(&self) -> Result<Option<Handle<Element>>, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        Ok(doc
+            .element_children(id)
+            .last()
+            .map(|child| Handle::from_bits(encode_node(doc.node_ref(child)))))
+    }
+
+    fn matches(&self, selectors: &str) -> bool {
+        // Spec: `matches` throws a `SyntaxError` on an invalid selector, but the
+        // generated fast-API signature is infallible (`-> bool`) — the generator
+        // has no way to mark a fast-API member fallible. Until it does, an
+        // invalid selector reports `false` rather than throwing. Valid selectors
+        // match per spec. (Follow-up: let `tenta-idl` force a `[Throws]` member
+        // off the fast path so it returns `Result`.)
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        doc.matches(id, selectors).unwrap_or(false)
+    }
+
+    fn query_selector(&self, selectors: &str) -> Result<Option<Handle<Element>>, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        match doc.query_selector(id, selectors) {
+            Ok(Some(result_id)) => Ok(Some(Handle::from_bits(encode_node(
+                doc.node_ref(result_id),
+            )))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(JsError::syntax_error(e.to_string())),
+        }
+    }
+
+    fn query_selector_all(&self, selectors: &str) -> Result<Handle<NodeList>, JsError> {
+        let (doc, id) = self.anchor();
+        let doc_ref = doc.borrow();
+
+        // Query against this element as the root scope
+        match doc_ref.query_selector_all(id, selectors) {
+            Ok(result_ids) => {
+                let refs: Vec<NodeRef> = result_ids
+                    .iter()
+                    .map(|node_id| doc_ref.node_ref(*node_id))
+                    .collect();
+                drop(doc_ref);
+
+                let ctx = match self {
+                    HostObject::Node { ctx, .. }
+                    | HostObject::NodeList { ctx, .. }
+                    | HostObject::HtmlCollection { ctx, .. }
+                    | HostObject::StaticNodeList { ctx, .. }
+                    | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
+                };
+                let key = ctx.snapshots.borrow_mut().insert(refs);
+                Ok(Handle::from_bits(encode_snapshot(
+                    TAG_STATIC_NODE_LIST,
+                    key,
+                )))
+            }
+            Err(e) => Err(JsError::syntax_error(e.to_string())),
+        }
+    }
+
+    fn tag_name(&self) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        Ok(element_tag_name(&doc.borrow(), id))
+    }
+
+    fn set_attribute(&self, name: &str, value: &str) -> Result<(), JsError> {
+        // Validate the attribute name: non-empty and valid XML name start
+        if name.is_empty() {
+            return Err(JsError::dom_exception(
+                "InvalidCharacterError",
+                "Attribute name must not be empty",
+            ));
+        }
+        if let Some(first_char) = name.chars().next()
+            && !first_char.is_ascii_alphabetic()
+            && first_char != '_'
+            && first_char != ':'
+        {
+            return Err(JsError::dom_exception(
+                "InvalidCharacterError",
+                "Attribute name must start with a letter, underscore, or colon",
+            ));
+        }
+
+        let (doc, id) = self.anchor();
+        let lower_name = name.to_ascii_lowercase();
+        let attr_name = Atom::new(&lower_name);
+        let qname = QualName::new(atoms::EMPTY, attr_name);
+
+        let mut doc = doc.borrow_mut();
+        doc.mutate(Mutation::SetAttribute {
+            element: id,
+            name: qname,
+            value: value.to_owned(),
+        })
+        .map_err(|e| mutation_error(&e))
+    }
+
+    fn get_attribute(&self, name: &str) -> Result<Option<String>, JsError> {
+        let (doc, id) = self.anchor();
+        let lower_name = name.to_ascii_lowercase();
+        Ok(doc
+            .borrow()
+            .attribute_str(id, &lower_name)
+            .map(str::to_owned))
+    }
+
+    fn remove_attribute(&self, name: &str) {
+        let (doc, id) = self.anchor();
+        let lower_name = name.to_ascii_lowercase();
+        let attr_name = Atom::new(&lower_name);
+        let qname = QualName::new(atoms::EMPTY, attr_name);
+
+        let mut doc = doc.borrow_mut();
+        // Removing a non-existent attribute is a no-op, so we ignore errors
+        let _ = doc.mutate(Mutation::RemoveAttribute {
+            element: id,
+            name: qname,
+        });
+    }
+
+    fn has_attribute(&self, name: &str) -> bool {
+        let (doc, id) = self.anchor();
+        let lower_name = name.to_ascii_lowercase();
+        // Check if the attribute exists
+        doc.borrow().attribute_str(id, &lower_name).is_some()
+    }
+}
+
+impl DocumentOps for HostObject {
+    fn child_element_count(&self) -> u32 {
+        let (doc, id) = self.anchor();
+        doc.borrow().element_children(id).count() as u32
+    }
+
+    fn children(&self) -> Result<Handle<HTMLCollection>, JsError> {
+        let (doc, id) = self.anchor();
+        let owner = doc.borrow().node_ref(id);
+        Ok(Handle::from_bits(encode_html_collection(owner)))
+    }
+
+    fn create_comment(&self, data: &str) -> Result<Handle<Comment>, JsError> {
+        let (doc, _) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        let id = doc.create_comment(data);
+        Ok(Handle::from_bits(encode_node(doc.node_ref(id))))
+    }
+
+    fn create_element(&self, local_name: &str) -> Result<Handle<Element>, JsError> {
+        // Validate the name: non-empty and starts with ASCII letter
+        if local_name.is_empty() {
+            return Err(JsError::dom_exception(
+                "InvalidCharacterError",
+                "Element name must not be empty",
+            ));
+        }
+        if let Some(first_char) = local_name.chars().next()
+            && !first_char.is_ascii_alphabetic()
+        {
+            return Err(JsError::dom_exception(
+                "InvalidCharacterError",
+                "Element name must start with a letter",
+            ));
+        }
+        let (doc, _) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        // HTML elements are lowercased
+        let atom = tenta_core::atom::Atom::new(&local_name.to_ascii_lowercase());
+        let id = doc.create_html_element(atom);
+        Ok(Handle::from_bits(encode_node(doc.node_ref(id))))
+    }
+
+    fn create_text_node(&self, data: &str) -> Result<Handle<Text>, JsError> {
+        let (doc, _) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        let id = doc.create_text(data);
+        Ok(Handle::from_bits(encode_node(doc.node_ref(id))))
+    }
+
+    fn document_element(&self) -> Result<Option<Handle<Element>>, JsError> {
+        let (doc, _) = self.anchor();
+        let doc = doc.borrow();
+        Ok(doc
+            .document_element()
+            .map(|id| Handle::from_bits(encode_node(doc.node_ref(id)))))
+    }
+
+    fn first_element_child(&self) -> Result<Option<Handle<Element>>, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        Ok(doc
+            .element_children(id)
+            .next()
+            .map(|child| Handle::from_bits(encode_node(doc.node_ref(child)))))
+    }
+
+    fn get_element_by_id(&self, element_id: &str) -> Result<Option<Handle<Element>>, JsError> {
+        let (doc, _) = self.anchor();
+        let doc = doc.borrow();
+        Ok(doc
+            .get_element_by_id(element_id)
+            .map(|id| Handle::from_bits(encode_node(doc.node_ref(id)))))
+    }
+
+    fn get_elements_by_class_name(
+        &self,
+        class_names: &str,
+    ) -> Result<Handle<HTMLCollection>, JsError> {
+        let (doc, _) = self.anchor();
+        let tokens: Vec<&str> = class_names.split_whitespace().collect();
+        let doc_ref = doc.borrow();
+        let doc_node = doc_ref.document_node();
+        let descendants: Vec<NodeRef> = doc_ref
+            .descendants(doc_node)
+            .filter(|node_id| {
+                // All tokens must be present on the element; an empty class
+                // list (an empty or whitespace-only argument) matches nothing,
+                // per the DOM `getElementsByClassName` definition.
+                !tokens.is_empty()
+                    && tokens
+                        .iter()
+                        .all(|token| doc_ref.has_class(*node_id, token))
+            })
+            .map(|node_id| doc_ref.node_ref(node_id))
+            .collect();
+        drop(doc_ref);
+
+        let ctx = match self {
+            HostObject::Node { ctx, .. }
+            | HostObject::NodeList { ctx, .. }
+            | HostObject::HtmlCollection { ctx, .. }
+            | HostObject::StaticNodeList { ctx, .. }
+            | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
+        };
+        let key = ctx.snapshots.borrow_mut().insert(descendants);
+        Ok(Handle::from_bits(encode_snapshot(
+            TAG_STATIC_HTML_COLLECTION,
+            key,
+        )))
+    }
+
+    fn get_elements_by_tag_name(
+        &self,
+        qualified_name: &str,
+    ) -> Result<Handle<HTMLCollection>, JsError> {
+        let (doc, _) = self.anchor();
+        let doc_ref = doc.borrow();
+        let doc_node = doc_ref.document_node();
+
+        let descendants: Vec<NodeRef> = if qualified_name == "*" {
+            doc_ref
+                .descendants(doc_node)
+                .filter(|node_id| doc_ref.is_element(*node_id))
+                .map(|node_id| doc_ref.node_ref(node_id))
+                .collect()
+        } else {
+            use tenta_core::atom::Atom;
+            let tag_atom = match Atom::get(&qualified_name.to_ascii_lowercase()) {
+                Some(atom) => atom,
+                None => {
+                    drop(doc_ref);
+                    let ctx = match self {
+                        HostObject::Node { ctx, .. }
+                        | HostObject::NodeList { ctx, .. }
+                        | HostObject::HtmlCollection { ctx, .. }
+                        | HostObject::StaticNodeList { ctx, .. }
+                        | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
+                    };
+                    let key = ctx.snapshots.borrow_mut().insert(vec![]);
+                    return Ok(Handle::from_bits(encode_snapshot(
+                        TAG_STATIC_HTML_COLLECTION,
+                        key,
+                    )));
+                }
+            };
+
+            doc_ref
+                .descendants(doc_node)
+                .filter(|node_id| doc_ref.tag(*node_id) == Some(tag_atom))
+                .map(|node_id| doc_ref.node_ref(node_id))
+                .collect()
+        };
+        drop(doc_ref);
+
+        let ctx = match self {
+            HostObject::Node { ctx, .. }
+            | HostObject::NodeList { ctx, .. }
+            | HostObject::HtmlCollection { ctx, .. }
+            | HostObject::StaticNodeList { ctx, .. }
+            | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
+        };
+        let key = ctx.snapshots.borrow_mut().insert(descendants);
+        Ok(Handle::from_bits(encode_snapshot(
+            TAG_STATIC_HTML_COLLECTION,
+            key,
+        )))
+    }
+
+    fn last_element_child(&self) -> Result<Option<Handle<Element>>, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        Ok(doc
+            .element_children(id)
+            .last()
+            .map(|child| Handle::from_bits(encode_node(doc.node_ref(child)))))
+    }
+
+    fn query_selector(&self, selectors: &str) -> Result<Option<Handle<Element>>, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        match doc.query_selector(id, selectors) {
+            Ok(Some(result_id)) => Ok(Some(Handle::from_bits(encode_node(
+                doc.node_ref(result_id),
+            )))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(JsError::syntax_error(e.to_string())),
+        }
+    }
+
+    fn query_selector_all(&self, selectors: &str) -> Result<Handle<NodeList>, JsError> {
+        let (doc, id) = self.anchor();
+        let doc_ref = doc.borrow();
+
+        match doc_ref.query_selector_all(id, selectors) {
+            Ok(result_ids) => {
+                let refs: Vec<NodeRef> = result_ids
+                    .iter()
+                    .map(|node_id| doc_ref.node_ref(*node_id))
+                    .collect();
+                drop(doc_ref);
+
+                let ctx = match self {
+                    HostObject::Node { ctx, .. }
+                    | HostObject::NodeList { ctx, .. }
+                    | HostObject::HtmlCollection { ctx, .. }
+                    | HostObject::StaticNodeList { ctx, .. }
+                    | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
+                };
+                let key = ctx.snapshots.borrow_mut().insert(refs);
+                Ok(Handle::from_bits(encode_snapshot(
+                    TAG_STATIC_NODE_LIST,
+                    key,
+                )))
+            }
+            Err(e) => Err(JsError::syntax_error(e.to_string())),
+        }
+    }
+}
+
+impl NodeListOps for HostObject {
+    fn item(&self, index: u32) -> Result<Option<Handle<Node>>, JsError> {
+        match self {
+            HostObject::StaticNodeList { ctx, key } => {
+                // Static snapshot: look up in slab
+                let snapshots = ctx.snapshots.borrow();
+                let refs = match snapshots.get(*key) {
+                    Some(r) => r,
+                    None => return Ok(None),
+                };
+                if let Some(node_ref) = refs.get(index as usize) {
+                    let doc = ctx.doc.borrow();
+                    if let Ok(id) = doc.resolve(*node_ref) {
+                        return Ok(Some(Handle::from_bits(encode_node(doc.node_ref(id)))));
+                    }
+                }
+                Ok(None)
+            }
+            _ => {
+                // Live collection: traverse from anchor
+                let (doc, id) = self.anchor();
+                let doc = doc.borrow();
+                Ok(doc
+                    .children(id)
+                    .nth(index as usize)
+                    .map(|child| Handle::from_bits(encode_node(doc.node_ref(child)))))
+            }
+        }
+    }
+
+    fn length(&self) -> u32 {
+        match self {
+            HostObject::StaticNodeList { ctx, key } => {
+                let snapshots = ctx.snapshots.borrow();
+                snapshots.get(*key).map(|r| r.len() as u32).unwrap_or(0)
+            }
+            _ => {
+                let (doc, id) = self.anchor();
+                doc.borrow().children(id).count() as u32
+            }
+        }
+    }
+}
+
+impl CharacterDataOps for HostObject {
+    fn data(&self) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        Ok(doc.borrow().text_data(id).unwrap_or("").to_owned())
+    }
+
+    fn set_data(&self, value: &str) {
+        let (doc, id) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        // SetText should not fail for CharacterData nodes (Text, Comment, CDATA).
+        // If it does, we ignore the error since the setter is infallible.
+        let _ = doc.mutate(Mutation::SetText {
+            node: id,
+            text: value.to_owned(),
+        });
+    }
+
+    fn length(&self) -> u32 {
+        let (doc, id) = self.anchor();
+        doc.borrow()
+            .text_data(id)
+            .map(|s| s.encode_utf16().count() as u32)
+            .unwrap_or(0)
+    }
+}
+
+impl TextOps for HostObject {}
+
+impl CommentOps for HostObject {}
+
+impl HTMLCollectionOps for HostObject {
+    fn item(&self, index: u32) -> Result<Option<Handle<Element>>, JsError> {
+        match self {
+            HostObject::StaticHtmlCollection { ctx, key } => {
+                // Static snapshot: look up in slab
+                let snapshots = ctx.snapshots.borrow();
+                let refs = match snapshots.get(*key) {
+                    Some(r) => r,
+                    None => return Ok(None),
+                };
+                if let Some(node_ref) = refs.get(index as usize) {
+                    let doc = ctx.doc.borrow();
+                    if let Ok(id) = doc.resolve(*node_ref) {
+                        return Ok(Some(Handle::from_bits(encode_node(doc.node_ref(id)))));
+                    }
+                }
+                Ok(None)
+            }
+            _ => {
+                // Live collection: traverse from anchor
+                let (doc, id) = self.anchor();
+                let doc = doc.borrow();
+                Ok(doc
+                    .element_children(id)
+                    .nth(index as usize)
+                    .map(|child| Handle::from_bits(encode_node(doc.node_ref(child)))))
+            }
+        }
+    }
+
+    fn length(&self) -> u32 {
+        match self {
+            HostObject::StaticHtmlCollection { ctx, key } => {
+                let snapshots = ctx.snapshots.borrow();
+                snapshots.get(*key).map(|r| r.len() as u32).unwrap_or(0)
+            }
+            _ => {
+                let (doc, id) = self.anchor();
+                doc.borrow().element_children(id).count() as u32
+            }
+        }
+    }
+
+    fn named_item(&self, name: &str) -> Result<Option<Handle<Element>>, JsError> {
+        match self {
+            HostObject::StaticHtmlCollection { ctx, key } => {
+                // Static snapshot: look up by id in stored nodes
+                let snapshots = ctx.snapshots.borrow();
+                let refs = match snapshots.get(*key) {
+                    Some(r) => r,
+                    None => return Ok(None),
+                };
+                let doc = ctx.doc.borrow();
+                for node_ref in refs {
+                    if let Ok(id) = doc.resolve(*node_ref)
+                        && doc
+                            .element_id(id)
+                            .map(|id_attr| id_attr == name)
+                            .unwrap_or(false)
+                    {
+                        return Ok(Some(Handle::from_bits(encode_node(doc.node_ref(id)))));
+                    }
+                }
+                Ok(None)
+            }
+            _ => {
+                // Live collection: traverse from anchor
+                let (doc, id) = self.anchor();
+                let doc = doc.borrow();
+                Ok(doc
+                    .element_children(id)
+                    .find(|child_id| {
+                        doc.element_id(*child_id)
+                            .map(|id_attr| id_attr == name)
+                            .unwrap_or(false)
+                    })
+                    .map(|child| Handle::from_bits(encode_node(doc.node_ref(child)))))
+            }
+        }
+    }
+}
+
+/// Maps a `tenta_core::Error` from a mutation to a `JsError`.
+fn mutation_error(e: &tenta_core::Error) -> JsError {
+    if let Some(code) = tenta_dom::error::dom_exception_name(e) {
+        JsError::dom_exception(code, &e.to_string())
+    } else {
+        JsError::type_error(e.to_string())
+    }
+}
+
+/// The DOM `nodeName` of `id` (https://dom.spec.whatwg.org/#dom-node-nodename).
+fn node_name(doc: &Document, id: NodeId) -> String {
+    match doc.kind(id) {
+        NodeKind::Element => element_tag_name(doc, id),
+        NodeKind::Text => "#text".to_owned(),
+        NodeKind::CData => "#cdata-section".to_owned(),
+        NodeKind::Comment => "#comment".to_owned(),
+        NodeKind::Document => "#document".to_owned(),
+        NodeKind::Fragment | NodeKind::ShadowRoot => "#document-fragment".to_owned(),
+        NodeKind::DocType => doc
+            .doctype(id)
+            .map(|doctype| doctype.name.clone())
+            .unwrap_or_default(),
+        NodeKind::ProcessingInstruction => doc
+            .processing_instruction(id)
+            .map(|(target, _)| target.to_owned())
+            .unwrap_or_default(),
+    }
+}
+
+/// The DOM `tagName` of an element: the qualified name, ASCII-uppercased for
+/// elements in the HTML namespace (https://dom.spec.whatwg.org/#dom-element-tagname).
+fn element_tag_name(doc: &Document, id: NodeId) -> String {
+    let Some(local) = doc.tag(id) else {
+        return String::new();
+    };
+    if doc.namespace(id) == Some(atoms::NS_HTML) {
+        local.as_str().to_ascii_uppercase()
+    } else {
+        local.as_str().to_owned()
+    }
+}
+
+/// The bit layout of a DOM wrapper handle: `tag:8 | doc_slot:8 | node_id:32 |
+/// generation:16` (`docs/spec/04-dom-and-css.md` §1, `NodeRef`). The document
+/// slot is always zero until a world spans more than one document.
+const TAG_SHIFT: u32 = 56;
+const DOC_SLOT_SHIFT: u32 = 48;
+const NODE_ID_SHIFT: u32 = 16;
+
+/// Handle tag for a single node.
+pub const TAG_NODE: u8 = 0;
+/// Handle tag for a node's child `NodeList`.
+pub const TAG_NODE_LIST: u8 = 1;
+/// Handle tag for a node's element-child `HTMLCollection`.
+pub const TAG_HTML_COLLECTION: u8 = 2;
+/// Handle tag for a static snapshot `NodeList` (querySelectorAll, etc.).
+pub const TAG_STATIC_NODE_LIST: u8 = 3;
+/// Handle tag for a static snapshot `HTMLCollection` (getElementsByTagName, etc.).
+pub const TAG_STATIC_HTML_COLLECTION: u8 = 4;
+
+/// A handle decoded back into its parts.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DecodedHandle {
+    /// [`TAG_NODE`], [`TAG_NODE_LIST`], [`TAG_HTML_COLLECTION`], or snapshot tags.
+    pub tag: u8,
+    /// For node handles: the node id. For snapshot handles: the snapshot index.
+    pub node_id: NodeId,
+    /// For node handles: the node generation. For snapshot handles: the snapshot generation.
+    pub generation: u16,
+}
+
+impl DecodedHandle {
+    /// Returns the node anchor (Some(node_id)) for live handles, None for snapshot tags.
+    /// Used in tag-aware scans to avoid corrupting a real node's HAS_WRAPPER bit
+    /// when sweeping dead wrappers.
+    pub fn node_anchor(&self) -> Option<NodeId> {
+        match self.tag {
+            TAG_NODE | TAG_NODE_LIST | TAG_HTML_COLLECTION => Some(self.node_id),
+            _ => None, // Snapshot tags 3 and 4
+        }
+    }
+
+    /// Reconstructs a SnapshotKey from decoded snapshot handle parts.
+    /// Only valid when tag is a snapshot tag.
+    pub fn snapshot_key(&self) -> SnapshotKey {
+        SnapshotKey {
+            index: self.node_id.raw(),
+            generation: self.generation,
+        }
+    }
+}
+
+/// Packs a `tag` and a node reference into the opaque handle bits a wrapper
+/// world keys on.
+fn pack(tag: u8, node: NodeRef) -> u64 {
+    // TODO(phase 1): the arena generation is `u32`; the low 16 bits are enough
+    // to catch slot reuse within a page. Widen alongside the `doc_slot` tag
+    // when a world spans more than one document.
+    let generation = node.generation as u16;
+    ((tag as u64) << TAG_SHIFT)
+        | (0u64 << DOC_SLOT_SHIFT)
+        | ((node.id.raw() as u64) << NODE_ID_SHIFT)
+        | (generation as u64)
+}
+
+/// Packs a node reference into a [`TAG_NODE`] handle.
+pub fn encode_node(node: NodeRef) -> u64 {
+    pack(TAG_NODE, node)
+}
+
+/// Packs a list owner's reference into a [`TAG_NODE_LIST`] handle.
+pub fn encode_collection(owner: NodeRef) -> u64 {
+    pack(TAG_NODE_LIST, owner)
+}
+
+/// Packs a collection owner's reference into a [`TAG_HTML_COLLECTION`] handle.
+pub fn encode_html_collection(owner: NodeRef) -> u64 {
+    pack(TAG_HTML_COLLECTION, owner)
+}
+
+/// Packs a snapshot tag and key into handle bits.
+pub fn encode_snapshot(tag: u8, key: SnapshotKey) -> u64 {
+    ((tag as u64) << TAG_SHIFT)
+        | (0u64 << DOC_SLOT_SHIFT)
+        | ((key.index as u64) << NODE_ID_SHIFT)
+        | (key.generation as u64)
+}
+
+/// Splits handle bits back into their tag, node id and generation.
+pub fn decode(bits: u64) -> DecodedHandle {
+    DecodedHandle {
+        tag: (bits >> TAG_SHIFT) as u8,
+        node_id: NodeId(((bits >> NODE_ID_SHIFT) & 0xFFFF_FFFF) as u32),
+        generation: (bits & 0xFFFF) as u16,
+    }
+}

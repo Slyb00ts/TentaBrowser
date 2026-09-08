@@ -12,3 +12,6 @@ use tenta_css as _;
 use tenta_dom as _;
 #[allow(unused_imports)]
 use tenta_net as _;
+
+pub mod bindings;
+pub mod event_loop;
