@@ -1,0 +1,46 @@
+{
+  "browser_host": "web-platform.test",
+  "alternate_hosts": {
+    "alt": "not-web-platform.test"
+  },
+  "ports": {
+    "http": [
+      8000,
+      8001
+    ],
+    "http-local": [
+      8002
+    ],
+    "http-public": [
+      8003
+    ],
+    "https": [
+      8443,
+      8444
+    ],
+    "https-local": [
+      8445
+    ],
+    "https-public": [
+      8446
+    ],
+    "ws": [
+      9000
+    ],
+    "wss": [
+      9001
+    ],
+    "h2": [
+      9002
+    ],
+    "webtransport-h3": [
+      11000
+    ]
+  },
+  "check_subdomains": false,
+  "bind_address": true,
+  "logging": {
+    "level": "info"
+  },
+  "server_host": "127.0.0.1"
+}

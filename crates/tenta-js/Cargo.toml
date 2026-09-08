@@ -1,0 +1,15 @@
+[package]
+name = "tenta-js"
+description = "Tier 2: engine trait, InterfaceRegistry, event loop, bindings runtime, timers, fetch/XHR/WebSocket, storage, workers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+tenta-net = { workspace = true }
+tenta-dom = { workspace = true }
+tenta-css = { workspace = true }

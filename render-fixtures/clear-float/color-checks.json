@@ -1,0 +1,14 @@
+[
+  {
+    "name": "float",
+    "color": "#88bbdd",
+    "width": 120,
+    "height": 80
+  },
+  {
+    "name": "cleared block",
+    "color": "#ffcc66",
+    "width": 500,
+    "height": 40
+  }
+]

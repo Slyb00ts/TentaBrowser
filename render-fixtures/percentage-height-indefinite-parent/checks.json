@@ -1,0 +1,93 @@
+{
+  "fixture": "percentage-height-indefinite-parent",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#outer",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 24
+    },
+    {
+      "selector": "#wrapper",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 24
+    },
+    {
+      "selector": "#stack",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 24
+    },
+    {
+      "selector": "#editor",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 24
+    },
+    {
+      "selector": "#pre",
+      "kind": "element",
+      "tag": "pre",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 24
+    },
+    {
+      "selector": "#code",
+      "kind": "element",
+      "tag": "code",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 234.05,
+      "height": 24
+    },
+    {
+      "selector": "#after",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 24,
+      "width": 400,
+      "height": 20
+    },
+    {
+      "selector": "#code::text(0)",
+      "kind": "text",
+      "text": "content gives the chain height",
+      "x": 0,
+      "y": 4,
+      "width": 234.05,
+      "height": 15
+    }
+  ]
+}

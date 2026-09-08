@@ -1,0 +1,23 @@
+# Single-libcrypto link test and "hello" size ladder (docs/spec/03-network.md §1.1,
+# docs/spec/21-project-operations.md §4). A separate workspace so that the heavy
+# native builds (BoringSSL, libvpx, libopus, the rusty_v8 prebuilt) never enter the
+# main lock file. Run through `cargo xtask link-test` and `cargo xtask hello-sizes`.
+
+[workspace]
+resolver = "3"
+members = ["hello"]
+
+[profile.release]
+# Mirrors the root release profile, plus symbol stripping for the size ladder.
+panic = "unwind"
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+debug = false
+strip = "symbols"
+
+# Same code generation as `release` but with the symbol table kept so that the
+# libcrypto symbol scan of `cargo xtask link-test` can read it.
+[profile.linktest]
+inherits = "release"
+strip = "none"

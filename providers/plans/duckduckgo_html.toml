@@ -1,0 +1,52 @@
+# DuckDuckGo HTML endpoint. Fast path, no JavaScript. Surveyed 2026-09-06.
+provider = "duckduckgo_html"
+version = 1
+path = "fast"
+notes = """
+GET works; the page's own forms POST to /html/ with the same fields. The
+first survey request got a TCP reset before any HTTP response; the second
+succeeded (see SURVEY.md), so treat resets as a transient block, not a
+parse failure. Result links are redirect wrappers
+(//duckduckgo.com/l/?uddg=<encoded target>&rut=…); the plan unwraps `uddg`.
+"""
+
+[request]
+endpoint = "https://html.duckduckgo.com/html/"
+method = "GET"
+query_param = "q"
+# `kl` is the region+language code, default "wt-wt" (no region). Examples:
+# "pl-pl", "us-en", "uk-en". `kp` is SafeSearch: 1 strict, -1 moderate, -2 off.
+# `df` is freshness: d, w, m, y.
+locale = { kl = "{region_lower}-{language}" }
+safe = { param = "kp", strict = "1", moderate = "-1", off = "-2" }
+freshness = { param = "df", day = "d", week = "w", month = "m", year = "y" }
+
+[request.headers]
+Accept-Language = "{accept_language}"
+
+[cookies]
+policy = "none"
+# Optional preset instead of `kl`: cookie `kl=<region>` has the same effect.
+
+[results]
+container = "div#links"
+item = "div.result"
+exclude = ["div.result--ad", "div.result--sep", "div.result--more"]
+title = "h2.result__title a.result__a"
+url = "a.result__a"
+url_attr = "href"
+url_unwrap_param = "uddg"
+display_url = "a.result__url"
+snippet = "a.result__snippet"
+
+[pagination]
+# The last form on the page carries hidden fields q, s (offset), nextParams,
+# v, o, dc, api, vqd and kl; submit them (POST) to fetch the next page.
+kind = "form"
+next = "div.nav-link form input[name=s]"
+attr = "value"
+
+[block]
+status = [403, 429, 503]
+selectors = ["div.anomaly-modal"]
+patterns = ["Unfortunately, bots use DuckDuckGo too", "anomaly-modal"]

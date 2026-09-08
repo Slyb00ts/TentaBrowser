@@ -1,0 +1,174 @@
+{
+  "started_utc": "2026-09-06T14:05:08.661050+00:00",
+  "finished_utc": "2026-09-06T14:05:12.721760+00:00",
+  "label": "fullpage-probe",
+  "machine": {
+    "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "cpu_count": 10,
+    "python": "3.14.7",
+    "psutil": null,
+    "cpu": "Apple M4",
+    "memory_bytes": 17179869184,
+    "os_version": "26.5.2"
+  },
+  "runs": 1,
+  "warmup": 0,
+  "interleaved": true,
+  "measurement": {
+    "wall_ms": "time.perf_counter around Popen..wait4 of the subject process",
+    "cpu_ms": "ru_utime + ru_stime from wait4 (user + system, subject process and its waited children)",
+    "peak_rss_bytes": "ru_maxrss from wait4 (the subject process itself; same source as /usr/bin/time -l)",
+    "peak_rss_tree_bytes": null,
+    "ttfr_ms": "first REQ logged by fixture-server minus the subject's spawn time (same wall clock)"
+  },
+  "subjects": {
+    "reference": {
+      "binary": "$REPOS/obscura-reference/target/release/obscura",
+      "version": "tentabrowser 0.1.0",
+      "available": true
+    },
+    "chromium": {
+      "binary": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "version": "Google Chrome 144.0.7559.60",
+      "available": true
+    }
+  },
+  "results": [
+    {
+      "scenario": "S-fullpage",
+      "subject": "reference",
+      "version": "tentabrowser 0.1.0",
+      "status": "ok",
+      "runs_ok": 1,
+      "runs_failed": 0,
+      "samples": [
+        {
+          "wall_ms": 2397.1627089194953,
+          "cpu_ms": 2124.056,
+          "peak_rss_bytes": 981254144,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 8.572,
+          "requests": 13
+        }
+      ],
+      "summary": {
+        "wall_ms": {
+          "n": 1,
+          "min": 2397.1627089194953,
+          "p50": 2397.1627089194953,
+          "p95": 2397.1627089194953,
+          "max": 2397.1627089194953,
+          "mean": 2397.1627089194953
+        },
+        "cpu_ms": {
+          "n": 1,
+          "min": 2124.056,
+          "p50": 2124.056,
+          "p95": 2124.056,
+          "max": 2124.056,
+          "mean": 2124.056
+        },
+        "peak_rss_bytes": {
+          "n": 1,
+          "min": 981254144,
+          "p50": 981254144,
+          "p95": 981254144,
+          "max": 981254144,
+          "mean": 981254144.0
+        },
+        "peak_rss_tree_bytes": null,
+        "ttfr_ms": {
+          "n": 1,
+          "min": 8.572,
+          "p50": 8.572,
+          "p95": 8.572,
+          "max": 8.572,
+          "mean": 8.572
+        }
+      },
+      "command": [
+        "$REPOS/obscura-reference/target/release/obscura",
+        "screenshot",
+        "http://127.0.0.1:60021/static-article/index.html",
+        "-o",
+        "/var/folders/k4/0h19smtx6xj91jlbk4__jgr00000gn/T/tenta-bench-7ghgh6xq/S-fullpage-reference.png",
+        "--width",
+        "1280",
+        "--height",
+        "12000",
+        "--allow-private-network"
+      ],
+      "rtt_ms": 0,
+      "url": "http://127.0.0.1:60021/static-article/index.html"
+    },
+    {
+      "scenario": "S-fullpage",
+      "subject": "chromium",
+      "version": "Google Chrome 144.0.7559.60",
+      "status": "ok",
+      "runs_ok": 1,
+      "runs_failed": 0,
+      "samples": [
+        {
+          "wall_ms": 1629.3051249813288,
+          "cpu_ms": 2272.0089999999996,
+          "peak_rss_bytes": 406716416,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 647.778,
+          "requests": 14
+        }
+      ],
+      "summary": {
+        "wall_ms": {
+          "n": 1,
+          "min": 1629.3051249813288,
+          "p50": 1629.3051249813288,
+          "p95": 1629.3051249813288,
+          "max": 1629.3051249813288,
+          "mean": 1629.3051249813288
+        },
+        "cpu_ms": {
+          "n": 1,
+          "min": 2272.0089999999996,
+          "p50": 2272.0089999999996,
+          "p95": 2272.0089999999996,
+          "max": 2272.0089999999996,
+          "mean": 2272.0089999999996
+        },
+        "peak_rss_bytes": {
+          "n": 1,
+          "min": 406716416,
+          "p50": 406716416,
+          "p95": 406716416,
+          "max": 406716416,
+          "mean": 406716416.0
+        },
+        "peak_rss_tree_bytes": null,
+        "ttfr_ms": {
+          "n": 1,
+          "min": 647.778,
+          "p50": 647.778,
+          "p95": 647.778,
+          "max": 647.778,
+          "mean": 647.778
+        }
+      },
+      "command": [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "--headless=new",
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--hide-scrollbars",
+        "--user-data-dir=/var/folders/k4/0h19smtx6xj91jlbk4__jgr00000gn/T/tenta-bench-7ghgh6xq/chromium-profile",
+        "--incognito",
+        "--window-size=1280,12000",
+        "--screenshot=/var/folders/k4/0h19smtx6xj91jlbk4__jgr00000gn/T/tenta-bench-7ghgh6xq/S-fullpage-chromium.png",
+        "http://127.0.0.1:60021/static-article/index.html"
+      ],
+      "rtt_ms": 0,
+      "url": "http://127.0.0.1:60021/static-article/index.html"
+    }
+  ]
+}

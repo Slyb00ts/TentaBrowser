@@ -1,0 +1,53 @@
+# Brave Search. Fast path, no JavaScript for organic results. Surveyed 2026-09-06.
+provider = "brave"
+version = 1
+path = "fast"
+notes = """
+Organic results are <div class="snippet" data-type="web" data-pos="N">;
+other snippet types (cluster, discussions, llm-snippet, infobox,
+related-queries, search-elsewhere, pagination-snippet) are excluded. Class
+names carry Svelte hashes (svelte-xxxx) that change per deployment; the plan
+only relies on the semantic class names next to them. Hrefs are direct
+(no redirect wrapper). The second survey request (pl-PL) got HTTP 429 with a
+"request has been flagged … schedule a captcha" page that needs JavaScript,
+so Brave's block detection is status 429 plus that text; the block hit even
+with a Chrome UA over Python's TLS, which is the Cloudflare/fingerprint risk
+noted in 08-search.md. Locale parameters are from Brave's public settings
+and were not exercised by the survey.
+"""
+
+[request]
+endpoint = "https://search.brave.com/search"
+method = "GET"
+query_param = "q"
+params = { source = "web" }
+locale = { country = "{region_lower}", search_lang = "{language}", ui_lang = "{language}-{region_lower}" }
+safe = { param = "safesearch", strict = "strict", moderate = "moderate", off = "off" }
+freshness = { param = "tf", day = "pd", week = "pw", month = "pm", year = "py" }
+page = { param = "offset", first = 0, step = 1 }
+
+[request.headers]
+Accept-Language = "{accept_language}"
+
+[cookies]
+policy = "session"
+
+[results]
+container = "body"
+item = "div.snippet[data-type=web]"
+exclude = ["div#llm-snippet", "div#discussions", "div#infobox-snippet", "div.snippet[data-type=cluster]", "div#related-queries", "div#search-elsewhere"]
+title = "div.title"
+url = "div.result-content > a"
+url_attr = "href"
+display_url = "div.site-name-content"
+snippet = "div.generic-snippet div.content"
+
+[pagination]
+kind = "link"
+next = "div#pagination-snippet a[href*=offset]"
+attr = "href"
+
+[block]
+status = [403, 429, 503]
+selectors = ["div#challenge-running", "form#challenge-form"]
+patterns = ["request has been flagged as being suspicious", "decided to schedule a captcha", "Just a moment"]

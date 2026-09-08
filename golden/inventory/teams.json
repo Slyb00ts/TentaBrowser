@@ -1,0 +1,2991 @@
+{
+ "meta": {
+  "site": "teams",
+  "title": "Microsoft Teams (pre-auth)",
+  "tracer_version": "0.1.0",
+  "playwright_version": "1.63.0",
+  "chromium_version": "153.0.8010.12",
+  "channel": "chromium",
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+  "user_agent_raw": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.0.0 Safari/537.36",
+  "date": "2026-09-06T13:22:37.751Z",
+  "duration_ms": 11385,
+  "viewport": {
+   "width": 1280,
+   "height": 800
+  },
+  "locale": "en-US",
+  "urls": [
+   "https://teams.microsoft.com/"
+  ],
+  "navigations": [
+   {
+    "url": "https://teams.microsoft.com/v2/",
+    "at_ms": 2139
+   },
+   {
+    "url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?<stripped>",
+    "at_ms": 5066
+   },
+   {
+    "url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?<stripped>",
+    "at_ms": 6139
+   },
+   {
+    "url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?<stripped>",
+    "at_ms": 6143
+   },
+   {
+    "url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?<stripped>",
+    "at_ms": 6199
+   },
+   {
+    "url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?<stripped>",
+    "at_ms": 6206
+   }
+  ],
+  "final_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?<stripped>",
+  "page_title": "Sign in to your account",
+  "steps": [
+   {
+    "label": "teams-landing",
+    "at_ms": 11274,
+    "url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?<stripped>",
+    "frames": 1,
+    "workers": 0,
+    "service_workers": 1
+   },
+   {
+    "label": "final",
+    "at_ms": 11284,
+    "url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?<stripped>",
+    "frames": 1,
+    "workers": 0,
+    "service_workers": 1
+   }
+  ],
+  "notes": [
+   "goto https://teams.microsoft.com/ -> 200 https://teams.microsoft.com/v2/",
+   "redirected to https://login.microsoftonline.com/common/oauth2/v2.0/authorize?<stripped>",
+   "landing page: {\"input[type=\\\"email\\\"]\":1,\"input[name=\\\"loginfmt\\\"]\":1,\"form\":2,\"iframe\":0,\"title\":\"Sign in to your account\",\"text_sample\":\"Sign in No account? Create one! Can’t access your account? Sign-in options Terms of use Privacy & cookies ...\"}"
+  ],
+  "limitations": [
+   "Dedicated, shared and service workers are traced after they attach (Playwright resumes them before the tracer can run), so their first synchronous statements are missed; workers that terminate before a harvest lose the counts since the previous harvest.",
+   "AudioWorklet and PaintWorklet global scopes are not traced (no injection path); worklet module URLs and AudioWorkletNode names are recorded from the page side.",
+   "[LegacyUnforgeable] members (Location.*, Window.location/document/window/top, Document.location) are non-configurable and cannot be wrapped; see meta.unwrappable.",
+   "ECMAScript intrinsics are not traced except Intl, the locale-sensitive Date/Number/String/Array methods, WebAssembly, SharedArrayBuffer and Atomics.wait/notify/waitAsync.",
+   "Cross-origin window property access (e.g. otherWindow.postMessage) goes through cross-origin wrappers, not the wrapped prototypes, and is undercounted.",
+   "HTTP protocol versions come from CDP Network.responseReceived on the main frame session plus best-effort sessions on out-of-process iframes; requests of frames that could not be attached are counted without a protocol.",
+   "Stylesheets are walked once per CSSStyleSheet object at harvest time; cross-origin sheets without CORS are counted in css.stylesheets.cross_origin_skipped only.",
+   "The User-Agent string had \"HeadlessChrome\" replaced by \"Chrome\" (Playwright then derives consistent navigator.userAgentData); no other fingerprint changes were made.",
+   "The authenticated Teams client is NOT covered: teams.microsoft.com redirects to the Microsoft login page and no test tenant credentials were available. Only the pre-auth shell and the login page were captured. The full client (calling, chat, Web Audio worklets, WebRTC, Service Worker, IndexedDB) must be captured with a test tenant later."
+  ],
+  "page_errors": {
+   "count": 0,
+   "samples": []
+  },
+  "console_errors": 1,
+  "frames_traced": 9,
+  "workers_traced": 0,
+  "service_workers_traced": 1,
+  "unwrappable": [
+   "Window.window",
+   "Window.document",
+   "Window.location",
+   "Window.top"
+  ],
+  "tracer_errors": [],
+  "wrapped_members_top_frame": 6449,
+  "tracer_install_ms_top_frame": 21,
+  "interface_count": 101
+ },
+ "interfaces": {
+  "Node": {
+   "total": 97093,
+   "total_top": 96907,
+   "member_count": 17,
+   "realms": {
+    "window": 97093
+   },
+   "members": {
+    "nodeType": {
+     "get": 45341
+    },
+    "nextSibling": {
+     "get": 20757
+    },
+    "nodeValue": {
+     "get": 10734
+    },
+    "parentNode": {
+     "get": 6235
+    },
+    "firstChild": {
+     "get": 2616
+    },
+    "ownerDocument": {
+     "get": 1620
+    },
+    "removeChild": {
+     "call": 1519
+    },
+    "contains": {
+     "call": 1438
+    },
+    "insertBefore": {
+     "call": 1414
+    },
+    "cloneNode": {
+     "call": 1372
+    },
+    "childNodes": {
+     "get": 1358
+    },
+    "nodeName": {
+     "get": 940
+    },
+    "appendChild": {
+     "call": 693
+    },
+    "previousSibling": {
+     "get": 572
+    },
+    "hasChildNodes": {
+     "call": 465
+    },
+    "lastChild": {
+     "get": 18
+    },
+    "baseURI": {
+     "get": 1
+    }
+   }
+  },
+  "Element": {
+   "total": 8961,
+   "total_top": 8924,
+   "member_count": 16,
+   "realms": {
+    "window": 8961
+   },
+   "members": {
+    "getAttribute": {
+     "call": 3561
+    },
+    "tagName": {
+     "get": 2419
+    },
+    "classList": {
+     "get": 1150
+    },
+    "namespaceURI": {
+     "get": 983
+    },
+    "getElementsByTagName": {
+     "call": 400
+    },
+    "attributes": {
+     "get": 181
+    },
+    "firstElementChild": {
+     "get": 87
+    },
+    "setAttribute": {
+     "call": 85
+    },
+    "id": {
+     "get": 34,
+     "set": 1
+    },
+    "innerHTML": {
+     "set": 28,
+     "get": 7
+    },
+    "querySelector": {
+     "call": 8
+    },
+    "removeAttribute": {
+     "call": 8
+    },
+    "querySelectorAll": {
+     "call": 4
+    },
+    "className": {
+     "set": 2
+    },
+    "getAttributeNode": {
+     "call": 2
+    },
+    "append": {
+     "call": 1
+    }
+   }
+  },
+  "NodeList": {
+   "total": 4383,
+   "total_top": 4380,
+   "member_count": 2,
+   "realms": {
+    "window": 4383
+   },
+   "members": {
+    "length": {
+     "get": 4382
+    },
+    "@@iterator": {
+     "call": 1
+    }
+   }
+  },
+  "Window": {
+   "total": 3689,
+   "total_top": 3673,
+   "member_count": 34,
+   "realms": {
+    "window": 3689
+   },
+   "members": {
+    "performance": {
+     "get": 2227
+    },
+    "crypto": {
+     "get": 369
+    },
+    "navigator": {
+     "get": 317
+    },
+    "setTimeout": {
+     "call": 235
+    },
+    "localStorage": {
+     "get": 170
+    },
+    "clearTimeout": {
+     "call": 107
+    },
+    "sessionStorage": {
+     "get": 107
+    },
+    "matchMedia": {
+     "call": 32
+    },
+    "self": {
+     "get": 30
+    },
+    "history": {
+     "get": 15
+    },
+    "caches": {
+     "get": 13
+    },
+    "trustedTypes": {
+     "get": 10
+    },
+    "btoa": {
+     "call": 9
+    },
+    "parent": {
+     "get": 6
+    },
+    "getComputedStyle": {
+     "call": 5
+    },
+    "atob": {
+     "call": 4
+    },
+    "onerror": {
+     "get": 2,
+     "set": 2
+    },
+    "screen": {
+     "get": 4
+    },
+    "setInterval": {
+     "call": 4
+    },
+    "indexedDB": {
+     "get": 3
+    },
+    "queueMicrotask": {
+     "call": 3
+    },
+    "postMessage": {
+     "call": 2
+    },
+    "scheduler": {
+     "get": 2
+    },
+    "close": {
+     "call": 1
+    },
+    "crossOriginIsolated": {
+     "get": 1
+    },
+    "documentPictureInPicture": {
+     "get": 1
+    },
+    "external": {
+     "get": 1
+    },
+    "fetch": {
+     "call": 1
+    },
+    "innerHeight": {
+     "get": 1
+    },
+    "innerWidth": {
+     "get": 1
+    },
+    "launchQueue": {
+     "get": 1
+    },
+    "onpagehide": {
+     "get": 1
+    },
+    "onpopstate": {
+     "get": 1
+    },
+    "opener": {
+     "get": 1
+    }
+   }
+  },
+  "HTMLCollection": {
+   "total": 1966,
+   "total_top": 1965,
+   "member_count": 1,
+   "realms": {
+    "window": 1966
+   },
+   "members": {
+    "length": {
+     "get": 1966
+    }
+   }
+  },
+  "Document": {
+   "total": 1954,
+   "total_top": 1918,
+   "member_count": 25,
+   "realms": {
+    "window": 1954
+   },
+   "members": {
+    "documentElement": {
+     "get": 1449
+    },
+    "createElement": {
+     "call": 163
+    },
+    "visibilityState": {
+     "get": 96
+    },
+    "head": {
+     "get": 73
+    },
+    "getElementsByTagName": {
+     "call": 39
+    },
+    "defaultView": {
+     "get": 23
+    },
+    "body": {
+     "get": 20
+    },
+    "cookie": {
+     "set": 10,
+     "get": 10
+    },
+    "activeElement": {
+     "get": 18
+    },
+    "querySelector": {
+     "call": 10
+    },
+    "createTextNode": {
+     "call": 9
+    },
+    "querySelectorAll": {
+     "call": 7
+    },
+    "getElementById": {
+     "call": 6
+    },
+    "domain": {
+     "get": 3
+    },
+    "implementation": {
+     "get": 3
+    },
+    "createComment": {
+     "call": 2
+    },
+    "createEvent": {
+     "call": 2
+    },
+    "currentScript": {
+     "get": 2
+    },
+    "hidden": {
+     "get": 2
+    },
+    "readyState": {
+     "get": 2
+    },
+    "createNodeIterator": {
+     "call": 1
+    },
+    "hasFocus": {
+     "call": 1
+    },
+    "hasStorageAccess": {
+     "call": 1
+    },
+    "styleSheets": {
+     "get": 1
+    },
+    "title": {
+     "set": 1
+    }
+   }
+  },
+  "Attr": {
+   "total": 1425,
+   "total_top": 1425,
+   "member_count": 3,
+   "realms": {
+    "window": 1425
+   },
+   "members": {
+    "name": {
+     "get": 475
+    },
+    "namespaceURI": {
+     "get": 475
+    },
+    "value": {
+     "get": 475
+    }
+   }
+  },
+  "Performance": {
+   "total": 1318,
+   "total_top": 1045,
+   "member_count": 11,
+   "realms": {
+    "window": 1045,
+    "worker": 268,
+    "service_worker": 5
+   },
+   "members": {
+    "now": {
+     "call": 527
+    },
+    "mark": {
+     "call": 390
+    },
+    "clearMarks": {
+     "call": 112
+    },
+    "timeOrigin": {
+     "get": 107
+    },
+    "getEntriesByName": {
+     "call": 54
+    },
+    "clearMeasures": {
+     "call": 52
+    },
+    "measure": {
+     "call": 52
+    },
+    "timing": {
+     "get": 10
+    },
+    "navigation": {
+     "get": 6
+    },
+    "getEntriesByType": {
+     "call": 5
+    },
+    "getEntries": {
+     "call": 3
+    }
+   }
+  },
+  "Crypto": {
+   "total": 922,
+   "total_top": 867,
+   "member_count": 3,
+   "realms": {
+    "window": 867,
+    "worker": 55
+   },
+   "members": {
+    "getRandomValues": {
+     "call": 913
+    },
+    "subtle": {
+     "get": 8
+    },
+    "randomUUID": {
+     "call": 1
+    }
+   }
+  },
+  "PerformanceEntry": {
+   "total": 521,
+   "total_top": 521,
+   "member_count": 4,
+   "realms": {
+    "window": 521
+   },
+   "members": {
+    "name": {
+     "get": 461
+    },
+    "startTime": {
+     "get": 55
+    },
+    "toJSON": {
+     "call": 3
+    },
+    "duration": {
+     "get": 2
+    }
+   }
+  },
+  "NodeIterator": {
+   "total": 466,
+   "total_top": 466,
+   "member_count": 1,
+   "realms": {
+    "window": 466
+   },
+   "members": {
+    "nextNode": {
+     "call": 466
+    }
+   }
+  },
+  "MessageEvent": {
+   "total": 462,
+   "total_top": 89,
+   "member_count": 4,
+   "realms": {
+    "worker": 367,
+    "window": 95
+   },
+   "members": {
+    "data": {
+     "get": 362
+    },
+    "ports": {
+     "get": 96
+    },
+    "origin": {
+     "get": 3
+    },
+    "source": {
+     "get": 1
+    }
+   }
+  },
+  "TrustedTypePolicyFactory": {
+   "total": 462,
+   "total_top": 462,
+   "member_count": 2,
+   "realms": {
+    "window": 462
+   },
+   "members": {
+    "getAttributeType": {
+     "call": 456
+    },
+    "createPolicy": {
+     "call": 6
+    }
+   }
+  },
+  "WorkerGlobalScope": {
+   "total": 436,
+   "total_top": 0,
+   "member_count": 12,
+   "realms": {
+    "worker": 314,
+    "service_worker": 122
+   },
+   "members": {
+    "performance": {
+     "get": 189
+    },
+    "self": {
+     "get": 94
+    },
+    "crypto": {
+     "get": 42
+    },
+    "origin": {
+     "get": 40
+    },
+    "fetch": {
+     "call": 21
+    },
+    "setTimeout": {
+     "call": 21
+    },
+    "caches": {
+     "get": 8
+    },
+    "location": {
+     "get": 7
+    },
+    "indexedDB": {
+     "get": 6
+    },
+    "navigator": {
+     "get": 4
+    },
+    "atob": {
+     "call": 2
+    },
+    "clearTimeout": {
+     "call": 2
+    }
+   }
+  },
+  "DOMTokenList": {
+   "total": 391,
+   "total_top": 391,
+   "member_count": 5,
+   "realms": {
+    "window": 391
+   },
+   "members": {
+    "remove": {
+     "call": 281
+    },
+    "add": {
+     "call": 107
+    },
+    "forEach": {
+     "call": 1
+    },
+    "length": {
+     "get": 1
+    },
+    "replace": {
+     "call": 1
+    }
+   }
+  },
+  "Storage": {
+   "total": 306,
+   "total_top": 306,
+   "member_count": 5,
+   "realms": {
+    "window": 306
+   },
+   "members": {
+    "getItem": {
+     "call": 269
+    },
+    "setItem": {
+     "call": 28
+    },
+    "removeItem": {
+     "call": 6
+    },
+    "length": {
+     "get": 2
+    },
+    "key": {
+     "call": 1
+    }
+   }
+  },
+  "HTMLInputElement": {
+   "total": 296,
+   "total_top": 296,
+   "member_count": 4,
+   "realms": {
+    "window": 296
+   },
+   "members": {
+    "type": {
+     "get": 169
+    },
+    "value": {
+     "get": 62,
+     "set": 57
+    },
+    "name": {
+     "set": 6
+    },
+    "disabled": {
+     "get": 2
+    }
+   }
+  },
+  "HTMLScriptElement": {
+   "total": 270,
+   "total_top": 266,
+   "member_count": 8,
+   "realms": {
+    "window": 270
+   },
+   "members": {
+    "src": {
+     "get": 34,
+     "set": 47
+    },
+    "crossOrigin": {
+     "set": 44
+    },
+    "integrity": {
+     "set": 44
+    },
+    "charset": {
+     "set": 31
+    },
+    "async": {
+     "get": 3,
+     "set": 16
+    },
+    "defer": {
+     "get": 3,
+     "set": 16
+    },
+    "noModule": {
+     "set": 16
+    },
+    "type": {
+     "set": 16
+    }
+   }
+  },
+  "HTMLElement": {
+   "total": 266,
+   "total_top": 266,
+   "member_count": 8,
+   "realms": {
+    "window": 266
+   },
+   "members": {
+    "onerror": {
+     "get": 28,
+     "set": 80
+    },
+    "onload": {
+     "get": 28,
+     "set": 78
+    },
+    "style": {
+     "get": 38
+    },
+    "dataset": {
+     "get": 6
+    },
+    "focus": {
+     "call": 3
+    },
+    "nonce": {
+     "get": 3
+    },
+    "blur": {
+     "call": 1
+    },
+    "lang": {
+     "get": 1
+    }
+   }
+  },
+  "Navigator": {
+   "total": 202,
+   "total_top": 198,
+   "member_count": 14,
+   "realms": {
+    "window": 202
+   },
+   "members": {
+    "connection": {
+     "get": 54
+    },
+    "onLine": {
+     "get": 50
+    },
+    "userAgent": {
+     "get": 38
+    },
+    "serviceWorker": {
+     "get": 22
+    },
+    "credentials": {
+     "get": 13
+    },
+    "language": {
+     "get": 8
+    },
+    "product": {
+     "get": 5
+    },
+    "scheduling": {
+     "get": 4
+    },
+    "platform": {
+     "get": 3
+    },
+    "maxTouchPoints": {
+     "get": 1
+    },
+    "permissions": {
+     "get": 1
+    },
+    "sendBeacon": {
+     "call": 1
+    },
+    "userAgentData": {
+     "get": 1
+    },
+    "vendor": {
+     "get": 1
+    }
+   }
+  },
+  "URL": {
+   "total": 199,
+   "total_top": 141,
+   "member_count": 10,
+   "realms": {
+    "window": 141,
+    "service_worker": 56,
+    "worker": 2
+   },
+   "members": {
+    "constructor": {
+     "construct": 70
+    },
+    "origin": {
+     "get": 60
+    },
+    "protocol": {
+     "get": 21
+    },
+    "pathname": {
+     "get": 16,
+     "set": 2
+    },
+    "searchParams": {
+     "get": 10
+    },
+    "href": {
+     "get": 9
+    },
+    "hash": {
+     "get": 3
+    },
+    "hostname": {
+     "get": 3
+    },
+    "toString": {
+     "call": 3
+    },
+    "search": {
+     "get": 2
+    }
+   }
+  },
+  "EventTarget": {
+   "total": 196,
+   "total_top": 187,
+   "member_count": 4,
+   "realms": {
+    "window": 196
+   },
+   "members": {
+    "addEventListener": {
+     "call": 178
+    },
+    "removeEventListener": {
+     "call": 15
+    },
+    "dispatchEvent": {
+     "call": 2
+    },
+    "constructor": {
+     "construct": 1
+    }
+   }
+  },
+  "NamedNodeMap": {
+   "total": 181,
+   "total_top": 181,
+   "member_count": 1,
+   "realms": {
+    "window": 181
+   },
+   "members": {
+    "length": {
+     "get": 181
+    }
+   }
+  },
+  "CSSRuleList": {
+   "total": 122,
+   "total_top": 122,
+   "member_count": 2,
+   "realms": {
+    "window": 122
+   },
+   "members": {
+    "length": {
+     "get": 117
+    },
+    "@@iterator": {
+     "call": 5
+    }
+   }
+  },
+  "NetworkInformation": {
+   "total": 111,
+   "total_top": 111,
+   "member_count": 5,
+   "realms": {
+    "window": 111
+   },
+   "members": {
+    "effectiveType": {
+     "get": 51
+    },
+    "rtt": {
+     "get": 51
+    },
+    "downlink": {
+     "get": 3
+    },
+    "onchange": {
+     "get": 3
+    },
+    "saveData": {
+     "get": 3
+    }
+   }
+  },
+  "Request": {
+   "total": 111,
+   "total_top": 22,
+   "member_count": 5,
+   "realms": {
+    "service_worker": 54,
+    "worker": 35,
+    "window": 22
+   },
+   "members": {
+    "constructor": {
+     "construct": 56
+    },
+    "url": {
+     "get": 47
+    },
+    "method": {
+     "get": 4
+    },
+    "mode": {
+     "get": 3
+    },
+    "headers": {
+     "get": 1
+    }
+   }
+  },
+  "Response": {
+   "total": 108,
+   "total_top": 11,
+   "member_count": 8,
+   "realms": {
+    "service_worker": 80,
+    "worker": 17,
+    "window": 11
+   },
+   "members": {
+    "headers": {
+     "get": 55
+    },
+    "constructor": {
+     "construct": 24
+    },
+    "ok": {
+     "get": 22
+    },
+    "clone": {
+     "call": 3
+    },
+    "json": {
+     "call": 1
+    },
+    "status": {
+     "get": 1
+    },
+    "text": {
+     "call": 1
+    },
+    "url": {
+     "get": 1
+    }
+   }
+  },
+  "HTMLLinkElement": {
+   "total": 93,
+   "total_top": 93,
+   "member_count": 6,
+   "realms": {
+    "window": 93
+   },
+   "members": {
+    "href": {
+     "get": 13,
+     "set": 19
+    },
+    "crossOrigin": {
+     "set": 13
+    },
+    "rel": {
+     "set": 13
+    },
+    "as": {
+     "set": 12
+    },
+    "integrity": {
+     "set": 12
+    },
+    "charset": {
+     "set": 11
+    }
+   }
+  },
+  "HTMLAnchorElement": {
+   "total": 74,
+   "total_top": 74,
+   "member_count": 3,
+   "realms": {
+    "window": 74
+   },
+   "members": {
+    "href": {
+     "set": 37
+    },
+    "hostname": {
+     "get": 34
+    },
+    "origin": {
+     "get": 3
+    }
+   }
+  },
+  "PerformanceResourceTiming": {
+   "total": 72,
+   "total_top": 72,
+   "member_count": 5,
+   "realms": {
+    "window": 72
+   },
+   "members": {
+    "initiatorType": {
+     "get": 32
+    },
+    "toJSON": {
+     "call": 30
+    },
+    "redirectStart": {
+     "get": 4
+    },
+    "workerStart": {
+     "get": 4
+    },
+    "responseStart": {
+     "get": 2
+    }
+   }
+  },
+  "Worker": {
+   "total": 67,
+   "total_top": 67,
+   "member_count": 4,
+   "realms": {
+    "window": 67
+   },
+   "members": {
+    "postMessage": {
+     "call": 61
+    },
+    "constructor": {
+     "construct": 2
+    },
+    "onerror": {
+     "set": 2
+    },
+    "onmessage": {
+     "set": 2
+    }
+   }
+  },
+  "Cache": {
+   "total": 65,
+   "total_top": 23,
+   "member_count": 4,
+   "realms": {
+    "service_worker": 24,
+    "window": 23,
+    "worker": 18
+   },
+   "members": {
+    "put": {
+     "call": 45
+    },
+    "match": {
+     "call": 11
+    },
+    "delete": {
+     "call": 7
+    },
+    "keys": {
+     "call": 2
+    }
+   }
+  },
+  "Headers": {
+   "total": 61,
+   "total_top": 3,
+   "member_count": 5,
+   "realms": {
+    "service_worker": 58,
+    "window": 3
+   },
+   "members": {
+    "get": {
+     "call": 54
+    },
+    "@@iterator": {
+     "call": 3
+    },
+    "constructor": {
+     "construct": 2
+    },
+    "forEach": {
+     "call": 1
+    },
+    "set": {
+     "call": 1
+    }
+   }
+  },
+  "IDBRequest": {
+   "total": 51,
+   "total_top": 31,
+   "member_count": 4,
+   "realms": {
+    "window": 31,
+    "service_worker": 16,
+    "worker": 4
+   },
+   "members": {
+    "result": {
+     "get": 17
+    },
+    "onerror": {
+     "set": 16
+    },
+    "onsuccess": {
+     "set": 16
+    },
+    "transaction": {
+     "get": 2
+    }
+   }
+  },
+  "TrustedTypePolicy": {
+   "total": 50,
+   "total_top": 50,
+   "member_count": 2,
+   "realms": {
+    "window": 50
+   },
+   "members": {
+    "createScriptURL": {
+     "call": 48
+    },
+    "createHTML": {
+     "call": 2
+    }
+   }
+  },
+  "CacheStorage": {
+   "total": 41,
+   "total_top": 17,
+   "member_count": 1,
+   "realms": {
+    "worker": 18,
+    "window": 17,
+    "service_worker": 6
+   },
+   "members": {
+    "open": {
+     "call": 41
+    }
+   }
+  },
+  "Event": {
+   "total": 37,
+   "total_top": 32,
+   "member_count": 3,
+   "realms": {
+    "window": 35,
+    "worker": 2
+   },
+   "members": {
+    "target": {
+     "get": 31
+    },
+    "preventDefault": {
+     "call": 4
+    },
+    "initEvent": {
+     "call": 2
+    }
+   }
+  },
+  "URLSearchParams": {
+   "total": 36,
+   "total_top": 28,
+   "member_count": 5,
+   "realms": {
+    "window": 31,
+    "service_worker": 5
+   },
+   "members": {
+    "get": {
+     "call": 18
+    },
+    "constructor": {
+     "construct": 10
+    },
+    "has": {
+     "call": 6
+    },
+    "@@iterator": {
+     "call": 1
+    },
+    "set": {
+     "call": 1
+    }
+   }
+  },
+  "MediaQueryList": {
+   "total": 32,
+   "total_top": 32,
+   "member_count": 1,
+   "realms": {
+    "window": 32
+   },
+   "members": {
+    "matches": {
+     "get": 32
+    }
+   }
+  },
+  "PerformanceTiming": {
+   "total": 28,
+   "total_top": 28,
+   "member_count": 9,
+   "realms": {
+    "window": 28
+   },
+   "members": {
+    "connectEnd": {
+     "get": 4
+    },
+    "domainLookupEnd": {
+     "get": 4
+    },
+    "domainLookupStart": {
+     "get": 4
+    },
+    "responseEnd": {
+     "get": 4
+    },
+    "responseStart": {
+     "get": 4
+    },
+    "toJSON": {
+     "call": 3
+    },
+    "fetchStart": {
+     "get": 2
+    },
+    "navigationStart": {
+     "get": 2
+    },
+    "domLoading": {
+     "get": 1
+    }
+   }
+  },
+  "PerformanceObserver": {
+   "total": 26,
+   "total_top": 26,
+   "member_count": 4,
+   "realms": {
+    "window": 26
+   },
+   "members": {
+    "disconnect": {
+     "call": 12
+    },
+    "constructor": {
+     "construct": 5
+    },
+    "observe": {
+     "call": 5
+    },
+    "supportedEntryTypes": {
+     "get": 4,
+     "static": true
+    }
+   }
+  },
+  "BroadcastChannel": {
+   "total": 25,
+   "total_top": 11,
+   "member_count": 4,
+   "realms": {
+    "window": 14,
+    "worker": 11
+   },
+   "members": {
+    "postMessage": {
+     "call": 11
+    },
+    "constructor": {
+     "construct": 9
+    },
+    "onmessage": {
+     "set": 3
+    },
+    "close": {
+     "call": 2
+    }
+   }
+  },
+  "IDBDatabase": {
+   "total": 24,
+   "total_top": 11,
+   "member_count": 8,
+   "realms": {
+    "window": 11,
+    "service_worker": 7,
+    "worker": 6
+   },
+   "members": {
+    "close": {
+     "call": 12
+    },
+    "transaction": {
+     "call": 4
+    },
+    "createObjectStore": {
+     "call": 3
+    },
+    "objectStoreNames": {
+     "get": 1
+    },
+    "onabort": {
+     "set": 1
+    },
+    "onclose": {
+     "set": 1
+    },
+    "onerror": {
+     "set": 1
+    },
+    "onversionchange": {
+     "set": 1
+    }
+   }
+  },
+  "ServiceWorkerContainer": {
+   "total": 20,
+   "total_top": 20,
+   "member_count": 3,
+   "realms": {
+    "window": 20
+   },
+   "members": {
+    "controller": {
+     "get": 18
+    },
+    "getRegistration": {
+     "call": 1
+    },
+    "register": {
+     "call": 1
+    }
+   }
+  },
+  "TrustedScriptURL": {
+   "total": 20,
+   "total_top": 20,
+   "member_count": 1,
+   "realms": {
+    "window": 20
+   },
+   "members": {
+    "toString": {
+     "call": 20
+    }
+   }
+  },
+  "WorkerLocation": {
+   "total": 20,
+   "total_top": 0,
+   "member_count": 3,
+   "realms": {
+    "worker": 18,
+    "service_worker": 2
+   },
+   "members": {
+    "hash": {
+     "get": 14
+    },
+    "href": {
+     "get": 4
+    },
+    "origin": {
+     "get": 2
+    }
+   }
+  },
+  "HTMLMetaElement": {
+   "total": 19,
+   "total_top": 19,
+   "member_count": 1,
+   "realms": {
+    "window": 19
+   },
+   "members": {
+    "name": {
+     "get": 19
+    }
+   }
+  },
+  "DedicatedWorkerGlobalScope": {
+   "total": 17,
+   "total_top": 0,
+   "member_count": 3,
+   "realms": {
+    "worker": 17
+   },
+   "members": {
+    "postMessage": {
+     "call": 15
+    },
+    "cdlWorkerChunkLoadRetryTelemetryCallback": {
+     "call": 1
+    },
+    "onmessage": {
+     "set": 1
+    }
+   }
+  },
+  "XMLHttpRequest": {
+   "total": 17,
+   "total_top": 15,
+   "member_count": 8,
+   "realms": {
+    "window": 15,
+    "worker": 2
+   },
+   "members": {
+    "setRequestHeader": {
+     "call": 7
+    },
+    "withCredentials": {
+     "get": 1,
+     "set": 2
+    },
+    "constructor": {
+     "construct": 2
+    },
+    "getAllResponseHeaders": {
+     "call": 1
+    },
+    "open": {
+     "call": 1
+    },
+    "responseText": {
+     "get": 1
+    },
+    "send": {
+     "call": 1
+    },
+    "status": {
+     "get": 1
+    }
+   }
+  },
+  "FetchEvent": {
+   "total": 16,
+   "total_top": 0,
+   "member_count": 2,
+   "realms": {
+    "service_worker": 16
+   },
+   "members": {
+    "request": {
+     "get": 14
+    },
+    "respondWith": {
+     "call": 2
+    }
+   }
+  },
+  "PerformanceObserverEntryList": {
+   "total": 15,
+   "total_top": 15,
+   "member_count": 1,
+   "realms": {
+    "window": 15
+   },
+   "members": {
+    "getEntries": {
+     "call": 15
+    }
+   }
+  },
+  "TextEncoder": {
+   "total": 15,
+   "total_top": 12,
+   "member_count": 2,
+   "realms": {
+    "window": 12,
+    "worker": 3
+   },
+   "members": {
+    "constructor": {
+     "construct": 8
+    },
+    "encode": {
+     "call": 7
+    }
+   }
+  },
+  "MessageChannel": {
+   "total": 14,
+   "total_top": 11,
+   "member_count": 3,
+   "realms": {
+    "window": 11,
+    "worker": 3
+   },
+   "members": {
+    "constructor": {
+     "construct": 5
+    },
+    "port2": {
+     "get": 5
+    },
+    "port1": {
+     "get": 4
+    }
+   }
+  },
+  "IDBObjectStore": {
+   "total": 13,
+   "total_top": 9,
+   "member_count": 2,
+   "realms": {
+    "window": 9,
+    "service_worker": 3,
+    "worker": 1
+   },
+   "members": {
+    "put": {
+     "call": 12
+    },
+    "createIndex": {
+     "call": 1
+    }
+   }
+  },
+  "Intl.DateTimeFormat": {
+   "total": 12,
+   "total_top": 6,
+   "member_count": 3,
+   "realms": {
+    "window": 6,
+    "worker": 6
+   },
+   "members": {
+    "constructor": {
+     "call": 7
+    },
+    "format": {
+     "get": 3
+    },
+    "resolvedOptions": {
+     "call": 2
+    }
+   }
+  },
+  "CharacterData": {
+   "total": 10,
+   "total_top": 10,
+   "member_count": 1,
+   "realms": {
+    "window": 10
+   },
+   "members": {
+    "data": {
+     "get": 10
+    }
+   }
+  },
+  "console": {
+   "total": 10,
+   "total_top": 7,
+   "member_count": 5,
+   "realms": {
+    "window": 10
+   },
+   "members": {
+    "log": {
+     "call": 6,
+     "static": true
+    },
+    "error": {
+     "call": 1,
+     "static": true
+    },
+    "info": {
+     "call": 1,
+     "static": true
+    },
+    "memory": {
+     "get": 1,
+     "static": true
+    },
+    "warn": {
+     "call": 1,
+     "static": true
+    }
+   }
+  },
+  "History": {
+   "total": 9,
+   "total_top": 8,
+   "member_count": 3,
+   "realms": {
+    "window": 9
+   },
+   "members": {
+    "replaceState": {
+     "call": 5
+    },
+    "state": {
+     "get": 3
+    },
+    "length": {
+     "get": 1
+    }
+   }
+  },
+  "StyleSheetList": {
+   "total": 9,
+   "total_top": 9,
+   "member_count": 2,
+   "realms": {
+    "window": 9
+   },
+   "members": {
+    "length": {
+     "get": 8
+    },
+    "@@iterator": {
+     "call": 1
+    }
+   }
+  },
+  "StyleSheet": {
+   "total": 7,
+   "total_top": 7,
+   "member_count": 1,
+   "realms": {
+    "window": 7
+   },
+   "members": {
+    "href": {
+     "get": 7
+    }
+   }
+  },
+  "SubtleCrypto": {
+   "total": 7,
+   "total_top": 7,
+   "member_count": 4,
+   "realms": {
+    "window": 7
+   },
+   "members": {
+    "digest": {
+     "call": 2
+    },
+    "exportKey": {
+     "call": 2
+    },
+    "generateKey": {
+     "call": 2
+    },
+    "importKey": {
+     "call": 1
+    }
+   }
+  },
+  "HTMLTemplateElement": {
+   "total": 6,
+   "total_top": 6,
+   "member_count": 1,
+   "realms": {
+    "window": 6
+   },
+   "members": {
+    "content": {
+     "get": 6
+    }
+   }
+  },
+  "PerformanceNavigationTiming": {
+   "total": 6,
+   "total_top": 6,
+   "member_count": 3,
+   "realms": {
+    "window": 6
+   },
+   "members": {
+    "toJSON": {
+     "call": 3
+    },
+    "type": {
+     "get": 2
+    },
+    "activationStart": {
+     "get": 1
+    }
+   }
+  },
+  "TextDecoder": {
+   "total": 6,
+   "total_top": 2,
+   "member_count": 2,
+   "realms": {
+    "window": 4,
+    "worker": 2
+   },
+   "members": {
+    "constructor": {
+     "construct": 4
+    },
+    "decode": {
+     "call": 2
+    }
+   }
+  },
+  "CSSStyleSheet": {
+   "total": 5,
+   "total_top": 5,
+   "member_count": 1,
+   "realms": {
+    "window": 5
+   },
+   "members": {
+    "cssRules": {
+     "get": 5
+    }
+   }
+  },
+  "HTMLIFrameElement": {
+   "total": 5,
+   "total_top": 5,
+   "member_count": 4,
+   "realms": {
+    "window": 5
+   },
+   "members": {
+    "src": {
+     "set": 2
+    },
+    "contentWindow": {
+     "get": 1
+    },
+    "height": {
+     "set": 1
+    },
+    "width": {
+     "set": 1
+    }
+   }
+  },
+  "ExtendableEvent": {
+   "total": 4,
+   "total_top": 0,
+   "member_count": 1,
+   "realms": {
+    "service_worker": 4
+   },
+   "members": {
+    "waitUntil": {
+     "call": 4
+    }
+   }
+  },
+  "IDBFactory": {
+   "total": 4,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "service_worker": 3,
+    "window": 1
+   },
+   "members": {
+    "open": {
+     "call": 4
+    }
+   }
+  },
+  "IDBOpenDBRequest": {
+   "total": 4,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "service_worker": 3,
+    "window": 1
+   },
+   "members": {
+    "onupgradeneeded": {
+     "set": 4
+    }
+   }
+  },
+  "IDBTransaction": {
+   "total": 4,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "service_worker": 3,
+    "window": 1
+   },
+   "members": {
+    "objectStore": {
+     "call": 4
+    }
+   }
+  },
+  "MessagePort": {
+   "total": 4,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3,
+    "worker": 1
+   },
+   "members": {
+    "onmessage": {
+     "set": 4
+    }
+   }
+  },
+  "MutationObserver": {
+   "total": 4,
+   "total_top": 2,
+   "member_count": 2,
+   "realms": {
+    "window": 4
+   },
+   "members": {
+    "constructor": {
+     "construct": 2
+    },
+    "observe": {
+     "call": 2
+    }
+   }
+  },
+  "PerformancePaintTiming": {
+   "total": 4,
+   "total_top": 4,
+   "member_count": 1,
+   "realms": {
+    "window": 4
+   },
+   "members": {
+    "toJSON": {
+     "call": 4
+    }
+   }
+  },
+  "WorkerNavigator": {
+   "total": 4,
+   "total_top": 0,
+   "member_count": 1,
+   "realms": {
+    "worker": 4
+   },
+   "members": {
+    "userAgent": {
+     "get": 4
+    }
+   }
+  },
+  "Blob": {
+   "total": 3,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "worker": 2,
+    "window": 1
+   },
+   "members": {
+    "constructor": {
+     "construct": 3
+    }
+   }
+  },
+  "DOMException": {
+   "total": 3,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "worker": 2,
+    "window": 1
+   },
+   "members": {
+    "constructor": {
+     "construct": 3
+    }
+   }
+  },
+  "HTMLImageElement": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 2,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "src": {
+     "set": 2
+    },
+    "Image": {
+     "construct": 1
+    }
+   }
+  },
+  "PerformanceLongAnimationFrameTiming": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "toJSON": {
+     "call": 3
+    }
+   }
+  },
+  "PerformanceNavigation": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "toJSON": {
+     "call": 3
+    }
+   }
+  },
+  "Screen": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 3,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "availHeight": {
+     "get": 1
+    },
+    "availWidth": {
+     "get": 1
+    },
+    "orientation": {
+     "get": 1
+    }
+   }
+  },
+  "XMLHttpRequestEventTarget": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 3,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "onerror": {
+     "set": 1
+    },
+    "onload": {
+     "set": 1
+    },
+    "ontimeout": {
+     "set": 1
+    }
+   }
+  },
+  "AbortController": {
+   "total": 2,
+   "total_top": 2,
+   "member_count": 2,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "constructor": {
+     "construct": 1
+    },
+    "signal": {
+     "get": 1
+    }
+   }
+  },
+  "CSSStyleDeclaration": {
+   "total": 2,
+   "total_top": 2,
+   "member_count": 1,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "getPropertyValue": {
+     "call": 2
+    }
+   }
+  },
+  "DOMParser": {
+   "total": 2,
+   "total_top": 2,
+   "member_count": 2,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "constructor": {
+     "construct": 1
+    },
+    "parseFromString": {
+     "call": 1
+    }
+   }
+  },
+  "IDBVersionChangeEvent": {
+   "total": 2,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "service_worker": 1,
+    "window": 1
+   },
+   "members": {
+    "oldVersion": {
+     "get": 2
+    }
+   }
+  },
+  "Intl": {
+   "total": 2,
+   "total_top": 2,
+   "member_count": 1,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "String.prototype.toLocaleLowerCase": {
+     "call": 2
+    }
+   }
+  },
+  "PermissionStatus": {
+   "total": 2,
+   "total_top": 2,
+   "member_count": 2,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "onchange": {
+     "set": 1
+    },
+    "state": {
+     "get": 1
+    }
+   }
+  },
+  "PromiseRejectionEvent": {
+   "total": 2,
+   "total_top": 2,
+   "member_count": 1,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "reason": {
+     "get": 2
+    }
+   }
+  },
+  "ServiceWorkerRegistration": {
+   "total": 2,
+   "total_top": 2,
+   "member_count": 2,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "active": {
+     "get": 1
+    },
+    "installing": {
+     "get": 1
+    }
+   }
+  },
+  "AbortSignal": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "aborted": {
+     "get": 1
+    }
+   }
+  },
+  "CredentialsContainer": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "get": {
+     "call": 1
+    }
+   }
+  },
+  "CustomEvent": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "constructor": {
+     "construct": 1
+    }
+   }
+  },
+  "DOMImplementation": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "hasFeature": {
+     "call": 1
+    }
+   }
+  },
+  "DOMStringList": {
+   "total": 1,
+   "total_top": 0,
+   "member_count": 1,
+   "realms": {
+    "worker": 1
+   },
+   "members": {
+    "contains": {
+     "call": 1
+    }
+   }
+  },
+  "HTMLTextAreaElement": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "value": {
+     "get": 1
+    }
+   }
+  },
+  "Intl.Collator": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "constructor": {
+     "construct": 1
+    }
+   }
+  },
+  "LaunchQueue": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "setConsumer": {
+     "call": 1
+    }
+   }
+  },
+  "NavigatorUAData": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "getHighEntropyValues": {
+     "call": 1
+    }
+   }
+  },
+  "Permissions": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "query": {
+     "call": 1
+    }
+   }
+  },
+  "PublicKeyCredential": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "isConditionalMediationAvailable": {
+     "call": 1,
+     "static": true
+    }
+   }
+  },
+  "ServiceWorker": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "postMessage": {
+     "call": 1
+    }
+   }
+  }
+ },
+ "events": {
+  "HTMLInputElement:change": 58,
+  "HTMLAnchorElement:click": 6,
+  "Window:pagehide": 6,
+  "HTMLDocument:visibilitychange": 5,
+  "HTMLInputElement:blur": 5,
+  "HTMLInputElement:click": 5,
+  "Window:message": 5,
+  "Window:visibilitychange": 5,
+  "Window:load": 4,
+  "BroadcastChannel:message": 3,
+  "HTMLDivElement:animationend": 3,
+  "HTMLInputElement:focus": 3,
+  "HTMLInputElement:focusin": 3,
+  "HTMLInputElement:focusout": 3,
+  "MediaQueryList:change": 3,
+  "Window:error": 3,
+  "Window:offline": 3,
+  "Window:online": 3,
+  "Window:popstate": 3,
+  "Window:unhandledrejection": 3,
+  "HTMLAnchorElement:blur": 2,
+  "HTMLAnchorElement:focus": 2,
+  "HTMLAnchorElement:focusin": 2,
+  "HTMLAnchorElement:focusout": 2,
+  "HTMLDocument:DOMContentLoaded": 2,
+  "HTMLDocument:pagehide": 2,
+  "HTMLHeadElement:error": 2,
+  "HTMLHeadElement:load": 2,
+  "HTMLInputElement:input": 2,
+  "Window:beforeunload": 2,
+  "Window:keydown": 2,
+  "Window:pageshow": 2,
+  "Window:resume": 2,
+  "Window:test": 2,
+  "HTMLDivElement:click": 1,
+  "HTMLDivElement:keydown": 1,
+  "HTMLDocument:beforeunload": 1,
+  "HTMLDocument:pageshow": 1,
+  "ServiceWorkerContainer:message": 1,
+  "Window:DOMMouseScroll": 1,
+  "Window:beforeinstallprompt": 1,
+  "Window:downloadLogs": 1,
+  "Window:hashchange": 1,
+  "Window:keyup": 1,
+  "Window:mousemove": 1,
+  "Window:mousewheel": 1,
+  "Window:pointerdown": 1,
+  "Window:scroll": 1,
+  "Window:storage": 1,
+  "Window:testPassive": 1,
+  "Window:touchmove": 1,
+  "Window:touchstart": 1
+ },
+ "elements": {
+  "div": 56,
+  "script": 47,
+  "a": 37,
+  "link": 13,
+  "form": 2,
+  "iframe": 2,
+  "template": 2,
+  "input": 1,
+  "span": 1,
+  "style": 1,
+  "textarea": 1
+ },
+ "custom_elements": {},
+ "css": {
+  "set": {
+   "height": 2,
+   "left": 2,
+   "position": 2,
+   "top": 2,
+   "width": 2,
+   "will-change": 2
+  },
+  "get": {},
+  "computed": {
+   "--*": 2
+  },
+  "inserted": {},
+  "supports": {},
+  "media_queries": {
+   "(display-mode: standalone) or (display-mode: window-controls-overlay)": 31,
+   "(display-mode: fullscreen)": 1
+  },
+  "stylesheets": {
+   "sheets": 8,
+   "cross_origin_skipped": 0,
+   "rules": 1714,
+   "rule_types": {
+    "CSSStyleRule": 1520,
+    "CSSKeyframeRule": 99,
+    "CSSMediaRule": 55,
+    "CSSKeyframesRule": 33,
+    "CSSFontFaceRule": 7
+   },
+   "properties": {
+    "width": 247,
+    "margin-left": 201,
+    "display": 187,
+    "left": 181,
+    "right": 156,
+    "background-color": 150,
+    "margin-bottom": 119,
+    "color": 118,
+    "position": 112,
+    "margin-top": 102,
+    "padding-bottom": 100,
+    "padding-left": 99,
+    "padding-top": 97,
+    "padding-right": 93,
+    "border-left-color": 91,
+    "border-right-color": 91,
+    "border-bottom-color": 89,
+    "border-top-color": 89,
+    "height": 83,
+    "max-height": 73,
+    "border-left-width": 70,
+    "border-right-width": 70,
+    "border-top-width": 68,
+    "margin-right": 68,
+    "border-bottom-width": 67,
+    "border-left-style": 67,
+    "border-right-style": 67,
+    "border-bottom-style": 65,
+    "border-top-style": 65,
+    "font-size": 62,
+    "opacity": 59,
+    "transform": 58,
+    "border-image-outset": 53,
+    "border-image-repeat": 53,
+    "border-image-slice": 53,
+    "border-image-source": 53,
+    "border-image-width": 53,
+    "font-weight": 49,
+    "animation-timing-function": 47,
+    "line-height": 46,
+    "outline-color": 46,
+    "outline-style": 46,
+    "--*": 45,
+    "outline-width": 45,
+    "overflow-x": 41,
+    "overflow-y": 40,
+    "text-wrap-mode": 40,
+    "white-space-collapse": 40,
+    "top": 39,
+    "z-index": 35,
+    "animation-name": 32,
+    "background-clip": 32,
+    "text-align": 32,
+    "background-image": 31,
+    "background-repeat": 31,
+    "animation-duration": 30,
+    "animation-fill-mode": 30,
+    "background-position-x": 30,
+    "background-position-y": 30,
+    "background-size": 30,
+    "text-decoration-color": 30,
+    "text-decoration-line": 30,
+    "text-decoration-style": 30,
+    "text-decoration-thickness": 30,
+    "vertical-align": 30,
+    "animation-delay": 29,
+    "bottom": 29,
+    "background-attachment": 28,
+    "background-origin": 28,
+    "font-family": 28,
+    "float": 26,
+    "max-width": 26,
+    "cursor": 24,
+    "animation-direction": 23,
+    "animation-iteration-count": 23,
+    "animation-play-state": 23,
+    "animation-range-end": 23,
+    "animation-range-start": 23,
+    "animation-timeline": 23,
+    "text-overflow": 20,
+    "border-bottom-left-radius": 19,
+    "border-bottom-right-radius": 19,
+    "border-top-left-radius": 19,
+    "border-top-right-radius": 19,
+    "min-width": 18,
+    "min-height": 16,
+    "box-shadow": 14,
+    "content": 11,
+    "transform-origin": 11,
+    "font-style": 10,
+    "visibility": 10,
+    "justify-content": 9,
+    "overflow-wrap": 9,
+    "align-items": 8,
+    "box-sizing": 8,
+    "clear": 7,
+    "list-style-type": 7,
+    "src": 7,
+    "list-style-image": 6,
+    "list-style-position": 6,
+    "appearance": 5,
+    "direction": 5,
+    "table-layout": 5,
+    "outline-offset": 4,
+    "pointer-events": 4,
+    "text-transform": 4,
+    "transition-property": 4,
+    "align-content": 3,
+    "app-region": 3,
+    "clip": 3,
+    "flex-direction": 3,
+    "font-variant-ligatures": 3,
+    "touch-action": 3,
+    "transition-behavior": 3,
+    "transition-delay": 3,
+    "transition-duration": 3,
+    "transition-timing-function": 3,
+    "backface-visibility": 2,
+    "border-collapse": 2,
+    "clip-path": 2,
+    "fill": 2,
+    "font-feature-settings": 2,
+    "font-kerning": 2,
+    "font-language-override": 2,
+    "font-optical-sizing": 2,
+    "font-size-adjust": 2,
+    "font-stretch": 2,
+    "font-variant-alternates": 2,
+    "font-variant-caps": 2,
+    "font-variant-east-asian": 2,
+    "font-variant-emoji": 2,
+    "font-variant-numeric": 2,
+    "font-variant-position": 2,
+    "font-variation-settings": 2,
+    "text-shadow": 2,
+    "will-change": 2,
+    "word-break": 2,
+    "-webkit-border-horizontal-spacing": 1,
+    "-webkit-border-vertical-spacing": 1,
+    "-webkit-font-smoothing": 1,
+    "-webkit-tap-highlight-color": 1,
+    "-webkit-text-security": 1,
+    "filter": 1,
+    "flex-basis": 1,
+    "flex-grow": 1,
+    "flex-shrink": 1,
+    "forced-color-adjust": 1,
+    "justify-items": 1,
+    "letter-spacing": 1,
+    "resize": 1,
+    "text-size-adjust": 1
+   },
+   "selectors": {
+    ":focus": 187,
+    ":hover": 132,
+    ":active": 40,
+    ":first-child": 29,
+    "::after": 25,
+    ":last-child": 20,
+    ":not(": 17,
+    "::-webkit-input-placeholder": 16,
+    "::before": 8,
+    ":link": 6,
+    ":nth-child(": 6,
+    ":visited": 6,
+    ":lang(": 5,
+    "::selection": 4,
+    "::-webkit-inner-spin-button": 1,
+    "::-webkit-outer-spin-button": 1,
+    "::-webkit-progress-bar": 1,
+    "::-webkit-progress-value": 1,
+    "::-webkit-search-cancel-button": 1,
+    "::-webkit-search-decoration": 1,
+    ":focus-visible": 1,
+    ":only-child": 1,
+    ":root": 1
+   },
+   "media_queries": {
+    "(min-width: 1400px)": 6,
+    "(min-width: 992px)": 6,
+    "print": 6,
+    "(max-width: 539px)": 5,
+    "(min-width: 540px) and (max-width: 767px)": 5,
+    "(min-width: 768px) and (max-width: 991px)": 5,
+    "(min-width: 768px)": 4,
+    "(min-width: 320px)": 3,
+    "(min-width: 540px)": 3,
+    "(-ms-high-contrast:active)": 1,
+    "(max-height: 400px)": 1,
+    "(max-width: 319px)": 1,
+    "(max-width: 600px), (max-height: 366px)": 1,
+    "(min-height: 800px)": 1,
+    "(min-width: 1084px)": 1,
+    "only screen and (max-height: 480px)": 1,
+    "only screen and (max-height: 768px)": 1,
+    "only screen and (min-height: 1024px)": 1,
+    "only screen and (min-height: 1280px)": 1,
+    "only screen and (min-height: 768px)": 1,
+    "screen and (max-width: 539px)": 1
+   },
+   "supports_conditions": {},
+   "container_conditions": {}
+  }
+ },
+ "media": {
+  "can_play_type": {},
+  "is_type_supported": {},
+  "source_buffer_types": {},
+  "change_type": {},
+  "decoding_info": {},
+  "key_systems": {},
+  "get_user_media": {},
+  "get_display_media": 0,
+  "src_schemes": {},
+  "append_count": 0,
+  "append_bytes": 0
+ },
+ "audio": {
+  "contexts": 0,
+  "context_options": {},
+  "worklet_nodes": {},
+  "processor_options": {}
+ },
+ "canvas": {
+  "contexts": {},
+  "context_attributes": {},
+  "to_data_url": 0,
+  "to_blob": 0,
+  "get_image_data": 0
+ },
+ "webgl": {
+  "parameters": {},
+  "extensions": {}
+ },
+ "workers": {
+  "dedicated": {
+   "https://teams.microsoft.com/v2/worker/precompiled-telemetry-web-worker-d1175eb166d33e19.js classic": 1,
+   "https://teams.microsoft.com/v2/worker/precompiled-web-worker-e7d630dacac25e10.js classic": 1
+  },
+  "shared": {},
+  "service": {
+   "https://teams.microsoft.com/v2/serviceworker.js {\"updateViaCache\":\"all\"}": 1
+  },
+  "worklets": {}
+ },
+ "wasm": {
+  "module_bytes": [],
+  "total_bytes": 0,
+  "streaming_urls": {},
+  "memory_shared": 0,
+  "memory_unshared": 0
+ },
+ "intl": {
+  "DateTimeFormat <default>": 4,
+  "DateTimeFormat en-us {timeZoneName}": 3,
+  "Collator <default> {numeric,sensitivity}": 1
+ },
+ "rtc": {
+  "local_candidates": {},
+  "remote_candidates": {},
+  "ice_servers": {},
+  "config": {},
+  "codecs": {}
+ },
+ "storage": {
+  "indexeddb": {
+   "teams-service-worker-telemetry-v2": 3,
+   "teams-service-worker-v2": 1
+  },
+  "caches": {
+   "cdl-worker-cache-manager": 25,
+   "provider-cache-storage": 9,
+   "teams-precache-v2": 6,
+   "teams-labs-service-cache-storage": 1
+  },
+  "broadcast_channels": {
+   "01a076e2-ab96-7055-b83f-b177fde0180d": 2,
+   "TelemetryDebugChannel": 2,
+   "msal.broadcast.cache": 2,
+   "CrossTabsBus": 1,
+   "msal.broadcast.event": 1,
+   "telemetry-react-web-client-4547e0ba-71c7-482d-a036-c668ed521b44": 1
+  }
+ },
+ "navigator": {
+  "high_entropy_hints": {
+   "fullVersionList": 1
+  },
+  "user_agent_data": {
+   "low_entropy": {
+    "brands": [
+     {
+      "brand": "Chromium",
+      "version": "153"
+     },
+     {
+      "brand": "Not_A Brand",
+      "version": "8"
+     }
+    ],
+    "mobile": false,
+    "platform": "macOS"
+   },
+   "high_entropy": {
+    "architecture": "x86",
+    "bitness": "64",
+    "brands": [
+     {
+      "brand": "Chromium",
+      "version": "153"
+     },
+     {
+      "brand": "Not_A Brand",
+      "version": "8"
+     }
+    ],
+    "formFactors": [
+     "Desktop"
+    ],
+    "fullVersionList": [
+     {
+      "brand": "Chromium",
+      "version": "153.0.8010.12"
+     },
+     {
+      "brand": "Not_A Brand",
+      "version": "8.0.0.0"
+     }
+    ],
+    "mobile": false,
+    "model": "",
+    "platform": "macOS",
+    "platformVersion": "10_15_7",
+    "uaFullVersion": "153.0.8010.12",
+    "wow64": false
+   }
+  }
+ },
+ "permissions": {
+  "idle-detection": 1
+ },
+ "websockets": {},
+ "event_sources": {},
+ "network": {
+  "requests": 98,
+  "responses": 82,
+  "failed": 0,
+  "bytes_encoded": 7773913,
+  "http_versions": {
+   "h3": 59,
+   "h2": 19,
+   "http/1.1": 4
+  },
+  "resource_types": {
+   "script": 69,
+   "document": 8,
+   "other": 7,
+   "image": 5,
+   "stylesheet": 4,
+   "xhr": 3,
+   "fetch": 1,
+   "ping": 1
+  },
+  "methods": {
+   "GET": 94,
+   "POST": 4
+  },
+  "status": {
+   "200": 93,
+   "301": 1,
+   "302": 2
+  },
+  "hosts": {
+   "teams.public.onecdn.static.microsoft": 69,
+   "aadcdn.msftauth.net": 12,
+   "teams.microsoft.com": 6,
+   "login.microsoftonline.com": 4,
+   "login.live.com": 2,
+   "aadcdn.msauth.net": 1,
+   "browser.events.data.microsoft.com": 1,
+   "config.teams.microsoft.com": 1,
+   "eu-mobile.events.data.microsoft.com": 1,
+   "teams.events.data.microsoft.com": 1
+  },
+  "host_protocols": {
+   "teams.microsoft.com": {
+    "h2": 1
+   },
+   "teams.public.onecdn.static.microsoft": {
+    "h3": 59
+   },
+   "config.teams.microsoft.com": {
+    "h2": 2
+   },
+   "login.microsoftonline.com": {
+    "http/1.1": 2
+   },
+   "teams.events.data.microsoft.com": {
+    "h2": 1
+   },
+   "browser.events.data.microsoft.com": {
+    "h2": 1
+   },
+   "aadcdn.msftauth.net": {
+    "h2": 12
+   },
+   "login.live.com": {
+    "http/1.1": 2
+   },
+   "eu-mobile.events.data.microsoft.com": {
+    "h2": 2
+   }
+  },
+  "mime_types": {
+   "application/javascript": 55,
+   "application/x-javascript": 5,
+   "text/html": 5,
+   "?": 4,
+   "text/css": 4,
+   "image/svg+xml": 3,
+   "application/json": 2,
+   "image/gif": 2,
+   "image/x-icon": 2
+  },
+  "content_encodings": {
+   "br": 59,
+   "gzip": 14
+  },
+  "alt_svc_hosts": {
+   "teams.public.onecdn.static.microsoft": 58
+  },
+  "from_service_worker": 1,
+  "from_cache": 0,
+  "websockets": {},
+  "ws_frames_sent": 0,
+  "ws_frames_received": 0,
+  "failed_errors": {},
+  "ice": null
+ },
+ "realms": [
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "https://login.microsoftonline.com",
+   "is_top": true,
+   "dumps": 3,
+   "member_accesses": 107935,
+   "wrapped_count": 7912,
+   "install_ms": 26,
+   "sources": {
+    "teams-landing": 1,
+    "final": 1,
+    "unload_flush": 1
+   }
+  },
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "https://teams.microsoft.com",
+   "is_top": true,
+   "dumps": 1,
+   "member_accesses": 18057,
+   "wrapped_count": 7917,
+   "install_ms": 25,
+   "sources": {
+    "unload_flush": 1
+   }
+  },
+  {
+   "kind": "worker",
+   "global": "DedicatedWorkerGlobalScope",
+   "origin": "https://teams.microsoft.com",
+   "is_top": false,
+   "dumps": 2,
+   "member_accesses": 1179,
+   "wrapped_count": 2371,
+   "install_ms": 7,
+   "sources": {
+    "unload_flush": 2
+   }
+  },
+  {
+   "kind": "service_worker",
+   "global": "ServiceWorkerGlobalScope",
+   "origin": "https://teams.microsoft.com",
+   "is_top": false,
+   "dumps": 3,
+   "member_accesses": 468,
+   "wrapped_count": 2102,
+   "install_ms": 8,
+   "sources": {
+    "unload_flush": 1,
+    "teams-landing": 1,
+    "final": 1
+   }
+  },
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "https://login.microsoftonline.com",
+   "is_top": false,
+   "dumps": 1,
+   "member_accesses": 295,
+   "wrapped_count": 7912,
+   "install_ms": 24,
+   "sources": {
+    "unload_flush": 1
+   }
+  },
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "https://teams.microsoft.com",
+   "is_top": false,
+   "dumps": 1,
+   "member_accesses": 13,
+   "wrapped_count": 7912,
+   "install_ms": 23,
+   "sources": {
+    "unload_flush": 1
+   }
+  },
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "https://login.live.com",
+   "is_top": false,
+   "dumps": 1,
+   "member_accesses": 11,
+   "wrapped_count": 7912,
+   "install_ms": 25,
+   "sources": {
+    "unload_flush": 1
+   }
+  },
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "null",
+   "is_top": true,
+   "dumps": 1,
+   "member_accesses": 0,
+   "wrapped_count": 6449,
+   "install_ms": 21,
+   "sources": {
+    "unload_flush": 1
+   }
+  },
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "null",
+   "is_top": false,
+   "dumps": 1,
+   "member_accesses": 0,
+   "wrapped_count": 7917,
+   "install_ms": 25,
+   "sources": {
+    "unload_flush": 1
+   }
+  }
+ ]
+}

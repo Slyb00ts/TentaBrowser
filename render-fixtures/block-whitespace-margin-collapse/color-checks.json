@@ -1,0 +1,18 @@
+[
+  {
+    "name": "first block keeps its declared geometry",
+    "color": "#087f5b",
+    "x": 0,
+    "y": 0,
+    "width": 900,
+    "height": 20
+  },
+  {
+    "name": "formatting whitespace does not interrupt sibling margin collapse",
+    "color": "#1971c2",
+    "x": 0,
+    "y": 60,
+    "width": 900,
+    "height": 20
+  }
+]

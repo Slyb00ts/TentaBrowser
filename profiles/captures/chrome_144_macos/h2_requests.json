@@ -1,0 +1,1052 @@
+[
+  {
+    "headers": [
+      [
+        ":method",
+        "GET"
+      ],
+      [
+        ":authority",
+        "fp-capture.test:55050"
+      ],
+      [
+        ":scheme",
+        "https"
+      ],
+      [
+        ":path",
+        "/"
+      ],
+      [
+        "sec-ch-ua",
+        "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\""
+      ],
+      [
+        "sec-ch-ua-mobile",
+        "?0"
+      ],
+      [
+        "sec-ch-ua-platform",
+        "\"macOS\""
+      ],
+      [
+        "upgrade-insecure-requests",
+        "1"
+      ],
+      [
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+      ],
+      [
+        "accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+      ],
+      [
+        "sec-fetch-site",
+        "none"
+      ],
+      [
+        "sec-fetch-mode",
+        "navigate"
+      ],
+      [
+        "sec-fetch-user",
+        "?1"
+      ],
+      [
+        "sec-fetch-dest",
+        "document"
+      ],
+      [
+        "accept-encoding",
+        "gzip, deflate, br, zstd"
+      ],
+      [
+        "accept-language",
+        "en-US,en;q=0.9"
+      ],
+      [
+        "priority",
+        "u=0, i"
+      ]
+    ],
+    "priority": {
+      "dependency": 0,
+      "exclusive": true,
+      "weight": 256
+    },
+    "stream_id": 1
+  },
+  {
+    "headers": [
+      [
+        ":method",
+        "GET"
+      ],
+      [
+        ":authority",
+        "fp-capture.test:55050"
+      ],
+      [
+        ":scheme",
+        "https"
+      ],
+      [
+        ":path",
+        "/sub.css"
+      ],
+      [
+        "sec-ch-ua-platform",
+        "\"macOS\""
+      ],
+      [
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+      ],
+      [
+        "sec-ch-ua",
+        "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\""
+      ],
+      [
+        "sec-ch-ua-mobile",
+        "?0"
+      ],
+      [
+        "accept",
+        "text/css,*/*;q=0.1"
+      ],
+      [
+        "sec-fetch-site",
+        "same-origin"
+      ],
+      [
+        "sec-fetch-mode",
+        "no-cors"
+      ],
+      [
+        "sec-fetch-dest",
+        "style"
+      ],
+      [
+        "referer",
+        "https://fp-capture.test:55050/"
+      ],
+      [
+        "accept-encoding",
+        "gzip, deflate, br, zstd"
+      ],
+      [
+        "accept-language",
+        "en-US,en;q=0.9"
+      ],
+      [
+        "cookie",
+        "fp=1"
+      ],
+      [
+        "priority",
+        "u=0"
+      ]
+    ],
+    "priority": {
+      "dependency": 0,
+      "exclusive": true,
+      "weight": 256
+    },
+    "stream_id": 3
+  },
+  {
+    "headers": [
+      [
+        ":method",
+        "GET"
+      ],
+      [
+        ":authority",
+        "fp-capture.test:55050"
+      ],
+      [
+        ":scheme",
+        "https"
+      ],
+      [
+        ":path",
+        "/sub.js"
+      ],
+      [
+        "sec-ch-ua-platform",
+        "\"macOS\""
+      ],
+      [
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+      ],
+      [
+        "sec-ch-ua",
+        "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\""
+      ],
+      [
+        "sec-ch-ua-mobile",
+        "?0"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "sec-fetch-site",
+        "same-origin"
+      ],
+      [
+        "sec-fetch-mode",
+        "no-cors"
+      ],
+      [
+        "sec-fetch-dest",
+        "script"
+      ],
+      [
+        "referer",
+        "https://fp-capture.test:55050/"
+      ],
+      [
+        "accept-encoding",
+        "gzip, deflate, br, zstd"
+      ],
+      [
+        "accept-language",
+        "en-US,en;q=0.9"
+      ],
+      [
+        "cookie",
+        "fp=1"
+      ],
+      [
+        "priority",
+        "u=1"
+      ]
+    ],
+    "priority": {
+      "dependency": 3,
+      "exclusive": true,
+      "weight": 220
+    },
+    "stream_id": 5
+  },
+  {
+    "headers": [
+      [
+        ":method",
+        "GET"
+      ],
+      [
+        ":authority",
+        "fp-capture.test:55050"
+      ],
+      [
+        ":scheme",
+        "https"
+      ],
+      [
+        ":path",
+        "/sub.png"
+      ],
+      [
+        "sec-ch-ua-platform",
+        "\"macOS\""
+      ],
+      [
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+      ],
+      [
+        "sec-ch-ua",
+        "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\""
+      ],
+      [
+        "sec-ch-ua-mobile",
+        "?0"
+      ],
+      [
+        "accept",
+        "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+      ],
+      [
+        "sec-fetch-site",
+        "same-origin"
+      ],
+      [
+        "sec-fetch-mode",
+        "no-cors"
+      ],
+      [
+        "sec-fetch-dest",
+        "image"
+      ],
+      [
+        "referer",
+        "https://fp-capture.test:55050/"
+      ],
+      [
+        "accept-encoding",
+        "gzip, deflate, br, zstd"
+      ],
+      [
+        "accept-language",
+        "en-US,en;q=0.9"
+      ],
+      [
+        "cookie",
+        "fp=1"
+      ],
+      [
+        "priority",
+        "u=2, i"
+      ]
+    ],
+    "priority": {
+      "dependency": 5,
+      "exclusive": true,
+      "weight": 183
+    },
+    "stream_id": 7
+  },
+  {
+    "headers": [
+      [
+        ":method",
+        "GET"
+      ],
+      [
+        ":authority",
+        "fp-capture.test:55050"
+      ],
+      [
+        ":scheme",
+        "https"
+      ],
+      [
+        ":path",
+        "/api"
+      ],
+      [
+        "sec-ch-ua-platform",
+        "\"macOS\""
+      ],
+      [
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+      ],
+      [
+        "sec-ch-ua",
+        "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\""
+      ],
+      [
+        "sec-ch-ua-mobile",
+        "?0"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "sec-fetch-site",
+        "same-origin"
+      ],
+      [
+        "sec-fetch-mode",
+        "cors"
+      ],
+      [
+        "sec-fetch-dest",
+        "empty"
+      ],
+      [
+        "referer",
+        "https://fp-capture.test:55050/"
+      ],
+      [
+        "accept-encoding",
+        "gzip, deflate, br, zstd"
+      ],
+      [
+        "accept-language",
+        "en-US,en;q=0.9"
+      ],
+      [
+        "cookie",
+        "fp=1"
+      ],
+      [
+        "priority",
+        "u=1, i"
+      ]
+    ],
+    "priority": {
+      "dependency": 0,
+      "exclusive": true,
+      "weight": 220
+    },
+    "stream_id": 9
+  },
+  {
+    "headers": [
+      [
+        ":method",
+        "GET"
+      ],
+      [
+        ":authority",
+        "fp-other.test:55050"
+      ],
+      [
+        ":scheme",
+        "https"
+      ],
+      [
+        ":path",
+        "/cross-site.png"
+      ],
+      [
+        "sec-ch-ua-platform",
+        "\"macOS\""
+      ],
+      [
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+      ],
+      [
+        "sec-ch-ua",
+        "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\""
+      ],
+      [
+        "sec-ch-ua-mobile",
+        "?0"
+      ],
+      [
+        "accept",
+        "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+      ],
+      [
+        "sec-fetch-site",
+        "cross-site"
+      ],
+      [
+        "sec-fetch-mode",
+        "no-cors"
+      ],
+      [
+        "sec-fetch-dest",
+        "image"
+      ],
+      [
+        "sec-fetch-storage-access",
+        "none"
+      ],
+      [
+        "referer",
+        "https://fp-capture.test:55050/"
+      ],
+      [
+        "accept-encoding",
+        "gzip, deflate, br, zstd"
+      ],
+      [
+        "accept-language",
+        "en-US,en;q=0.9"
+      ],
+      [
+        "priority",
+        "u=2, i"
+      ]
+    ],
+    "priority": {
+      "dependency": 0,
+      "exclusive": true,
+      "weight": 183
+    },
+    "stream_id": 1
+  },
+  {
+    "headers": [
+      [
+        ":method",
+        "GET"
+      ],
+      [
+        ":authority",
+        "sub.fp-capture.test:55050"
+      ],
+      [
+        ":scheme",
+        "https"
+      ],
+      [
+        ":path",
+        "/same-site.png"
+      ],
+      [
+        "sec-ch-ua-platform",
+        "\"macOS\""
+      ],
+      [
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+      ],
+      [
+        "sec-ch-ua",
+        "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\""
+      ],
+      [
+        "sec-ch-ua-mobile",
+        "?0"
+      ],
+      [
+        "accept",
+        "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+      ],
+      [
+        "sec-fetch-site",
+        "same-site"
+      ],
+      [
+        "sec-fetch-mode",
+        "no-cors"
+      ],
+      [
+        "sec-fetch-dest",
+        "image"
+      ],
+      [
+        "referer",
+        "https://fp-capture.test:55050/"
+      ],
+      [
+        "accept-encoding",
+        "gzip, deflate, br, zstd"
+      ],
+      [
+        "accept-language",
+        "en-US,en;q=0.9"
+      ],
+      [
+        "priority",
+        "u=2, i"
+      ]
+    ],
+    "priority": {
+      "dependency": 0,
+      "exclusive": true,
+      "weight": 183
+    },
+    "stream_id": 1
+  },
+  {
+    "headers": [
+      [
+        ":method",
+        "GET"
+      ],
+      [
+        ":authority",
+        "fp-capture.test:55050"
+      ],
+      [
+        ":scheme",
+        "https"
+      ],
+      [
+        ":path",
+        "/sub.woff2"
+      ],
+      [
+        "origin",
+        "https://fp-capture.test:55050"
+      ],
+      [
+        "sec-ch-ua-platform",
+        "\"macOS\""
+      ],
+      [
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+      ],
+      [
+        "sec-ch-ua",
+        "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\""
+      ],
+      [
+        "sec-ch-ua-mobile",
+        "?0"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "sec-fetch-site",
+        "same-origin"
+      ],
+      [
+        "sec-fetch-mode",
+        "cors"
+      ],
+      [
+        "sec-fetch-dest",
+        "font"
+      ],
+      [
+        "referer",
+        "https://fp-capture.test:55050/sub.css"
+      ],
+      [
+        "accept-encoding",
+        "gzip, deflate, br, zstd"
+      ],
+      [
+        "accept-language",
+        "en-US,en;q=0.9"
+      ],
+      [
+        "cookie",
+        "fp=1"
+      ],
+      [
+        "priority",
+        "u=0"
+      ]
+    ],
+    "priority": {
+      "dependency": 0,
+      "exclusive": true,
+      "weight": 256
+    },
+    "stream_id": 11
+  },
+  {
+    "headers": [
+      [
+        ":method",
+        "POST"
+      ],
+      [
+        ":authority",
+        "fp-capture.test:55050"
+      ],
+      [
+        ":scheme",
+        "https"
+      ],
+      [
+        ":path",
+        "/api-post"
+      ],
+      [
+        "content-length",
+        "7"
+      ],
+      [
+        "sec-ch-ua-platform",
+        "\"macOS\""
+      ],
+      [
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+      ],
+      [
+        "sec-ch-ua",
+        "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\""
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "sec-ch-ua-mobile",
+        "?0"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "origin",
+        "https://fp-capture.test:55050"
+      ],
+      [
+        "sec-fetch-site",
+        "same-origin"
+      ],
+      [
+        "sec-fetch-mode",
+        "cors"
+      ],
+      [
+        "sec-fetch-dest",
+        "empty"
+      ],
+      [
+        "referer",
+        "https://fp-capture.test:55050/"
+      ],
+      [
+        "accept-encoding",
+        "gzip, deflate, br, zstd"
+      ],
+      [
+        "accept-language",
+        "en-US,en;q=0.9"
+      ],
+      [
+        "cookie",
+        "fp=1"
+      ],
+      [
+        "priority",
+        "u=1, i"
+      ]
+    ],
+    "priority": {
+      "dependency": 0,
+      "exclusive": true,
+      "weight": 220
+    },
+    "stream_id": 13
+  },
+  {
+    "headers": [
+      [
+        ":method",
+        "GET"
+      ],
+      [
+        ":authority",
+        "fp-capture.test:55050"
+      ],
+      [
+        ":scheme",
+        "https"
+      ],
+      [
+        ":path",
+        "/favicon.ico"
+      ],
+      [
+        "sec-ch-ua-platform",
+        "\"macOS\""
+      ],
+      [
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+      ],
+      [
+        "sec-ch-ua",
+        "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\""
+      ],
+      [
+        "sec-ch-ua-mobile",
+        "?0"
+      ],
+      [
+        "accept",
+        "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+      ],
+      [
+        "sec-fetch-site",
+        "same-origin"
+      ],
+      [
+        "sec-fetch-mode",
+        "no-cors"
+      ],
+      [
+        "sec-fetch-dest",
+        "image"
+      ],
+      [
+        "referer",
+        "https://fp-capture.test:55050/"
+      ],
+      [
+        "accept-encoding",
+        "gzip, deflate, br, zstd"
+      ],
+      [
+        "accept-language",
+        "en-US,en;q=0.9"
+      ],
+      [
+        "cookie",
+        "fp=1"
+      ],
+      [
+        "priority",
+        "u=1, i"
+      ]
+    ],
+    "priority": {
+      "dependency": 0,
+      "exclusive": true,
+      "weight": 220
+    },
+    "stream_id": 15
+  },
+  {
+    "headers": [
+      [
+        ":method",
+        "POST"
+      ],
+      [
+        ":authority",
+        "fp-capture.test:55050"
+      ],
+      [
+        ":scheme",
+        "https"
+      ],
+      [
+        ":path",
+        "/form"
+      ],
+      [
+        "content-length",
+        "3"
+      ],
+      [
+        "cache-control",
+        "max-age=0"
+      ],
+      [
+        "sec-ch-ua",
+        "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\""
+      ],
+      [
+        "sec-ch-ua-mobile",
+        "?0"
+      ],
+      [
+        "sec-ch-ua-platform",
+        "\"macOS\""
+      ],
+      [
+        "origin",
+        "https://fp-capture.test:55050"
+      ],
+      [
+        "content-type",
+        "application/x-www-form-urlencoded"
+      ],
+      [
+        "upgrade-insecure-requests",
+        "1"
+      ],
+      [
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+      ],
+      [
+        "accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+      ],
+      [
+        "sec-fetch-site",
+        "same-origin"
+      ],
+      [
+        "sec-fetch-mode",
+        "navigate"
+      ],
+      [
+        "sec-fetch-dest",
+        "document"
+      ],
+      [
+        "referer",
+        "https://fp-capture.test:55050/"
+      ],
+      [
+        "accept-encoding",
+        "gzip, deflate, br, zstd"
+      ],
+      [
+        "accept-language",
+        "en-US,en;q=0.9"
+      ],
+      [
+        "cookie",
+        "fp=1"
+      ],
+      [
+        "priority",
+        "u=0, i"
+      ]
+    ],
+    "priority": {
+      "dependency": 0,
+      "exclusive": true,
+      "weight": 256
+    },
+    "stream_id": 1
+  },
+  {
+    "headers": [
+      [
+        ":method",
+        "GET"
+      ],
+      [
+        ":authority",
+        "fp-capture.test:55050"
+      ],
+      [
+        ":scheme",
+        "https"
+      ],
+      [
+        ":path",
+        "/second"
+      ],
+      [
+        "sec-ch-ua",
+        "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\""
+      ],
+      [
+        "sec-ch-ua-mobile",
+        "?0"
+      ],
+      [
+        "sec-ch-ua-platform",
+        "\"macOS\""
+      ],
+      [
+        "upgrade-insecure-requests",
+        "1"
+      ],
+      [
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+      ],
+      [
+        "accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+      ],
+      [
+        "sec-fetch-site",
+        "same-origin"
+      ],
+      [
+        "sec-fetch-mode",
+        "navigate"
+      ],
+      [
+        "sec-fetch-dest",
+        "document"
+      ],
+      [
+        "referer",
+        "https://fp-capture.test:55050/form"
+      ],
+      [
+        "accept-encoding",
+        "gzip, deflate, br, zstd"
+      ],
+      [
+        "accept-language",
+        "en-US,en;q=0.9"
+      ],
+      [
+        "cookie",
+        "fp=1"
+      ],
+      [
+        "priority",
+        "u=0, i"
+      ]
+    ],
+    "priority": {
+      "dependency": 0,
+      "exclusive": true,
+      "weight": 256
+    },
+    "stream_id": 3
+  },
+  {
+    "headers": [
+      [
+        ":method",
+        "GET"
+      ],
+      [
+        ":authority",
+        "fp-capture.test:55050"
+      ],
+      [
+        ":scheme",
+        "https"
+      ],
+      [
+        ":path",
+        "/favicon.ico"
+      ],
+      [
+        "sec-ch-ua-platform",
+        "\"macOS\""
+      ],
+      [
+        "user-agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+      ],
+      [
+        "sec-ch-ua",
+        "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\""
+      ],
+      [
+        "sec-ch-ua-mobile",
+        "?0"
+      ],
+      [
+        "accept",
+        "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+      ],
+      [
+        "sec-fetch-site",
+        "same-origin"
+      ],
+      [
+        "sec-fetch-mode",
+        "no-cors"
+      ],
+      [
+        "sec-fetch-dest",
+        "image"
+      ],
+      [
+        "referer",
+        "https://fp-capture.test:55050/second"
+      ],
+      [
+        "accept-encoding",
+        "gzip, deflate, br, zstd"
+      ],
+      [
+        "accept-language",
+        "en-US,en;q=0.9"
+      ],
+      [
+        "cookie",
+        "fp=1"
+      ],
+      [
+        "priority",
+        "u=1, i"
+      ]
+    ],
+    "priority": {
+      "dependency": 0,
+      "exclusive": true,
+      "weight": 220
+    },
+    "stream_id": 5
+  }
+]

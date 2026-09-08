@@ -1,0 +1,1174 @@
+# Hand-maintained rules mapping web-platform interface names (as seen in the
+# golden-site inventories, golden/inventory/*.json) to the phase that ships
+# them, the owning crate, the WebIDL source spec (idl/<spec>/<Interface>.webidl)
+# and the WPT directory used by the WPT runner.
+#
+# Sources: docs/spec/05-javascript.md Appendix A (surface by phase),
+# docs/spec/16-roadmap.md (what each phase ships), docs/spec/02-architecture.md
+# section 2 (crate map), docs/spec/07-media.md, docs/spec/20-platform-behaviour.md.
+#
+# `idl/gen_manifest.py` tries `[[rule]]` entries in order; the first whose
+# `match` (an anchored regular expression) matches the interface name wins.
+# `phase = "unscheduled"` marks a known family that no roadmap phase ships;
+# such interfaces land in the `[[unassigned]]` section of the manifest with
+# the family named, so a human can schedule or reject them. Interfaces that
+# match no rule land there too.
+#
+# `kind = "ecmascript"` marks ECMAScript intrinsics (no WebIDL file; the
+# engines provide them, QuickJS with `tenta-js-qjs` glue).
+#
+# `[[member_rule]]` entries name members whose implementation lives in a
+# later phase or another crate than their interface (layout geometry on
+# Element, canvas on HTMLCanvasElement, ...). They are reported per interface
+# as `deferred_members` so that P2 ships the interface with stubs for them.
+
+version = 1
+
+[phases]
+P1 = "Network, DOM, Search"
+P2 = "JavaScript: engines, event loop, DOM/HTML/CSSOM bindings, fetch, storage, workers"
+P3a = "Render: Stylo, block/inline layout, geometry APIs"
+P3b = "Render: flex/grid/table/positioned, scrolling, form controls"
+P3c = "Render: paint, images, canvas 2D, screenshots, PDF"
+P4 = "Hosts and platform completeness: CDP, MCP, FFI, Shared/Service Workers, IndexedDB, editing"
+P5 = "Audio: Web Audio, worklets, media element audio, capture"
+P6a = "Video and MSE"
+P7 = "WebRTC"
+P8 = "Mobile, hardening, WebGL shape-only, OffscreenCanvas, 1.0"
+
+# ---------------------------------------------------------------------------
+# ECMAScript (no WebIDL)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+match = "Intl|Intl\\..*"
+kind = "ecmascript"
+phase = "P2"
+crate = "tenta-js-qjs"
+wpt = ""
+note = "V8 native; QuickJS subset via icu4x (16-roadmap P2 (b)); the inventory lists the locale-sensitive Date/Number/String methods under Intl"
+
+[[rule]]
+match = "SharedArrayBuffer|Atomics"
+kind = "ecmascript"
+phase = "P2"
+crate = "tenta-js-qjs"
+wpt = ""
+note = "V8 native; QuickJS shared-array-buffer hooks and the futex table for wait/notify/waitAsync (05 section 7)"
+
+# ---------------------------------------------------------------------------
+# WebAssembly JS API (WebIDL, engine-independent layer over wasmi)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+match = "WebAssembly|WebAssembly\\..*"
+spec = "wasm-js-api"
+phase = "P2"
+crate = "tenta-js"
+wpt = "wasm/jsapi/"
+
+# ---------------------------------------------------------------------------
+# WebRTC (P7, tenta-webrtc)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+match = "RTCEncoded(Audio|Video)Frame|RTCRtpScriptTransform(er)?|RTCTransformEvent"
+spec = "webrtc-encoded-transform"
+phase = "P7"
+crate = "tenta-webrtc"
+wpt = "webrtc-encoded-transform/"
+note = "insertable streams; P7 stretch (07 section 3.1)"
+
+[[rule]]
+match = "RTC.*"
+spec = "webrtc"
+phase = "P7"
+crate = "tenta-webrtc"
+wpt = "webrtc/"
+
+# ---------------------------------------------------------------------------
+# Media (P5 audio, P6a video/MSE, tenta-media)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+match = "AudioWorklet.*|.*AudioContext|AudioNode|AudioParam|AudioParamMap|AudioBuffer|AudioListener|AudioDestinationNode|AudioScheduledSourceNode|AudioProcessingEvent|OfflineAudioCompletionEvent|PeriodicWave|AudioSinkInfo|.+Node"
+spec = "webaudio"
+phase = "P5"
+crate = "tenta-media"
+wpt = "webaudio/"
+note = "the trailing .+Node alternative catches the Web Audio node classes (GainNode, OscillatorNode, ...); it does not match DOM Node"
+
+[[rule]]
+match = "Worklet"
+spec = "html"
+phase = "P5"
+crate = "tenta-js"
+wpt = "worklets/"
+note = "worklet threads ship with AudioWorklet in P5 (05 Appendix A)"
+
+[[rule]]
+match = "MediaSource|SourceBuffer|SourceBufferList|ManagedMediaSource|MediaSourceHandle|BufferedChangeEvent"
+spec = "media-source"
+phase = "P6a"
+crate = "tenta-media"
+wpt = "media-source/"
+
+[[rule]]
+match = "MediaCapabilities|MediaCapabilitiesInfo"
+spec = "media-capabilities"
+phase = "P6a"
+crate = "tenta-media"
+wpt = "media-capabilities/"
+
+[[rule]]
+match = "MediaKeys|MediaKeySystemAccess|MediaKeySession|MediaKeyStatusMap|MediaKeyMessageEvent|MediaEncryptedEvent"
+spec = "encrypted-media"
+phase = "P6a"
+crate = "tenta-media"
+wpt = "encrypted-media/"
+note = "EME stub: interfaces present, key systems unsupported (16-roadmap P6a)"
+
+[[rule]]
+match = "HTMLVideoElement|VideoPlaybackQuality|VideoFrameCallbackMetadata"
+spec = "html"
+phase = "P6a"
+crate = "tenta-media"
+wpt = "html/semantics/embedded-content/media-elements/"
+note = "requestVideoFrameCallback (video-rvfc) and getVideoPlaybackQuality (media-playback-quality) ship with the video pipeline"
+
+[[rule]]
+match = "HTMLMediaElement|HTMLAudioElement|HTMLSourceElement|HTMLTrackElement|MediaError|TimeRanges|TextTrack|TextTrackList|TextTrackCue|TextTrackCueList|AudioTrack|AudioTrackList|VideoTrack|VideoTrackList|TrackEvent"
+spec = "html"
+phase = "P5"
+crate = "tenta-media"
+wpt = "html/semantics/embedded-content/media-elements/"
+
+[[rule]]
+match = "VTTCue|VTTRegion"
+spec = "webvtt"
+phase = "P6a"
+crate = "tenta-media"
+wpt = "webvtt/"
+
+[[rule]]
+match = "MediaSession|MediaMetadata"
+spec = "mediasession"
+phase = "P6a"
+crate = "tenta-media"
+wpt = "mediasession/"
+
+[[rule]]
+match = "MediaStream|MediaStreamTrack|MediaStreamTrackEvent|MediaDevices|MediaDeviceInfo|InputDeviceInfo|OverconstrainedError|MediaStreamTrackProcessor|MediaStreamTrackGenerator|CanvasCaptureMediaStreamTrack"
+spec = "mediacapture-streams"
+phase = "P5"
+crate = "tenta-media"
+wpt = "mediacapture-streams/"
+
+[[rule]]
+match = "MediaRecorder|BlobEvent"
+spec = "mediacapture-record"
+phase = "P5"
+crate = "tenta-media"
+wpt = "mediacapture-record/"
+
+[[rule]]
+match = "ImageCapture|PhotoCapabilities"
+spec = "image-capture"
+phase = "unscheduled"
+crate = ""
+wpt = "mediacapture-image/"
+
+[[rule]]
+match = "VideoFrame|VideoDecoder|VideoEncoder|VideoColorSpace|AudioData|AudioDecoder|AudioEncoder|EncodedVideoChunk|EncodedAudioChunk|ImageDecoder|ImageTrack|ImageTrackList"
+spec = "webcodecs"
+phase = "unscheduled"
+crate = ""
+wpt = "webcodecs/"
+note = "WebCodecs is not in the roadmap; tenta-media owns the codecs if it is scheduled"
+
+[[rule]]
+match = "PictureInPictureWindow|PictureInPictureEvent|DocumentPictureInPicture|DocumentPictureInPictureEvent|RemotePlayback"
+spec = "picture-in-picture"
+phase = "unscheduled"
+crate = ""
+wpt = "picture-in-picture/"
+
+# ---------------------------------------------------------------------------
+# WebGL / WebGPU
+# ---------------------------------------------------------------------------
+
+[[rule]]
+match = "WebGL.*|WebGL2.*|EXT_.*|OES_.*|WEBGL_.*|ANGLE_.*|KHR_.*|OVR_.*"
+spec = "webgl"
+phase = "P8"
+crate = "tenta-paint"
+wpt = "webgl/"
+note = "shape-only WebGL surface (D-010): context and parameters exist, nothing is rendered"
+
+[[rule]]
+match = "GPU.*|WGSLLanguageFeatures"
+spec = "webgpu"
+phase = "unscheduled"
+crate = ""
+wpt = "webgpu/"
+note = "out of scope (01-requirements section 89, D-010)"
+
+# ---------------------------------------------------------------------------
+# Canvas and images (P3c tenta-paint; OffscreenCanvas P8)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+match = "OffscreenCanvas|OffscreenCanvasRenderingContext2D"
+spec = "html"
+phase = "P8"
+crate = "tenta-paint"
+wpt = "html/canvas/offscreen/"
+note = "OffscreenCanvas ships in P8 (05 section 10, 20 section 10)"
+
+[[rule]]
+match = "CanvasRenderingContext2D|CanvasGradient|CanvasPattern|Path2D|TextMetrics|ImageData|ImageBitmap|ImageBitmapRenderingContext|CanvasFilter"
+spec = "html"
+phase = "P3c"
+crate = "tenta-paint"
+wpt = "html/canvas/element/"
+note = "20 section 10: full canvas 2D over tiny-skia/vello"
+
+# ---------------------------------------------------------------------------
+# CSS: CSSOM (P2 tenta-css), typed OM, fonts, animations, view
+# ---------------------------------------------------------------------------
+
+[[rule]]
+match = "FontFace|FontFaceSet|FontFaceSetLoadEvent"
+spec = "css-font-loading"
+phase = "P2"
+crate = "tenta-css"
+wpt = "css/css-font-loading/"
+note = "16-roadmap P2 lists FontFace with CSSOM"
+
+[[rule]]
+match = "CSSMediaRule|CSSSupportsRule|CSSConditionRule|CSSGroupingRule"
+spec = "css-conditional"
+phase = "P2"
+crate = "tenta-css"
+wpt = "css/css-conditional/"
+
+[[rule]]
+match = "CSSContainerRule"
+spec = "css-conditional"
+phase = "P3b"
+crate = "tenta-css"
+wpt = "css/css-contain/"
+note = "container queries need layout"
+
+[[rule]]
+match = "CSSKeyframesRule|CSSKeyframeRule|AnimationEvent"
+spec = "css-animations"
+phase = "P2"
+crate = "tenta-css"
+wpt = "css/css-animations/"
+note = "rule objects in P2 CSSOM; animations run in P3 over Stylo data"
+
+[[rule]]
+match = "TransitionEvent|CSSStartingStyleRule"
+spec = "css-transitions"
+phase = "P2"
+crate = "tenta-css"
+wpt = "css/css-transitions/"
+
+[[rule]]
+match = "CSSLayerBlockRule|CSSLayerStatementRule|CSSScopeRule"
+spec = "css-cascade"
+phase = "P2"
+crate = "tenta-css"
+wpt = "css/css-cascade/"
+
+[[rule]]
+match = "CSSNestedDeclarations"
+spec = "css-nesting"
+phase = "P2"
+crate = "tenta-css"
+wpt = "css/css-nesting/"
+
+[[rule]]
+match = "CSSPropertyRule"
+spec = "css-properties-values-api"
+phase = "P2"
+crate = "tenta-css"
+wpt = "css/css-properties-values-api/"
+
+[[rule]]
+match = "CSSCounterStyleRule"
+spec = "css-counter-styles"
+phase = "P2"
+crate = "tenta-css"
+wpt = "css/css-counter-styles/"
+
+[[rule]]
+match = "CSSFontFeatureValuesRule|CSSFontPaletteValuesRule|CSSFontFaceRule"
+spec = "css-fonts"
+phase = "P2"
+crate = "tenta-css"
+wpt = "css/css-fonts/"
+
+[[rule]]
+match = "CSSPositionTryRule|CSSPositionTryDescriptors"
+spec = "css-anchor-position"
+phase = "unscheduled"
+crate = ""
+wpt = "css/css-anchor-position/"
+
+[[rule]]
+match = "CSSViewTransitionRule|ViewTransition|ViewTransitionTypeSet"
+spec = "css-view-transitions"
+phase = "unscheduled"
+crate = ""
+wpt = "css/css-view-transitions/"
+
+[[rule]]
+match = "CSSStyleValue|CSSNumericValue|CSSUnitValue|CSSKeywordValue|CSSMath.*|CSSNumericArray|CSSTransformValue|CSSTransformComponent|CSSTranslate|CSSRotate|CSSScale|CSSSkew|CSSSkewX|CSSSkewY|CSSPerspective|CSSMatrixComponent|CSSImageValue|CSSUnparsedValue|CSSVariableReferenceValue|StylePropertyMap|StylePropertyMapReadOnly|CSSColorValue|CSSRGB|CSSHSL|CSSHWB|CSSOKLab|CSSOKLCH|CSSLab|CSSLCH|CSSColor"
+spec = "css-typed-om"
+phase = "P3a"
+crate = "tenta-css"
+wpt = "css/css-typed-om/"
+note = "not named in the roadmap; assigned to the Stylo integration phase"
+
+[[rule]]
+match = "Highlight|HighlightRegistry"
+spec = "css-highlight-api"
+phase = "P3c"
+crate = "tenta-render"
+wpt = "css/css-highlight-api/"
+
+[[rule]]
+match = "MediaQueryList|MediaQueryListEvent|Screen|CaretPosition|VisualViewport"
+spec = "cssom-view"
+phase = "P2"
+crate = "tenta-js"
+wpt = "css/cssom-view/"
+note = "matchMedia and Screen come from the profile in P2; VisualViewport and caret geometry are stubs until P3a"
+
+[[rule]]
+match = "CSS|CSSStyleSheet|CSSRule|CSSRuleList|CSSStyleRule|CSSImportRule|CSSNamespaceRule|CSSPageRule|CSSMarginRule|CSSStyleDeclaration|StyleSheet|StyleSheetList|MediaList|LinkStyle|CSSPageDescriptors"
+spec = "cssom"
+phase = "P2"
+crate = "tenta-css"
+wpt = "css/cssom/"
+
+[[rule]]
+match = "Animation|AnimationEffect|KeyframeEffect|AnimationTimeline|DocumentTimeline|AnimationPlaybackEvent|ScrollTimeline|ViewTimeline"
+spec = "web-animations"
+phase = "P3a"
+crate = "tenta-render"
+wpt = "web-animations/"
+note = "Web Animations objects over Stylo's animation data (05 section 10: P3)"
+
+[[rule]]
+match = "IntersectionObserver|IntersectionObserverEntry"
+spec = "intersection-observer"
+phase = "P3a"
+crate = "tenta-render"
+wpt = "intersection-observer/"
+note = "needs layout geometry; P2 ships the interface with geometry stubs (16-roadmap P2 gate)"
+
+[[rule]]
+match = "ResizeObserver|ResizeObserverEntry|ResizeObserverSize"
+spec = "resize-observer"
+phase = "P3a"
+crate = "tenta-render"
+wpt = "resize-observer/"
+note = "needs layout geometry; P2 ships the interface with geometry stubs (16-roadmap P2 gate)"
+
+[[rule]]
+match = "ContentVisibilityAutoStateChangeEvent"
+spec = "css-contain"
+phase = "P3b"
+crate = "tenta-render"
+wpt = "css/css-contain/"
+
+[[rule]]
+match = "SnapEvent"
+spec = "css-scroll-snap"
+phase = "P3b"
+crate = "tenta-render"
+wpt = "css/css-scroll-snap/"
+
+[[rule]]
+match = "DOMRect|DOMRectReadOnly|DOMRectList|DOMPoint|DOMPointReadOnly|DOMQuad|DOMMatrix|DOMMatrixReadOnly"
+spec = "geometry"
+phase = "P2"
+crate = "tenta-js"
+wpt = "css/geometry/"
+
+# ---------------------------------------------------------------------------
+# SVG and MathML element interfaces (DOM in P2, rendering in P3c)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+match = "SVG.*|TimeEvent"
+spec = "svg"
+phase = "P2"
+crate = "tenta-js"
+wpt = "svg/"
+note = "element and animated-value interfaces for the DOM; rendering via resvg/usvg in P3c (06 section 2)"
+
+[[rule]]
+match = "MathMLElement"
+spec = "mathml"
+phase = "P2"
+crate = "tenta-js"
+wpt = "mathml/"
+
+# ---------------------------------------------------------------------------
+# Workers, Service Workers, storage (P2 dedicated workers and Web Storage; P4 the rest)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+match = "ServiceWorker.*|Cache|CacheStorage|Client|Clients|WindowClient|FetchEvent|ExtendableEvent|ExtendableMessageEvent|InstallEvent|NavigationPreloadManager"
+spec = "service-workers"
+phase = "P4"
+crate = "tenta-js"
+wpt = "service-workers/"
+
+[[rule]]
+match = "PushManager|PushSubscription|PushSubscriptionOptions|PushEvent|PushMessageData|PushSubscriptionChangeEvent"
+spec = "push-api"
+phase = "P4"
+crate = "tenta-js"
+wpt = "push-api/"
+note = "PushManager present, subscribe() rejects (05 section 7)"
+
+[[rule]]
+match = "SyncManager|SyncEvent|PeriodicSyncManager|PeriodicSyncEvent|BackgroundFetch.*"
+spec = "background-sync"
+phase = "unscheduled"
+crate = ""
+wpt = "background-sync/"
+
+[[rule]]
+match = "SharedWorker|SharedWorkerGlobalScope"
+spec = "html"
+phase = "P4"
+crate = "tenta-js"
+wpt = "workers/"
+
+[[rule]]
+match = "Worker|DedicatedWorkerGlobalScope|WorkerGlobalScope|WorkerNavigator|WorkerLocation"
+spec = "html"
+phase = "P2"
+crate = "tenta-js"
+wpt = "workers/"
+
+[[rule]]
+match = "IDB.*"
+spec = "indexeddb"
+phase = "P4"
+crate = "tenta-js"
+wpt = "IndexedDB/"
+
+[[rule]]
+match = "Lock|LockManager"
+spec = "web-locks"
+phase = "P4"
+crate = "tenta-js"
+wpt = "web-locks/"
+
+[[rule]]
+match = "Storage|StorageEvent"
+spec = "webstorage"
+phase = "P2"
+crate = "tenta-js"
+wpt = "webstorage/"
+
+[[rule]]
+match = "StorageManager"
+spec = "storage"
+phase = "P2"
+crate = "tenta-js"
+wpt = "storage/"
+note = "navigator.storage estimate/persist (05 section 8)"
+
+[[rule]]
+match = "StorageBucket|StorageBucketManager"
+spec = "storage-buckets"
+phase = "unscheduled"
+crate = ""
+wpt = "storage-buckets/"
+
+[[rule]]
+match = "FileSystemHandle|FileSystemFileHandle|FileSystemDirectoryHandle|FileSystemWritableFileStream|FileSystemSyncAccessHandle|FileSystemObserver|FileSystemChangeRecord"
+spec = "fs"
+phase = "unscheduled"
+crate = ""
+wpt = "fs/"
+note = "OPFS / File System Access; not in the roadmap"
+
+[[rule]]
+match = "CookieStore|CookieStoreManager|CookieChangeEvent"
+spec = "cookie-store"
+phase = "unscheduled"
+crate = ""
+wpt = "cookie-store/"
+
+[[rule]]
+match = "SharedStorage.*|PrivateAggregation|Fence|FencedFrameConfig|HTMLFencedFrameElement|BrowsingTopics.*|ProtectedAudience.*|InterestGroup.*"
+spec = "privacy-sandbox"
+phase = "unscheduled"
+crate = ""
+wpt = "shared-storage/"
+note = "Privacy Sandbox ad APIs touched by Google ad scripts; not planned"
+
+# ---------------------------------------------------------------------------
+# Networking APIs (P2 tenta-js)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+match = "Headers|Request|Response"
+spec = "fetch"
+phase = "P2"
+crate = "tenta-js"
+wpt = "fetch/api/"
+
+[[rule]]
+match = "XMLHttpRequest|XMLHttpRequestEventTarget|XMLHttpRequestUpload|FormData|ProgressEvent"
+spec = "xhr"
+phase = "P2"
+crate = "tenta-js"
+wpt = "xhr/"
+
+[[rule]]
+match = "ReadableStream.*|ReadableByteStreamController|WritableStream.*|TransformStream.*|ByteLengthQueuingStrategy|CountQueuingStrategy"
+spec = "streams"
+phase = "P2"
+crate = "tenta-js"
+wpt = "streams/"
+
+[[rule]]
+match = "CompressionStream|DecompressionStream"
+spec = "compression"
+phase = "P2"
+crate = "tenta-js"
+wpt = "compression/"
+
+[[rule]]
+match = "TextEncoder|TextDecoder|TextEncoderStream|TextDecoderStream"
+spec = "encoding"
+phase = "P2"
+crate = "tenta-js"
+wpt = "encoding/"
+
+[[rule]]
+match = "URL|URLSearchParams"
+spec = "url"
+phase = "P2"
+crate = "tenta-js"
+wpt = "url/"
+
+[[rule]]
+match = "URLPattern"
+spec = "urlpattern"
+phase = "P2"
+crate = "tenta-js"
+wpt = "urlpattern/"
+
+[[rule]]
+match = "WebSocket|CloseEvent|WebSocketStream|WebSocketError"
+spec = "websockets"
+phase = "P2"
+crate = "tenta-js"
+wpt = "websockets/"
+
+[[rule]]
+match = "EventSource"
+spec = "eventsource"
+phase = "P2"
+crate = "tenta-js"
+wpt = "eventsource/"
+
+[[rule]]
+match = "WebTransport.*"
+spec = "webtransport"
+phase = "unscheduled"
+crate = ""
+wpt = "webtransport/"
+
+[[rule]]
+match = "AbortController|AbortSignal"
+spec = "dom"
+phase = "P2"
+crate = "tenta-js"
+wpt = "dom/abort/"
+
+[[rule]]
+match = "NetworkInformation"
+spec = "netinfo"
+phase = "P2"
+crate = "tenta-js"
+wpt = "netinfo/"
+note = "navigator.connection values from the profile"
+
+[[rule]]
+match = "ReportingObserver|Report|ReportBody|CSPViolationReportBody|DeprecationReportBody|InterventionReportBody"
+spec = "reporting"
+phase = "P2"
+crate = "tenta-js"
+wpt = "reporting/"
+
+[[rule]]
+match = "TrustedTypePolicyFactory|TrustedTypePolicy|TrustedHTML|TrustedScript|TrustedScriptURL"
+spec = "trusted-types"
+phase = "P2"
+crate = "tenta-js"
+wpt = "trusted-types/"
+note = "05 section 6: enforced when the page opts in"
+
+[[rule]]
+match = "SecurityPolicyViolationEvent"
+spec = "csp"
+phase = "P2"
+crate = "tenta-js"
+wpt = "content-security-policy/"
+
+# ---------------------------------------------------------------------------
+# Crypto, files, misc platform (P2 tenta-js)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+match = "Crypto|SubtleCrypto|CryptoKey"
+spec = "webcrypto"
+phase = "P2"
+crate = "tenta-js"
+wpt = "WebCryptoAPI/"
+
+[[rule]]
+match = "Blob|File|FileList|FileReader|FileReaderSync"
+spec = "fileapi"
+phase = "P2"
+crate = "tenta-js"
+wpt = "FileAPI/"
+
+[[rule]]
+match = "PublicKeyCredential|AuthenticatorResponse|AuthenticatorAttestationResponse|AuthenticatorAssertionResponse"
+spec = "webauthn"
+phase = "P2"
+crate = "tenta-js"
+wpt = "webauthn/"
+note = "interfaces exposed, operations reject NotAllowedError so MSAL falls back (05 section 10)"
+
+[[rule]]
+match = "Credential|CredentialsContainer|PasswordCredential|FederatedCredential|IdentityCredential|OTPCredential|DigitalCredential"
+spec = "credential-management"
+phase = "P2"
+crate = "tenta-js"
+wpt = "credential-management/"
+note = "interfaces exposed, get()/create() reject (05 section 10)"
+
+[[rule]]
+match = "IdentityProvider|IdentityCredentialError|NavigatorLogin"
+spec = "fedcm"
+phase = "unscheduled"
+crate = ""
+wpt = "fedcm/"
+
+[[rule]]
+match = "Performance|PerformanceEntry|PerformanceMark|PerformanceMeasure|PerformanceObserver|PerformanceObserverEntryList|PerformanceTiming|PerformanceNavigation|EventCounts|MemoryInfo"
+spec = "hr-time"
+phase = "P2"
+crate = "tenta-js"
+wpt = "hr-time/"
+note = "performance-timeline and user-timing share the file set"
+
+[[rule]]
+match = "PerformanceResourceTiming|PerformanceServerTiming"
+spec = "resource-timing"
+phase = "P2"
+crate = "tenta-js"
+wpt = "resource-timing/"
+
+[[rule]]
+match = "PerformanceNavigationTiming|NotRestoredReasons|NotRestoredReasonDetails"
+spec = "navigation-timing"
+phase = "P2"
+crate = "tenta-js"
+wpt = "navigation-timing/"
+
+[[rule]]
+match = "PerformanceLongTaskTiming|TaskAttributionTiming|PerformanceLongAnimationFrameTiming|PerformanceScriptTiming"
+spec = "longtasks"
+phase = "P2"
+crate = "tenta-js"
+wpt = "longtask-timing/"
+
+[[rule]]
+match = "PerformancePaintTiming|LargestContentfulPaint|LayoutShift|LayoutShiftAttribution|PerformanceElementTiming|PerformanceEventTiming|VisibilityStateEntry|InteractionContentfulPaint"
+spec = "paint-timing"
+phase = "P3c"
+crate = "tenta-render"
+wpt = "paint-timing/"
+note = "entries that need paint/layout; PerformanceEventTiming can be stubbed earlier"
+
+[[rule]]
+match = "Scheduler|TaskController|TaskSignal|TaskPriorityChangeEvent|Scheduling"
+spec = "scheduling-apis"
+phase = "P2"
+crate = "tenta-js"
+wpt = "scheduler/"
+note = "scheduler.postTask over the event loop task sources (05 section 5)"
+
+[[rule]]
+match = "IdleDeadline"
+spec = "requestidlecallback"
+phase = "P2"
+crate = "tenta-js"
+wpt = "requestidlecallback/"
+
+[[rule]]
+match = "MutationObserver|MutationRecord"
+spec = "dom"
+phase = "P2"
+crate = "tenta-js"
+wpt = "dom/nodes/"
+note = "observer machinery lives in tenta-dom (P1); bindings in P2"
+
+[[rule]]
+match = "DOMException"
+spec = "webidl"
+phase = "P2"
+crate = "tenta-js"
+wpt = "webidl/"
+
+[[rule]]
+match = "console"
+spec = "console"
+phase = "P2"
+crate = "tenta-js"
+wpt = "console/"
+
+[[rule]]
+match = "Permissions|PermissionStatus"
+spec = "permissions"
+phase = "P4"
+crate = "tenta-js"
+wpt = "permissions/"
+note = "20 section 7"
+
+[[rule]]
+match = "Geolocation|GeolocationPosition|GeolocationCoordinates|GeolocationPositionError"
+spec = "geolocation"
+phase = "P4"
+crate = "tenta-js"
+wpt = "geolocation/"
+note = "20 section 7"
+
+[[rule]]
+match = "Notification|NotificationEvent"
+spec = "notifications"
+phase = "P4"
+crate = "tenta-js"
+wpt = "notifications/"
+note = "constructor and permission; never displays (05 section 10, 20 section 7)"
+
+[[rule]]
+match = "Selection"
+spec = "selection-api"
+phase = "P4"
+crate = "tenta-js"
+wpt = "selection/"
+note = "05 section 9b editing; selection geometry in P3a"
+
+[[rule]]
+match = "Clipboard|ClipboardItem|ClipboardEvent"
+spec = "clipboard-apis"
+phase = "P4"
+crate = "tenta-js"
+wpt = "clipboard-apis/"
+
+[[rule]]
+match = "EditContext|TextFormat|TextFormatUpdateEvent|TextUpdateEvent|CharacterBoundsUpdateEvent"
+spec = "edit-context"
+phase = "P4"
+crate = "tenta-js"
+wpt = "editing/edit-context/"
+
+[[rule]]
+match = "InputEvent"
+spec = "input-events"
+phase = "P2"
+crate = "tenta-js"
+wpt = "input-events/"
+note = "event interface in P2; beforeinput/inputType semantics with editing in P4"
+
+[[rule]]
+match = "NavigatorUAData"
+spec = "ua-client-hints"
+phase = "P2"
+crate = "tenta-js"
+wpt = "client-hints/"
+note = "values from the fingerprint profile"
+
+[[rule]]
+match = "ScreenOrientation"
+spec = "screen-orientation"
+phase = "P2"
+crate = "tenta-js"
+wpt = "screen-orientation/"
+
+[[rule]]
+match = "WakeLock|WakeLockSentinel"
+spec = "screen-wake-lock"
+phase = "unscheduled"
+crate = ""
+wpt = "screen-wake-lock/"
+
+[[rule]]
+match = "DeviceOrientationEvent|DeviceMotionEvent|DeviceMotionEventAcceleration|DeviceMotionEventRotationRate"
+spec = "orientation-event"
+phase = "unscheduled"
+crate = ""
+wpt = "orientation-event/"
+
+[[rule]]
+match = "Sensor|Accelerometer|Gyroscope|LinearAccelerationSensor|GravitySensor|AbsoluteOrientationSensor|RelativeOrientationSensor|AmbientLightSensor|Magnetometer|SensorErrorEvent"
+spec = "sensors"
+phase = "unscheduled"
+crate = ""
+wpt = "generic-sensor/"
+
+[[rule]]
+match = "Gamepad|GamepadButton|GamepadEvent|GamepadHapticActuator"
+spec = "gamepad"
+phase = "unscheduled"
+crate = ""
+wpt = "gamepad/"
+
+[[rule]]
+match = "PaymentRequest|PaymentResponse|PaymentAddress|PaymentMethodChangeEvent|PaymentRequestUpdateEvent|PaymentManager|PaymentInstruments"
+spec = "payment-request"
+phase = "unscheduled"
+crate = ""
+wpt = "payment-request/"
+
+[[rule]]
+match = "SpeechSynthesis|SpeechSynthesisUtterance|SpeechSynthesisVoice|SpeechSynthesisEvent|SpeechSynthesisErrorEvent|SpeechRecognition.*|SpeechGrammar.*"
+spec = "web-speech"
+phase = "unscheduled"
+crate = ""
+wpt = "speech-api/"
+
+[[rule]]
+match = "Keyboard|KeyboardLayoutMap"
+spec = "keyboard"
+phase = "unscheduled"
+crate = ""
+wpt = "keyboard-map/"
+
+[[rule]]
+match = "IdleDetector"
+spec = "idle-detection"
+phase = "unscheduled"
+crate = ""
+wpt = "idle-detection/"
+
+[[rule]]
+match = "Presentation.*"
+spec = "presentation"
+phase = "unscheduled"
+crate = ""
+wpt = "presentation-api/"
+
+[[rule]]
+match = "Bluetooth.*|USB.*|Serial.*|HID.*|NDEF.*|MIDI.*|XR.*|NFC.*"
+spec = "device-apis"
+phase = "unscheduled"
+crate = ""
+wpt = ""
+note = "hardware device APIs; out of scope"
+
+[[rule]]
+match = "BatteryManager"
+spec = "battery"
+phase = "unscheduled"
+crate = ""
+wpt = "battery-status/"
+
+[[rule]]
+match = "ScreenDetails|ScreenDetailed|WindowControlsOverlay|WindowControlsOverlayGeometryChangeEvent|LaunchParams|LaunchQueue|BeforeInstallPromptEvent|NavigatorManagedData"
+spec = "web-app-apis"
+phase = "unscheduled"
+crate = ""
+wpt = "window-management/"
+
+[[rule]]
+match = "PressureObserver|PressureRecord"
+spec = "compute-pressure"
+phase = "unscheduled"
+crate = ""
+wpt = "compute-pressure/"
+
+[[rule]]
+match = "EyeDropper|DelegatedInkTrailPresenter|Ink|BarcodeDetector|FaceDetector|TextDetector|ContactsManager|ContactAddress"
+spec = "incubations"
+phase = "unscheduled"
+crate = ""
+wpt = ""
+
+[[rule]]
+match = "LanguageModel.*|Summarizer|Translator|LanguageDetector|Writer|Rewriter|Proofreader|AI.*"
+spec = "built-in-ai"
+phase = "unscheduled"
+crate = ""
+wpt = ""
+note = "Chromium built-in AI incubations"
+
+[[rule]]
+match = "XSLTProcessor|Sanitizer|HTMLPortalElement|PortalActivateEvent|Model.*"
+spec = "nonstandard"
+phase = "unscheduled"
+crate = ""
+wpt = ""
+
+# ---------------------------------------------------------------------------
+# UI events (P2 tenta-js)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+match = "PointerEvent"
+spec = "pointerevents"
+phase = "P2"
+crate = "tenta-js"
+wpt = "pointerevents/"
+
+[[rule]]
+match = "Touch|TouchList|TouchEvent"
+spec = "touch-events"
+phase = "P2"
+crate = "tenta-js"
+wpt = "touch-events/"
+
+[[rule]]
+match = "UIEvent|MouseEvent|KeyboardEvent|FocusEvent|CompositionEvent|WheelEvent|TextEvent|MutationEvent"
+spec = "uievents"
+phase = "P2"
+crate = "tenta-js"
+wpt = "uievents/"
+
+# ---------------------------------------------------------------------------
+# HTML (P2 tenta-js unless listed above)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+match = "Navigation|NavigateEvent|NavigationHistoryEntry|NavigationTransition|NavigationDestination|NavigationActivation|NavigationCurrentEntryChangeEvent|NavigationPrecommitController"
+spec = "html"
+phase = "P4"
+crate = "tenta-page"
+wpt = "navigation-api/"
+note = "Navigation API over the session history of tenta-page (20 section 1)"
+
+[[rule]]
+match = "HTMLCanvasElement"
+spec = "html"
+phase = "P2"
+crate = "tenta-js"
+wpt = "html/canvas/element/"
+note = "element in P2; getContext/toDataURL/toBlob in P3c (see member rules)"
+
+[[rule]]
+match = "HTMLDialogElement|CloseWatcher|ToggleEvent|CommandEvent"
+spec = "html"
+phase = "P2"
+crate = "tenta-js"
+wpt = "html/semantics/interactive-elements/"
+
+[[rule]]
+match = "HTMLFormElement|HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|HTMLButtonElement|HTMLOptionElement|HTMLOptGroupElement|HTMLOptionsCollection|HTMLDataListElement|HTMLOutputElement|HTMLFieldSetElement|HTMLLegendElement|HTMLLabelElement|HTMLProgressElement|HTMLMeterElement|HTMLFormControlsCollection|RadioNodeList|ValidityState|SubmitEvent|FormDataEvent|ElementInternals"
+spec = "html"
+phase = "P2"
+crate = "tenta-js"
+wpt = "html/semantics/forms/"
+note = "05 section 9a forms and FormData"
+
+[[rule]]
+match = "HTML.*Element|HTMLCollection|HTMLAllCollection|DOMStringMap|DOMStringList|CustomElementRegistry|HTMLSlotElement|HTMLTemplateElement"
+spec = "html"
+phase = "P2"
+crate = "tenta-js"
+wpt = "html/dom/"
+
+[[rule]]
+match = "Window|WindowProperties|Navigator|History|Location|BarProp|External|Plugin|PluginArray|MimeType|MimeTypeArray|UserActivation|FragmentDirective|PageRevealEvent|PageSwapEvent|PageTransitionEvent|BeforeUnloadEvent|HashChangeEvent|PopStateEvent|ErrorEvent|PromiseRejectionEvent"
+spec = "html"
+phase = "P2"
+crate = "tenta-js"
+wpt = "html/browsers/"
+note = "history/location/session history semantics in 20 section 1; navigator values from the profile"
+
+[[rule]]
+match = "MessageChannel|MessagePort|MessageEvent|BroadcastChannel"
+spec = "html"
+phase = "P2"
+crate = "tenta-js"
+wpt = "html/webappapis/"
+
+[[rule]]
+match = "DataTransfer|DataTransferItem|DataTransferItemList|DragEvent"
+spec = "html"
+phase = "P4"
+crate = "tenta-js"
+wpt = "html/editing/dnd/"
+note = "drag and drop with editing/clipboard (05 section 9b)"
+
+[[rule]]
+match = "DOMParser|XMLSerializer"
+spec = "domparsing"
+phase = "P2"
+crate = "tenta-js"
+wpt = "domparsing/"
+note = "parsing by tenta-html (P1), serialisation by tenta-dom"
+
+[[rule]]
+match = "XPathResult|XPathExpression|XPathEvaluator|XPathNSResolver"
+spec = "dom"
+phase = "P2"
+crate = "tenta-js"
+wpt = "domxpath/"
+
+# ---------------------------------------------------------------------------
+# DOM (P2 tenta-js; the arena and algorithms are tenta-dom, P1)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+match = "Node|Element|Document|XMLDocument|DocumentFragment|DocumentType|DOMImplementation|ShadowRoot|Attr|NamedNodeMap|CharacterData|Text|CDATASection|Comment|ProcessingInstruction|NodeList|NodeIterator|TreeWalker|NodeFilter|DOMTokenList|Range|StaticRange|AbstractRange|EventTarget|Event|CustomEvent|Observable|Subscriber"
+spec = "dom"
+phase = "P2"
+crate = "tenta-js"
+wpt = "dom/"
+
+# Generic fallback for event interfaces not listed above.
+[[rule]]
+match = ".*Event"
+spec = "dom"
+phase = "P2"
+crate = "tenta-js"
+wpt = "dom/events/"
+note = "generic event fallback: verify the source spec before creating the IDL file"
+
+# ---------------------------------------------------------------------------
+# Members implemented in a later phase or another crate than their interface
+# ---------------------------------------------------------------------------
+
+[[member_rule]]
+interface = "Element"
+match = "getBoundingClientRect|getClientRects|scrollIntoView|scrollIntoViewIfNeeded|scroll|scrollTo|scrollBy|scrollTop|scrollLeft|scrollWidth|scrollHeight|clientTop|clientLeft|clientWidth|clientHeight|checkVisibility|currentCSSZoom|computedStyleMap"
+phase = "P3a"
+crate = "tenta-render"
+note = "layout geometry and scrolling (cssom-view); P2 ships stubs"
+
+[[member_rule]]
+interface = "Element"
+match = "animate|getAnimations"
+phase = "P3a"
+crate = "tenta-render"
+note = "Web Animations"
+
+[[member_rule]]
+interface = "HTMLElement"
+match = "offsetParent|offsetTop|offsetLeft|offsetWidth|offsetHeight|innerText|outerText"
+phase = "P3a"
+crate = "tenta-render"
+note = "offset geometry needs layout; innerText needs the rendered-text algorithm (P2 approximates with textContent)"
+
+[[member_rule]]
+interface = "Window"
+match = "getComputedStyle|innerWidth|innerHeight|outerWidth|outerHeight|scrollX|scrollY|pageXOffset|pageYOffset|scroll|scrollTo|scrollBy|visualViewport"
+phase = "P3a"
+crate = "tenta-render"
+note = "viewport geometry; P2 returns profile/viewport constants"
+
+[[member_rule]]
+interface = "Document"
+match = "elementFromPoint|elementsFromPoint|caretPositionFromPoint|caretRangeFromPoint|getAnimations|scrollingElement"
+phase = "P3a"
+crate = "tenta-render"
+note = "hit testing"
+
+[[member_rule]]
+interface = "Range"
+match = "getBoundingClientRect|getClientRects"
+phase = "P3a"
+crate = "tenta-render"
+note = "selection geometry"
+
+[[member_rule]]
+interface = "MouseEvent"
+match = "offsetX|offsetY|layerX|layerY"
+phase = "P3a"
+crate = "tenta-render"
+
+[[member_rule]]
+interface = "HTMLCanvasElement"
+match = "getContext|toDataURL|toBlob|transferControlToOffscreen"
+phase = "P3c"
+crate = "tenta-paint"
+
+[[member_rule]]
+interface = "HTMLCanvasElement"
+match = "captureStream"
+phase = "P6a"
+crate = "tenta-media"
+
+[[member_rule]]
+interface = "HTMLImageElement"
+match = "naturalWidth|naturalHeight|complete|decode|currentSrc|x|y"
+phase = "P3c"
+crate = "tenta-paint"
+note = "image decoding; P2 reports 0 x 0 and complete = true after load"
+
+[[member_rule]]
+interface = "HTMLMediaElement"
+match = "captureStream"
+phase = "P6a"
+crate = "tenta-media"
+
+[[member_rule]]
+interface = "Navigator"
+match = "mediaDevices|getUserMedia|webkitGetUserMedia"
+phase = "P5"
+crate = "tenta-media"
+
+[[member_rule]]
+interface = "Navigator"
+match = "mediaCapabilities|mediaSession"
+phase = "P6a"
+crate = "tenta-media"
+
+[[member_rule]]
+interface = "Navigator"
+match = "requestMediaKeySystemAccess"
+phase = "P6a"
+crate = "tenta-media"
+note = "EME stub"
+
+[[member_rule]]
+interface = "Navigator"
+match = "serviceWorker|locks|permissions|geolocation|clipboard"
+phase = "P4"
+crate = "tenta-js"
+
+[[member_rule]]
+interface = "Window"
+match = "indexedDB|caches|getSelection"
+phase = "P4"
+crate = "tenta-js"
+
+[[member_rule]]
+interface = "Document"
+match = "getSelection|execCommand|queryCommandSupported|queryCommandState|queryCommandValue|queryCommandEnabled|queryCommandIndeterm|designMode"
+phase = "P4"
+crate = "tenta-js"
+note = "editing (05 section 9b)"
+
+[[member_rule]]
+interface = "Window"
+match = "webkitRequestFileSystem|webkitResolveLocalFileSystemURL|showOpenFilePicker|showSaveFilePicker|showDirectoryPicker"
+phase = "unscheduled"
+crate = ""
+note = "file system access; not planned"

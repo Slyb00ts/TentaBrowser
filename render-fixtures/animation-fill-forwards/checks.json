@@ -1,0 +1,34 @@
+{
+  "fixture": "animation-fill-forwards",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#content",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 360,
+      "height": 180
+    },
+    {
+      "selector": "#overlay",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 360,
+      "height": 180
+    }
+  ]
+}

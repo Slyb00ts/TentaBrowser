@@ -1,0 +1,94 @@
+{
+  "fixture": "float-bfc-continuation",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#bfc",
+      "kind": "element",
+      "tag": "main",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 900,
+      "height": 470
+    },
+    {
+      "selector": "#intro",
+      "kind": "element",
+      "tag": "section",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 900,
+      "height": 250
+    },
+    {
+      "selector": "#intro-float",
+      "kind": "element",
+      "tag": "aside",
+      "named": true,
+      "x": 650,
+      "y": 0,
+      "width": 250,
+      "height": 400
+    },
+    {
+      "selector": "#lead",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 900,
+      "height": 250
+    },
+    {
+      "selector": "#following",
+      "kind": "element",
+      "tag": "section",
+      "named": true,
+      "x": 0,
+      "y": 250,
+      "width": 900,
+      "height": 220
+    },
+    {
+      "selector": "#heading",
+      "kind": "element",
+      "tag": "h2",
+      "named": true,
+      "x": 0,
+      "y": 250,
+      "width": 900,
+      "height": 50
+    },
+    {
+      "selector": "#beside",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 300,
+      "width": 900,
+      "height": 100
+    },
+    {
+      "selector": "#after",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 400,
+      "width": 900,
+      "height": 70
+    }
+  ]
+}

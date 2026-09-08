@@ -1,0 +1,48 @@
+# WPT runner configuration (docs/spec/15-testing-and-benchmarks.md §6).
+#
+# `directories` lists the WPT directories that gate each roadmap phase
+# (docs/spec/16-roadmap.md). `wpt/run.py` checks out the pinned commit into
+# `wpt/checkout/` (gitignored), starts `./wpt serve` with `serve-config.json`
+# and runs the requested directories against a product.
+
+[wpt]
+repository = "https://github.com/web-platform-tests/wpt.git"
+commit = "b89af32bc8f42d678f444eb0703bca015ddcf240"
+serve_config = "serve-config.json"
+
+[runner]
+# Test timeouts in seconds; WPT's `timeout: long` metadata multiplies by 6.
+timeout = 10
+long_timeout = 60
+jobs = 4
+
+[phases.p1]
+directories = ["encoding"]
+
+[phases.p2]
+directories = [
+    "dom",
+    "html/dom",
+    "html/webappapis",
+    "fetch/api",
+    "xhr",
+    "websockets",
+    "streams",
+    "WebCryptoAPI",
+    "cssom",
+]
+
+[phases.p3a]
+directories = ["css/CSS2", "css/css-text", "css/css-writing-modes"]
+
+[phases.p3b]
+directories = ["css/css-flexbox", "css/css-grid", "css/css-position", "css/css-tables"]
+
+[phases.p5]
+directories = ["webaudio"]
+
+[phases.p6a]
+directories = ["media-source"]
+
+[phases.p7]
+directories = ["webrtc"]

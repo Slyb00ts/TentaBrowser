@@ -1,0 +1,7 @@
+[profile.default]
+# Detect runaway tests (e.g., infinite loops) by killing them after 60 seconds.
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.ci]
+# Same timeout for CI profile.
+slow-timeout = { period = "60s", terminate-after = 5 }

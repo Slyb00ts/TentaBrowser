@@ -1,0 +1,54 @@
+{
+  "fixture": "replaced-grid-order",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#grid",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 600,
+      "height": 300
+    },
+    {
+      "selector": "#media",
+      "kind": "element",
+      "tag": "figure",
+      "named": true,
+      "x": 300,
+      "y": 0,
+      "width": 300,
+      "height": 300
+    },
+    {
+      "selector": "#image",
+      "kind": "element",
+      "tag": "img",
+      "named": true,
+      "x": 320,
+      "y": 20,
+      "width": 260,
+      "height": 260
+    },
+    {
+      "selector": "#description",
+      "kind": "element",
+      "tag": "section",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 300,
+      "height": 200
+    }
+  ]
+}

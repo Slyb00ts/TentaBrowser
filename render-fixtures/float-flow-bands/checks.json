@@ -1,0 +1,114 @@
+{
+  "fixture": "float-flow-bands",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#container",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 900,
+      "height": 450
+    },
+    {
+      "selector": "#float",
+      "kind": "element",
+      "tag": "aside",
+      "named": true,
+      "x": 650,
+      "y": 0,
+      "width": 250,
+      "height": 400
+    },
+    {
+      "selector": "#intro",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 650,
+      "height": 100
+    },
+    {
+      "selector": "#release",
+      "kind": "element",
+      "tag": "h2",
+      "named": true,
+      "x": 0,
+      "y": 100,
+      "width": 650,
+      "height": 50
+    },
+    {
+      "selector": "#download",
+      "kind": "element",
+      "tag": "span",
+      "named": true,
+      "x": 0,
+      "y": 150,
+      "width": 60,
+      "height": 30
+    },
+    {
+      "selector": "#archive",
+      "kind": "element",
+      "tag": "span",
+      "named": true,
+      "x": 60,
+      "y": 150,
+      "width": 90,
+      "height": 30
+    },
+    {
+      "selector": "#mobile-duplicate",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    {
+      "selector": "#sponsors",
+      "kind": "element",
+      "tag": "h2",
+      "named": true,
+      "x": 0,
+      "y": 180,
+      "width": 650,
+      "height": 50
+    },
+    {
+      "selector": "#logos",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 230,
+      "width": 650,
+      "height": 70
+    },
+    {
+      "selector": "#cleared",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 400,
+      "width": 900,
+      "height": 50
+    }
+  ]
+}

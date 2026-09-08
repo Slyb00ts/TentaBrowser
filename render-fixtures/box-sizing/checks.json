@@ -1,0 +1,186 @@
+{
+  "fixture": "box-sizing",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(1)",
+      "kind": "element",
+      "tag": "p",
+      "named": false,
+      "x": 0,
+      "y": 16,
+      "width": 900,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 10,
+      "y": 50,
+      "width": 880,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 10,
+      "y": 50,
+      "width": 230,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 260,
+      "y": 50,
+      "width": 200,
+      "height": 70
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(3)",
+      "kind": "element",
+      "tag": "p",
+      "named": false,
+      "x": 0,
+      "y": 166,
+      "width": 900,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 10,
+      "y": 200,
+      "width": 404,
+      "height": 134
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 12,
+      "y": 202,
+      "width": 230,
+      "height": 80
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 12,
+      "y": 282,
+      "width": 200,
+      "height": 50
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(5)",
+      "kind": "element",
+      "tag": "p",
+      "named": false,
+      "x": 0,
+      "y": 350,
+      "width": 900,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(6)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 10,
+      "y": 384,
+      "width": 200,
+      "height": 70
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "Left content-box outer size: 230x100. Right border-box outer size: 200x70.",
+      "x": 0,
+      "y": 16,
+      "width": 526.55,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "content-box",
+      "x": 25,
+      "y": 65,
+      "width": 83.61,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(2)::text(0)",
+      "kind": "text",
+      "text": "border-box",
+      "x": 275,
+      "y": 65,
+      "width": 77.38,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(3)::text(0)",
+      "kind": "text",
+      "text": "Inside a 400px parent: content-box 50% outer width 230; border-box 50% outer ...",
+      "x": 0,
+      "y": 166,
+      "width": 637.75,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > div:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "50% content-box",
+      "x": 27,
+      "y": 217,
+      "width": 120.08,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > div:nth-child(2)::text(0)",
+      "kind": "text",
+      "text": "50% border-box",
+      "x": 27,
+      "y": 297,
+      "width": 113.84,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(5)::text(0)",
+      "kind": "text",
+      "text": "The common html border-box / universal inherit reset stays 200x70.",
+      "x": 0,
+      "y": 350,
+      "width": 478.44,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(6)::text(0)",
+      "kind": "text",
+      "text": "inherited border-box",
+      "x": 25,
+      "y": 399,
+      "width": 143.2,
+      "height": 18
+    }
+  ]
+}

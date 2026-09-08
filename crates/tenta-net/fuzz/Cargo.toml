@@ -1,0 +1,32 @@
+[package]
+name = "tenta-net-fuzz"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+
+# Excluded from the workspace (see the root Cargo.toml): `cargo fuzz` builds
+# it with its own nightly toolchain and sanitiser flags.
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tenta-net = { path = ".." }
+url = "2"
+http = "1"
+
+[[bin]]
+name = "cookies"
+path = "fuzz_targets/cookies.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "policy_headers"
+path = "fuzz_targets/policy_headers.rs"
+test = false
+doc = false
+bench = false

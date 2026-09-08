@@ -1,0 +1,5969 @@
+{
+ "meta": {
+  "site": "youtube",
+  "title": "YouTube",
+  "tracer_version": "0.1.0",
+  "playwright_version": "1.63.0",
+  "chromium_version": "153.0.8010.12",
+  "channel": "chromium",
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+  "user_agent_raw": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.0.0 Safari/537.36",
+  "date": "2026-09-06T13:29:49.025Z",
+  "duration_ms": 49734,
+  "viewport": {
+   "width": 1280,
+   "height": 800
+  },
+  "locale": "en-US",
+  "urls": [
+   "https://www.youtube.com/",
+   "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
+  ],
+  "navigations": [
+   {
+    "url": "https://www.youtube.com/",
+    "at_ms": 818
+   },
+   {
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "at_ms": 9886
+   }
+  ],
+  "final_url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+  "page_title": "Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film - YouTube",
+  "steps": [
+   {
+    "label": "youtube-home",
+    "at_ms": 9602,
+    "url": "https://www.youtube.com/",
+    "frames": 3,
+    "workers": 0,
+    "service_workers": 2
+   },
+   {
+    "label": "youtube-watch",
+    "at_ms": 49330,
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "frames": 2,
+    "workers": 0,
+    "service_workers": 2
+   },
+   {
+    "label": "final",
+    "at_ms": 49488,
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "frames": 2,
+    "workers": 0,
+    "service_workers": 2
+   }
+  ],
+  "notes": [
+   "goto https://www.youtube.com/ -> 200 https://www.youtube.com/",
+   "consent: clicked button[aria-label*=\"Accept the use of cookies\"]",
+   "consent interstitial: accepted",
+   "goto https://www.youtube.com/watch?v=aqz-KE-bpKQ -> 200 https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+   "playback started: true; state {\"paused\":false,\"currentTime\":17.773209,\"readyState\":4,\"muted\":true,\"videoWidth\":854,\"videoHeight\":480,\"src_scheme\":\"blob\",\"dropped\":7,\"total_frames\":538,\"error\":null}",
+   "after 20 s: {\"paused\":false,\"currentTime\":37.770919,\"readyState\":4,\"muted\":true,\"videoWidth\":854,\"videoHeight\":480,\"src_scheme\":\"blob\",\"dropped\":9,\"total_frames\":1138,\"error\":null}"
+  ],
+  "limitations": [
+   "Dedicated, shared and service workers are traced after they attach (Playwright resumes them before the tracer can run), so their first synchronous statements are missed; workers that terminate before a harvest lose the counts since the previous harvest.",
+   "AudioWorklet and PaintWorklet global scopes are not traced (no injection path); worklet module URLs and AudioWorkletNode names are recorded from the page side.",
+   "[LegacyUnforgeable] members (Location.*, Window.location/document/window/top, Document.location) are non-configurable and cannot be wrapped; see meta.unwrappable.",
+   "ECMAScript intrinsics are not traced except Intl, the locale-sensitive Date/Number/String/Array methods, WebAssembly, SharedArrayBuffer and Atomics.wait/notify/waitAsync.",
+   "Cross-origin window property access (e.g. otherWindow.postMessage) goes through cross-origin wrappers, not the wrapped prototypes, and is undercounted.",
+   "HTTP protocol versions come from CDP Network.responseReceived on the main frame session plus best-effort sessions on out-of-process iframes; requests of frames that could not be attached are counted without a protocol.",
+   "Stylesheets are walked once per CSSStyleSheet object at harvest time; cross-origin sheets without CORS are counted in css.stylesheets.cross_origin_skipped only.",
+   "The User-Agent string had \"HeadlessChrome\" replaced by \"Chrome\" (Playwright then derives consistent navigator.userAgentData); no other fingerprint changes were made.",
+   "Home page plus one non-DRM video (Big Buck Bunny) played muted for 20 s; no seek, quality change, comments, search or sign-in flows. Chromium (no proprietary codecs) is served VP9/AV1 + Opus, so H.264/AAC MSE paths are not observed."
+  ],
+  "page_errors": {
+   "count": 0,
+   "samples": []
+  },
+  "console_errors": 22,
+  "frames_traced": 16,
+  "workers_traced": 0,
+  "service_workers_traced": 2,
+  "unwrappable": [
+   "Window.window",
+   "Window.document",
+   "Window.location",
+   "Window.top"
+  ],
+  "tracer_errors": [],
+  "wrapped_members_top_frame": 6449,
+  "tracer_install_ms_top_frame": 22,
+  "interface_count": 137
+ },
+ "interfaces": {
+  "Node": {
+   "total": 401161,
+   "total_top": 401161,
+   "member_count": 19,
+   "realms": {
+    "window": 401161
+   },
+   "members": {
+    "nodeType": {
+     "get": 149096
+    },
+    "nextSibling": {
+     "get": 119617
+    },
+    "firstChild": {
+     "get": 58841
+    },
+    "isConnected": {
+     "get": 22590
+    },
+    "parentNode": {
+     "get": 17821
+    },
+    "appendChild": {
+     "call": 11651
+    },
+    "parentElement": {
+     "get": 5440
+    },
+    "textContent": {
+     "get": 2887,
+     "set": 655
+    },
+    "removeChild": {
+     "call": 2678
+    },
+    "lastChild": {
+     "get": 2677
+    },
+    "ownerDocument": {
+     "get": 1940
+    },
+    "contains": {
+     "call": 1670
+    },
+    "insertBefore": {
+     "call": 1178
+    },
+    "childNodes": {
+     "get": 912
+    },
+    "cloneNode": {
+     "call": 782
+    },
+    "nodeName": {
+     "get": 374
+    },
+    "replaceChild": {
+     "call": 335
+    },
+    "getRootNode": {
+     "call": 14
+    },
+    "baseURI": {
+     "get": 3
+    }
+   }
+  },
+  "Element": {
+   "total": 306615,
+   "total_top": 306615,
+   "member_count": 36,
+   "realms": {
+    "window": 306615
+   },
+   "members": {
+    "tagName": {
+     "get": 145882
+    },
+    "getAttribute": {
+     "call": 42479
+    },
+    "matches": {
+     "call": 38622
+    },
+    "localName": {
+     "get": 24557
+    },
+    "setAttribute": {
+     "call": 14988
+    },
+    "removeAttribute": {
+     "call": 8863
+    },
+    "classList": {
+     "get": 7466
+    },
+    "querySelectorAll": {
+     "call": 5189
+    },
+    "hasAttribute": {
+     "call": 4884
+    },
+    "attributes": {
+     "get": 4641
+    },
+    "hasAttributes": {
+     "call": 1525
+    },
+    "children": {
+     "get": 1292
+    },
+    "firstElementChild": {
+     "get": 1284
+    },
+    "clientWidth": {
+     "get": 917
+    },
+    "shadowRoot": {
+     "get": 745
+    },
+    "innerHTML": {
+     "set": 703
+    },
+    "clientHeight": {
+     "get": 695
+    },
+    "closest": {
+     "call": 455
+    },
+    "id": {
+     "get": 280,
+     "set": 73
+    },
+    "getElementsByTagName": {
+     "call": 300
+    },
+    "ariaLabel": {
+     "get": 62,
+     "set": 62
+    },
+    "childElementCount": {
+     "get": 104
+    },
+    "getBoundingClientRect": {
+     "call": 89
+    },
+    "scrollHeight": {
+     "get": 87
+    },
+    "querySelector": {
+     "call": 80
+    },
+    "nextElementSibling": {
+     "get": 67
+    },
+    "className": {
+     "get": 59,
+     "set": 1
+    },
+    "setAttributeNS": {
+     "call": 46
+    },
+    "scrollTop": {
+     "get": 31,
+     "set": 4
+    },
+    "ariaExpanded": {
+     "get": 15,
+     "set": 15
+    },
+    "scrollLeft": {
+     "get": 21,
+     "set": 1
+    },
+    "animate": {
+     "call": 13
+    },
+    "getElementsByClassName": {
+     "call": 8
+    },
+    "scrollWidth": {
+     "get": 7
+    },
+    "namespaceURI": {
+     "get": 2
+    },
+    "remove": {
+     "call": 1
+    }
+   }
+  },
+  "Window": {
+   "total": 41620,
+   "total_top": 41613,
+   "member_count": 47,
+   "realms": {
+    "window": 41620
+   },
+   "members": {
+    "performance": {
+     "get": 34655
+    },
+    "setTimeout": {
+     "call": 1770
+    },
+    "navigator": {
+     "get": 930
+    },
+    "trustedTypes": {
+     "get": 904
+    },
+    "self": {
+     "get": 480
+    },
+    "requestAnimationFrame": {
+     "call": 395
+    },
+    "clearTimeout": {
+     "call": 372
+    },
+    "matchMedia": {
+     "call": 372
+    },
+    "getComputedStyle": {
+     "call": 339
+    },
+    "fetch": {
+     "call": 251
+    },
+    "requestIdleCallback": {
+     "call": 121
+    },
+    "screen": {
+     "get": 115
+    },
+    "crypto": {
+     "get": 95
+    },
+    "cancelIdleCallback": {
+     "call": 93
+    },
+    "devicePixelRatio": {
+     "get": 72
+    },
+    "cancelAnimationFrame": {
+     "call": 68
+    },
+    "localStorage": {
+     "get": 66
+    },
+    "innerWidth": {
+     "get": 62
+    },
+    "innerHeight": {
+     "get": 59
+    },
+    "indexedDB": {
+     "get": 48
+    },
+    "history": {
+     "get": 47
+    },
+    "btoa": {
+     "call": 30
+    },
+    "sessionStorage": {
+     "get": 30
+    },
+    "outerHeight": {
+     "get": 22
+    },
+    "outerWidth": {
+     "get": 20
+    },
+    "setInterval": {
+     "call": 19
+    },
+    "caches": {
+     "get": 16
+    },
+    "screenLeft": {
+     "get": 16
+    },
+    "screenTop": {
+     "get": 16
+    },
+    "screenX": {
+     "get": 16
+    },
+    "screenY": {
+     "get": 16
+    },
+    "pageXOffset": {
+     "get": 14
+    },
+    "pageYOffset": {
+     "get": 14
+    },
+    "queueMicrotask": {
+     "call": 14
+    },
+    "customElements": {
+     "get": 12
+    },
+    "atob": {
+     "call": 6
+    },
+    "clearInterval": {
+     "call": 6
+    },
+    "isSecureContext": {
+     "get": 6
+    },
+    "onerror": {
+     "set": 6
+    },
+    "postMessage": {
+     "call": 6
+    },
+    "documentPictureInPicture": {
+     "get": 3
+    },
+    "locationbar": {
+     "get": 3
+    },
+    "menubar": {
+     "get": 3
+    },
+    "opener": {
+     "get": 3
+    },
+    "parent": {
+     "get": 3
+    },
+    "statusbar": {
+     "get": 3
+    },
+    "toolbar": {
+     "get": 3
+    }
+   }
+  },
+  "NodeList": {
+   "total": 38612,
+   "total_top": 38612,
+   "member_count": 3,
+   "realms": {
+    "window": 38612
+   },
+   "members": {
+    "length": {
+     "get": 32786
+    },
+    "@@iterator": {
+     "call": 5814
+    },
+    "forEach": {
+     "call": 12
+    }
+   }
+  },
+  "Document": {
+   "total": 38449,
+   "total_top": 38449,
+   "member_count": 40,
+   "realms": {
+    "window": 38449
+   },
+   "members": {
+    "hidden": {
+     "get": 12411
+    },
+    "createElement": {
+     "call": 7455
+    },
+    "all": {
+     "get": 5640
+    },
+    "documentElement": {
+     "get": 4347
+    },
+    "createTextNode": {
+     "call": 3215
+    },
+    "contentType": {
+     "get": 2035
+    },
+    "importNode": {
+     "call": 1342
+    },
+    "createElementNS": {
+     "call": 518
+    },
+    "visibilityState": {
+     "get": 286
+    },
+    "createDocumentFragment": {
+     "call": 193
+    },
+    "querySelector": {
+     "call": 147
+    },
+    "body": {
+     "get": 144
+    },
+    "cookie": {
+     "get": 112,
+     "set": 31
+    },
+    "head": {
+     "get": 117
+    },
+    "readyState": {
+     "get": 82
+    },
+    "currentScript": {
+     "get": 54
+    },
+    "getElementById": {
+     "call": 54
+    },
+    "getElementsByTagName": {
+     "call": 38
+    },
+    "scrollingElement": {
+     "get": 30
+    },
+    "defaultView": {
+     "get": 29
+    },
+    "compatMode": {
+     "get": 22
+    },
+    "createComment": {
+     "call": 20
+    },
+    "domain": {
+     "get": 20
+    },
+    "prerendering": {
+     "get": 16
+    },
+    "querySelectorAll": {
+     "call": 15
+    },
+    "URL": {
+     "get": 12
+    },
+    "fonts": {
+     "get": 12
+    },
+    "createTreeWalker": {
+     "call": 6
+    },
+    "fullscreenEnabled": {
+     "get": 6
+    },
+    "implementation": {
+     "get": 6
+    },
+    "pictureInPictureEnabled": {
+     "get": 6
+    },
+    "title": {
+     "set": 5
+    },
+    "createEvent": {
+     "call": 4
+    },
+    "hasFocus": {
+     "call": 4
+    },
+    "activeElement": {
+     "get": 3
+    },
+    "fullscreenElement": {
+     "get": 3
+    },
+    "hasStorageAccess": {
+     "call": 3
+    },
+    "webkitFullscreenElement": {
+     "get": 3
+    },
+    "getElementsByClassName": {
+     "call": 2
+    },
+    "startViewTransition": {
+     "call": 1
+    }
+   }
+  },
+  "Performance": {
+   "total": 34963,
+   "total_top": 34963,
+   "member_count": 10,
+   "realms": {
+    "window": 34963
+   },
+   "members": {
+    "now": {
+     "call": 25921
+    },
+    "timing": {
+     "get": 8651
+    },
+    "mark": {
+     "call": 193
+    },
+    "timeOrigin": {
+     "get": 93
+    },
+    "clearMarks": {
+     "call": 74
+    },
+    "getEntriesByType": {
+     "call": 15
+    },
+    "getEntriesByName": {
+     "call": 6
+    },
+    "memory": {
+     "get": 6
+    },
+    "clearResourceTimings": {
+     "call": 3
+    },
+    "measure": {
+     "call": 1
+    }
+   }
+  },
+  "Attr": {
+   "total": 26067,
+   "total_top": 26067,
+   "member_count": 2,
+   "realms": {
+    "window": 26067
+   },
+   "members": {
+    "name": {
+     "get": 19017
+    },
+    "value": {
+     "get": 6972,
+     "set": 78
+    }
+   }
+  },
+  "NamedNodeMap": {
+   "total": 16577,
+   "total_top": 16577,
+   "member_count": 3,
+   "realms": {
+    "window": 16577
+   },
+   "members": {
+    "length": {
+     "get": 12998
+    },
+    "@@iterator": {
+     "call": 3287
+    },
+    "getNamedItem": {
+     "call": 292
+    }
+   }
+  },
+  "HTMLElement": {
+   "total": 12816,
+   "total_top": 12816,
+   "member_count": 36,
+   "realms": {
+    "window": 12816
+   },
+   "members": {
+    "style": {
+     "get": 2848,
+     "set": 54
+    },
+    "constructor": {
+     "construct": 2521
+    },
+    "hidden": {
+     "get": 1600,
+     "set": 672
+    },
+    "onclick": {
+     "get": 329,
+     "set": 333
+    },
+    "onkeydown": {
+     "get": 325,
+     "set": 325
+    },
+    "onmouseenter": {
+     "get": 320,
+     "set": 320
+    },
+    "onmousedown": {
+     "get": 250,
+     "set": 250
+    },
+    "onmouseup": {
+     "get": 246,
+     "set": 246
+    },
+    "onpointerleave": {
+     "get": 246,
+     "set": 246
+    },
+    "onmouseleave": {
+     "get": 166,
+     "set": 166
+    },
+    "innerText": {
+     "set": 230,
+     "get": 14
+    },
+    "onpointerdown": {
+     "get": 104,
+     "set": 104
+    },
+    "onload": {
+     "get": 81,
+     "set": 111
+    },
+    "onerror": {
+     "get": 81,
+     "set": 102
+    },
+    "offsetWidth": {
+     "get": 84
+    },
+    "title": {
+     "get": 50,
+     "set": 34
+    },
+    "onmouseover": {
+     "get": 36,
+     "set": 36
+    },
+    "offsetHeight": {
+     "get": 54
+    },
+    "offsetLeft": {
+     "get": 50
+    },
+    "nonce": {
+     "get": 43
+    },
+    "dir": {
+     "get": 14,
+     "set": 5
+    },
+    "dataset": {
+     "get": 18
+    },
+    "tabIndex": {
+     "set": 13,
+     "get": 1
+    },
+    "onblur": {
+     "get": 4,
+     "set": 4
+    },
+    "oncancel": {
+     "get": 4,
+     "set": 4
+    },
+    "onchange": {
+     "get": 4,
+     "set": 4
+    },
+    "onfocus": {
+     "get": 4,
+     "set": 4
+    },
+    "oninput": {
+     "get": 4,
+     "set": 4
+    },
+    "onmousemove": {
+     "get": 4,
+     "set": 4
+    },
+    "onpaste": {
+     "get": 4,
+     "set": 4
+    },
+    "onscroll": {
+     "get": 4,
+     "set": 4
+    },
+    "onsubmit": {
+     "get": 4,
+     "set": 4
+    },
+    "onanimationend": {
+     "get": 3,
+     "set": 3
+    },
+    "offsetTop": {
+     "get": 4
+    },
+    "click": {
+     "call": 3
+    },
+    "focus": {
+     "call": 3
+    }
+   }
+  },
+  "SourceBuffer": {
+   "total": 12478,
+   "total_top": 12478,
+   "member_count": 3,
+   "realms": {
+    "window": 12478
+   },
+   "members": {
+    "updating": {
+     "get": 11549
+    },
+    "appendBuffer": {
+     "call": 864
+    },
+    "buffered": {
+     "get": 65
+    }
+   }
+  },
+  "EventTarget": {
+   "total": 11205,
+   "total_top": 11205,
+   "member_count": 3,
+   "realms": {
+    "window": 11205
+   },
+   "members": {
+    "addEventListener": {
+     "call": 8400
+    },
+    "dispatchEvent": {
+     "call": 1770
+    },
+    "removeEventListener": {
+     "call": 1035
+    }
+   }
+  },
+  "HTMLMediaElement": {
+   "total": 9641,
+   "total_top": 9641,
+   "member_count": 20,
+   "realms": {
+    "window": 9641
+   },
+   "members": {
+    "currentTime": {
+     "get": 4035
+    },
+    "readyState": {
+     "get": 1731
+    },
+    "error": {
+     "get": 1523
+    },
+    "src": {
+     "get": 807,
+     "set": 9
+    },
+    "buffered": {
+     "get": 643
+    },
+    "duration": {
+     "get": 233
+    },
+    "played": {
+     "get": 191
+    },
+    "ended": {
+     "get": 165
+    },
+    "paused": {
+     "get": 157
+    },
+    "muted": {
+     "get": 46,
+     "set": 33
+    },
+    "playbackRate": {
+     "get": 15,
+     "set": 5
+    },
+    "load": {
+     "call": 13
+    },
+    "volume": {
+     "set": 10
+    },
+    "controls": {
+     "set": 6
+    },
+    "play": {
+     "call": 4
+    },
+    "canPlayType": {
+     "call": 3
+    },
+    "defaultPlaybackRate": {
+     "get": 3
+    },
+    "loop": {
+     "set": 3
+    },
+    "seeking": {
+     "get": 3
+    },
+    "srcObject": {
+     "get": 3
+    }
+   }
+  },
+  "PerformanceTiming": {
+   "total": 8671,
+   "total_top": 8671,
+   "member_count": 11,
+   "realms": {
+    "window": 8671
+   },
+   "members": {
+    "navigationStart": {
+     "get": 8633
+    },
+    "responseStart": {
+     "get": 9
+    },
+    "connectEnd": {
+     "get": 4
+    },
+    "secureConnectionStart": {
+     "get": 4
+    },
+    "connectStart": {
+     "get": 3
+    },
+    "domainLookupEnd": {
+     "get": 3
+    },
+    "domainLookupStart": {
+     "get": 3
+    },
+    "redirectEnd": {
+     "get": 3
+    },
+    "redirectStart": {
+     "get": 3
+    },
+    "requestStart": {
+     "get": 3
+    },
+    "responseEnd": {
+     "get": 3
+    }
+   }
+  },
+  "DOMTokenList": {
+   "total": 7594,
+   "total_top": 7594,
+   "member_count": 9,
+   "realms": {
+    "window": 7594
+   },
+   "members": {
+    "length": {
+     "get": 2667
+    },
+    "add": {
+     "call": 1361
+    },
+    "remove": {
+     "call": 1273
+    },
+    "@@iterator": {
+     "call": 1120
+    },
+    "value": {
+     "get": 933,
+     "set": 3
+    },
+    "supports": {
+     "call": 176
+    },
+    "contains": {
+     "call": 28
+    },
+    "toggle": {
+     "call": 28
+    },
+    "replace": {
+     "call": 5
+    }
+   }
+  },
+  "HTMLCollection": {
+   "total": 6550,
+   "total_top": 6550,
+   "member_count": 2,
+   "realms": {
+    "window": 6550
+   },
+   "members": {
+    "length": {
+     "get": 4457
+    },
+    "@@iterator": {
+     "call": 2093
+    }
+   }
+  },
+  "MediaSource": {
+   "total": 6420,
+   "total_top": 6420,
+   "member_count": 6,
+   "realms": {
+    "window": 6420
+   },
+   "members": {
+    "readyState": {
+     "get": 6289
+    },
+    "isTypeSupported": {
+     "call": 123,
+     "static": true
+    },
+    "canConstructInDedicatedWorker": {
+     "get": 3,
+     "static": true
+    },
+    "addSourceBuffer": {
+     "call": 2
+    },
+    "duration": {
+     "set": 2
+    },
+    "constructor": {
+     "construct": 1
+    }
+   }
+  },
+  "TimeRanges": {
+   "total": 3905,
+   "total_top": 3905,
+   "member_count": 3,
+   "realms": {
+    "window": 3905
+   },
+   "members": {
+    "length": {
+     "get": 1634
+    },
+    "end": {
+     "call": 1511
+    },
+    "start": {
+     "call": 760
+    }
+   }
+  },
+  "HTMLTemplateElement": {
+   "total": 3687,
+   "total_top": 3687,
+   "member_count": 1,
+   "realms": {
+    "window": 3687
+   },
+   "members": {
+    "content": {
+     "get": 3687
+    }
+   }
+  },
+  "CustomElementRegistry": {
+   "total": 3318,
+   "total_top": 3318,
+   "member_count": 1,
+   "realms": {
+    "window": 3318
+   },
+   "members": {
+    "define": {
+     "call": 3318
+    }
+   }
+  },
+  "IntersectionObserverEntry": {
+   "total": 2424,
+   "total_top": 2424,
+   "member_count": 4,
+   "realms": {
+    "window": 2424
+   },
+   "members": {
+    "target": {
+     "get": 1550
+    },
+    "isIntersecting": {
+     "get": 801
+    },
+    "intersectionRect": {
+     "get": 65
+    },
+    "isVisible": {
+     "get": 8
+    }
+   }
+  },
+  "Intl": {
+   "total": 2301,
+   "total_top": 2301,
+   "member_count": 2,
+   "realms": {
+    "window": 2301
+   },
+   "members": {
+    "String.prototype.toLocaleLowerCase": {
+     "call": 2238
+    },
+    "Number.prototype.toLocaleString": {
+     "call": 63
+    }
+   }
+  },
+  "SVGElement": {
+   "total": 2234,
+   "total_top": 2234,
+   "member_count": 1,
+   "realms": {
+    "window": 2234
+   },
+   "members": {
+    "style": {
+     "get": 2234
+    }
+   }
+  },
+  "CSSStyleDeclaration": {
+   "total": 2077,
+   "total_top": 2077,
+   "member_count": 4,
+   "realms": {
+    "window": 2077
+   },
+   "members": {
+    "cssText": {
+     "get": 298,
+     "set": 1190
+    },
+    "setProperty": {
+     "call": 549
+    },
+    "removeProperty": {
+     "call": 22
+    },
+    "getPropertyValue": {
+     "call": 18
+    }
+   }
+  },
+  "IntersectionObserver": {
+   "total": 2022,
+   "total_top": 2022,
+   "member_count": 4,
+   "realms": {
+    "window": 2022
+   },
+   "members": {
+    "observe": {
+     "call": 1845
+    },
+    "unobserve": {
+     "call": 146
+    },
+    "constructor": {
+     "construct": 30
+    },
+    "disconnect": {
+     "call": 1
+    }
+   }
+  },
+  "Event": {
+   "total": 1763,
+   "total_top": 1763,
+   "member_count": 14,
+   "realms": {
+    "window": 1763
+   },
+   "members": {
+    "type": {
+     "get": 1051
+    },
+    "constructor": {
+     "construct": 434
+    },
+    "target": {
+     "get": 143
+    },
+    "currentTarget": {
+     "get": 28
+    },
+    "timeStamp": {
+     "get": 21
+    },
+    "stopPropagation": {
+     "call": 20
+    },
+    "bubbles": {
+     "get": 11
+    },
+    "composed": {
+     "get": 11
+    },
+    "cancelable": {
+     "get": 8
+    },
+    "defaultPrevented": {
+     "get": 8
+    },
+    "cancelBubble": {
+     "get": 7
+    },
+    "eventPhase": {
+     "get": 7
+    },
+    "returnValue": {
+     "get": 7
+    },
+    "srcElement": {
+     "get": 7
+    }
+   }
+  },
+  "Headers": {
+   "total": 1762,
+   "total_top": 1762,
+   "member_count": 1,
+   "realms": {
+    "window": 1762
+   },
+   "members": {
+    "get": {
+     "call": 1762
+    }
+   }
+  },
+  "CustomEvent": {
+   "total": 1722,
+   "total_top": 1722,
+   "member_count": 3,
+   "realms": {
+    "window": 1722
+   },
+   "members": {
+    "constructor": {
+     "construct": 1339
+    },
+    "detail": {
+     "get": 380
+    },
+    "initCustomEvent": {
+     "call": 3
+    }
+   }
+  },
+  "TrustedTypePolicy": {
+   "total": 1720,
+   "total_top": 1720,
+   "member_count": 3,
+   "realms": {
+    "window": 1720
+   },
+   "members": {
+    "createScript": {
+     "call": 919
+    },
+    "createHTML": {
+     "call": 706
+    },
+    "createScriptURL": {
+     "call": 95
+    }
+   }
+  },
+  "Response": {
+   "total": 1640,
+   "total_top": 1638,
+   "member_count": 10,
+   "realms": {
+    "window": 1638,
+    "service_worker": 2
+   },
+   "members": {
+    "clone": {
+     "call": 673
+    },
+    "text": {
+     "call": 483
+    },
+    "ok": {
+     "get": 308
+    },
+    "json": {
+     "call": 59
+    },
+    "constructor": {
+     "construct": 44
+    },
+    "status": {
+     "get": 28
+    },
+    "body": {
+     "get": 26
+    },
+    "headers": {
+     "get": 13
+    },
+    "redirected": {
+     "get": 5
+    },
+    "url": {
+     "get": 1
+    }
+   }
+  },
+  "DocumentFragment": {
+   "total": 1549,
+   "total_top": 1549,
+   "member_count": 3,
+   "realms": {
+    "window": 1549
+   },
+   "members": {
+    "children": {
+     "get": 1204
+    },
+    "querySelectorAll": {
+     "call": 230
+    },
+    "firstElementChild": {
+     "get": 115
+    }
+   }
+  },
+  "TextEncoder": {
+   "total": 1462,
+   "total_top": 1462,
+   "member_count": 3,
+   "realms": {
+    "window": 1462
+   },
+   "members": {
+    "encode": {
+     "call": 976
+    },
+    "encodeInto": {
+     "call": 455
+    },
+    "constructor": {
+     "construct": 31
+    }
+   }
+  },
+  "Animation": {
+   "total": 1411,
+   "total_top": 1411,
+   "member_count": 7,
+   "realms": {
+    "window": 1411
+   },
+   "members": {
+    "playState": {
+     "get": 1381
+    },
+    "currentTime": {
+     "get": 5,
+     "set": 3
+    },
+    "cancel": {
+     "call": 7
+    },
+    "startTime": {
+     "get": 5
+    },
+    "play": {
+     "call": 4
+    },
+    "oncancel": {
+     "get": 3
+    },
+    "playbackRate": {
+     "get": 3
+    }
+   }
+  },
+  "Navigator": {
+   "total": 907,
+   "total_top": 907,
+   "member_count": 26,
+   "realms": {
+    "window": 907
+   },
+   "members": {
+    "userAgent": {
+     "get": 626
+    },
+    "connection": {
+     "get": 51
+    },
+    "mediaSession": {
+     "get": 39
+    },
+    "deviceMemory": {
+     "get": 26
+    },
+    "mediaCapabilities": {
+     "get": 26
+    },
+    "serviceWorker": {
+     "get": 24
+    },
+    "userAgentData": {
+     "get": 18
+    },
+    "cookieEnabled": {
+     "get": 13
+    },
+    "hardwareConcurrency": {
+     "get": 9
+    },
+    "locks": {
+     "get": 9
+    },
+    "platform": {
+     "get": 9
+    },
+    "maxTouchPoints": {
+     "get": 6
+    },
+    "plugins": {
+     "get": 6
+    },
+    "presentation": {
+     "get": 6
+    },
+    "vendor": {
+     "get": 6
+    },
+    "onLine": {
+     "get": 4
+    },
+    "userActivation": {
+     "get": 4
+    },
+    "doNotTrack": {
+     "get": 3
+    },
+    "gpu": {
+     "get": 3
+    },
+    "keyboard": {
+     "get": 3
+    },
+    "language": {
+     "get": 3
+    },
+    "languages": {
+     "get": 3
+    },
+    "mediaDevices": {
+     "get": 3
+    },
+    "mimeTypes": {
+     "get": 3
+    },
+    "webdriver": {
+     "get": 3
+    },
+    "getBattery": {
+     "call": 1
+    }
+   }
+  },
+  "ReadableStreamDefaultReader": {
+   "total": 881,
+   "total_top": 881,
+   "member_count": 1,
+   "realms": {
+    "window": 881
+   },
+   "members": {
+    "read": {
+     "call": 881
+    }
+   }
+  },
+  "HTMLScriptElement": {
+   "total": 799,
+   "total_top": 799,
+   "member_count": 3,
+   "realms": {
+    "window": 799
+   },
+   "members": {
+    "src": {
+     "get": 761,
+     "set": 31
+    },
+    "async": {
+     "set": 6
+    },
+    "textContent": {
+     "set": 1
+    }
+   }
+  },
+  "Storage": {
+   "total": 768,
+   "total_top": 768,
+   "member_count": 5,
+   "realms": {
+    "window": 768
+   },
+   "members": {
+    "getItem": {
+     "call": 568
+    },
+    "removeItem": {
+     "call": 97
+    },
+    "setItem": {
+     "call": 78
+    },
+    "length": {
+     "get": 14
+    },
+    "key": {
+     "call": 11
+    }
+   }
+  },
+  "HTMLIFrameElement": {
+   "total": 555,
+   "total_top": 555,
+   "member_count": 4,
+   "realms": {
+    "window": 555
+   },
+   "members": {
+    "sandbox": {
+     "get": 531,
+     "set": 3
+    },
+    "contentWindow": {
+     "get": 15
+    },
+    "src": {
+     "set": 3
+    },
+    "srcdoc": {
+     "set": 3
+    }
+   }
+  },
+  "IDBRequest": {
+   "total": 485,
+   "total_top": 394,
+   "member_count": 4,
+   "realms": {
+    "window": 394,
+    "service_worker": 91
+   },
+   "members": {
+    "result": {
+     "get": 379
+    },
+    "onerror": {
+     "set": 39
+    },
+    "onsuccess": {
+     "set": 39
+    },
+    "transaction": {
+     "get": 28
+    }
+   }
+  },
+  "Cache": {
+   "total": 480,
+   "total_top": 480,
+   "member_count": 2,
+   "realms": {
+    "window": 480
+   },
+   "members": {
+    "match": {
+     "call": 283
+    },
+    "put": {
+     "call": 197
+    }
+   }
+  },
+  "TrustedTypePolicyFactory": {
+   "total": 470,
+   "total_top": 470,
+   "member_count": 6,
+   "realms": {
+    "window": 470
+   },
+   "members": {
+    "emptyScript": {
+     "get": 421
+    },
+    "createPolicy": {
+     "call": 33
+    },
+    "emptyHTML": {
+     "get": 7
+    },
+    "isHTML": {
+     "call": 3
+    },
+    "isScript": {
+     "call": 3
+    },
+    "isScriptURL": {
+     "call": 3
+    }
+   }
+  },
+  "IDBDatabase": {
+   "total": 407,
+   "total_top": 373,
+   "member_count": 4,
+   "realms": {
+    "window": 373,
+    "service_worker": 34
+   },
+   "members": {
+    "transaction": {
+     "call": 210
+    },
+    "version": {
+     "get": 108
+    },
+    "objectStoreNames": {
+     "get": 66
+    },
+    "createObjectStore": {
+     "call": 23
+    }
+   }
+  },
+  "MediaQueryList": {
+   "total": 389,
+   "total_top": 389,
+   "member_count": 3,
+   "realms": {
+    "window": 389
+   },
+   "members": {
+    "matches": {
+     "get": 369
+    },
+    "addListener": {
+     "call": 16
+    },
+    "removeListener": {
+     "call": 4
+    }
+   }
+  },
+  "HTMLSlotElement": {
+   "total": 311,
+   "total_top": 311,
+   "member_count": 1,
+   "realms": {
+    "window": 311
+   },
+   "members": {
+    "name": {
+     "get": 311
+    }
+   }
+  },
+  "IDBTransaction": {
+   "total": 271,
+   "total_top": 242,
+   "member_count": 2,
+   "realms": {
+    "window": 242,
+    "service_worker": 29
+   },
+   "members": {
+    "objectStore": {
+     "call": 227
+    },
+    "commit": {
+     "call": 44
+    }
+   }
+  },
+  "IDBObjectStore": {
+   "total": 259,
+   "total_top": 230,
+   "member_count": 9,
+   "realms": {
+    "window": 230,
+    "service_worker": 29
+   },
+   "members": {
+    "get": {
+     "call": 75
+    },
+    "index": {
+     "call": 68
+    },
+    "put": {
+     "call": 50
+    },
+    "createIndex": {
+     "call": 19
+    },
+    "delete": {
+     "call": 18
+    },
+    "clear": {
+     "call": 12
+    },
+    "openCursor": {
+     "call": 12
+    },
+    "openKeyCursor": {
+     "call": 3
+    },
+    "indexNames": {
+     "get": 2
+    }
+   }
+  },
+  "XMLHttpRequest": {
+   "total": 248,
+   "total_top": 248,
+   "member_count": 12,
+   "realms": {
+    "window": 248
+   },
+   "members": {
+    "setRequestHeader": {
+     "call": 92
+    },
+    "status": {
+     "get": 53
+    },
+    "readyState": {
+     "get": 20
+    },
+    "constructor": {
+     "construct": 17
+    },
+    "open": {
+     "call": 17
+    },
+    "send": {
+     "call": 17
+    },
+    "withCredentials": {
+     "set": 10
+    },
+    "responseText": {
+     "get": 7
+    },
+    "getResponseHeader": {
+     "call": 5
+    },
+    "responseType": {
+     "get": 2,
+     "set": 3
+    },
+    "response": {
+     "get": 3
+    },
+    "onreadystatechange": {
+     "set": 2
+    }
+   }
+  },
+  "DOMRectReadOnly": {
+   "total": 230,
+   "total_top": 230,
+   "member_count": 3,
+   "realms": {
+    "window": 230
+   },
+   "members": {
+    "top": {
+     "get": 83
+    },
+    "left": {
+     "get": 82
+    },
+    "height": {
+     "get": 65
+    }
+   }
+  },
+  "PerformanceEntry": {
+   "total": 206,
+   "total_top": 206,
+   "member_count": 3,
+   "realms": {
+    "window": 206
+   },
+   "members": {
+    "name": {
+     "get": 200
+    },
+    "startTime": {
+     "get": 4
+    },
+    "duration": {
+     "get": 2
+    }
+   }
+  },
+  "TextDecoder": {
+   "total": 192,
+   "total_top": 192,
+   "member_count": 2,
+   "realms": {
+    "window": 192
+   },
+   "members": {
+    "decode": {
+     "call": 130
+    },
+    "constructor": {
+     "construct": 62
+    }
+   }
+  },
+  "MouseEvent": {
+   "total": 165,
+   "total_top": 165,
+   "member_count": 20,
+   "realms": {
+    "window": 165
+   },
+   "members": {
+    "clientX": {
+     "get": 28
+    },
+    "clientY": {
+     "get": 28
+    },
+    "button": {
+     "get": 9
+    },
+    "altKey": {
+     "get": 8
+    },
+    "ctrlKey": {
+     "get": 8
+    },
+    "metaKey": {
+     "get": 8
+    },
+    "pageX": {
+     "get": 8
+    },
+    "pageY": {
+     "get": 8
+    },
+    "relatedTarget": {
+     "get": 8
+    },
+    "shiftKey": {
+     "get": 8
+    },
+    "buttons": {
+     "get": 7
+    },
+    "movementX": {
+     "get": 5
+    },
+    "movementY": {
+     "get": 5
+    },
+    "fromElement": {
+     "get": 4
+    },
+    "offsetX": {
+     "get": 4
+    },
+    "offsetY": {
+     "get": 4
+    },
+    "toElement": {
+     "get": 4
+    },
+    "x": {
+     "get": 4
+    },
+    "y": {
+     "get": 4
+    },
+    "constructor": {
+     "construct": 3
+    }
+   }
+  },
+  "DOMRect": {
+   "total": 139,
+   "total_top": 139,
+   "member_count": 4,
+   "realms": {
+    "window": 139
+   },
+   "members": {
+    "width": {
+     "get": 70
+    },
+    "height": {
+     "get": 67
+    },
+    "x": {
+     "get": 1
+    },
+    "y": {
+     "get": 1
+    }
+   }
+  },
+  "HTMLImageElement": {
+   "total": 138,
+   "total_top": 138,
+   "member_count": 4,
+   "realms": {
+    "window": 138
+   },
+   "members": {
+    "width": {
+     "get": 25,
+     "set": 25
+    },
+    "height": {
+     "get": 23,
+     "set": 23
+    },
+    "src": {
+     "set": 15,
+     "get": 24
+    },
+    "Image": {
+     "construct": 3
+    }
+   }
+  },
+  "Screen": {
+   "total": 130,
+   "total_top": 130,
+   "member_count": 7,
+   "realms": {
+    "window": 130
+   },
+   "members": {
+    "availWidth": {
+     "get": 35
+    },
+    "availHeight": {
+     "get": 19
+    },
+    "availTop": {
+     "get": 19
+    },
+    "height": {
+     "get": 19
+    },
+    "width": {
+     "get": 19
+    },
+    "colorDepth": {
+     "get": 16
+    },
+    "availLeft": {
+     "get": 3
+    }
+   }
+  },
+  "IDBVersionChangeEvent": {
+   "total": 98,
+   "total_top": 98,
+   "member_count": 3,
+   "realms": {
+    "window": 98
+   },
+   "members": {
+    "newVersion": {
+     "get": 42
+    },
+    "dataLoss": {
+     "get": 28
+    },
+    "oldVersion": {
+     "get": 28
+    }
+   }
+  },
+  "IDBCursorWithValue": {
+   "total": 93,
+   "total_top": 93,
+   "member_count": 1,
+   "realms": {
+    "window": 93
+   },
+   "members": {
+    "value": {
+     "get": 93
+    }
+   }
+  },
+  "ResizeObserver": {
+   "total": 90,
+   "total_top": 90,
+   "member_count": 3,
+   "realms": {
+    "window": 90
+   },
+   "members": {
+    "constructor": {
+     "construct": 43
+    },
+    "observe": {
+     "call": 43
+    },
+    "disconnect": {
+     "call": 4
+    }
+   }
+  },
+  "MutationObserver": {
+   "total": 86,
+   "total_top": 86,
+   "member_count": 3,
+   "realms": {
+    "window": 86
+   },
+   "members": {
+    "observe": {
+     "call": 41
+    },
+    "constructor": {
+     "construct": 37
+    },
+    "disconnect": {
+     "call": 8
+    }
+   }
+  },
+  "IdleDeadline": {
+   "total": 79,
+   "total_top": 79,
+   "member_count": 1,
+   "realms": {
+    "window": 79
+   },
+   "members": {
+    "timeRemaining": {
+     "call": 79
+    }
+   }
+  },
+  "DOMStringList": {
+   "total": 77,
+   "total_top": 72,
+   "member_count": 3,
+   "realms": {
+    "window": 72,
+    "service_worker": 5
+   },
+   "members": {
+    "contains": {
+     "call": 68
+    },
+    "length": {
+     "get": 6
+    },
+    "@@iterator": {
+     "call": 3
+    }
+   }
+  },
+  "IDBIndex": {
+   "total": 68,
+   "total_top": 68,
+   "member_count": 2,
+   "realms": {
+    "window": 68
+   },
+   "members": {
+    "getAll": {
+     "call": 37
+    },
+    "openCursor": {
+     "call": 31
+    }
+   }
+  },
+  "HTMLButtonElement": {
+   "total": 65,
+   "total_top": 65,
+   "member_count": 1,
+   "realms": {
+    "window": 65
+   },
+   "members": {
+    "disabled": {
+     "get": 14,
+     "set": 51
+    }
+   }
+  },
+  "IDBCursor": {
+   "total": 63,
+   "total_top": 63,
+   "member_count": 2,
+   "realms": {
+    "window": 63
+   },
+   "members": {
+    "continue": {
+     "call": 62
+    },
+    "update": {
+     "call": 1
+    }
+   }
+  },
+  "IDBKeyRange": {
+   "total": 56,
+   "total_top": 56,
+   "member_count": 2,
+   "realms": {
+    "window": 56
+   },
+   "members": {
+    "only": {
+     "call": 46,
+     "static": true
+    },
+    "bound": {
+     "call": 10,
+     "static": true
+    }
+   }
+  },
+  "IDBFactory": {
+   "total": 52,
+   "total_top": 47,
+   "member_count": 2,
+   "realms": {
+    "window": 47,
+    "service_worker": 5
+   },
+   "members": {
+    "open": {
+     "call": 43
+    },
+    "deleteDatabase": {
+     "call": 9
+    }
+   }
+  },
+  "VideoPlaybackQuality": {
+   "total": 44,
+   "total_top": 44,
+   "member_count": 2,
+   "realms": {
+    "window": 44
+   },
+   "members": {
+    "totalVideoFrames": {
+     "get": 24
+    },
+    "droppedVideoFrames": {
+     "get": 20
+    }
+   }
+  },
+  "Crypto": {
+   "total": 43,
+   "total_top": 43,
+   "member_count": 2,
+   "realms": {
+    "window": 43
+   },
+   "members": {
+    "subtle": {
+     "get": 25
+    },
+    "getRandomValues": {
+     "call": 18
+    }
+   }
+  },
+  "TrustedScriptURL": {
+   "total": 41,
+   "total_top": 41,
+   "member_count": 1,
+   "realms": {
+    "window": 41
+   },
+   "members": {
+    "toString": {
+     "call": 41
+    }
+   }
+  },
+  "HTMLLinkElement": {
+   "total": 40,
+   "total_top": 40,
+   "member_count": 2,
+   "realms": {
+    "window": 40
+   },
+   "members": {
+    "href": {
+     "get": 22,
+     "set": 9
+    },
+    "rel": {
+     "set": 9
+    }
+   }
+  },
+  "HTMLAnchorElement": {
+   "total": 38,
+   "total_top": 38,
+   "member_count": 5,
+   "realms": {
+    "window": 38
+   },
+   "members": {
+    "href": {
+     "get": 9,
+     "set": 15
+    },
+    "hrefTranslate": {
+     "get": 6
+    },
+    "rel": {
+     "set": 4
+    },
+    "pathname": {
+     "get": 3
+    },
+    "target": {
+     "set": 1
+    }
+   }
+  },
+  "Intl.DateTimeFormat": {
+   "total": 38,
+   "total_top": 38,
+   "member_count": 2,
+   "realms": {
+    "window": 38
+   },
+   "members": {
+    "constructor": {
+     "construct": 19
+    },
+    "resolvedOptions": {
+     "call": 19
+    }
+   }
+  },
+  "URLSearchParams": {
+   "total": 36,
+   "total_top": 36,
+   "member_count": 3,
+   "realms": {
+    "window": 36
+   },
+   "members": {
+    "set": {
+     "call": 24
+    },
+    "constructor": {
+     "construct": 6
+    },
+    "toString": {
+     "call": 6
+    }
+   }
+  },
+  "CSS": {
+   "total": 34,
+   "total_top": 34,
+   "member_count": 1,
+   "realms": {
+    "window": 34
+   },
+   "members": {
+    "supports": {
+     "call": 34,
+     "static": true
+    }
+   }
+  },
+  "Request": {
+   "total": 34,
+   "total_top": 33,
+   "member_count": 1,
+   "realms": {
+    "window": 33,
+    "service_worker": 1
+   },
+   "members": {
+    "constructor": {
+     "construct": 34
+    }
+   }
+  },
+  "BroadcastChannel": {
+   "total": 33,
+   "total_top": 33,
+   "member_count": 3,
+   "realms": {
+    "window": 33
+   },
+   "members": {
+    "constructor": {
+     "construct": 12
+    },
+    "onmessage": {
+     "set": 12
+    },
+    "postMessage": {
+     "call": 9
+    }
+   }
+  },
+  "MediaSession": {
+   "total": 33,
+   "total_top": 33,
+   "member_count": 4,
+   "realms": {
+    "window": 33
+   },
+   "members": {
+    "setActionHandler": {
+     "call": 21
+    },
+    "playbackState": {
+     "set": 6
+    },
+    "metadata": {
+     "set": 3
+    },
+    "setPositionState": {
+     "call": 3
+    }
+   }
+  },
+  "AbortController": {
+   "total": 32,
+   "total_top": 32,
+   "member_count": 3,
+   "realms": {
+    "window": 32
+   },
+   "members": {
+    "constructor": {
+     "construct": 13
+    },
+    "signal": {
+     "get": 13
+    },
+    "abort": {
+     "call": 6
+    }
+   }
+  },
+  "PerformanceResourceTiming": {
+   "total": 31,
+   "total_top": 31,
+   "member_count": 9,
+   "realms": {
+    "window": 31
+   },
+   "members": {
+    "connectEnd": {
+     "get": 5
+    },
+    "domainLookupEnd": {
+     "get": 5
+    },
+    "requestStart": {
+     "get": 4
+    },
+    "transferSize": {
+     "get": 4
+    },
+    "connectStart": {
+     "get": 3
+    },
+    "domainLookupStart": {
+     "get": 3
+    },
+    "responseStart": {
+     "get": 3
+    },
+    "fetchStart": {
+     "get": 2
+    },
+    "responseEnd": {
+     "get": 2
+    }
+   }
+  },
+  "Plugin": {
+   "total": 30,
+   "total_top": 30,
+   "member_count": 2,
+   "realms": {
+    "window": 30
+   },
+   "members": {
+    "description": {
+     "get": 15
+    },
+    "name": {
+     "get": 15
+    }
+   }
+  },
+  "ServiceWorkerRegistration": {
+   "total": 30,
+   "total_top": 19,
+   "member_count": 5,
+   "realms": {
+    "window": 19,
+    "service_worker": 11
+   },
+   "members": {
+    "pushManager": {
+     "get": 16
+    },
+    "active": {
+     "get": 9
+    },
+    "installing": {
+     "get": 3
+    },
+    "unregister": {
+     "call": 1
+    },
+    "waiting": {
+     "get": 1
+    }
+   }
+  },
+  "UIEvent": {
+   "total": 29,
+   "total_top": 29,
+   "member_count": 5,
+   "realms": {
+    "window": 29
+   },
+   "members": {
+    "detail": {
+     "get": 9
+    },
+    "which": {
+     "get": 8
+    },
+    "pseudoTarget": {
+     "get": 4
+    },
+    "sourceCapabilities": {
+     "get": 4
+    },
+    "view": {
+     "get": 4
+    }
+   }
+  },
+  "WorkerGlobalScope": {
+   "total": 29,
+   "total_top": 0,
+   "member_count": 4,
+   "realms": {
+    "service_worker": 29
+   },
+   "members": {
+    "self": {
+     "get": 18
+    },
+    "indexedDB": {
+     "get": 5
+    },
+    "location": {
+     "get": 4
+    },
+    "fetch": {
+     "call": 2
+    }
+   }
+  },
+  "HTMLVideoElement": {
+   "total": 26,
+   "total_top": 26,
+   "member_count": 3,
+   "realms": {
+    "window": 26
+   },
+   "members": {
+    "getVideoPlaybackQuality": {
+     "call": 12
+    },
+    "videoHeight": {
+     "get": 7
+    },
+    "videoWidth": {
+     "get": 7
+    }
+   }
+  },
+  "MessageChannel": {
+   "total": 24,
+   "total_top": 24,
+   "member_count": 3,
+   "realms": {
+    "window": 24
+   },
+   "members": {
+    "port2": {
+     "get": 15
+    },
+    "constructor": {
+     "construct": 6
+    },
+    "port1": {
+     "get": 3
+    }
+   }
+  },
+  "BatteryManager": {
+   "total": 20,
+   "total_top": 20,
+   "member_count": 2,
+   "realms": {
+    "window": 20
+   },
+   "members": {
+    "charging": {
+     "get": 10
+    },
+    "level": {
+     "get": 10
+    }
+   }
+  },
+  "NetworkInformation": {
+   "total": 20,
+   "total_top": 20,
+   "member_count": 3,
+   "realms": {
+    "window": 20
+   },
+   "members": {
+    "effectiveType": {
+     "get": 11
+    },
+    "downlink": {
+     "get": 6
+    },
+    "rtt": {
+     "get": 3
+    }
+   }
+  },
+  "History": {
+   "total": 19,
+   "total_top": 19,
+   "member_count": 1,
+   "realms": {
+    "window": 19
+   },
+   "members": {
+    "length": {
+     "get": 19
+    }
+   }
+  },
+  "MediaCapabilities": {
+   "total": 19,
+   "total_top": 19,
+   "member_count": 1,
+   "realms": {
+    "window": 19
+   },
+   "members": {
+    "decodingInfo": {
+     "call": 19
+    }
+   }
+  },
+  "MessagePort": {
+   "total": 15,
+   "total_top": 15,
+   "member_count": 2,
+   "realms": {
+    "window": 15
+   },
+   "members": {
+    "postMessage": {
+     "call": 12
+    },
+    "onmessage": {
+     "set": 3
+    }
+   }
+  },
+  "Blob": {
+   "total": 14,
+   "total_top": 14,
+   "member_count": 2,
+   "realms": {
+    "window": 14
+   },
+   "members": {
+    "constructor": {
+     "construct": 7
+    },
+    "size": {
+     "get": 7
+    }
+   }
+  },
+  "CacheStorage": {
+   "total": 13,
+   "total_top": 13,
+   "member_count": 3,
+   "realms": {
+    "window": 13
+   },
+   "members": {
+    "open": {
+     "call": 6
+    },
+    "delete": {
+     "call": 4
+    },
+    "keys": {
+     "call": 3
+    }
+   }
+  },
+  "MessageEvent": {
+   "total": 13,
+   "total_top": 13,
+   "member_count": 1,
+   "realms": {
+    "window": 13
+   },
+   "members": {
+    "data": {
+     "get": 13
+    }
+   }
+  },
+  "ReadableStream": {
+   "total": 13,
+   "total_top": 13,
+   "member_count": 1,
+   "realms": {
+    "window": 13
+   },
+   "members": {
+    "getReader": {
+     "call": 13
+    }
+   }
+  },
+  "ServiceWorker": {
+   "total": 13,
+   "total_top": 13,
+   "member_count": 2,
+   "realms": {
+    "window": 13
+   },
+   "members": {
+    "state": {
+     "get": 10
+    },
+    "postMessage": {
+     "call": 3
+    }
+   }
+  },
+  "ServiceWorkerGlobalScope": {
+   "total": 13,
+   "total_top": 0,
+   "member_count": 2,
+   "realms": {
+    "service_worker": 13
+   },
+   "members": {
+    "registration": {
+     "get": 11
+    },
+    "clients": {
+     "get": 2
+    }
+   }
+  },
+  "BarProp": {
+   "total": 12,
+   "total_top": 12,
+   "member_count": 1,
+   "realms": {
+    "window": 12
+   },
+   "members": {
+    "visible": {
+     "get": 12
+    }
+   }
+  },
+  "PointerEvent": {
+   "total": 12,
+   "total_top": 12,
+   "member_count": 2,
+   "realms": {
+    "window": 12
+   },
+   "members": {
+    "pointerType": {
+     "get": 10
+    },
+    "pointerId": {
+     "get": 2
+    }
+   }
+  },
+  "PresentationRequest": {
+   "total": 12,
+   "total_top": 12,
+   "member_count": 4,
+   "realms": {
+    "window": 12
+   },
+   "members": {
+    "constructor": {
+     "construct": 3
+    },
+    "getAvailability": {
+     "call": 3
+    },
+    "onconnectionavailable": {
+     "set": 3
+    },
+    "reconnect": {
+     "call": 3
+    }
+   }
+  },
+  "Notification": {
+   "total": 11,
+   "total_top": 6,
+   "member_count": 1,
+   "realms": {
+    "window": 6,
+    "service_worker": 5
+   },
+   "members": {
+    "permission": {
+     "get": 11,
+     "static": true
+    }
+   }
+  },
+  "CSSStyleSheet": {
+   "total": 10,
+   "total_top": 10,
+   "member_count": 1,
+   "realms": {
+    "window": 10
+   },
+   "members": {
+    "insertRule": {
+     "call": 10
+    }
+   }
+  },
+  "HTMLCanvasElement": {
+   "total": 10,
+   "total_top": 10,
+   "member_count": 3,
+   "realms": {
+    "window": 10
+   },
+   "members": {
+    "getContext": {
+     "call": 8
+    },
+    "height": {
+     "set": 1
+    },
+    "width": {
+     "set": 1
+    }
+   }
+  },
+  "PushManager": {
+   "total": 10,
+   "total_top": 0,
+   "member_count": 1,
+   "realms": {
+    "service_worker": 10
+   },
+   "members": {
+    "getSubscription": {
+     "call": 10
+    }
+   }
+  },
+  "ServiceWorkerContainer": {
+   "total": 10,
+   "total_top": 10,
+   "member_count": 2,
+   "realms": {
+    "window": 10
+   },
+   "members": {
+    "getRegistration": {
+     "call": 7
+    },
+    "register": {
+     "call": 3
+    }
+   }
+  },
+  "URL": {
+   "total": 10,
+   "total_top": 10,
+   "member_count": 4,
+   "realms": {
+    "window": 10
+   },
+   "members": {
+    "constructor": {
+     "construct": 3
+    },
+    "origin": {
+     "get": 3
+    },
+    "pathname": {
+     "get": 3
+    },
+    "createObjectURL": {
+     "call": 1,
+     "static": true
+    }
+   }
+  },
+  "NavigatorUAData": {
+   "total": 9,
+   "total_top": 9,
+   "member_count": 1,
+   "realms": {
+    "window": 9
+   },
+   "members": {
+    "brands": {
+     "get": 9
+    }
+   }
+  },
+  "PresentationAvailability": {
+   "total": 9,
+   "total_top": 9,
+   "member_count": 2,
+   "realms": {
+    "window": 9
+   },
+   "members": {
+    "onchange": {
+     "get": 3,
+     "set": 3
+    },
+    "value": {
+     "get": 3
+    }
+   }
+  },
+  "HTMLAudioElement": {
+   "total": 8,
+   "total_top": 8,
+   "member_count": 1,
+   "realms": {
+    "window": 8
+   },
+   "members": {
+    "Audio": {
+     "construct": 8
+    }
+   }
+  },
+  "HTMLMetaElement": {
+   "total": 8,
+   "total_top": 8,
+   "member_count": 2,
+   "realms": {
+    "window": 8
+   },
+   "members": {
+    "content": {
+     "set": 4
+    },
+    "name": {
+     "set": 4
+    }
+   }
+  },
+  "UserActivation": {
+   "total": 8,
+   "total_top": 8,
+   "member_count": 2,
+   "realms": {
+    "window": 8
+   },
+   "members": {
+    "hasBeenActive": {
+     "get": 4
+    },
+    "isActive": {
+     "get": 4
+    }
+   }
+  },
+  "IDBOpenDBRequest": {
+   "total": 7,
+   "total_top": 2,
+   "member_count": 1,
+   "realms": {
+    "service_worker": 5,
+    "window": 2
+   },
+   "members": {
+    "onupgradeneeded": {
+     "set": 7
+    }
+   }
+  },
+  "XMLHttpRequestEventTarget": {
+   "total": 7,
+   "total_top": 7,
+   "member_count": 3,
+   "realms": {
+    "window": 7
+   },
+   "members": {
+    "onerror": {
+     "set": 3
+    },
+    "onload": {
+     "set": 3
+    },
+    "onprogress": {
+     "set": 1
+    }
+   }
+  },
+  "DOMImplementation": {
+   "total": 6,
+   "total_top": 6,
+   "member_count": 1,
+   "realms": {
+    "window": 6
+   },
+   "members": {
+    "createHTMLDocument": {
+     "call": 6
+    }
+   }
+  },
+  "FontFaceSet": {
+   "total": 6,
+   "total_top": 6,
+   "member_count": 1,
+   "realms": {
+    "window": 6
+   },
+   "members": {
+    "load": {
+     "call": 6
+    }
+   }
+  },
+  "GPUAdapterInfo": {
+   "total": 6,
+   "total_top": 6,
+   "member_count": 2,
+   "realms": {
+    "window": 6
+   },
+   "members": {
+    "architecture": {
+     "get": 3
+    },
+    "vendor": {
+     "get": 3
+    }
+   }
+  },
+  "HTMLTextAreaElement": {
+   "total": 6,
+   "total_top": 6,
+   "member_count": 1,
+   "realms": {
+    "window": 6
+   },
+   "members": {
+    "placeholder": {
+     "get": 3,
+     "set": 3
+    }
+   }
+  },
+  "KeyboardLayoutMap": {
+   "total": 6,
+   "total_top": 6,
+   "member_count": 2,
+   "realms": {
+    "window": 6
+   },
+   "members": {
+    "size": {
+     "get": 3
+    },
+    "values": {
+     "call": 3
+    }
+   }
+  },
+  "WebGLRenderingContext": {
+   "total": 6,
+   "total_top": 6,
+   "member_count": 2,
+   "realms": {
+    "window": 6
+   },
+   "members": {
+    "getExtension": {
+     "call": 3
+    },
+    "getParameter": {
+     "call": 3
+    }
+   }
+  },
+  "FocusEvent": {
+   "total": 4,
+   "total_top": 4,
+   "member_count": 1,
+   "realms": {
+    "window": 4
+   },
+   "members": {
+    "relatedTarget": {
+     "get": 4
+    }
+   }
+  },
+  "WorkerLocation": {
+   "total": 4,
+   "total_top": 0,
+   "member_count": 1,
+   "realms": {
+    "service_worker": 4
+   },
+   "members": {
+    "href": {
+     "get": 4
+    }
+   }
+  },
+  "DOMException": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "constructor": {
+     "construct": 3
+    }
+   }
+  },
+  "ExtendableMessageEvent": {
+   "total": 3,
+   "total_top": 0,
+   "member_count": 1,
+   "realms": {
+    "service_worker": 3
+   },
+   "members": {
+    "data": {
+     "get": 3
+    }
+   }
+  },
+  "GPU": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "requestAdapter": {
+     "call": 3
+    }
+   }
+  },
+  "GPUAdapter": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "info": {
+     "get": 3
+    }
+   }
+  },
+  "Intl.NumberFormat": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "supportedLocalesOf": {
+     "call": 3,
+     "static": true
+    }
+   }
+  },
+  "Keyboard": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "getLayoutMap": {
+     "call": 3
+    }
+   }
+  },
+  "LockManager": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "request": {
+     "call": 3
+    }
+   }
+  },
+  "MediaDevices": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "enumerateDevices": {
+     "call": 3
+    }
+   }
+  },
+  "MediaMetadata": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "constructor": {
+     "construct": 3
+    }
+   }
+  },
+  "PerformanceNavigationTiming": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "type": {
+     "get": 3
+    }
+   }
+  },
+  "Permissions": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "query": {
+     "call": 3
+    }
+   }
+  },
+  "PluginArray": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "length": {
+     "get": 3
+    }
+   }
+  },
+  "Presentation": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "defaultRequest": {
+     "set": 3
+    }
+   }
+  },
+  "console": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "info": {
+     "call": 3,
+     "static": true
+    }
+   }
+  },
+  "CanvasRenderingContext2D": {
+   "total": 2,
+   "total_top": 2,
+   "member_count": 2,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "fillRect": {
+     "call": 1
+    },
+    "fillStyle": {
+     "set": 1
+    }
+   }
+  },
+  "Clients": {
+   "total": 2,
+   "total_top": 0,
+   "member_count": 1,
+   "realms": {
+    "service_worker": 2
+   },
+   "members": {
+    "claim": {
+     "call": 2
+    }
+   }
+  },
+  "ExtendableEvent": {
+   "total": 2,
+   "total_top": 0,
+   "member_count": 1,
+   "realms": {
+    "service_worker": 2
+   },
+   "members": {
+    "waitUntil": {
+     "call": 2
+    }
+   }
+  },
+  "ViewTransition": {
+   "total": 2,
+   "total_top": 2,
+   "member_count": 2,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "finished": {
+     "get": 1
+    },
+    "ready": {
+     "get": 1
+    }
+   }
+  },
+  "HTMLStyleElement": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "sheet": {
+     "get": 1
+    }
+   }
+  }
+ },
+ "events": {
+  "HTMLElement:touchstart": 459,
+  "HTMLElement:touchend": 435,
+  "HTMLElement:click": 392,
+  "IDBRequest:error": 269,
+  "IDBRequest:success": 269,
+  "MediaQueryList:change": 243,
+  "HTMLElement:mousedown": 236,
+  "HTMLElement:tap": 235,
+  "HTMLElement:mouseenter": 231,
+  "HTMLElement:focusout": 204,
+  "HTMLElement:focusin": 203,
+  "IDBTransaction:abort": 192,
+  "IDBTransaction:complete": 192,
+  "IDBTransaction:error": 192,
+  "HTMLDivElement:click": 187,
+  "HTMLDivElement:animationend": 156,
+  "HTMLElement:focus": 153,
+  "HTMLElement:blur": 150,
+  "HTMLButtonElement:focus": 146,
+  "HTMLElement:keydown": 146,
+  "HTMLButtonElement:click": 137,
+  "HTMLElement:down": 125,
+  "HTMLElement:yt-service-request-completed": 103,
+  "HTMLElement:mouseleave": 94,
+  "HTMLButtonElement:blur": 92,
+  "HTMLElement:keyup": 85,
+  "HTMLElement:mouseup": 83,
+  "HTMLDivElement:mouseover": 79,
+  "HTMLDivElement:touchstart": 68,
+  "HTMLElement:webkitAnimationEnd": 64,
+  "HTMLButtonElement:mouseover": 60,
+  "HTMLAnchorElement:click": 52,
+  "HTMLButtonElement:mouseenter": 50,
+  "HTMLButtonElement:mouseleave": 50,
+  "HTMLButtonElement:tap": 50,
+  "HTMLDivElement:focus": 50,
+  "Window:resize": 48,
+  "IDBOpenDBRequest:error": 45,
+  "IDBOpenDBRequest:success": 45,
+  "HTMLElement:up": 42,
+  "HTMLElement:yt-commentbox-dismiss": 42,
+  "HTMLDivElement:keydown": 41,
+  "HTMLDivElement:touchend": 40,
+  "HTMLDivElement:mousedown": 39,
+  "IDBDatabase:close": 36,
+  "IDBDatabase:versionchange": 36,
+  "IDBOpenDBRequest:upgradeneeded": 36,
+  "HTMLElement:yt-navigate": 34,
+  "HTMLImageElement:error": 34,
+  "HTMLElement:iron-resize": 32,
+  "HTMLElement:yt-service-request-sent": 29,
+  "HTMLDivElement:webkit-animation-end": 28,
+  "HTMLImageElement:load": 28,
+  "HTMLTemplateElement:_host_badge-changed": 27,
+  "HTMLElement:yt-popup-closed": 26,
+  "HTMLDocument:visibilitychange": 25,
+  "HTMLTemplateElement:_host_data-changed": 25,
+  "HTMLAnchorElement:focus": 24,
+  "HTMLDivElement:focusin": 23,
+  "HTMLElement:yt-toggle-button": 23,
+  "HTMLElement:yt-popup-canceled": 22,
+  "HTMLElement:yt-popup-opened": 22,
+  "HTMLElement:yt-service-request-sent-button-renderer": 21,
+  "HTMLDivElement:focusout": 20,
+  "HTMLDivElement:mouseout": 20,
+  "HTMLElement:yt-append-continuation-items-action-finished": 20,
+  "HTMLElement:yt-comment-continuation-empty": 20,
+  "HTMLElement:yt-comment-sub-threads-changed": 20,
+  "HTMLElement:yt-commentbox-resize": 20,
+  "HTMLElement:yt-expander-more-tapped": 20,
+  "HTMLElement:yt-pushed-create-comment-reply": 20,
+  "HTMLElement:yt-rendererstamper-finished": 20,
+  "HTMLTemplateElement:_host_added-replies-changed": 20,
+  "HTMLTemplateElement:_host_author-badge-changed": 20,
+  "HTMLTemplateElement:_host_engagement-panel-changed": 20,
+  "HTMLTemplateElement:_host_expanded-changed": 20,
+  "HTMLTemplateElement:_host_image-attachment-changed": 20,
+  "HTMLTemplateElement:_host_is-sub-thread-changed": 20,
+  "HTMLTemplateElement:_host_thread-hovered-changed": 20,
+  "HTMLTemplateElement:_host_toggle-expanded-changed": 20,
+  "HTMLElement:iron-request-resize-notifications": 19,
+  "HTMLElement:yt-service-request-completed-button-renderer": 19,
+  "Window:test": 19,
+  "HTMLAnchorElement:tap": 18,
+  "Window:message": 18,
+  "HTMLDocument:mousedown": 16,
+  "Window:scroll": 16,
+  "HTMLAnchorElement:blur": 14,
+  "HTMLAnchorElement:mouseenter": 14,
+  "HTMLAnchorElement:mouseleave": 14,
+  "HTMLDivElement:wheel": 14,
+  "HTMLDocument:yt-navigate-finish": 13,
+  "HTMLAnchorElement:keypress": 12,
+  "HTMLAnchorElement:mousedown": 12,
+  "HTMLAnchorElement:touchend": 12,
+  "HTMLAnchorElement:touchstart": 12,
+  "HTMLDivElement:scroll": 12,
+  "HTMLElement:query-matches-changed": 12,
+  "HTMLElement:wheel": 12,
+  "Window:beforeunload": 12,
+  "XMLHttpRequest:loadend": 12,
+  "HTMLDivElement:tap": 11,
+  "HTMLElement:yt-load-next-continuation": 11,
+  "HTMLElement:yt-retrieve-location": 11,
+  "HTMLDocument:readystatechange": 10,
+  "Window:load": 10,
+  "HTMLDivElement:mouseenter": 9,
+  "HTMLDivElement:mouseleave": 9,
+  "HTMLDocument:keydown": 9,
+  "HTMLDocument:touchend": 9,
+  "HTMLSpanElement:click": 9,
+  "HTMLAnchorElement:down": 8,
+  "HTMLAnchorElement:up": 8,
+  "HTMLDivElement:blur": 8,
+  "HTMLTemplateElement:_host_description-collapsed-changed": 8,
+  "HTMLDocument:mouseup": 7,
+  "HTMLElement:transitionend": 7,
+  "HTMLElement:yt-get-context-provider": 7,
+  "HTMLElement:yt-service-request-error": 7,
+  "HTMLTemplateElement:_host_video-primary-info-renderer-changed": 7,
+  "Window:DOMContentLoaded": 7,
+  "Window:mousemove": 7,
+  "HTMLAnchorElement:mouseover": 6,
+  "HTMLBodyElement:click": 6,
+  "HTMLDivElement:contextmenu": 6,
+  "HTMLDivElement:dblclick": 6,
+  "HTMLDivElement:fullscreenchange": 6,
+  "HTMLDivElement:keyup": 6,
+  "HTMLDivElement:touchmove": 6,
+  "HTMLDocument:click": 6,
+  "HTMLDocument:fullscreenchange": 6,
+  "HTMLDocument:keyup": 6,
+  "HTMLDocument:touchstart": 6,
+  "HTMLElement:image-loaded": 6,
+  "HTMLElement:image-unloaded": 6,
+  "HTMLElement:pinchin": 6,
+  "HTMLElement:pinchout": 6,
+  "HTMLElement:yoodle-error": 6,
+  "HTMLElement:yt-dismissible-item-dismissed": 6,
+  "HTMLElement:yt-dismissible-item-undismissed": 6,
+  "HTMLElement:yt-load-reload-continuation": 6,
+  "HTMLTemplateElement:_host_merch-shelf-changed": 6,
+  "HTMLTemplateElement:_host_metadata-above-the-fold-changed": 6,
+  "HTMLVideoElement:focus": 6,
+  "Window:blur": 6,
+  "Window:pagehide": 6,
+  "Window:pointerup": 6,
+  "Window:yt-navigate-finish": 6,
+  "HTMLDocument:yt-page-type-changed": 5,
+  "HTMLElement:iron-overlay-closed": 5,
+  "HTMLElement:opened-changed": 5,
+  "HTMLDocument:DOMContentLoaded": 4,
+  "HTMLDocument:mousemove": 4,
+  "HTMLDocument:yt-set-theater-mode-enabled": 4,
+  "HTMLDocument:yt-watch-masthead-scroll": 4,
+  "HTMLElement:iron-activate": 4,
+  "HTMLElement:yt-player-attached": 4,
+  "HTMLElement:yt-player-detached": 4,
+  "HTMLTemplateElement:_host_product-shelf-changed": 4,
+  "HTMLTemplateElement:_host_shopping-description-shelf-changed": 4,
+  "HTMLBodyElement:auxclick": 3,
+  "HTMLBodyElement:change": 3,
+  "HTMLBodyElement:copy": 3,
+  "HTMLBodyElement:cut": 3,
+  "HTMLBodyElement:dblclick": 3,
+  "HTMLBodyElement:drag": 3,
+  "HTMLBodyElement:dragend": 3,
+  "HTMLBodyElement:dragenter": 3,
+  "HTMLBodyElement:dragleave": 3,
+  "HTMLBodyElement:focusin": 3,
+  "HTMLBodyElement:focusout": 3,
+  "HTMLBodyElement:input": 3,
+  "HTMLBodyElement:keydown": 3,
+  "HTMLBodyElement:keypress": 3,
+  "HTMLBodyElement:keyup": 3,
+  "HTMLBodyElement:mousedown": 3,
+  "HTMLBodyElement:mousemove": 3,
+  "HTMLBodyElement:mouseout": 3,
+  "HTMLBodyElement:mouseover": 3,
+  "HTMLBodyElement:mouseup": 3,
+  "HTMLBodyElement:paste": 3,
+  "HTMLBodyElement:pointerdown": 3,
+  "HTMLBodyElement:pointermove": 3,
+  "HTMLBodyElement:pointerout": 3,
+  "HTMLBodyElement:pointerover": 3,
+  "HTMLBodyElement:pointerup": 3,
+  "HTMLBodyElement:select": 3,
+  "HTMLBodyElement:touchend": 3,
+  "HTMLBodyElement:touchmove": 3,
+  "HTMLBodyElement:touchstart": 3,
+  "HTMLBodyElement:wheel": 3,
+  "HTMLBodyElement:yt-page-data-updated": 3,
+  "HTMLButtonElement:mouseout": 3,
+  "HTMLDivElement:fullscreenerror": 3,
+  "HTMLDivElement:gesturechange": 3,
+  "HTMLDivElement:gestureend": 3,
+  "HTMLDivElement:mousemove": 3,
+  "HTMLDivElement:pointerdown": 3,
+  "HTMLDocument:focus": 3,
+  "HTMLDocument:lr-maybe-resize": 3,
+  "HTMLDocument:lr-scroll-event": 3,
+  "HTMLDocument:mouseout": 3,
+  "HTMLDocument:scroll": 3,
+  "HTMLDocument:tap": 3,
+  "HTMLDocument:yt-guide-close": 3,
+  "HTMLDocument:yt-guide-show": 3,
+  "HTMLDocument:yt-guide-toggle": 3,
+  "HTMLDocument:yt-navigate-cache": 3,
+  "HTMLDocument:yt-navigate-start": 3,
+  "HTMLDocument:yt-page-data-updated": 3,
+  "HTMLElement:animationend": 3,
+  "HTMLElement:app-drawer-transitioned": 3,
+  "HTMLElement:attached": 3,
+  "HTMLElement:can-show-more-changed": 3,
+  "HTMLElement:guide-persistent-and-visible-changed": 3,
+  "HTMLElement:iron-overlay-opened": 3,
+  "HTMLElement:mini-guide-visible-changed": 3,
+  "HTMLElement:neon-animation-finish": 3,
+  "HTMLElement:render-guide-changed": 3,
+  "HTMLElement:shown-items-changed": 3,
+  "HTMLElement:touchmove": 3,
+  "HTMLElement:track": 3,
+  "HTMLElement:yt-action": 3,
+  "HTMLElement:yt-add-element-to-app": 3,
+  "HTMLElement:yt-autonav-engagement-panel-visible-changed": 3,
+  "HTMLElement:yt-autonav-pause-blur": 3,
+  "HTMLElement:yt-autonav-pause-focus": 3,
+  "HTMLElement:yt-autonav-pause-guide-closed": 3,
+  "HTMLElement:yt-autonav-pause-guide-opened": 3,
+  "HTMLElement:yt-autonav-pause-player": 3,
+  "HTMLElement:yt-autonav-pause-player-ended": 3,
+  "HTMLElement:yt-autonav-pause-scroll": 3,
+  "HTMLElement:yt-chat-collapsed-changed": 3,
+  "HTMLElement:yt-expander-less-tapped": 3,
+  "HTMLElement:yt-guide-hover": 3,
+  "HTMLElement:yt-history-load": 3,
+  "HTMLElement:yt-history-pop": 3,
+  "HTMLElement:yt-navigate-error": 3,
+  "HTMLElement:yt-navigate-finish": 3,
+  "HTMLElement:yt-navigate-set-page-offset": 3,
+  "HTMLElement:yt-navigate-start": 3,
+  "HTMLElement:yt-open-hotkey-dialog": 3,
+  "HTMLElement:yt-page-data-fetched": 3,
+  "HTMLElement:yt-page-data-updated": 3,
+  "HTMLElement:yt-page-type-changed": 3,
+  "HTMLElement:yt-request-panel-mode-change": 3,
+  "HTMLElement:yt-set-fullerscreen-styles": 3,
+  "HTMLElement:yt-set-theater-mode-enabled": 3,
+  "HTMLElement:yt-show-survey": 3,
+  "HTMLElement:yt-subscription-changed": 3,
+  "HTMLElement:yt-text-inline-expander-collapse-clicked": 3,
+  "HTMLElement:yt-text-inline-expander-expand-clicked": 3,
+  "HTMLElement:yt-text-inline-expander-expanded-changed": 3,
+  "HTMLElement:yt-update-title": 3,
+  "HTMLElement:yt-update-unseen-notification-count": 3,
+  "HTMLHtmlElement:click": 3,
+  "HTMLHtmlElement:mousedown": 3,
+  "HTMLHtmlElement:tap": 3,
+  "HTMLHtmlElement:touchend": 3,
+  "HTMLHtmlElement:touchstart": 3,
+  "HTMLInputElement:click": 3,
+  "HTMLLinkElement:load": 3,
+  "HTMLScriptElement:load": 3,
+  "HTMLSpanElement:mouseover": 3,
+  "HTMLSpanElement:touchstart": 3,
+  "HTMLTemplateElement:_host_collapsible-metadata-rows-changed": 3,
+  "HTMLTemplateElement:_host_description-expand-command-changed": 3,
+  "HTMLTemplateElement:_host_description-max-lines-changed": 3,
+  "HTMLTemplateElement:_host_description-text-changed": 3,
+  "HTMLTemplateElement:_host_force-dark-panel-theme-changed": 3,
+  "HTMLTemplateElement:_host_header-runs-changed": 3,
+  "HTMLTemplateElement:_host_player-controls-app-api-changed": 3,
+  "HTMLTemplateElement:_host_player-controls-data-changed": 3,
+  "HTMLTemplateElement:_host_player-controls-options-changed": 3,
+  "HTMLTemplateElement:_host_should-show-product-shelf-changed": 3,
+  "HTMLTemplateElement:_host_should-show-shopping-description-shelf-changed": 3,
+  "HTMLTemplateElement:_host_show-inline-structured-description-changed": 3,
+  "HTMLTemplateElement:_host_skinny-mode-changed": 3,
+  "HTMLTemplateElement:_host_structured-description-content-renderer-computed-changed": 3,
+  "HTMLTemplateElement:_host_ticket-shelf-changed": 3,
+  "HTMLTemplateElement:_host_video-secondary-info-renderer-changed": 3,
+  "HTMLTemplateElement:_host_video-summary-changed": 3,
+  "HTMLTemplateElement:_host_watch-metadata-refresh-changed": 3,
+  "HTMLTemplateElement:_host_watch-while-panels-active-changed": 3,
+  "HTMLVideoElement:durationchange": 3,
+  "HTMLVideoElement:ended": 3,
+  "HTMLVideoElement:enterpictureinpicture": 3,
+  "HTMLVideoElement:error": 3,
+  "HTMLVideoElement:leavepictureinpicture": 3,
+  "HTMLVideoElement:loadedmetadata": 3,
+  "HTMLVideoElement:loadstart": 3,
+  "HTMLVideoElement:pause": 3,
+  "HTMLVideoElement:play": 3,
+  "HTMLVideoElement:playing": 3,
+  "HTMLVideoElement:progress": 3,
+  "HTMLVideoElement:ratechange": 3,
+  "HTMLVideoElement:resize": 3,
+  "HTMLVideoElement:seeked": 3,
+  "HTMLVideoElement:seeking": 3,
+  "HTMLVideoElement:suspend": 3,
+  "HTMLVideoElement:timeupdate": 3,
+  "HTMLVideoElement:volumechange": 3,
+  "HTMLVideoElement:waiting": 3,
+  "Window:appinstalled": 3,
+  "Window:beforeinstallprompt": 3,
+  "Window:copy": 3,
+  "Window:focus": 3,
+  "Window:iron-iconset-added": 3,
+  "Window:offline": 3,
+  "Window:online": 3,
+  "Window:orientationchange": 3,
+  "Window:pointercancel": 3,
+  "Window:pointermove": 3,
+  "Window:popstate": 3,
+  "Window:state-navigateend": 3,
+  "Window:unhandledrejection": 3,
+  "Window:yt-focus-searchbox": 3,
+  "HTMLDivElement:pointermove": 2,
+  "HTMLDocument:yt-feed-customization-scroll-up": 2,
+  "HTMLElement:data-changed": 2,
+  "HTMLElement:iron-items-changed": 2,
+  "HTMLElement:iron-overlay-canceled": 2,
+  "HTMLElement:iron-select": 2,
+  "HTMLElement:panend": 2,
+  "HTMLElement:panmove": 2,
+  "HTMLElement:panstart": 2,
+  "HTMLElement:paper-dropdown-open": 2,
+  "HTMLElement:pointerdown": 2,
+  "HTMLElement:scroll": 2,
+  "HTMLElement:selected-changed": 2,
+  "HTMLElement:yt-dismissible-item-action": 2,
+  "HTMLElement:yt-player-updated": 2,
+  "HTMLElement:yt-reload-continuation-finish": 2,
+  "HTMLElement:yt-renderidom-finished": 2,
+  "HTMLElement:yt-request-elements-per-row": 2,
+  "HTMLElement:yt-rich-grid-reflow": 2,
+  "HTMLElement:yt-rich-shelf-renderer-collapse": 2,
+  "HTMLElement:yt-show-subscribers-only-disclaimer": 2,
+  "HTMLElement:yt-show-superfan-only-snackbar": 2,
+  "HTMLTemplateElement:_host_floating-button-data-changed": 2,
+  "HTMLTemplateElement:_host_icon-changed": 2,
+  "HTMLTemplateElement:_host_icon-label-changed": 2,
+  "HTMLTemplateElement:_host_item-changed": 2,
+  "HTMLTemplateElement:_host_items-container-element-changed": 2,
+  "HTMLTemplateElement:_host_menu-expanded-changed": 2,
+  "HTMLTemplateElement:_host_notification-data-changed": 2,
+  "HTMLTemplateElement:_host_scroll-container-element-changed": 2,
+  "HTMLTemplateElement:_host_selected-changed": 2,
+  "ServiceWorker:statechange": 2,
+  "SourceBuffer:error": 2,
+  "SourceBuffer:updateend": 2,
+  "HTMLButtonElement:touchmove": 1,
+  "HTMLButtonElement:touchstart": 1,
+  "HTMLDivElement:down": 1,
+  "HTMLDivElement:keypress": 1,
+  "HTMLDivElement:panend": 1,
+  "HTMLDivElement:panmove": 1,
+  "HTMLDivElement:panstart": 1,
+  "HTMLDivElement:up": 1,
+  "HTMLElement:yt-page-data-will-update": 1,
+  "HTMLElement:yt-playlist-data-updated": 1,
+  "HTMLScriptElement:error": 1,
+  "HTMLSelectElement:change": 1,
+  "HTMLTemplateElement:_host_source-attribution-changed": 1,
+  "MediaSource:sourceclose": 1,
+  "MediaSource:sourceopen": 1,
+  "MediaSource:webkitsourceclose": 1,
+  "MediaSource:webkitsourceopen": 1,
+  "Window:__playwright_global_listeners_check__": 1,
+  "Window:auxclick": 1,
+  "Window:click": 1,
+  "Window:contextmenu": 1,
+  "Window:dblclick": 1,
+  "Window:mousedown": 1,
+  "Window:mouseup": 1,
+  "Window:pointerdown": 1,
+  "Window:touchcancel": 1,
+  "Window:touchend": 1,
+  "Window:touchstart": 1
+ },
+ "elements": {
+  "div": 4323,
+  "span": 1171,
+  "button": 317,
+  "template": 313,
+  "yt-touch-feedback-shape": 226,
+  "svg:path": 200,
+  "a": 185,
+  "svg:svg": 154,
+  "img": 88,
+  "button-view-model": 56,
+  "svg:g": 54,
+  "svg:use": 46,
+  "dom-if": 41,
+  "h3": 39,
+  "text": 36,
+  "yt-thumbnail-view-model": 36,
+  "yt-ghost-comments": 35,
+  "script": 32,
+  "yt-light-shape": 31,
+  "ps-dom-if": 26,
+  "iframe": 25,
+  "badge-shape": 23,
+  "yt-avatar-shape": 21,
+  "yt-content-metadata-view-model": 20,
+  "yt-lockup-metadata-view-model": 20,
+  "yt-lockup-view-model": 20,
+  "yt-thumbnail-badge-view-model": 20,
+  "yt-thumbnail-bottom-overlay-view-model": 20,
+  "ytd-comment-thread-renderer": 20,
+  "svg:clippath": 19,
+  "yt-decorated-avatar-view-model": 19,
+  "ytd-button-renderer": 18,
+  "svg:filter": 16,
+  "ytm-shorts-lockup-view-model": 16,
+  "ytm-shorts-lockup-view-model-v2": 16,
+  "label": 15,
+  "yt-draggable": 15,
+  "yt-button-view-model": 12,
+  "input": 11,
+  "ps-dom-repeat": 10,
+  "link": 9,
+  "ytd-mini-guide-entry-renderer": 8,
+  "style": 7,
+  "toggle-button-view-model": 7,
+  "yt-icon": 7,
+  "dom-repeat": 6,
+  "h1": 6,
+  "svg:stop": 6,
+  "video": 6,
+  "canvas": 5,
+  "svg:rect": 5,
+  "form": 4,
+  "h2": 4,
+  "lottie-component": 4,
+  "meta": 4,
+  "ytd-browse": 4,
+  "ytd-continuation-item-renderer": 4,
+  "ytd-engagement-panel-section-list-renderer": 4,
+  "dislike-button-view-model": 3,
+  "factoid-renderer": 3,
+  "like-button-view-model": 3,
+  "picture": 3,
+  "polyresinuncustomized": 3,
+  "svg:defs": 3,
+  "svg:lineargradient": 3,
+  "textarea": 3,
+  "yt-icon-button": 3,
+  "yt-page-navigation-progress": 3,
+  "yt-popover": 3,
+  "ytd-miniplayer": 3,
+  "ytd-miniplayer-info-bar": 3,
+  "ytd-topbar-menu-button-renderer": 3,
+  "ytd-video-preview": 3,
+  "ytd-video-preview-loader": 3,
+  "ytd-video-primary-info-renderer": 3,
+  "ytd-watch-flexy": 3,
+  "avatar-view-model": 2,
+  "segmented-like-dislike-button-view-model": 2,
+  "svg:mask": 2,
+  "yt-badge-view-model": 2,
+  "yt-page-header-portal": 2,
+  "yt-smartimation": 2,
+  "yt-sort-filter-sub-menu-renderer": 2,
+  "ytd-download-button-renderer": 2,
+  "ytd-engagement-panel-title-header-renderer": 2,
+  "ytd-feed-nudge-renderer": 2,
+  "ytd-menu-renderer": 2,
+  "ytd-rich-grid-renderer": 2,
+  "ytd-rich-section-renderer": 2,
+  "ytd-section-list-renderer": 2,
+  "ytd-video-description-infocards-section-renderer": 2,
+  "player-microformat-renderer": 1,
+  "tp-yt-iron-overlay-backdrop": 1,
+  "view-count-factoid-renderer": 1,
+  "yt-avatar-stack-view-model": 1,
+  "yt-metadata-badge-renderer": 1,
+  "yt-player-overlay-video-details-renderer": 1,
+  "yt-player-quick-action-buttons": 1,
+  "ytd-ads-engagement-panel-content-renderer": 1,
+  "ytd-author-comment-badge-renderer": 1,
+  "ytd-comment-simplebox-renderer": 1,
+  "ytd-comments": 1,
+  "ytd-comments-header-renderer": 1,
+  "ytd-consent-bump-v2-renderer": 1,
+  "ytd-expandable-video-description-body-renderer": 1,
+  "ytd-item-section-renderer": 1,
+  "ytd-metadata-row-renderer": 1,
+  "ytd-reel-shelf-renderer": 1,
+  "ytd-structured-description-content-renderer": 1,
+  "ytd-subscribe-button-renderer": 1,
+  "ytd-subscription-notification-toggle-button-renderer-next": 1,
+  "ytd-video-description-header-renderer": 1,
+  "ytd-video-view-count-renderer": 1,
+  "ytlr-banner-cta-renderer": 1,
+  "ytw-timely-actions-overlay-view-model": 1
+ },
+ "custom_elements": {
+  "account-link-button-view-model": 3,
+  "ad-badge-view-model": 3,
+  "ad-button-view-model": 3,
+  "ad-disclosure-banner-view-model": 3,
+  "array-selector": 3,
+  "badge-shape": 3,
+  "banner-image-layout-view-model": 3,
+  "basic-content-view-model": 3,
+  "button-card-view-model": 3,
+  "chip-bar-view-model": 3,
+  "chip-shape": 3,
+  "chips-shelf-view-model": 3,
+  "compact-landscape-no-button-layout-view-model": 3,
+  "course-metadata-view-model": 3,
+  "custom-style": 3,
+  "desktop-shorts-player-controls": 3,
+  "dismissed-mini-game-card-view-model": 3,
+  "divider-view-model": 3,
+  "dom-bind": 3,
+  "dom-if": 3,
+  "dom-module": 3,
+  "dom-repeat": 3,
+  "engagement-bar-view-model": 3,
+  "factoid-renderer": 3,
+  "fade-in-animation": 3,
+  "fade-out-animation": 3,
+  "fantasy-league-summary-view-model": 3,
+  "fantasy-win-probability-view-model": 3,
+  "first-party-network-section-view-model": 3,
+  "grid-shelf-view-model": 3,
+  "horizontal-shelf-view-model": 3,
+  "how-this-was-made-section-view-model": 3,
+  "iron-a11y-keys": 3,
+  "iron-iconset-svg": 3,
+  "iron-media-query": 3,
+  "iron-meta": 3,
+  "iron-selector": 3,
+  "learning-journey-quiz-view-model": 3,
+  "like-button-view-model": 3,
+  "macro-markers-panel-item-view-model": 3,
+  "mini-app-container-view-model": 3,
+  "mini-app-feed-player-view-model": 3,
+  "mini-app-play-page-renderer": 3,
+  "mini-game-card-view-model": 3,
+  "overview-message-view-model": 3,
+  "panel-ad-header-image-lockup-view-model": 3,
+  "panel-image-carousel-card-one-button-layout-content-view-model": 3,
+  "panel-text-icon-image-tiles-button-layout-content-view-model": 3,
+  "panel-text-icon-text-grid-cards-sub-layout-content-view-model": 3,
+  "pdp-view-model": 3,
+  "place-data-view-model": 3,
+  "player-microformat-renderer": 3,
+  "playlist-collaboration-view-model": 3,
+  "ps-dom-if": 3,
+  "ps-dom-repeat": 3,
+  "reel-watch-break-view-model": 3,
+  "reels-player-overlay-layout-view-model": 3,
+  "segmented-like-dislike-button-view-model": 3,
+  "snackbar-container": 3,
+  "square-image-layout-view-model": 3,
+  "switch-list-item-view-model": 3,
+  "teaser-card-view-model": 3,
+  "text-image-no-button-layout-view-model": 3,
+  "thumbnail-overlay-avatar-stack-view-model": 3,
+  "thumbnail-overlay-button-view-model": 3,
+  "timed-animation-button-renderer": 3,
+  "top-banner-image-text-icon-buttoned-layout-view-model": 3,
+  "top-landscape-image-layout-view-model": 3,
+  "tp-yt-app-drawer": 3,
+  "tp-yt-app-header": 3,
+  "tp-yt-app-header-layout": 3,
+  "tp-yt-app-toolbar": 3,
+  "tp-yt-iron-a11y-announcer": 3,
+  "tp-yt-iron-autogrow-textarea": 3,
+  "tp-yt-iron-collapse": 3,
+  "tp-yt-iron-dropdown": 3,
+  "tp-yt-iron-icon": 3,
+  "tp-yt-iron-image": 3,
+  "tp-yt-iron-input": 3,
+  "tp-yt-iron-list": 3,
+  "tp-yt-iron-overlay-backdrop": 3,
+  "tp-yt-iron-pages": 3,
+  "tp-yt-paper-button": 3,
+  "tp-yt-paper-card": 3,
+  "tp-yt-paper-checkbox": 3,
+  "tp-yt-paper-dialog": 3,
+  "tp-yt-paper-dialog-scrollable": 3,
+  "tp-yt-paper-dropdown-menu": 3,
+  "tp-yt-paper-dropdown-menu-light": 3,
+  "tp-yt-paper-icon-button": 3,
+  "tp-yt-paper-icon-item": 3,
+  "tp-yt-paper-input": 3,
+  "tp-yt-paper-input-char-counter": 3,
+  "tp-yt-paper-input-container": 3,
+  "tp-yt-paper-input-error": 3,
+  "tp-yt-paper-item": 3,
+  "tp-yt-paper-item-body": 3,
+  "tp-yt-paper-listbox": 3,
+  "tp-yt-paper-material": 3,
+  "tp-yt-paper-menu-button": 3,
+  "tp-yt-paper-menu-grow-height-animation": 3,
+  "tp-yt-paper-menu-grow-width-animation": 3,
+  "tp-yt-paper-menu-shrink-height-animation": 3,
+  "tp-yt-paper-menu-shrink-width-animation": 3,
+  "tp-yt-paper-progress": 3,
+  "tp-yt-paper-radio-button": 3,
+  "tp-yt-paper-radio-group": 3,
+  "tp-yt-paper-ripple": 3,
+  "tp-yt-paper-slider": 3,
+  "tp-yt-paper-spinner": 3,
+  "tp-yt-paper-spinner-lite": 3,
+  "tp-yt-paper-tab": 3,
+  "tp-yt-paper-tabs": 3,
+  "tp-yt-paper-textarea": 3,
+  "tp-yt-paper-toast": 3,
+  "tp-yt-paper-toggle-button": 3,
+  "tp-yt-paper-tooltip": 3,
+  "upload-time-factoid-renderer": 3,
+  "video-display-billboard-layout-renderer": 3,
+  "video-display-button-group-layout-view-model": 3,
+  "video-display-compact-button-group-layout-view-model": 3,
+  "video-display-compact-buttoned-layout-view-model": 3,
+  "video-display-compact-carousel-button-group-layout-view-model": 3,
+  "video-display-compact-layout-view-model": 3,
+  "video-display-full-buttoned-layout-view-model": 3,
+  "video-display-full-layout-view-model": 3,
+  "video-summary-content-view-model": 3,
+  "view-count-factoid-renderer": 3,
+  "volume-controls": 3,
+  "yt-about-this-ad-renderer": 3,
+  "yt-accordion-view-model": 3,
+  "yt-activity-item-renderer": 3,
+  "yt-ai-search-input-view-model": 3,
+  "yt-ai-search-result-section-renderer": 3,
+  "yt-alert-banner-view-model": 3,
+  "yt-alert-renderer": 3,
+  "yt-alert-with-actions-renderer": 3,
+  "yt-animated-action": 3,
+  "yt-animated-icon": 3,
+  "yt-animated-rolling-number": 3,
+  "yt-attributed-string": 3,
+  "yt-avatar-stack-view-model": 3,
+  "yt-badge-supported-renderer": 3,
+  "yt-badge-view-model": 3,
+  "yt-benefits-flow-step-renderer": 3,
+  "yt-benefits-item-renderer": 3,
+  "yt-benefits-section-renderer": 3,
+  "yt-boolean-form-field-v2-renderer": 3,
+  "yt-bubble-hint-renderer": 3,
+  "yt-bumper-user-edu-content-view-model": 3,
+  "yt-button-renderer": 3,
+  "yt-button-shape": 3,
+  "yt-button-view-model": 3,
+  "yt-card-item-actions-renderer": 3,
+  "yt-card-item-badge-renderer": 3,
+  "yt-card-item-container-renderer": 3,
+  "yt-card-item-error-renderer": 3,
+  "yt-card-item-renderer": 3,
+  "yt-card-item-text-collection-renderer": 3,
+  "yt-card-item-text-renderer": 3,
+  "yt-card-item-text-with-button-renderer": 3,
+  "yt-card-item-text-with-image-renderer": 3,
+  "yt-card-view-model": 3,
+  "yt-channel-external-link-view-model": 3,
+  "yt-chat-input-view-model": 3,
+  "yt-chip-cloud-chip-renderer": 3,
+  "yt-chip-cloud-renderer": 3,
+  "yt-chip-content-loader-view-model": 3,
+  "yt-clip-creation-renderer": 3,
+  "yt-clip-creation-scrubber-canvas": 3,
+  "yt-clip-creation-scrubber-renderer": 3,
+  "yt-clip-creation-scrubber-view": 3,
+  "yt-collapsible-ypc-offer-renderer": 3,
+  "yt-collections-stack": 3,
+  "yt-comment-filter-context-view-model": 3,
+  "yt-community-post-section-renderer": 3,
+  "yt-confirm-dialog-renderer": 3,
+  "yt-confirmation-flow-step-renderer": 3,
+  "yt-contact-section-renderer": 3,
+  "yt-content-loading-renderer": 3,
+  "yt-contributor-zero-state-view-model": 3,
+  "yt-copy-link-renderer": 3,
+  "yt-countdown": 3,
+  "yt-course-perks-view-model": 3,
+  "yt-course-progress-view-model": 3,
+  "yt-course-ratings-view-model": 3,
+  "yt-create-family-dialog": 3,
+  "yt-creator-goal-progress-flow-view-model": 3,
+  "yt-creator-goal-set-up-flow-view-model": 3,
+  "yt-decorated-avatar-view-model": 3,
+  "yt-dialog-view-model": 3,
+  "yt-did-you-mean-renderer": 3,
+  "yt-disableable-button-view-model": 3,
+  "yt-dropdown-menu": 3,
+  "yt-dynamic-sizing-formatted-string": 3,
+  "yt-edu-card-view-model": 3,
+  "yt-emoji-customization-panel-view-model": 3,
+  "yt-emoji-fountain-view-model": 3,
+  "yt-emoji-multi-person-selector": 3,
+  "yt-emoji-picker-category-button-renderer": 3,
+  "yt-emoji-picker-category-renderer": 3,
+  "yt-emoji-picker-renderer": 3,
+  "yt-emoji-picker-upsell-category-renderer": 3,
+  "yt-emoji-variant-selector": 3,
+  "yt-enrolled-contact-renderer": 3,
+  "yt-ephemeral-actions": 3,
+  "yt-fancy-dismissible-dialog-renderer": 3,
+  "yt-faq-section-renderer": 3,
+  "yt-feature-enablement-soft-entry-renderer": 3,
+  "yt-feedback-form-view-model": 3,
+  "yt-feedback-item-renderer": 3,
+  "yt-flexible-actions-view-model": 3,
+  "yt-floating-button-view-model": 3,
+  "yt-floating-footer-message": 3,
+  "yt-flow-bottom-bar-renderer": 3,
+  "yt-flow-bottom-bar-view-model": 3,
+  "yt-flow-footer-renderer": 3,
+  "yt-flow-header-renderer": 3,
+  "yt-flow-root-progress-indicator-view-model": 3,
+  "yt-form-footer-view-model": 3,
+  "yt-form-header-view-model": 3,
+  "yt-form-renderer": 3,
+  "yt-formatted-string": 3,
+  "yt-free-text-input-flow-step-renderer": 3,
+  "yt-gen-ai-feedback-form-view-model": 3,
+  "yt-generic-faq-question-renderer": 3,
+  "yt-ghost-comments": 3,
+  "yt-guide-avatar-row-view-model": 3,
+  "yt-guide-manager": 3,
+  "yt-gulp-triggering-dialog-view-model": 3,
+  "yt-header-with-back-renderer": 3,
+  "yt-horizontal-list-renderer": 3,
+  "yt-hotkey-manager": 3,
+  "yt-icon": 3,
+  "yt-icon-badge-shape": 3,
+  "yt-icon-button": 3,
+  "yt-image": 3,
+  "yt-image-banner-view-model": 3,
+  "yt-image-editor-renderer": 3,
+  "yt-img-crop-picker": 3,
+  "yt-img-shadow": 3,
+  "yt-including-results-for-renderer": 3,
+  "yt-info-flow-step-renderer": 3,
+  "yt-info-list-flow-step-renderer": 3,
+  "yt-info-panel-details-view-model": 3,
+  "yt-inline-player-controls": 3,
+  "yt-interaction": 3,
+  "yt-interstitial-view-model": 3,
+  "yt-learning-journey-loader-view-model": 3,
+  "yt-learning-journey-zero-state": 3,
+  "yt-linear-layout-view-model": 3,
+  "yt-linear-progress-bar-view-model": 3,
+  "yt-list-item-view-model": 3,
+  "yt-live-chat-author-badge-renderer": 3,
+  "yt-live-chat-author-chip": 3,
+  "yt-live-chat-auto-mod-message-renderer": 3,
+  "yt-live-chat-banner-poll-choice": 3,
+  "yt-live-chat-button": 3,
+  "yt-live-chat-call-for-questions-renderer": 3,
+  "yt-live-chat-channel-activity-reputation-renderer": 3,
+  "yt-live-chat-creator-heart-view-model": 3,
+  "yt-live-chat-dialog-renderer": 3,
+  "yt-live-chat-donation-announcement-renderer": 3,
+  "yt-live-chat-empty-feed-view-model": 3,
+  "yt-live-chat-engagement-panel-input-renderer": 3,
+  "yt-live-chat-error-message-renderer": 3,
+  "yt-live-chat-icon-toggle-button-renderer": 3,
+  "yt-live-chat-identity-view-model": 3,
+  "yt-live-chat-item-bumper-view-model": 3,
+  "yt-live-chat-item-display-list-renderer": 3,
+  "yt-live-chat-item-display-renderer": 3,
+  "yt-live-chat-like-button-view-model": 3,
+  "yt-live-chat-membership-item-renderer": 3,
+  "yt-live-chat-message-input-prompt-header-renderer": 3,
+  "yt-live-chat-message-input-renderer": 3,
+  "yt-live-chat-message-renderer": 3,
+  "yt-live-chat-message-subtext-renderer": 3,
+  "yt-live-chat-mode-change-message-renderer": 3,
+  "yt-live-chat-moderation-message-renderer": 3,
+  "yt-live-chat-paid-message-footer-renderer": 3,
+  "yt-live-chat-paid-message-renderer": 3,
+  "yt-live-chat-paid-sticker-renderer": 3,
+  "yt-live-chat-participants-manager": 3,
+  "yt-live-chat-placeholder-item-renderer": 3,
+  "yt-live-chat-poll-editor-input": 3,
+  "yt-live-chat-poll-editor-panel-renderer": 3,
+  "yt-live-chat-product-button-renderer": 3,
+  "yt-live-chat-product-picker-panel-item-view-model": 3,
+  "yt-live-chat-product-picker-panel-view-model": 3,
+  "yt-live-chat-product-picker-renderer": 3,
+  "yt-live-chat-qna-start-panel-renderer": 3,
+  "yt-live-chat-reply-button-view-model": 3,
+  "yt-live-chat-restricted-participation-renderer": 3,
+  "yt-live-chat-server-error-message": 3,
+  "yt-live-chat-text-actions-error-message-renderer": 3,
+  "yt-live-chat-text-input-field-renderer": 3,
+  "yt-live-chat-text-input-field-suggestion": 3,
+  "yt-live-chat-text-message-renderer": 3,
+  "yt-live-chat-toggle-renderer": 3,
+  "yt-live-chat-viewer-engagement-message-renderer": 3,
+  "yt-live-interactivity-component-background": 3,
+  "yt-loading-renderer": 3,
+  "yt-lockup-metadata-view-model": 3,
+  "yt-lockup-view-model": 3,
+  "yt-lp-section-group-view-model": 3,
+  "yt-mdx-manager": 3,
+  "yt-mealbar-promo-renderer": 3,
+  "yt-mini-app-game-info-dialog-view-model": 3,
+  "yt-multi-page-menu-section-renderer": 3,
+  "yt-music-pass-feature-info-renderer": 3,
+  "yt-music-pass-small-feature-info-renderer": 3,
+  "yt-next-continuation": 3,
+  "yt-no-results-found-showing-results-for-renderer": 3,
+  "yt-note-user-rating-view-model": 3,
+  "yt-note-view-model": 3,
+  "yt-notes-wrapper-view-model": 3,
+  "yt-notification-action-renderer": 3,
+  "yt-nudge-form-view-model": 3,
+  "yt-offer-item-expanded-renderer": 3,
+  "yt-offer-item-renderer": 3,
+  "yt-offer-item-upsell-renderer": 3,
+  "yt-offer-summary-flow-step-renderer": 3,
+  "yt-official-card-view-model": 3,
+  "yt-option-selection-flow-step-renderer": 3,
+  "yt-options-renderer": 3,
+  "yt-page-header-renderer": 3,
+  "yt-page-header-view-model": 3,
+  "yt-page-indicator-view-model": 3,
+  "yt-page-navigation-progress": 3,
+  "yt-pdg-banner-view-model": 3,
+  "yt-pdg-buy-flow-header-renderer": 3,
+  "yt-pdg-comment-chip-renderer": 3,
+  "yt-pdg-gift-button": 3,
+  "yt-pdg-gift-collection-view-model": 3,
+  "yt-personal-greeting-view-model": 3,
+  "yt-playability-error-supported-renderers": 3,
+  "yt-player-captcha-view-model": 3,
+  "yt-player-error-message-renderer": 3,
+  "yt-player-interstitial-renderer": 3,
+  "yt-player-kav-renderer": 3,
+  "yt-player-overlay-interaction": 3,
+  "yt-playlist-manager": 3,
+  "yt-playlist-metadata-editor-form-view-model": 3,
+  "yt-post-confirmation-flow-step-renderer": 3,
+  "yt-posts-creation-options-editor-view-model": 3,
+  "yt-premium-spotlight-banner-renderer": 3,
+  "yt-profile-card-view-model": 3,
+  "yt-profile-identity-info-view-model": 3,
+  "yt-profile-page-header-information-view-model": 3,
+  "yt-qr-code-renderer": 3,
+  "yt-reaction-control-panel-button-view-model": 3,
+  "yt-reaction-control-panel-overlay-view-model": 3,
+  "yt-reaction-control-panel-view-model": 3,
+  "yt-reel-player-overlay-view-model": 3,
+  "yt-refund-confirmation-flow-step-renderer": 3,
+  "yt-related-chip-cloud-renderer": 3,
+  "yt-reload-continuation": 3,
+  "yt-report-details-form-content": 3,
+  "yt-report-details-form-renderer": 3,
+  "yt-report-form-bottom-bar-view-model": 3,
+  "yt-report-form-confirmation-page-view-model": 3,
+  "yt-report-form-details-page-view-model": 3,
+  "yt-report-form-modal-content": 3,
+  "yt-report-form-modal-renderer": 3,
+  "yt-report-form-reason-select-page-view-model": 3,
+  "yt-report-form-sign-in-page-view-model": 3,
+  "yt-results-without-quotes-renderer": 3,
+  "yt-rive-component": 3,
+  "yt-search-no-results-renderer": 3,
+  "yt-search-query-correction": 3,
+  "yt-searchbox": 3,
+  "yt-section-group-view-model": 3,
+  "yt-section-header-view-model": 3,
+  "yt-section-list-renderer": 3,
+  "yt-sender-id-section-renderer": 3,
+  "yt-share-panel-header-renderer": 3,
+  "yt-share-panel-title-v15-renderer": 3,
+  "yt-share-start-time-with-context-renderer": 3,
+  "yt-share-target-renderer": 3,
+  "yt-sharing-embed-renderer": 3,
+  "yt-sheet-view-model": 3,
+  "yt-shopping-description-shelf-view-model": 3,
+  "yt-shopping-sized-image-view-model": 3,
+  "yt-shopping-timely-shelf-content-view-model": 3,
+  "yt-showing-results-for-renderer": 3,
+  "yt-side-rail-view-model": 3,
+  "yt-single-ypc-offer-list-renderer": 3,
+  "yt-single-ypc-offer-renderer": 3,
+  "yt-slimline-survey-view-model": 3,
+  "yt-smartimation": 3,
+  "yt-sort-filter-sub-menu-renderer": 3,
+  "yt-sponsorships-channel-upsell-view-model": 3,
+  "yt-sponsorships-destination-hub-header-view-model": 3,
+  "yt-sponsorships-hub": 3,
+  "yt-sponsorships-perks-list": 3,
+  "yt-start-at-renderer": 3,
+  "yt-stickers-layer": 3,
+  "yt-stories-viewer-view-model": 3,
+  "yt-structured-context-note-view-model": 3,
+  "yt-sub-thread": 3,
+  "yt-subscription-product-header-renderer": 3,
+  "yt-subscription-product-renderer": 3,
+  "yt-subscription-product-upsell-offer-renderer": 3,
+  "yt-suggested-contact-renderer": 3,
+  "yt-super-vod-buy-flow-content-renderer": 3,
+  "yt-survey-answer-card-renderer": 3,
+  "yt-survey-flow-step-renderer": 3,
+  "yt-suspense-view-model": 3,
+  "yt-tab-group-shape": 3,
+  "yt-talk-to-recs-view-model": 3,
+  "yt-text-input-form-field-renderer": 3,
+  "yt-text-subform-view-model": 3,
+  "yt-text-view-model": 3,
+  "yt-themed-image-renderer": 3,
+  "yt-third-party-network-section-renderer": 3,
+  "yt-third-party-share-target-section-renderer": 3,
+  "yt-thumbnail-bottom-overlay-view-model": 3,
+  "yt-thumbnail-overlay-badge-view-model": 3,
+  "yt-thumbnail-overlay-title-view-model": 3,
+  "yt-thumbnail-view-model": 3,
+  "yt-timestamp-input": 3,
+  "yt-toggle-button-view-model": 3,
+  "yt-toggle-form-field-renderer": 3,
+  "yt-tooltip": 3,
+  "yt-tooltip-renderer": 3,
+  "yt-unified-share-panel-renderer": 3,
+  "yt-unlimited-family-message-interstitial-renderer": 3,
+  "yt-unlimited-family-profile-interstitial-renderer": 3,
+  "yt-unlimited-manage-subscription-page-renderer": 3,
+  "yt-unlimited-page-header-renderer": 3,
+  "yt-unlimited-user-notification-renderer": 3,
+  "yt-unplugged-pause-membership-dialog-renderer": 3,
+  "yt-upsell-dialog-renderer": 3,
+  "yt-user-mention-autosuggest-input": 3,
+  "yt-user-mention-suggestion-renderer": 3,
+  "yt-user-mention-suggestions-dropdown": 3,
+  "yt-vc-offer-layout-header-renderer": 3,
+  "yt-vc-offer-layout-renderer": 3,
+  "yt-vc-offer-renderer": 3,
+  "yt-video-as-thumbnail-details": 3,
+  "yt-video-attribute-view-model": 3,
+  "yt-video-attributes-section-view-model": 3,
+  "yt-video-description-youchat-section-view-model": 3,
+  "yt-video-metadata-carousel-view-model": 3,
+  "yt-video-overview-view-model": 3,
+  "yt-video-title-header-view-model": 3,
+  "yt-xp-goal-set-up-flow-view-model": 3,
+  "yt-ypc-offers-list-renderer": 3,
+  "yt-ypc-offers-modal-renderer": 3,
+  "yt-ypc-offers-modal-top-bar-renderer": 3,
+  "yt-ypc-upgrade-dialog-renderer": 3,
+  "ytd-about-channel-renderer": 3,
+  "ytd-abuse-type-selector-renderer": 3,
+  "ytd-account-item-renderer": 3,
+  "ytd-account-item-section-header-renderer": 3,
+  "ytd-account-item-section-renderer": 3,
+  "ytd-account-link-button-renderer": 3,
+  "ytd-account-section-list-renderer": 3,
+  "ytd-accounts-dialog-header-renderer": 3,
+  "ytd-action-basic-immersive-content-renderer": 3,
+  "ytd-action-companion-ad-renderer": 3,
+  "ytd-action-engagement-panel-content-renderer": 3,
+  "ytd-active-account-header-renderer": 3,
+  "ytd-ad-engagement-panel-banner-renderer": 3,
+  "ytd-ad-feedback-content": 3,
+  "ytd-ad-feedback-renderer": 3,
+  "ytd-ad-hover-text-button-renderer": 3,
+  "ytd-ad-info-dialog-content": 3,
+  "ytd-ad-info-dialog-renderer": 3,
+  "ytd-ad-inline-playback-meta-block": 3,
+  "ytd-ad-slot-renderer": 3,
+  "ytd-add-to-playlist-create-renderer": 3,
+  "ytd-add-to-playlist-renderer": 3,
+  "ytd-ads-engagement-panel-content-renderer": 3,
+  "ytd-alert-with-button-renderer": 3,
+  "ytd-app": 3,
+  "ytd-author-comment-badge-renderer": 3,
+  "ytd-autotagging-metadata-renderer": 3,
+  "ytd-autotagging-metadata-row-renderer": 3,
+  "ytd-background-promo-renderer": 3,
+  "ytd-backstage-dismissable-attachment": 3,
+  "ytd-backstage-image-poll-editor-renderer": 3,
+  "ytd-backstage-image-preview-renderer": 3,
+  "ytd-backstage-image-renderer": 3,
+  "ytd-backstage-image-select-renderer": 3,
+  "ytd-backstage-items": 3,
+  "ytd-backstage-locked-post-view-model": 3,
+  "ytd-backstage-multi-image-reposition-renderer": 3,
+  "ytd-backstage-multi-image-select-renderer": 3,
+  "ytd-backstage-multi-image-thumbnail-renderer": 3,
+  "ytd-backstage-poll-renderer": 3,
+  "ytd-backstage-post-dialog-popup-renderer": 3,
+  "ytd-backstage-post-dialog-renderer": 3,
+  "ytd-backstage-post-renderer": 3,
+  "ytd-backstage-post-thread-renderer": 3,
+  "ytd-backstage-prefilled-post-dialog-header-renderer": 3,
+  "ytd-backstage-quiz-editor-renderer": 3,
+  "ytd-backstage-quiz-renderer": 3,
+  "ytd-backstage-video-link-attachment": 3,
+  "ytd-backstage-zero-state-renderer": 3,
+  "ytd-badge-supported-renderer": 3,
+  "ytd-banner-and-box-hero-image-renderer": 3,
+  "ytd-banner-promo-renderer": 3,
+  "ytd-billboard-masthead-renderer": 3,
+  "ytd-block-button": 3,
+  "ytd-brand-video-shelf-renderer": 3,
+  "ytd-brand-video-singleton-renderer": 3,
+  "ytd-browse": 3,
+  "ytd-browse-feed-actions-renderer": 3,
+  "ytd-browse-secondary-contents-renderer": 3,
+  "ytd-bullet-formatted-string": 3,
+  "ytd-button-banner-view-model": 3,
+  "ytd-button-renderer": 3,
+  "ytd-calendar-date-picker": 3,
+  "ytd-call-to-action-button-renderer": 3,
+  "ytd-carousel-ad-renderer": 3,
+  "ytd-carousel-header-renderer": 3,
+  "ytd-carousel-item-renderer": 3,
+  "ytd-channel-about-metadata-renderer": 3,
+  "ytd-channel-age-gate-renderer": 3,
+  "ytd-channel-avatar-editor": 3,
+  "ytd-channel-creation-dialog-renderer": 3,
+  "ytd-channel-featured-content-renderer": 3,
+  "ytd-channel-handle-edit-dialog-renderer": 3,
+  "ytd-channel-handle-input-renderer": 3,
+  "ytd-channel-legal-info-renderer": 3,
+  "ytd-channel-list-sub-menu-avatar-renderer": 3,
+  "ytd-channel-list-sub-menu-renderer": 3,
+  "ytd-channel-masthead-renderer": 3,
+  "ytd-channel-metadata-renderer": 3,
+  "ytd-channel-name": 3,
+  "ytd-channel-options-renderer": 3,
+  "ytd-channel-owner-empty-state-renderer": 3,
+  "ytd-channel-picker-page": 3,
+  "ytd-channel-picker-page-renderer": 3,
+  "ytd-channel-renderer": 3,
+  "ytd-channel-sub-menu-renderer": 3,
+  "ytd-channel-switcher-footer-renderer": 3,
+  "ytd-channel-switcher-header-renderer": 3,
+  "ytd-channel-switcher-page-renderer": 3,
+  "ytd-channel-switcher-renderer": 3,
+  "ytd-channel-switcher-search-box-renderer": 3,
+  "ytd-channel-tagline-renderer": 3,
+  "ytd-channel-transfer-stepper-renderer": 3,
+  "ytd-channel-video-player-renderer": 3,
+  "ytd-checkbox-survey-option-renderer": 3,
+  "ytd-checkbox-survey-renderer": 3,
+  "ytd-child-video-renderer": 3,
+  "ytd-chips-shelf-with-video-shelf-ghost-card-view-model": 3,
+  "ytd-chips-shelf-with-video-shelf-renderer": 3,
+  "ytd-clarification-renderer": 3,
+  "ytd-clip-ad-state-renderer": 3,
+  "ytd-clip-attribution-renderer": 3,
+  "ytd-clip-creation-text-input-renderer": 3,
+  "ytd-clip-section-footer-renderer": 3,
+  "ytd-clip-section-renderer": 3,
+  "ytd-collage-hero-image-renderer": 3,
+  "ytd-comment-action-buttons-renderer": 3,
+  "ytd-comment-dialog-renderer": 3,
+  "ytd-comment-engagement-bar": 3,
+  "ytd-comment-history-entry-renderer": 3,
+  "ytd-comment-input": 3,
+  "ytd-comment-pause-composer-renderer": 3,
+  "ytd-comment-preview-renderer": 3,
+  "ytd-comment-replies-renderer": 3,
+  "ytd-comment-reply-dialog-renderer": 3,
+  "ytd-comment-simplebox-renderer": 3,
+  "ytd-comment-thread-renderer": 3,
+  "ytd-comment-video-thumbnail-header-renderer": 3,
+  "ytd-comment-view-model": 3,
+  "ytd-commentbox": 3,
+  "ytd-comments": 3,
+  "ytd-comments-entry-point-header-renderer": 3,
+  "ytd-comments-entry-point-message-renderer": 3,
+  "ytd-comments-entry-point-teaser-renderer": 3,
+  "ytd-comments-header-renderer": 3,
+  "ytd-comments-simplebox-renderer": 3,
+  "ytd-commerce-cart-checkout-button-renderer": 3,
+  "ytd-commerce-cart-header-renderer": 3,
+  "ytd-commerce-cart-summary-line-item-renderer": 3,
+  "ytd-compact-channel-recommendation-card-renderer": 3,
+  "ytd-compact-infocard-renderer": 3,
+  "ytd-compact-link-renderer": 3,
+  "ytd-compact-movie-renderer": 3,
+  "ytd-compact-playlist-renderer": 3,
+  "ytd-compact-product-list-item-renderer": 3,
+  "ytd-compact-product-list-renderer": 3,
+  "ytd-compact-promoted-item-renderer": 3,
+  "ytd-compact-promoted-video-renderer": 3,
+  "ytd-compact-radio-renderer": 3,
+  "ytd-compact-station-renderer": 3,
+  "ytd-compact-text-promo-renderer": 3,
+  "ytd-compact-tvfilm-entry-point-renderer": 3,
+  "ytd-compact-video-renderer": 3,
+  "ytd-companion-legal-text-renderer": 3,
+  "ytd-companion-slot-renderer": 3,
+  "ytd-confirmation-masthead-renderer": 3,
+  "ytd-connected-app-renderer": 3,
+  "ytd-consent-bump-v2-lightbox": 3,
+  "ytd-consent-bump-v2-renderer": 3,
+  "ytd-continuation-item-renderer": 3,
+  "ytd-counterfactual-renderer": 3,
+  "ytd-creator-heart-renderer": 3,
+  "ytd-cross-account-transfer-channel-confirm-dialog-renderer": 3,
+  "ytd-cross-account-transfer-channel-overview-renderer": 3,
+  "ytd-cross-account-transfer-channel-tnc-dialog-renderer": 3,
+  "ytd-date-time-picker-renderer": 3,
+  "ytd-default-promo-panel-renderer": 3,
+  "ytd-default-promo-panel-renderer-inline-playback-renderer": 3,
+  "ytd-desktop-image-overlay-renderer": 3,
+  "ytd-destination-button-renderer": 3,
+  "ytd-destination-shelf-renderer": 3,
+  "ytd-dismissal-follow-up-renderer": 3,
+  "ytd-dismissal-reason-text-renderer": 3,
+  "ytd-dismissal-reason-video-renderer": 3,
+  "ytd-display-ad-renderer": 3,
+  "ytd-donation-amount-picker-renderer": 3,
+  "ytd-donation-post-transaction-content": 3,
+  "ytd-donation-post-transaction-renderer": 3,
+  "ytd-donation-shelf-renderer": 3,
+  "ytd-donation-unavailable-renderer": 3,
+  "ytd-download-button-renderer": 3,
+  "ytd-download-playlist-button-renderer": 3,
+  "ytd-download-quality-selector-content": 3,
+  "ytd-download-quality-selector-renderer": 3,
+  "ytd-dropdown-form-field-renderer": 3,
+  "ytd-dropdown-item-renderer": 3,
+  "ytd-dropdown-renderer": 3,
+  "ytd-early-access-header-renderer": 3,
+  "ytd-effect-pivot-header-view-model": 3,
+  "ytd-emergency-onebox-renderer": 3,
+  "ytd-emoji-input": 3,
+  "ytd-emoji-suggestion": 3,
+  "ytd-empty-product-details-renderer": 3,
+  "ytd-empty-product-shelf-renderer": 3,
+  "ytd-endorsement-header-renderer": 3,
+  "ytd-enforcement-message-view-model": 3,
+  "ytd-engagement-panel-ad-subtitle-renderer": 3,
+  "ytd-engagement-panel-section-list-renderer": 3,
+  "ytd-engagement-panel-title-header-renderer": 3,
+  "ytd-eom-settings-disclaimer-renderer": 3,
+  "ytd-error-corrections-section-item-renderer": 3,
+  "ytd-error-corrections-section-renderer": 3,
+  "ytd-expand-on-hover-card-renderer": 3,
+  "ytd-expandable-metadata-renderer": 3,
+  "ytd-expandable-tab-renderer": 3,
+  "ytd-expandable-video-description-body-renderer": 3,
+  "ytd-expanded-shelf-contents-renderer": 3,
+  "ytd-expander": 3,
+  "ytd-exploratory-results-renderer": 3,
+  "ytd-feed-channel-filter-header-renderer": 3,
+  "ytd-feed-customization-form-view-model": 3,
+  "ytd-feed-entry-renderer": 3,
+  "ytd-feed-filter-chip-bar-renderer": 3,
+  "ytd-feed-nudge-renderer": 3,
+  "ytd-feedback-elicitation-single-question-renderer": 3,
+  "ytd-flat-dropdown-renderer": 3,
+  "ytd-flow-bottom-bar-renderer": 3,
+  "ytd-flow-footer-renderer": 3,
+  "ytd-flow-root-renderer": 3,
+  "ytd-flow-step-renderer": 3,
+  "ytd-flow-top-bar-renderer": 3,
+  "ytd-form-popup-content": 3,
+  "ytd-form-popup-renderer": 3,
+  "ytd-free-text-input-flow-step-renderer": 3,
+  "ytd-game-card-renderer": 3,
+  "ytd-game-details-renderer": 3,
+  "ytd-gaming-account-link-confirm-dialog-renderer": 3,
+  "ytd-gaming-account-link-setting-renderer": 3,
+  "ytd-ghost-comments-renderer": 3,
+  "ytd-ghost-grid-renderer": 3,
+  "ytd-ghost-grid-view-model": 3,
+  "ytd-ghost-watch-metadata-renderer": 3,
+  "ytd-google-account-header-renderer": 3,
+  "ytd-grid-channel-renderer": 3,
+  "ytd-grid-movie-playlist-renderer": 3,
+  "ytd-grid-movie-renderer": 3,
+  "ytd-grid-playlist-renderer": 3,
+  "ytd-grid-radio-renderer": 3,
+  "ytd-grid-renderer": 3,
+  "ytd-grid-show-renderer": 3,
+  "ytd-grid-video-renderer": 3,
+  "ytd-guide-collapsible-entry-renderer": 3,
+  "ytd-guide-collapsible-section-entry-renderer": 3,
+  "ytd-guide-downloads-entry-renderer": 3,
+  "ytd-guide-entry-renderer": 3,
+  "ytd-guide-renderer": 3,
+  "ytd-guide-section-renderer": 3,
+  "ytd-guide-signin-promo-renderer": 3,
+  "ytd-handles-claiming-confirm-dialog-content": 3,
+  "ytd-handles-claiming-confirm-dialog-renderer": 3,
+  "ytd-handles-claiming-edit-dialog-content": 3,
+  "ytd-handles-claiming-edit-dialog-renderer": 3,
+  "ytd-handles-claiming-faq-renderer": 3,
+  "ytd-handles-claiming-faq-section-renderer": 3,
+  "ytd-handles-claiming-header-renderer": 3,
+  "ytd-handles-claiming-radio-option-renderer": 3,
+  "ytd-handles-claiming-select-dialog-content": 3,
+  "ytd-handles-claiming-select-dialog-renderer": 3,
+  "ytd-handles-claiming-title-images-section-renderer": 3,
+  "ytd-handles-claiming-update-social-renderer": 3,
+  "ytd-handles-claiming-vanity-info-renderer": 3,
+  "ytd-handles-claiming-video-item-renderer": 3,
+  "ytd-hashtag-grid-shelf-renderer": 3,
+  "ytd-hashtag-grid-tile-renderer": 3,
+  "ytd-hashtag-tile-renderer": 3,
+  "ytd-hero-playlist-thumbnail-renderer": 3,
+  "ytd-horizontal-card-list-renderer": 3,
+  "ytd-hotkey-dialog-content": 3,
+  "ytd-hotkey-dialog-renderer": 3,
+  "ytd-hotkey-dialog-section-option-renderer": 3,
+  "ytd-hotkey-dialog-section-renderer": 3,
+  "ytd-icon-badge-topbar-button-renderer": 3,
+  "ytd-identity-chip-renderer": 3,
+  "ytd-identity-prompt-footer-renderer": 3,
+  "ytd-image-companion-renderer": 3,
+  "ytd-image-tile-renderer": 3,
+  "ytd-in-feed-ad-layout-renderer": 3,
+  "ytd-info-panel-container-renderer": 3,
+  "ytd-info-panel-content-renderer": 3,
+  "ytd-info-row-renderer": 3,
+  "ytd-inline-form-renderer": 3,
+  "ytd-inline-survey-renderer": 3,
+  "ytd-interactive-tabbed-header-renderer": 3,
+  "ytd-item-section-header-renderer": 3,
+  "ytd-item-section-renderer": 3,
+  "ytd-kids-blocklist-picker-content": 3,
+  "ytd-kids-blocklist-picker-item-renderer": 3,
+  "ytd-kids-blocklist-picker-renderer": 3,
+  "ytd-labs-edit-renderer": 3,
+  "ytd-labs-header-renderer": 3,
+  "ytd-labs-item-renderer": 3,
+  "ytd-legal-report-details-form-renderer": 3,
+  "ytd-limited-state-message-renderer": 3,
+  "ytd-link-card-renderer": 3,
+  "ytd-list-item-view-model": 3,
+  "ytd-live-chat-frame": 3,
+  "ytd-live-chat-history-entry-renderer": 3,
+  "ytd-live-chat-history-new-sponsor-chip-renderer": 3,
+  "ytd-live-chat-history-super-chat-chip-renderer": 3,
+  "ytd-logo": 3,
+  "ytd-lottie-player": 3,
+  "ytd-lumiere-promo-item-image-renderer": 3,
+  "ytd-lumiere-shelf-details-renderer": 3,
+  "ytd-macro-markers-info-item-renderer": 3,
+  "ytd-macro-markers-list-item-renderer": 3,
+  "ytd-macro-markers-list-renderer": 3,
+  "ytd-masthead": 3,
+  "ytd-media-lockup-renderer": 3,
+  "ytd-media-masthead-renderer": 3,
+  "ytd-media-product-renderer": 3,
+  "ytd-media-upsell-renderer": 3,
+  "ytd-medical-panel-content-renderer": 3,
+  "ytd-medical-panel-section-renderer": 3,
+  "ytd-member-hub-profile-renderer": 3,
+  "ytd-membership-post-cancel-renderer": 3,
+  "ytd-menu-custom-icon-item-renderer": 3,
+  "ytd-menu-navigation-item-renderer": 3,
+  "ytd-menu-popup-renderer": 3,
+  "ytd-menu-renderer": 3,
+  "ytd-menu-service-item-download-renderer": 3,
+  "ytd-menu-service-item-renderer": 3,
+  "ytd-menu-title-renderer": 3,
+  "ytd-merch-shelf-item-renderer": 3,
+  "ytd-merch-shelf-renderer": 3,
+  "ytd-message-renderer": 3,
+  "ytd-metadata-line-renderer": 3,
+  "ytd-metadata-row-container-renderer": 3,
+  "ytd-metadata-row-header-renderer": 3,
+  "ytd-metadata-row-renderer": 3,
+  "ytd-metadata-with-image-row-renderer": 3,
+  "ytd-mini-channel-renderer": 3,
+  "ytd-mini-game-card-view-model": 3,
+  "ytd-mini-guide-entry-renderer": 3,
+  "ytd-mini-guide-renderer": 3,
+  "ytd-miniplayer": 3,
+  "ytd-minor-moment-header-renderer": 3,
+  "ytd-minor-moment-setting-alert-renderer": 3,
+  "ytd-minor-moment-setting-section-renderer": 3,
+  "ytd-modal-with-title-and-button-renderer": 3,
+  "ytd-movie-renderer": 3,
+  "ytd-moving-thumbnail-renderer": 3,
+  "ytd-multi-page-menu-renderer": 3,
+  "ytd-multi-stage-survey-renderer": 3,
+  "ytd-navigation-dropdown-item-renderer": 3,
+  "ytd-network-status-banner": 3,
+  "ytd-newspaper-hero-video-renderer": 3,
+  "ytd-newspaper-mini-video-renderer": 3,
+  "ytd-newspaper-renderer": 3,
+  "ytd-notice-renderer": 3,
+  "ytd-notification-multi-action-renderer": 3,
+  "ytd-notification-renderer": 3,
+  "ytd-notification-text-renderer": 3,
+  "ytd-notification-topbar-button-renderer": 3,
+  "ytd-offer-card-renderer": 3,
+  "ytd-offer-content-renderer": 3,
+  "ytd-offer-detail-renderer": 3,
+  "ytd-offer-detail-step-renderer": 3,
+  "ytd-offer-section-renderer": 3,
+  "ytd-offer-selection-step-renderer": 3,
+  "ytd-offline-promo-content": 3,
+  "ytd-offline-promo-renderer": 3,
+  "ytd-open-in-native-app-view-model": 3,
+  "ytd-overview-answer-view-model": 3,
+  "ytd-page-continuation": 3,
+  "ytd-page-footer-renderer": 3,
+  "ytd-page-introduction-renderer": 3,
+  "ytd-page-manager": 3,
+  "ytd-page-top-ad-layout-renderer": 3,
+  "ytd-pdg-buy-flow-renderer": 3,
+  "ytd-pdg-color-slider-renderer": 3,
+  "ytd-pdg-comment-preview-renderer": 3,
+  "ytd-pdg-super-vod-selectable-item-button-renderer": 3,
+  "ytd-permission-role-bottom-bar-renderer": 3,
+  "ytd-player": 3,
+  "ytd-player-legacy-desktop-watch-ads-renderer": 3,
+  "ytd-playlist-add-to-option-renderer": 3,
+  "ytd-playlist-byline-renderer": 3,
+  "ytd-playlist-custom-thumbnail-renderer": 3,
+  "ytd-playlist-header-renderer": 3,
+  "ytd-playlist-loop-button-renderer": 3,
+  "ytd-playlist-panel-renderer": 3,
+  "ytd-playlist-panel-video-renderer": 3,
+  "ytd-playlist-renderer": 3,
+  "ytd-playlist-settings-editor-renderer": 3,
+  "ytd-playlist-show-metadata-renderer": 3,
+  "ytd-playlist-sidebar-primary-info-renderer": 3,
+  "ytd-playlist-sidebar-renderer": 3,
+  "ytd-playlist-sidebar-secondary-info-renderer": 3,
+  "ytd-playlist-sidebar-tertiary-info-renderer": 3,
+  "ytd-playlist-thumbnail": 3,
+  "ytd-playlist-video-list-renderer": 3,
+  "ytd-playlist-video-renderer": 3,
+  "ytd-playlist-video-thumbnail-renderer": 3,
+  "ytd-poll-attachment": 3,
+  "ytd-popup-container": 3,
+  "ytd-post-filter-zero-state-renderer": 3,
+  "ytd-post-multi-image-renderer": 3,
+  "ytd-post-redemption-section-renderer": 3,
+  "ytd-post-renderer": 3,
+  "ytd-post-scheduling-zero-state-renderer": 3,
+  "ytd-post-stream-filter-renderer": 3,
+  "ytd-post-uploaded-video-renderer": 3,
+  "ytd-premium-browse-footer-renderer": 3,
+  "ytd-preview-card-renderer": 3,
+  "ytd-preview-comment-dialog-content": 3,
+  "ytd-preview-comment-dialog-renderer": 3,
+  "ytd-privacy-dropdown-item-renderer": 3,
+  "ytd-product-details-description-renderer": 3,
+  "ytd-product-details-hero-offer-renderer": 3,
+  "ytd-product-details-image-carousel-renderer": 3,
+  "ytd-product-details-offer-renderer": 3,
+  "ytd-product-details-offers-container-renderer": 3,
+  "ytd-product-details-renderer": 3,
+  "ytd-product-details-thumbnail-renderer": 3,
+  "ytd-product-details-variant-option-renderer": 3,
+  "ytd-product-details-variant-renderer": 3,
+  "ytd-product-list-header-renderer": 3,
+  "ytd-product-list-item-renderer": 3,
+  "ytd-product-list-renderer": 3,
+  "ytd-profile-column-renderer": 3,
+  "ytd-profile-column-stats-entry-renderer": 3,
+  "ytd-profile-column-stats-renderer": 3,
+  "ytd-profile-column-user-info-renderer": 3,
+  "ytd-promoted-sparkles-text-search-renderer": 3,
+  "ytd-promoted-sparkles-web-renderer": 3,
+  "ytd-promoted-video-renderer": 3,
+  "ytd-purchase-complete-detail-renderer": 3,
+  "ytd-purchase-complete-step-renderer": 3,
+  "ytd-radio-button-survey-option-renderer": 3,
+  "ytd-radio-renderer": 3,
+  "ytd-rating-survey-option-renderer": 3,
+  "ytd-rating-survey-renderer": 3,
+  "ytd-recognition-shelf-renderer": 3,
+  "ytd-red-cancel-survey-renderer": 3,
+  "ytd-redeem-code-renderer": 3,
+  "ytd-reel-non-video-content-renderer": 3,
+  "ytd-reel-player-overlay-renderer": 3,
+  "ytd-reel-player-overlay-renderer-cow": 3,
+  "ytd-reel-shelf-renderer": 3,
+  "ytd-reel-video-renderer": 3,
+  "ytd-refresh": 3,
+  "ytd-reload-page-button-renderer": 3,
+  "ytd-report-channel-modal-additional-context-renderer": 3,
+  "ytd-report-channel-modal-footer-renderer": 3,
+  "ytd-report-channel-modal-header-renderer": 3,
+  "ytd-report-channel-modal-impersonation-renderer": 3,
+  "ytd-report-description-renderer": 3,
+  "ytd-report-history-section-header-renderer": 3,
+  "ytd-report-history-section-renderer": 3,
+  "ytd-report-history-table-cell-renderer": 3,
+  "ytd-report-history-table-reason-cell-renderer": 3,
+  "ytd-report-history-table-row-renderer": 3,
+  "ytd-report-history-table-text-cell-renderer": 3,
+  "ytd-rich-grid-media": 3,
+  "ytd-rich-grid-renderer": 3,
+  "ytd-rich-grid-slim-media": 3,
+  "ytd-rich-item-renderer": 3,
+  "ytd-rich-list-header-renderer": 3,
+  "ytd-rich-metadata-renderer": 3,
+  "ytd-rich-metadata-row-renderer": 3,
+  "ytd-rich-section-renderer": 3,
+  "ytd-rich-shelf-renderer": 3,
+  "ytd-search": 3,
+  "ytd-search-box-renderer": 3,
+  "ytd-search-filter-group-renderer": 3,
+  "ytd-search-filter-options-dialog-renderer": 3,
+  "ytd-search-filter-renderer": 3,
+  "ytd-search-header-renderer": 3,
+  "ytd-search-pyv-renderer": 3,
+  "ytd-search-refinement-card-renderer": 3,
+  "ytd-search-sub-menu-renderer": 3,
+  "ytd-search-suggestion-report-dialog": 3,
+  "ytd-secondary-search-container-renderer": 3,
+  "ytd-section-list-renderer": 3,
+  "ytd-segmented-like-dislike-button-renderer": 3,
+  "ytd-selectable-video-list-renderer": 3,
+  "ytd-selectable-video-renderer": 3,
+  "ytd-sentiment-bar-renderer": 3,
+  "ytd-settings-checkbox-renderer": 3,
+  "ytd-settings-email-item-renderer": 3,
+  "ytd-settings-email-list-renderer": 3,
+  "ytd-settings-gaia-link-renderer": 3,
+  "ytd-settings-options-renderer": 3,
+  "ytd-settings-radio-option-renderer": 3,
+  "ytd-settings-sidebar-renderer": 3,
+  "ytd-settings-switch-renderer": 3,
+  "ytd-shared-post-renderer": 3,
+  "ytd-shelf-renderer": 3,
+  "ytd-shopping-companion-item-renderer": 3,
+  "ytd-shopping-companion-renderer": 3,
+  "ytd-shopping-item-card": 3,
+  "ytd-shorts": 3,
+  "ytd-shorts-player-controls": 3,
+  "ytd-shorts-player-controls-cow": 3,
+  "ytd-show-custom-thumbnail-renderer": 3,
+  "ytd-show-renderer": 3,
+  "ytd-simple-menu-header-renderer": 3,
+  "ytd-simple-text-section-renderer": 3,
+  "ytd-single-action-emergency-support-renderer": 3,
+  "ytd-single-hero-image-renderer": 3,
+  "ytd-single-option-survey-option-renderer": 3,
+  "ytd-single-option-survey-renderer": 3,
+  "ytd-single-select-answer-option-renderer": 3,
+  "ytd-single-select-question-renderer": 3,
+  "ytd-sitelink-renderer": 3,
+  "ytd-slim-metadata-toggle-button-renderer": 3,
+  "ytd-slimline-survey-renderer": 3,
+  "ytd-sort-filter-header-renderer": 3,
+  "ytd-source-content": 3,
+  "ytd-source-pivot-header-renderer": 3,
+  "ytd-sponsor-comment-badge-renderer": 3,
+  "ytd-sponsors-only-badge-renderer": 3,
+  "ytd-sponsorship-confirm-cancel-content": 3,
+  "ytd-sponsorship-confirm-cancel-renderer": 3,
+  "ytd-sponsorships-alert-renderer": 3,
+  "ytd-sponsorships-celebration-content": 3,
+  "ytd-sponsorships-celebration-renderer": 3,
+  "ytd-sponsorships-expandable-message-renderer": 3,
+  "ytd-sponsorships-gifting-opt-in-renderer": 3,
+  "ytd-sponsorships-list-tile-renderer": 3,
+  "ytd-sponsorships-live-chat-gift-purchase-announcement-renderer": 3,
+  "ytd-sponsorships-live-chat-gift-redemption-announcement-renderer": 3,
+  "ytd-sponsorships-live-chat-header-renderer": 3,
+  "ytd-sponsorships-loyalty-badges-renderer": 3,
+  "ytd-sponsorships-offer-renderer": 3,
+  "ytd-sponsorships-perk-renderer": 3,
+  "ytd-sponsorships-perks-renderer": 3,
+  "ytd-sponsorships-promotion-renderer": 3,
+  "ytd-sponsorships-purchase-option-renderer": 3,
+  "ytd-sponsorships-tier-renderer": 3,
+  "ytd-statement-banner-renderer": 3,
+  "ytd-structured-description-channel-lockup-renderer": 3,
+  "ytd-structured-description-content-renderer": 3,
+  "ytd-structured-description-playlist-lockup-renderer": 3,
+  "ytd-structured-description-video-lockup-renderer": 3,
+  "ytd-sub-feed-option-renderer": 3,
+  "ytd-sub-feed-selector-renderer": 3,
+  "ytd-subscribe-button-renderer": 3,
+  "ytd-subscription-notification-options-renderer": 3,
+  "ytd-subscription-notification-toggle-button-renderer": 3,
+  "ytd-subscription-notification-toggle-button-renderer-next": 3,
+  "ytd-subscription-toggle-option-renderer": 3,
+  "ytd-survey-flow-step-renderer": 3,
+  "ytd-survey-follow-up-renderer": 3,
+  "ytd-survey-trigger-renderer": 3,
+  "ytd-tabbed-page-header": 3,
+  "ytd-table-renderer": 3,
+  "ytd-talk-to-recs-flow-renderer": 3,
+  "ytd-text-header-renderer": 3,
+  "ytd-text-image-no-button-layout-renderer": 3,
+  "ytd-text-inline-expander": 3,
+  "ytd-third-party-manager": 3,
+  "ytd-thumbnail": 3,
+  "ytd-thumbnail-overlay-bottom-panel-renderer": 3,
+  "ytd-thumbnail-overlay-button-renderer": 3,
+  "ytd-thumbnail-overlay-downloading-renderer": 3,
+  "ytd-thumbnail-overlay-endorsement-renderer": 3,
+  "ytd-thumbnail-overlay-equalizer": 3,
+  "ytd-thumbnail-overlay-hover-text-renderer": 3,
+  "ytd-thumbnail-overlay-icon-renderer": 3,
+  "ytd-thumbnail-overlay-inline-unplayable-renderer": 3,
+  "ytd-thumbnail-overlay-loading-preview-renderer": 3,
+  "ytd-thumbnail-overlay-now-playing-renderer": 3,
+  "ytd-thumbnail-overlay-pinking-renderer": 3,
+  "ytd-thumbnail-overlay-playback-status-renderer": 3,
+  "ytd-thumbnail-overlay-side-panel-renderer": 3,
+  "ytd-thumbnail-overlay-time-status-renderer": 3,
+  "ytd-thumbnail-overlay-toggle-button-renderer": 3,
+  "ytd-ticket-shelf-renderer": 3,
+  "ytd-title-and-button-list-header-renderer": 3,
+  "ytd-toggle-button-renderer": 3,
+  "ytd-toggle-item-renderer": 3,
+  "ytd-toggle-menu-service-item-renderer": 3,
+  "ytd-toggle-option-renderer": 3,
+  "ytd-toggle-theme-compact-link-renderer": 3,
+  "ytd-topbar-logo-renderer": 3,
+  "ytd-topbar-menu-button-renderer": 3,
+  "ytd-topic-channel-details-renderer": 3,
+  "ytd-topic-link-renderer": 3,
+  "ytd-transcript-footer-renderer": 3,
+  "ytd-transcript-renderer": 3,
+  "ytd-transcript-search-box-renderer": 3,
+  "ytd-transcript-search-panel-renderer": 3,
+  "ytd-transcript-section-header-renderer": 3,
+  "ytd-transcript-segment-list-renderer": 3,
+  "ytd-transcript-segment-renderer": 3,
+  "ytd-transfer-channel-confirm-dialog-renderer": 3,
+  "ytd-tri-state-button-view-model": 3,
+  "ytd-tvfilm-offer-groups-renderer": 3,
+  "ytd-tvfilm-offer-module-renderer": 3,
+  "ytd-tvfilm-show-watch-forward-overlay-renderer": 3,
+  "ytd-two-column-browse-results-renderer": 3,
+  "ytd-two-column-search-results-renderer": 3,
+  "ytd-universal-watch-card-renderer": 3,
+  "ytd-unlimited-offer-module-renderer": 3,
+  "ytd-unlimited-page-feature-info-renderer": 3,
+  "ytd-vertical-channel-section-renderer": 3,
+  "ytd-vertical-list-renderer": 3,
+  "ytd-vertical-product-card-renderer": 3,
+  "ytd-vertical-watch-card-list-renderer": 3,
+  "ytd-video-description-course-section-renderer": 3,
+  "ytd-video-description-files-section-renderer": 3,
+  "ytd-video-description-gaming-section-renderer": 3,
+  "ytd-video-description-header-renderer": 3,
+  "ytd-video-description-infocards-section-renderer": 3,
+  "ytd-video-description-music-section-renderer": 3,
+  "ytd-video-description-transcript-section-renderer": 3,
+  "ytd-video-display-full-buttoned-and-button-group-renderer": 3,
+  "ytd-video-download-toast-renderer": 3,
+  "ytd-video-masthead-ad-advertiser-info-renderer": 3,
+  "ytd-video-masthead-ad-expandable-thumbnail-tile-renderer": 3,
+  "ytd-video-masthead-ad-expandable-video-tile-renderer": 3,
+  "ytd-video-masthead-ad-primary-video-overlay-renderer": 3,
+  "ytd-video-masthead-ad-primary-video-renderer": 3,
+  "ytd-video-masthead-ad-v3-renderer": 3,
+  "ytd-video-meta-block": 3,
+  "ytd-video-owner-renderer": 3,
+  "ytd-video-preview": 3,
+  "ytd-video-preview-loader": 3,
+  "ytd-video-preview-portal": 3,
+  "ytd-video-primary-info-renderer": 3,
+  "ytd-video-renderer": 3,
+  "ytd-video-report-renderer": 3,
+  "ytd-video-secondary-info-renderer": 3,
+  "ytd-video-view-count-renderer": 3,
+  "ytd-voice-search-dialog-renderer": 3,
+  "ytd-watch-card-compact-video-renderer": 3,
+  "ytd-watch-card-hero-one-vs-one-event-renderer": 3,
+  "ytd-watch-card-hero-video-renderer": 3,
+  "ytd-watch-card-one-vs-one-event": 3,
+  "ytd-watch-card-one-vs-one-event-compact-video-renderer": 3,
+  "ytd-watch-card-rich-header-renderer": 3,
+  "ytd-watch-card-section-dropdown-renderer": 3,
+  "ytd-watch-card-section-sequence-renderer": 3,
+  "ytd-watch-fixie": 3,
+  "ytd-watch-flexy": 3,
+  "ytd-watch-grid": 3,
+  "ytd-watch-info-text": 3,
+  "ytd-watch-learning-journey": 3,
+  "ytd-watch-metadata": 3,
+  "ytd-watch-next-secondary-results-renderer": 3,
+  "ytd-web-answer-renderer": 3,
+  "ytd-yoodle-renderer": 3,
+  "ytd-ypc-coupon-renderer": 3,
+  "ytd-ypc-offer-promo-renderer": 3,
+  "ytd-ypc-offers-overlay-renderer": 3,
+  "ytd-ypc-post-redemption-renderer": 3,
+  "ytd-ypc-transaction-error-message-renderer": 3,
+  "ytfz-schedule-fanzone-view-model": 3,
+  "ytm-closed-captioning-button": 3,
+  "ytm-shorts-lockup-view-model-v2": 3,
+  "ytvl-live-leaderboard-item-view-model": 3,
+  "ytvl-live-viewer-leaderboard-item-view-model": 3,
+  "ytw-channel-history-renderer": 3,
+  "ytw-channel-thumbnail-with-link-renderer": 3,
+  "ytw-comment-image-attachment-view-model": 3,
+  "ytw-fantasy-empty-state-view-model": 3,
+  "ytw-fantasy-matchup-view-model": 3,
+  "ytw-fantasy-weekly-matchup-summary-view-model": 3,
+  "ytw-feature-enablement-info-renderer": 3,
+  "ytw-pinned-comment-badge-renderer": 3,
+  "ytw-player-with-controls": 3,
+  "ytw-search-friction-view-model": 3,
+  "ytw-thumbnail-overlay-resume-playback-renderer": 3,
+  "ytw-video-description-fantasy-section-view-model": 3
+ },
+ "css": {
+  "set": {
+   "width": 895,
+   "height": 858,
+   "display": 591,
+   "--*": 487,
+   "pointer-events": 297,
+   "fill": 288,
+   "background": 41,
+   "color": 40,
+   "margin-left": 30,
+   "background-color": 20,
+   "border-color": 20,
+   "margin": 20,
+   "background-image": 12,
+   "will-change": 12,
+   "left": 10,
+   "top": 10,
+   "transform": 10,
+   "margin-right": 9,
+   "max-width": 9,
+   "min-width": 9,
+   "opacity": 9,
+   "bottom": 7,
+   "right": 7,
+   "overflow": 6,
+   "position": 6,
+   "-webkit-mask-image": 5,
+   "mask-image": 5,
+   "font-weight": 3,
+   "max-height": 3,
+   "padding": 3,
+   "padding-bottom": 3,
+   "-webkit-mask-repeat": 1,
+   "mask-repeat": 1
+  },
+  "get": {},
+  "computed": {
+   "--*": 12,
+   "opacity": 6
+  },
+  "inserted": {
+   "background": 10,
+   "background-size": 8,
+   "height": 8,
+   "width": 8
+  },
+  "supports": {
+   "-webkit-line-clamp: 1": 20,
+   "-webkit-mask-composite: xor": 3,
+   "-webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)": 3,
+   "box-shadow: 0 0 0 var(--foo)": 3,
+   "selector(:has(*))": 3,
+   "aspect-ratio: 1 / 1": 1,
+   "filter: blur(0)": 1
+  },
+  "media_queries": {
+   "(max-width: 527.9px)": 60,
+   "(min-width: 1024px)": 60,
+   "(min-width: 528px) and (max-width: 839.9px)": 60,
+   "(min-width: 840px) and (max-width: 1023.9px)": 60,
+   "(prefers-color-scheme)": 27,
+   "(prefers-color-scheme: dark)": 24,
+   "(display-mode: browser)": 10,
+   "(display-mode: fullscreen)": 10,
+   "(display-mode: minimal-ui)": 10,
+   "(display-mode: standalone)": 10,
+   "(max-width: 656px)": 7,
+   "(prefers-reduced-motion: reduce)": 7,
+   "(any-pointer: coarse)": 3,
+   "(any-pointer:coarse)": 3,
+   "(any-pointer:fine)": 3,
+   "(forced-colors: active)": 3,
+   "(hover: hover)": 3,
+   "(max-height: 629px) and (min-width: 657px), (min-height: 630px) and (min-width: 1000px) and (max-width: 1327px)": 3,
+   "(min-height: 630px) and (min-width: 1327px)": 3,
+   "(min-width: 1000px)": 3,
+   "(orientation: landscape)": 3
+  },
+  "stylesheets": {
+   "sheets": 46,
+   "cross_origin_skipped": 9,
+   "rules": 77336,
+   "rule_types": {
+    "CSSStyleRule": 70907,
+    "CSSMediaRule": 2539,
+    "CSSKeyframeRule": 1943,
+    "CSSSupportsRule": 1309,
+    "CSSKeyframesRule": 635,
+    "CSSPropertyRule": 3
+   },
+   "properties": {
+    "display": 19550,
+    "--*": 11692,
+    "width": 10996,
+    "color": 10003,
+    "font-size": 9643,
+    "height": 9064,
+    "line-height": 8914,
+    "font-weight": 8688,
+    "background-color": 8418,
+    "margin-top": 8216,
+    "padding-top": 8194,
+    "font-family": 8066,
+    "padding-right": 7931,
+    "padding-bottom": 7825,
+    "padding-left": 7745,
+    "margin-bottom": 7722,
+    "margin-left": 7510,
+    "margin-right": 7494,
+    "flex-direction": 6938,
+    "position": 6260,
+    "overflow-y": 4914,
+    "border-top-right-radius": 4814,
+    "border-bottom-right-radius": 4812,
+    "border-top-left-radius": 4805,
+    "border-bottom-left-radius": 4803,
+    "overflow-x": 4740,
+    "max-height": 4460,
+    "align-items": 4325,
+    "background-size": 3583,
+    "background-image": 3558,
+    "justify-content": 3476,
+    "background-position-x": 3435,
+    "background-position-y": 3435,
+    "background-repeat": 3416,
+    "background-clip": 3357,
+    "background-attachment": 3240,
+    "background-origin": 3239,
+    "opacity": 3119,
+    "flex-shrink": 3083,
+    "border-bottom-color": 3063,
+    "flex-grow": 3031,
+    "top": 3020,
+    "border-top-color": 2930,
+    "bottom": 2778,
+    "border-bottom-width": 2724,
+    "left": 2712,
+    "flex-basis": 2676,
+    "border-bottom-style": 2674,
+    "text-wrap-mode": 2609,
+    "white-space-collapse": 2588,
+    "border-left-color": 2581,
+    "border-top-width": 2571,
+    "border-top-style": 2539,
+    "border-right-color": 2531,
+    "right": 2380,
+    "max-width": 2328,
+    "border-left-width": 2218,
+    "border-left-style": 2184,
+    "border-right-width": 2172,
+    "text-overflow": 2142,
+    "border-right-style": 2134,
+    "transform": 2119,
+    "border-image-outset": 1972,
+    "border-image-repeat": 1972,
+    "border-image-slice": 1972,
+    "border-image-source": 1972,
+    "border-image-width": 1972,
+    "transition-duration": 1908,
+    "transition-timing-function": 1902,
+    "transition-delay": 1856,
+    "transition-property": 1854,
+    "transition-behavior": 1827,
+    "cursor": 1823,
+    "min-width": 1748,
+    "-webkit-box-orient": 1741,
+    "-webkit-line-clamp": 1513,
+    "z-index": 1489,
+    "text-align": 1354,
+    "pointer-events": 1201,
+    "box-sizing": 985,
+    "align-self": 785,
+    "min-height": 767,
+    "outline-width": 745,
+    "outline-style": 739,
+    "outline-color": 736,
+    "content": 709,
+    "box-shadow": 684,
+    "text-decoration-line": 590,
+    "vertical-align": 590,
+    "text-decoration-style": 587,
+    "text-decoration-color": 581,
+    "text-decoration-thickness": 581,
+    "animation-name": 575,
+    "animation-timing-function": 546,
+    "animation-duration": 532,
+    "text-transform": 528,
+    "visibility": 527,
+    "animation-iteration-count": 509,
+    "animation-delay": 482,
+    "row-gap": 474,
+    "animation-fill-mode": 458,
+    "column-gap": 458,
+    "animation-play-state": 440,
+    "animation-direction": 437,
+    "animation-range-end": 437,
+    "animation-range-start": 437,
+    "animation-timeline": 437,
+    "flex-wrap": 402,
+    "fill": 367,
+    "-webkit-box-align": 326,
+    "text-shadow": 325,
+    "-webkit-box-direction": 290,
+    "overflow-wrap": 272,
+    "backdrop-filter": 264,
+    "filter": 250,
+    "-webkit-box-pack": 244,
+    "float": 175,
+    "-webkit-font-smoothing": 167,
+    "-webkit-box-flex": 163,
+    "word-break": 151,
+    "letter-spacing": 136,
+    "user-select": 126,
+    "scrollbar-color": 125,
+    "direction": 124,
+    "object-fit": 121,
+    "font-style": 117,
+    "grid-template-columns": 117,
+    "scrollbar-width": 111,
+    "transform-origin": 100,
+    "aspect-ratio": 99,
+    "will-change": 99,
+    "stroke": 80,
+    "outline-offset": 79,
+    "margin-inline-start": 74,
+    "background-blend-mode": 72,
+    "mask-image": 72,
+    "padding-inline-start": 67,
+    "margin-inline-end": 66,
+    "font-variant-alternates": 63,
+    "font-variant-caps": 63,
+    "font-variant-east-asian": 63,
+    "font-variant-emoji": 63,
+    "font-variant-ligatures": 63,
+    "font-variant-numeric": 63,
+    "font-variant-position": 63,
+    "appearance": 59,
+    "font-feature-settings": 57,
+    "font-kerning": 57,
+    "font-language-override": 57,
+    "font-optical-sizing": 57,
+    "font-size-adjust": 57,
+    "font-stretch": 57,
+    "font-variation-settings": 57,
+    "fill-opacity": 50,
+    "-webkit-tap-highlight-color": 46,
+    "forced-color-adjust": 46,
+    "list-style-type": 45,
+    "order": 45,
+    "padding-inline-end": 40,
+    "mask-repeat": 36,
+    "align-content": 34,
+    "list-style-position": 33,
+    "view-transition-name": 33,
+    "clip-path": 30,
+    "grid-column-end": 30,
+    "grid-column-start": 30,
+    "-webkit-mask-position-x": 27,
+    "-webkit-mask-position-y": 27,
+    "inset-inline-end": 27,
+    "mask-clip": 27,
+    "mask-composite": 27,
+    "mask-mode": 27,
+    "mask-origin": 27,
+    "mask-size": 27,
+    "resize": 27,
+    "grid-template-rows": 25,
+    "overscroll-behavior-x": 24,
+    "overscroll-behavior-y": 24,
+    "text-wrap-style": 24,
+    "stroke-width": 23,
+    "clip": 21,
+    "list-style-image": 21,
+    "contain": 18,
+    "grid-auto-flow": 18,
+    "inset-inline-start": 18,
+    "grid-row-end": 15,
+    "grid-row-start": 15,
+    "grid-template-areas": 15,
+    "object-position": 15,
+    "scale": 15,
+    "scroll-margin-top": 15,
+    "touch-action": 13,
+    "translate": 13,
+    "border-collapse": 12,
+    "stroke-opacity": 12,
+    "writing-mode": 11,
+    "-webkit-box-ordinal-group": 9,
+    "clear": 9,
+    "justify-self": 9,
+    "scroll-snap-type": 9,
+    "view-transition-class": 9,
+    "-webkit-writing-mode": 8,
+    "grid-auto-rows": 7,
+    "justify-items": 6,
+    "margin-block-end": 6,
+    "margin-block-start": 6,
+    "mix-blend-mode": 6,
+    "overflow-clip-margin": 6,
+    "scroll-padding-top": 6,
+    "scroll-snap-align": 6,
+    "scroll-snap-stop": 6,
+    "scrollbar-gutter": 6,
+    "-webkit-border-horizontal-spacing": 3,
+    "-webkit-border-vertical-spacing": 3,
+    "-webkit-user-modify": 3,
+    "all": 3,
+    "backface-visibility": 3,
+    "border-inline-start-color": 3,
+    "border-inline-start-style": 3,
+    "border-inline-start-width": 3,
+    "caret-color": 3,
+    "color-scheme": 3,
+    "container-type": 3,
+    "isolation": 3,
+    "scroll-behavior": 3,
+    "scroll-margin-bottom": 3,
+    "scroll-margin-left": 3,
+    "scroll-margin-right": 3,
+    "scroll-padding-right": 3,
+    "stop-color": 3,
+    "stroke-dasharray": 3,
+    "stroke-linecap": 3,
+    "table-layout": 3,
+    "text-size-adjust": 3,
+    "transform-style": 3,
+    "unicode-bidi": 3,
+    "word-spacing": 3
+   },
+   "selectors": {
+    ":not(": 6420,
+    ":hover": 2523,
+    "::after": 1223,
+    "::before": 775,
+    ":focus": 593,
+    ":last-child": 454,
+    ":empty": 442,
+    ":first-child": 442,
+    "::-webkit-scrollbar-thumb": 340,
+    ":active": 271,
+    "::-webkit-scrollbar": 213,
+    ":focus-within": 208,
+    ":last-of-type": 178,
+    ":first-of-type": 89,
+    ":nth-child(": 84,
+    ":focus-visible": 67,
+    ":has(": 60,
+    "::view-transition-new(": 45,
+    "::view-transition-old(": 42,
+    "::-webkit-input-placeholder": 39,
+    ":where(": 36,
+    "::placeholder": 30,
+    ":nth-of-type(": 30,
+    "::-webkit-slider-runnable-track": 28,
+    ":is(": 28,
+    ":checked": 27,
+    ":only-child": 24,
+    "::-webkit-slider-thumb": 21,
+    ":root": 18,
+    "::-webkit-scrollbar-track": 14,
+    ":nth-last-child(": 14,
+    ":visited": 13,
+    ":popover-open": 12,
+    "::-webkit-media-controls-start-playback-button": 8,
+    ":HASHTAG": 6,
+    ":disabled": 6,
+    "::-webkit-media-controls": 4,
+    "::-webkit-media-controls-current-time-display": 4,
+    "::-webkit-media-controls-fullscreen-button": 4,
+    "::-webkit-media-controls-time-remaining-display": 4,
+    "::-webkit-media-controls-timeline": 4,
+    "::-webkit-media-controls-wireless-playback-picker-button": 4,
+    "::-webkit-inner-spin-button": 3,
+    "::-webkit-outer-spin-button": 3,
+    "::view-transition-group(": 3,
+    ":EMPTY": 3,
+    ":link": 3
+   },
+   "media_queries": {
+    "(max-width: 527.9px)": 885,
+    "(hover: none)": 192,
+    "(prefers-reduced-motion: no-preference)": 132,
+    "(-ms-high-contrast:active), (forced-colors: active)": 129,
+    "(min-width: 1024px)": 129,
+    "(forced-colors: active)": 99,
+    "(max-width: 1023.9px)": 54,
+    "(min-width: 528px) and (max-width: 1023.9px)": 51,
+    "(max-width: 299.9px)": 33,
+    "(max-width: 299px) and (orientation: landscape), (max-width: 299px) and (orientation: portrait)": 24,
+    "(min-width: 840px)": 21,
+    "(max-width: 656px)": 19,
+    "(max-width: 299px)": 18,
+    "(min-width: 876px)": 18,
+    "(display-mode: picture-in-picture)": 15,
+    "(max-width: 600px)": 15,
+    "(min-width: 1024px) and (max-width: 527.9px)": 15,
+    "((max-width: 1000px))": 12,
+    "((min-width: 1001px))": 12,
+    "(max-height: 550px)": 12,
+    "(max-height: 750px)": 12,
+    "(max-width: 570px)": 12,
+    "(max-width: 839.9px)": 12,
+    "(min-aspect-ratio: 13 / 9) and (orientation: landscape), (min-width: 931px) and (orientation: landscape)": 12,
+    "(prefers-reduced-motion: reduce)": 12,
+    "((min-width: 528px) and (max-width: 839.9px))": 9,
+    "(max-height: 500px)": 9,
+    "(max-width: 1080px)": 9,
+    "(max-width: 640px)": 9,
+    "(max-width: 800px)": 9,
+    "(min-width: 0) and (max-width: 662px)": 9,
+    "(min-width: 528px)": 9,
+    "(min-width: 2200px)": 8,
+    "(max-width: 856px)": 7,
+    "(max-width: 999px)": 7,
+    "print": 7,
+    "((min-width: 1708px))": 6,
+    "(any-pointer: coarse)": 6,
+    "(forced-colors: active) and (prefers-color-scheme: light)": 6,
+    "(max-height: 411px) and (orientation: landscape)": 6,
+    "(max-height: 723px), (max-width: 552px)": 6,
+    "(max-height: 808px), (max-width: 600px)": 6,
+    "(max-width: 1090px)": 6,
+    "(max-width: 1185px), (min-width: 1328px) and (max-width: 1353px)": 6,
+    "(max-width: 1200px)": 6,
+    "(max-width: 330px)": 6,
+    "(max-width: 427px)": 6,
+    "(max-width: 527px)": 6,
+    "(max-width: 549px) and (orientation: portrait), (max-width: 930px) and (orientation: landscape)": 6,
+    "(max-width: 615px)": 6,
+    "(max-width: 662px)": 6,
+    "(max-width: 701px)": 6,
+    "(max-width: 720px)": 6,
+    "(max-width: 971px)": 6,
+    "(min-width: 1080px)": 6,
+    "(min-width: 300px)": 6,
+    "(min-width: 528px) and (max-width: 1023.9px) and (max-width: 527.9px)": 6,
+    "(min-width: 528px) and (max-width: 1023px)": 6,
+    "(min-width: 529px)": 6,
+    "(min-width: 662px)": 6,
+    "(min-width: 671px)": 6,
+    "(min-width: 841px)": 6,
+    "(pointer: coarse)": 6,
+    "(min-width: 882px)": 5,
+    "only screen and (min-width: 392px)": 5,
+    "(max-width: 791px)": 4,
+    "(min-width: 1000px)": 4,
+    "(min-width: 1294px) and (min-height: 630px)": 4,
+    "(min-width: 1720px) and (min-height: 980px)": 4,
+    "screen and (-ms-high-contrast:active)": 4,
+    "screen and (max-width: 325px)": 4,
+    "screen and (max-width: 656px)": 4,
+    "screen and (min-width: 1294px) and (min-height: 630px)": 4,
+    "screen and (min-width: 1600px)": 4,
+    "screen and (min-width: 1720px) and (min-height: 980px)": 4,
+    "((min-width: 840px) and (max-width: 1023.9px))": 3,
+    "(max-height: 221px)": 3,
+    "(max-height: 250px)": 3,
+    "(max-width: 1015px)": 3,
+    "(max-width: 1023.9px) and (max-width: 527.9px)": 3,
+    "(max-width: 1050px)": 3,
+    "(max-width: 1066px)": 3,
+    "(max-width: 1080px) and (min-width: 720px)": 3,
+    "(max-width: 1080px) and (min-width: 880px)": 3,
+    "(max-width: 1128px)": 3,
+    "(max-width: 1143px)": 3,
+    "(max-width: 1156px)": 3,
+    "(max-width: 1185px)": 3,
+    "(max-width: 1190px)": 3,
+    "(max-width: 1200px) and (max-width: 527.9px)": 3,
+    "(max-width: 1280px)": 3,
+    "(max-width: 1439px)": 3,
+    "(max-width: 299.9px) and (max-width: 527.9px)": 3,
+    "(max-width: 299px) and (max-width: 527.9px)": 3,
+    "(max-width: 299px) and (orientation: portrait)": 3,
+    "(max-width: 300px)": 3,
+    "(max-width: 340px)": 3,
+    "(max-width: 346px)": 3,
+    "(max-width: 346px), (min-width: 512px) and (max-width: 600px)": 3,
+    "(max-width: 400px)": 3,
+    "(max-width: 424px)": 3,
+    "(max-width: 428px)": 3,
+    "(max-width: 440px)": 3,
+    "(max-width: 455px)": 3,
+    "(max-width: 512px)": 3,
+    "(max-width: 527.9px) and (max-width: 527.9px)": 3,
+    "(max-width: 527px) and (max-width: 527.9px)": 3,
+    "(max-width: 554px)": 3,
+    "(max-width: 568px)": 3,
+    "(max-width: 605px)": 3,
+    "(max-width: 620px)": 3,
+    "(max-width: 638px)": 3,
+    "(max-width: 650px)": 3,
+    "(max-width: 680px)": 3,
+    "(max-width: 685px)": 3,
+    "(max-width: 750px)": 3,
+    "(max-width: 768px)": 3,
+    "(max-width: 839.9px) and (max-width: 527.9px)": 3,
+    "(max-width: 839px)": 3,
+    "(max-width: 840px)": 3,
+    "(max-width: 850px)": 3,
+    "(max-width: 852px)": 3,
+    "(max-width: 871px)": 3,
+    "(max-width: 875px)": 3,
+    "(max-width: 876px)": 3,
+    "(max-width: 936px)": 3,
+    "(min-aspect-ratio: 13 / 9) and (orientation: landscape) and (min-width: 416px), (min-width: 931px) and (orientation: landscape) and (min-width: 416px)": 3,
+    "(min-aspect-ratio: 7 / 5)": 3,
+    "(min-height: 729px)": 3,
+    "(min-width: 0) and (max-width: 627px)": 3,
+    "(min-width: 0) and (max-width: 691px)": 3,
+    "(min-width: 1015px)": 3,
+    "(min-width: 1070px)": 3,
+    "(min-width: 1080px) and (max-height: 500px)": 3,
+    "(min-width: 1080px) and (min-height: 700px)": 3,
+    "(min-width: 1081px)": 3,
+    "(min-width: 1090px)": 3,
+    "(min-width: 1157px) and (max-width: 1439px)": 3,
+    "(min-width: 1304px)": 3,
+    "(min-width: 1312px)": 3,
+    "(min-width: 1480px)": 3,
+    "(min-width: 1544px)": 3,
+    "(min-width: 1560px)": 3,
+    "(min-width: 1720px)": 3,
+    "(min-width: 300px) and (max-width: 527.9px)": 3,
+    "(min-width: 300px) and (max-width: 527px)": 3,
+    "(min-width: 300px) and (max-width: 527px) and (max-width: 527.9px)": 3,
+    "(min-width: 331px) and (max-width: 527px)": 3,
+    "(min-width: 392px)": 3,
+    "(min-width: 428px)": 3,
+    "(min-width: 512px) and (max-width: 600px)": 3,
+    "(min-width: 528px) and (max-width: 1023px) and (max-width: 527.9px)": 3,
+    "(min-width: 550px) and (orientation: portrait), (min-width: 931px) and (orientation: landscape)": 3,
+    "(min-width: 600px)": 3,
+    "(min-width: 642px)": 3,
+    "(min-width: 791px) and (max-width: 1312px)": 3,
+    "(min-width: 840px) and (max-width: 1023px)": 3,
+    "(min-width: 840px) and (max-width: 1023px) and (max-width: 527.9px)": 3,
+    "(min-width: 856px)": 3,
+    "(min-width: calc(984px + 56.25vh))": 3,
+    "(prefers-contrast: more)": 3,
+    "not all and (hover: none)": 3,
+    "only screen and (-webkit-max-device-pixel-ratio: 1)": 3,
+    "only screen and (min-width: 2244px)": 3,
+    "screen and (max-width: 600px)": 3,
+    "screen and (max-width: 712px)": 3,
+    "screen and (prefers-reduced-motion: no-preference)": 3,
+    "(min-width: 792px)": 2,
+    "(min-width: 792px) and (max-width: 1311px)": 2,
+    "only screen and (-webkit-min-device-pixel-ratio: 2)": 2,
+    "only screen and (max-width: 600px)": 2,
+    "only screen and (min-resolution: 192dpi)": 2,
+    "only screen and (min-width: 1600px)": 2,
+    "screen and (max-width: 772px)": 2
+   },
+   "supports_conditions": {
+    "(-webkit-line-clamp:1)": 1284,
+    "((-webkit-writing-mode:vertical-rl) or (writing-mode:vertical-rl))": 8,
+    "(aspect-ratio:1/1)": 4,
+    "not (aspect-ratio:1/1)": 4,
+    "(font-size:9cqi)": 3,
+    "(scrollbar-width:none)": 3,
+    "not (aspect-ratio:9/16)": 3
+   },
+   "container_conditions": {}
+  }
+ },
+ "media": {
+  "can_play_type": {},
+  "is_type_supported": {
+   "video/webm; codecs=\"vp9\"": 27,
+   "audio/mp4; codecs=\"mp4a.40.2\"": 5,
+   "audio/webm; codecs=\"opus\"": 5,
+   "audio/webm; codecs=\"opus\"; channels=2": 3,
+   "audio/webm; codecs=\"opus\"; channels=99": 3,
+   "video/mp4; codecs=\"avc1.42001E\"": 3,
+   "video/mp4; codecs=\"avc1.42001E\"; decode-to-texture=true": 3,
+   "video/mp4; codecs=av01.0.05M.08": 3,
+   "video/mp4; codecs=av99.0.05M.08": 3,
+   "video/webm; codecs=\"vp9\"; bitrate=2000000000": 3,
+   "video/webm; codecs=\"vp9\"; bitrate=300000": 3,
+   "video/webm; codecs=\"vp9\"; cryptoblockformat=invalidformat": 3,
+   "video/webm; codecs=\"vp9\"; cryptoblockformat=subsample": 3,
+   "video/webm; codecs=\"vp9\"; decode-to-texture=false": 3,
+   "video/webm; codecs=\"vp9\"; decode-to-texture=nope": 3,
+   "video/webm; codecs=\"vp9\"; eotf=bt709": 3,
+   "video/webm; codecs=\"vp9\"; eotf=catavision": 3,
+   "video/webm; codecs=\"vp9\"; experimental=allowed": 3,
+   "video/webm; codecs=\"vp9\"; experimental=invalid": 3,
+   "video/webm; codecs=\"vp9\"; framerate=30": 3,
+   "video/webm; codecs=\"vp9\"; framerate=9999": 3,
+   "video/webm; codecs=\"vp9\"; height=360": 3,
+   "video/webm; codecs=\"vp9\"; height=99999": 3,
+   "video/webm; codecs=\"vp9\"; tunnelmode=false": 3,
+   "video/webm; codecs=\"vp9\"; tunnelmode=true": 3,
+   "video/webm; codecs=\"vp9\"; width=3840; height=2160; bitrate=2000000": 3,
+   "video/webm; codecs=\"vp9\"; width=3840; height=2160; bitrate=20000000": 3,
+   "video/webm; codecs=\"vp9\"; width=640": 3,
+   "video/webm; codecs=\"vp9\"; width=99999": 3,
+   "video/webm; codecs=\"vp09.00.51.08.01.01.01.01.00\"": 2,
+   "video/mp4; codecs=\"av01.0.04M.08\"": 1,
+   "video/mp4; codecs=\"av01.0.13M.08\"": 1,
+   "video/mp4; codecs=\"avc1.4d401f\"": 1,
+   "video/mp4; codecs=\"avc1.64002a\"": 1,
+   "video/webm; codecs=\"vp09.02.51.10.01.09.16.09.00\"": 1,
+   "video/webm; codecs=\"vp09.02.51.10.01.09.99.99.00\"": 1
+  },
+  "source_buffer_types": {
+   "audio/webm; codecs=\"opus\"": 1,
+   "video/mp4; codecs=\"av01.0.04M.08\"": 1
+  },
+  "change_type": {},
+  "decoding_info": {
+   "media-source video/webm; codecs=\"vp09.00.51.08.01.01.01.01.00\"": 8,
+   "media-source video/mp4; codecs=\"av01.0.12M.08\"": 4,
+   "media-source video/mp4; codecs=\"av01.0.00M.08\"": 2,
+   "media-source video/mp4; codecs=\"av01.0.01M.08\"": 1,
+   "media-source video/mp4; codecs=\"av01.0.04M.08\"": 1,
+   "media-source video/mp4; codecs=\"av01.0.08M.08\"": 1,
+   "media-source video/mp4; codecs=\"av01.0.09M.08\"": 1,
+   "media-source video/mp4; codecs=\"av01.0.13M.08\"": 1
+  },
+  "key_systems": {},
+  "get_user_media": {},
+  "get_display_media": 0,
+  "src_schemes": {
+   "/s/search/audio/failure.mp3": 2,
+   "/s/search/audio/no_input.mp3": 2,
+   "/s/search/audio/open.mp3": 2,
+   "/s/search/audio/success.mp3": 2,
+   "blob": 1
+  },
+  "append_count": 864,
+  "append_bytes": 3513190
+ },
+ "audio": {
+  "contexts": 0,
+  "context_options": {},
+  "worklet_nodes": {},
+  "processor_options": {}
+ },
+ "canvas": {
+  "contexts": {
+   "experimental-webgl": 3,
+   "webgl": 3,
+   "2d": 2
+  },
+  "context_attributes": {},
+  "to_data_url": 0,
+  "to_blob": 0,
+  "get_image_data": 0
+ },
+ "webgl": {
+  "parameters": {
+   "37446": 3
+  },
+  "extensions": {
+   "WEBGL_debug_renderer_info": 3
+  }
+ },
+ "workers": {
+  "dedicated": {},
+  "shared": {},
+  "service": {
+   "https://www.youtube.com/sw.js {\"scope\":\"/\"}": 3
+  },
+  "worklets": {}
+ },
+ "wasm": {
+  "module_bytes": [],
+  "total_bytes": 0,
+  "streaming_urls": {},
+  "memory_shared": 0,
+  "memory_unshared": 0
+ },
+ "intl": {
+  "DateTimeFormat <default>": 19
+ },
+ "rtc": {
+  "local_candidates": {},
+  "remote_candidates": {},
+  "ice_servers": {},
+  "config": {},
+  "codecs": {}
+ },
+ "storage": {
+  "indexeddb": {
+   "swpushnotificationsdb": 7,
+   "YtIdbMeta": 6,
+   "PersistentEntityStoreDb:V14397e27||": 4,
+   "yt-idb-pref-storage:V14397e27||": 4,
+   "ytGcfConfig:V14397e27||": 4,
+   "ServiceWorkerLogsDatabase": 3,
+   "LogsDatabaseV2:V14397e27||": 2,
+   "PersistentEntityStoreDb:Vc14e586f||": 2,
+   "yt-idb-pref-storage:Vc14e586f||": 2,
+   "yt-it-response-store:V14397e27||": 2,
+   "yt-player-local-media:V14397e27||": 2,
+   "ytGcfConfig:Vc14e586f||": 2,
+   "LogsDatabaseV2:Vc14e586f||": 1,
+   "yt-it-response-store:Vc14e586f||": 1,
+   "yt-player-local-media:Vc14e586f||": 1
+  },
+  "caches": {
+   "test-only": 3,
+   "yt-icons": 3
+  },
+  "broadcast_channels": {
+   "PERSISTENT_ENTITY_STORE_SYNC:V14397e27||": 4,
+   "PERSISTENT_ENTITY_STORE_SYNC:Vc14e586f||": 2,
+   "PLAYER_OFFLINE_ERROR_SYNC:V14397e27||": 2,
+   "PLAYER_OFFLINE_PAUSE_SYNC:V14397e27||": 2,
+   "PLAYER_OFFLINE_ERROR_SYNC:Vc14e586f||": 1,
+   "PLAYER_OFFLINE_PAUSE_SYNC:Vc14e586f||": 1
+  }
+ },
+ "navigator": {
+  "high_entropy_hints": {},
+  "user_agent_data": {
+   "low_entropy": {
+    "brands": [
+     {
+      "brand": "Chromium",
+      "version": "153"
+     },
+     {
+      "brand": "Not_A Brand",
+      "version": "8"
+     }
+    ],
+    "mobile": false,
+    "platform": "macOS"
+   },
+   "high_entropy": {
+    "architecture": "x86",
+    "bitness": "64",
+    "brands": [
+     {
+      "brand": "Chromium",
+      "version": "153"
+     },
+     {
+      "brand": "Not_A Brand",
+      "version": "8"
+     }
+    ],
+    "formFactors": [
+     "Desktop"
+    ],
+    "fullVersionList": [
+     {
+      "brand": "Chromium",
+      "version": "153.0.8010.12"
+     },
+     {
+      "brand": "Not_A Brand",
+      "version": "8.0.0.0"
+     }
+    ],
+    "mobile": false,
+    "model": "",
+    "platform": "macOS",
+    "platformVersion": "10_15_7",
+    "uaFullVersion": "153.0.8010.12",
+    "wow64": false
+   }
+  }
+ },
+ "permissions": {
+  "notifications": 3
+ },
+ "websockets": {},
+ "event_sources": {},
+ "network": {
+  "requests": 386,
+  "responses": 396,
+  "failed": 25,
+  "bytes_encoded": 11405541,
+  "http_versions": {
+   "h3": 312,
+   "h2": 68,
+   "data": 16
+  },
+  "resource_types": {
+   "fetch": 238,
+   "script": 59,
+   "stylesheet": 24,
+   "xhr": 19,
+   "image": 17,
+   "font": 8,
+   "media": 8,
+   "other": 8,
+   "document": 5
+  },
+  "methods": {
+   "GET": 350,
+   "POST": 36
+  },
+  "status": {
+   "200": 335,
+   "204": 19,
+   "206": 8,
+   "301": 2,
+   "400": 1,
+   "401": 2,
+   "403": 12
+  },
+  "hosts": {
+   "fonts.gstatic.com": 186,
+   "www.youtube.com": 103,
+   "www.gstatic.com": 28,
+   "i.ytimg.com": 15,
+   "rr3---sn-2auhvcpax-f5f6.googlevideo.com": 14,
+   "fonts.googleapis.com": 9,
+   "rr2---sn-q4fl6nss.googlevideo.com": 6,
+   "rr5---sn-q4fl6n6s.googlevideo.com": 6,
+   "yt3.ggpht.com": 4,
+   "googleads.g.doubleclick.net": 3,
+   "www.google.com": 3,
+   "accounts.google.com": 2,
+   "static.doubleclick.net": 2,
+   "youtube.com": 2,
+   "consent.youtube.com": 1,
+   "r1---sn-tn.googlevideo.com": 1,
+   "rr2---sn-f5f7kn7e.c.youtube.com": 1
+  },
+  "host_protocols": {
+   "www.youtube.com": {
+    "h3": 72,
+    "h2": 32
+   },
+   "i.ytimg.com": {
+    "h3": 13,
+    "h2": 2
+   },
+   "fonts.googleapis.com": {
+    "h2": 9
+   },
+   "": {
+    "data": 16
+   },
+   "www.google.com": {
+    "h3": 3
+   },
+   "fonts.gstatic.com": {
+    "h3": 186
+   },
+   "www.gstatic.com": {
+    "h2": 18,
+    "h3": 10
+   },
+   "accounts.google.com": {
+    "h2": 2
+   },
+   "consent.youtube.com": {
+    "h2": 1
+   },
+   "rr5---sn-q4fl6n6s.googlevideo.com": {
+    "h3": 6
+   },
+   "rr3---sn-2auhvcpax-f5f6.googlevideo.com": {
+    "h3": 14
+   },
+   "rr2---sn-f5f7kn7e.c.youtube.com": {
+    "h3": 1
+   },
+   "rr2---sn-q4fl6nss.googlevideo.com": {
+    "h3": 6
+   },
+   "yt3.ggpht.com": {
+    "h2": 4
+   },
+   "r1---sn-tn.googlevideo.com": {
+    "h3": 1
+   }
+  },
+  "mime_types": {
+   "image/svg+xml": 198,
+   "text/javascript": 57,
+   "application/json": 28,
+   "text/css": 24,
+   "text/plain": 20,
+   "text/html": 16,
+   "application/vnd.yt-ump": 13,
+   "image/avif": 10,
+   "audio/mpeg": 8,
+   "font/woff2": 8,
+   "image/jpeg": 6,
+   "application/json+protobuf": 3,
+   "image/x-icon": 3,
+   "application/octet-stream": 1,
+   "image/png": 1
+  },
+  "content_encodings": {
+   "gzip": 199,
+   "br": 103
+  },
+  "alt_svc_hosts": {
+   "fonts.gstatic.com": 186,
+   "www.youtube.com": 104,
+   "www.gstatic.com": 28,
+   "i.ytimg.com": 15,
+   "rr3---sn-2auhvcpax-f5f6.googlevideo.com": 14,
+   "fonts.googleapis.com": 9,
+   "yt3.ggpht.com": 4,
+   "www.google.com": 3,
+   "accounts.google.com": 2,
+   "consent.youtube.com": 1,
+   "r1---sn-tn.googlevideo.com": 1,
+   "rr2---sn-f5f7kn7e.c.youtube.com": 1
+  },
+  "from_service_worker": 0,
+  "from_cache": 121,
+  "websockets": {},
+  "ws_frames_sent": 0,
+  "ws_frames_received": 0,
+  "failed_errors": {
+   "net::ERR_ABORTED": 20,
+   "net::ERR_CONNECTION_REFUSED": 5
+  },
+  "failed_hosts": {
+   "www.youtube.com": 7,
+   "rr2---sn-q4fl6nss.googlevideo.com": 6,
+   "rr5---sn-q4fl6n6s.googlevideo.com": 6,
+   "googleads.g.doubleclick.net": 3,
+   "static.doubleclick.net": 2,
+   "consent.youtube.com": 1
+  }
+ },
+ "realms": [
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "https://www.youtube.com",
+   "is_top": true,
+   "dumps": 6,
+   "member_accesses": 1024471,
+   "wrapped_count": 7912,
+   "install_ms": 24,
+   "sources": {
+    "unload_flush": 3,
+    "youtube-home": 1,
+    "youtube-watch": 1,
+    "final": 1
+   }
+  },
+  {
+   "kind": "service_worker",
+   "global": "ServiceWorkerGlobalScope",
+   "origin": "https://www.youtube.com",
+   "is_top": false,
+   "dumps": 6,
+   "member_accesses": 280,
+   "wrapped_count": 2099,
+   "install_ms": 7,
+   "sources": {
+    "youtube-home": 2,
+    "youtube-watch": 2,
+    "final": 2
+   }
+  },
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "null",
+   "is_top": false,
+   "dumps": 6,
+   "member_accesses": 6,
+   "wrapped_count": 7912,
+   "install_ms": 19,
+   "sources": {
+    "unload_flush": 3,
+    "youtube-home": 1,
+    "youtube-watch": 1,
+    "final": 1
+   }
+  },
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "https://accounts.google.com",
+   "is_top": false,
+   "dumps": 3,
+   "member_accesses": 1,
+   "wrapped_count": 7912,
+   "install_ms": 24,
+   "sources": {
+    "unload_flush": 2,
+    "youtube-home": 1
+   }
+  },
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "null",
+   "is_top": true,
+   "dumps": 1,
+   "member_accesses": 0,
+   "wrapped_count": 6449,
+   "install_ms": 22,
+   "sources": {
+    "unload_flush": 1
+   }
+  }
+ ]
+}

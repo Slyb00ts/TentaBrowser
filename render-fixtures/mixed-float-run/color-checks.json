@@ -1,0 +1,26 @@
+[
+  {
+    "name": "first left float starts the band",
+    "color": "#087f5b",
+    "x": 0,
+    "y": 0,
+    "width": 80,
+    "height": 30
+  },
+  {
+    "name": "same-side floats remain adjacent",
+    "color": "#1971c2",
+    "x": 80,
+    "y": 0,
+    "width": 80,
+    "height": 30
+  },
+  {
+    "name": "trailing right float shares the band",
+    "color": "#e8590c",
+    "x": 340,
+    "y": 0,
+    "width": 60,
+    "height": 30
+  }
+]

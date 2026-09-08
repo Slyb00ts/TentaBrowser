@@ -1,0 +1,134 @@
+{
+  "fixture": "list-indentation",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 40
+    },
+    {
+      "selector": "#default",
+      "kind": "element",
+      "tag": "ul",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 20
+    },
+    {
+      "selector": "#default > li:nth-child(1)",
+      "kind": "element",
+      "tag": "li",
+      "named": false,
+      "x": 40,
+      "y": 0,
+      "width": 360,
+      "height": 20
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 40,
+      "width": 400,
+      "height": 40
+    },
+    {
+      "selector": "#reset",
+      "kind": "element",
+      "tag": "ul",
+      "named": true,
+      "x": 0,
+      "y": 40,
+      "width": 400,
+      "height": 20
+    },
+    {
+      "selector": "#reset > li:nth-child(1)",
+      "kind": "element",
+      "tag": "li",
+      "named": false,
+      "x": 0,
+      "y": 40,
+      "width": 400,
+      "height": 20
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(3)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 80,
+      "width": 400,
+      "height": 40
+    },
+    {
+      "selector": "#ordered-reset",
+      "kind": "element",
+      "tag": "ol",
+      "named": true,
+      "x": 0,
+      "y": 80,
+      "width": 400,
+      "height": 20
+    },
+    {
+      "selector": "#ordered-reset > li:nth-child(1)",
+      "kind": "element",
+      "tag": "li",
+      "named": false,
+      "x": 0,
+      "y": 80,
+      "width": 400,
+      "height": 20
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 120,
+      "width": 400,
+      "height": 40
+    },
+    {
+      "selector": "#font-relative",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 120,
+      "width": 400,
+      "height": 40
+    },
+    {
+      "selector": "#ex-box",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 120,
+      "width": 43.22,
+      "height": 21.59
+    }
+  ]
+}

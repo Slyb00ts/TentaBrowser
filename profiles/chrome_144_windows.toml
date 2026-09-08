@@ -1,0 +1,196 @@
+# Chrome 144 on Windows. Format: profiles/README.md.
+#
+# Derived from profiles/chrome_144_macos.toml: Chrome's TLS and HTTP/2 stacks
+# are the same code on every desktop platform, so `[tls]`, `[h2]`, `ja4` and
+# `akamai_h2` are the macOS measurements and only the two OS-dependent header
+# values differ. Unverified on Windows until CI captures there
+# (docs/dev/fingerprint.md).
+
+[meta]
+name = "chrome_144_windows"
+browser = "chrome"
+version = "144"
+os = "windows"
+captured = "2026-09-06"
+chrome_build = "Google Chrome 144.0.7559.60"
+ja4 = "t13d1516h2_8daaf6152771_d8a2da3f94cd"
+ja4_r = "t13d1516h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0017,001b,0023,002b,002d,0033,44cd,fe0d,ff01_0403,0804,0401,0503,0805,0501,0806,0601"
+akamai_h2 = "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p"
+
+[tls]
+# Cipher suites in Chrome's order; GREASE is inserted by BoringSSL itself.
+ciphers = [
+    "0x1301", # TLS_AES_128_GCM_SHA256
+    "0x1302", # TLS_AES_256_GCM_SHA384
+    "0x1303", # TLS_CHACHA20_POLY1305_SHA256
+    "0xc02b", # ECDHE-ECDSA-AES128-GCM-SHA256
+    "0xc02f", # ECDHE-RSA-AES128-GCM-SHA256
+    "0xc02c", # ECDHE-ECDSA-AES256-GCM-SHA384
+    "0xc030", # ECDHE-RSA-AES256-GCM-SHA384
+    "0xcca9", # ECDHE-ECDSA-CHACHA20-POLY1305
+    "0xcca8", # ECDHE-RSA-CHACHA20-POLY1305
+    "0xc013", # ECDHE-RSA-AES128-SHA
+    "0xc014", # ECDHE-RSA-AES256-SHA
+    "0x009c", # AES128-GCM-SHA256
+    "0x009d", # AES256-GCM-SHA384
+    "0x002f", # AES128-SHA
+    "0x0035", # AES256-SHA
+]
+# The extension set, in the order of one captured (permuted) ClientHello.
+#
+# Chrome 144 has no way to turn permutation off: the `PermuteTLSExtensions`
+# feature name is gone from the binary and every run, with or without
+# `--disable-features=PermuteTLSExtensions`, produces a different order. Only
+# the *set* is a profile property; the order is randomised per connection with
+# GREASE pinned first and last, which is what `permute_extensions` asks
+# BoringSSL to reproduce. JA4 sorts the list, so it is unaffected; JA3 is not,
+# which is why no `ja3` is stored (docs/spec/03-network.md §2).
+extensions = [
+    65281, # renegotiation_info
+    10,    # supported_groups
+    23,    # extended_master_secret
+    13,    # signature_algorithms
+    16,    # application_layer_protocol_negotiation
+    27,    # compress_certificate
+    51,    # key_share
+    45,    # psk_key_exchange_modes
+    18,    # signed_certificate_timestamp
+    43,    # supported_versions
+    35,    # session_ticket
+    5,     # status_request
+    65037, # encrypted_client_hello (GREASE ECH)
+    17613, # application_settings, new codepoint
+    11,    # ec_point_formats
+    0,     # server_name
+]
+permute_extensions = true
+# supported_groups; key_share carries GREASE, X25519MLKEM768 (0x11ec) and X25519.
+groups = ["X25519MLKEM768", "X25519", "P-256", "P-384"]
+sigalgs = [
+    "ecdsa_secp256r1_sha256",
+    "rsa_pss_rsae_sha256",
+    "rsa_pkcs1_sha256",
+    "ecdsa_secp384r1_sha384",
+    "rsa_pss_rsae_sha384",
+    "rsa_pkcs1_sha384",
+    "rsa_pss_rsae_sha512",
+    "rsa_pkcs1_sha512",
+]
+alpn = ["h2", "http/1.1"]
+alps = ["h2"]
+alps_new_codepoint = true
+cert_compression = ["brotli"]
+grease = true
+ech = true
+ocsp_stapling = true
+signed_cert_timestamps = true
+session_tickets = true
+
+[h2]
+settings = [[1, 65536], [2, 0], [4, 6291456], [6, 262144]]
+window_update = 15663105
+pseudo_header_order = ["method", "authority", "scheme", "path"]
+never_index = []
+# Chromium's HPACK encoder leaves a literal uncompressed unless the Huffman
+# form is strictly shorter, which changes the bytes of every short value
+# (`?0`, `1`, most cookie tokens). Stock `h2` always Huffman-codes.
+huffman = "when_shorter"
+
+# Chrome sends no standalone PRIORITY frames but does set the PRIORITY flag on
+# every request HEADERS frame. `weight` is the wire value; RFC 7540 weight 256.
+[h2.headers_priority]
+exclusive = true
+dep = 0
+weight = 255
+
+[headers]
+# Order and casing of a *navigation*, measured from the HTTP/2 requests in
+# profiles/captures/chrome_144_macos/h2_requests.json (`/`, `/form`, `/second`)
+# and cross-checked against the HTTPS/1.1 capture. `Content-Length` and
+# `Cache-Control` lead the block on a form POST; `Origin` and `Content-Type`
+# sit between the client hints and `Upgrade-Insecure-Requests`; HTTP/2
+# lower-cases every name and ends with `priority`.
+order = [
+    "Host",
+    "Connection",
+    "Content-Length",
+    "Cache-Control",
+    "sec-ch-ua",
+    "sec-ch-ua-mobile",
+    "sec-ch-ua-platform",
+    "Origin",
+    "Content-Type",
+    "Upgrade-Insecure-Requests",
+    "User-Agent",
+    "Accept",
+    "Sec-Fetch-Site",
+    "Sec-Fetch-Mode",
+    "Sec-Fetch-User",
+    "Sec-Fetch-Dest",
+    "Referer",
+    "Accept-Encoding",
+    "Accept-Language",
+    "Cookie",
+    "priority",
+]
+# A sub-resource: Chrome puts `sec-ch-ua-platform` and `User-Agent` before the
+# other two hints, drops the navigation-only names, and (measured on a
+# `fetch()` with a body) places `Content-Type` between `sec-ch-ua` and
+# `sec-ch-ua-mobile` with `Origin` after `Accept`. A CORS font request instead
+# leads with `Origin`; the fetch/XHR placement is the one reproduced here
+# because it is the request kind the engine issues.
+subresource_order = [
+    "Host",
+    "Connection",
+    "Content-Length",
+    "sec-ch-ua-platform",
+    "User-Agent",
+    "sec-ch-ua",
+    "Content-Type",
+    "sec-ch-ua-mobile",
+    "Accept",
+    "Origin",
+    "Sec-Fetch-Site",
+    "Sec-Fetch-Mode",
+    "Sec-Fetch-Dest",
+    "Sec-Fetch-Storage-Access",
+    "Referer",
+    "Accept-Encoding",
+    "Accept-Language",
+    "Cookie",
+    "priority",
+]
+user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+accept = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+accept_language = "en-US,en;q=0.9"
+accept_encoding = "gzip, deflate, br, zstd"
+# An origin that is not potentially trustworthy sees no brotli and no zstd
+# (profiles/captures/chrome_144_macos/http1_request.txt).
+insecure_accept_encoding = "gzip, deflate"
+sec_ch_ua = "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\""
+sec_ch_ua_mobile = "?0"
+sec_ch_ua_platform = "\"Windows\""
+upgrade_insecure_requests = "1"
+sec_fetch_site = "none"
+sec_fetch_mode = "navigate"
+sec_fetch_user = "?1"
+sec_fetch_dest = "document"
+# Chrome 144 sends this on cross-site sub-resources that have no storage access.
+sec_fetch_storage_access = "none"
+
+# RFC 9218 `Priority`, HTTP/2 only. Measured from the capture: document and the
+# form POST `u=0, i`, stylesheet and font `u=0`, script `u=1`, image `u=2, i`,
+# `fetch()` and favicon `u=1, i`. `media` and `prefetch` were not in the capture
+# and follow Chromium's urgency mapping for their priority class.
+[headers.priority]
+document = "u=0, i"
+stylesheet = "u=0"
+script = "u=1"
+blocking_script = "u=1"
+font = "u=0"
+image = "u=2, i"
+media = "u=2, i"
+xhr = "u=1, i"
+fetch = "u=1, i"
+prefetch = "u=4"
+other = "u=1, i"

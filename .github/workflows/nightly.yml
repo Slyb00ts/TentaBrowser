@@ -1,0 +1,10 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  mobile:
+    uses: ./.github/workflows/ci.yml

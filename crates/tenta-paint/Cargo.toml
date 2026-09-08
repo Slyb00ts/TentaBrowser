@@ -1,0 +1,13 @@
+[package]
+name = "tenta-paint"
+description = "Display lists, CPU and GPU raster, images, SVG, fonts and the glyph cache."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+tenta-layout = { workspace = true }

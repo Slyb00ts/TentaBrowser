@@ -1,0 +1,242 @@
+{
+  "fixture": "fixed-table-layout",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(1)",
+      "kind": "element",
+      "tag": "table",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 300,
+      "height": 60
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(1) > tbody:nth-child(1)",
+      "kind": "element",
+      "tag": "tbody",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 300,
+      "height": 60
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 300,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 50,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(2)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 50,
+      "y": 0,
+      "width": 250,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(2)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 0,
+      "y": 30,
+      "width": 300,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 0,
+      "y": 30,
+      "width": 50,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(2)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 50,
+      "y": 30,
+      "width": 250,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(2)",
+      "kind": "element",
+      "tag": "table",
+      "named": false,
+      "x": 0,
+      "y": 100,
+      "width": 300,
+      "height": 68
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(2) > tbody:nth-child(1)",
+      "kind": "element",
+      "tag": "tbody",
+      "named": false,
+      "x": 14,
+      "y": 104,
+      "width": 272,
+      "height": 60
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(2) > tbody:nth-child(1) > tr:nth-child(1)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 14,
+      "y": 104,
+      "width": 272,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(2) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 14,
+      "y": 104,
+      "width": 50,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(2) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(2)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 74,
+      "y": 104,
+      "width": 212,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(2) > tbody:nth-child(1) > tr:nth-child(2)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 14,
+      "y": 134,
+      "width": 272,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(2) > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 14,
+      "y": 134,
+      "width": 50,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(2) > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(2)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 74,
+      "y": 134,
+      "width": 212,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(3)",
+      "kind": "element",
+      "tag": "table",
+      "named": false,
+      "x": 0,
+      "y": 208,
+      "width": 308,
+      "height": 38
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(3) > tbody:nth-child(1)",
+      "kind": "element",
+      "tag": "tbody",
+      "named": false,
+      "x": 14,
+      "y": 212,
+      "width": 280,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(3) > tbody:nth-child(1) > tr:nth-child(1)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 14,
+      "y": 212,
+      "width": 280,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(3) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 14,
+      "y": 212,
+      "width": 50,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(3) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(2)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 74,
+      "y": 212,
+      "width": 220,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "XXXXXXXXXXXXXXXXXXXXXXXX",
+      "x": 0,
+      "y": 36,
+      "width": 277.31,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > table:nth-child(2) > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "XXXXXXXXXXXXXXXXXXXXXXXX",
+      "x": 14,
+      "y": 140,
+      "width": 277.31,
+      "height": 18
+    }
+  ]
+}

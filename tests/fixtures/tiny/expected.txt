@@ -1,0 +1,2 @@
+Tiny fixture
+One paragraph, no scripts, no subresources.

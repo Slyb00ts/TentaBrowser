@@ -1,0 +1,3 @@
+# rav1d 1.x omits src/arm/asm-offsets.h from its crates.io package; see shims/rav1d/README.md.
+[env]
+CPATH = { value = "shims/rav1d", relative = true }

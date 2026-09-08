@@ -1,0 +1,18 @@
+target/
+.DS_Store
+*.log
+bench/results/
+# The specification is internal and must never be pushed to the remote.
+docs/spec/
+wpt/checkout/
+node_modules/
+# WPT run output (wpt/run.py); gate numbers are recorded in wpt/README.md
+wpt/results/*
+!wpt/results/.gitkeep
+__pycache__/
+
+# Golden-site tracer (golden/tracer/) local run output; node_modules/ is ignored above
+golden/tracer/out/
+
+# html5lib/WPT parser conformance corpus (crates/tenta-html/tests/fetch-html5lib-tests.sh)
+crates/tenta-html/tests/html5lib-tests/

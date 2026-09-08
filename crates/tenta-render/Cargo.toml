@@ -1,0 +1,17 @@
+[package]
+name = "tenta-render"
+description = "Page-level orchestration of style, layout and paint: geometry APIs, screenshots, PDF, screencast, hit testing."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+tenta-dom = { workspace = true }
+tenta-css = { workspace = true }
+tenta-js = { workspace = true }
+tenta-layout = { workspace = true }
+tenta-paint = { workspace = true }

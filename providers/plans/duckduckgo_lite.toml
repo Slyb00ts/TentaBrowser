@@ -1,0 +1,45 @@
+# DuckDuckGo Lite endpoint. Fast path, no JavaScript, table layout. Surveyed 2026-09-06.
+provider = "duckduckgo_lite"
+version = 1
+path = "fast"
+notes = """
+Each result spans three <tr> rows: title link, snippet, display URL. The
+plan therefore anchors on the row with the link and takes snippet and
+display URL from the following rows (`following`). Same redirect wrapper
+and the same hidden pagination form fields as the HTML endpoint.
+"""
+
+[request]
+endpoint = "https://lite.duckduckgo.com/lite/"
+method = "GET"
+query_param = "q"
+locale = { kl = "{region_lower}-{language}" }
+safe = { param = "kp", strict = "1", moderate = "-1", off = "-2" }
+freshness = { param = "df", day = "d", week = "w", month = "m", year = "y" }
+
+[request.headers]
+Accept-Language = "{accept_language}"
+
+[cookies]
+policy = "none"
+
+[results]
+container = "body"
+item = "tr:has(a.result-link)"
+title = "a.result-link"
+url = "a.result-link"
+url_attr = "href"
+url_unwrap_param = "uddg"
+snippet = "td.result-snippet"
+display_url = "span.link-text"
+following = ["snippet", "display_url"]
+
+[pagination]
+kind = "form"
+next = "form.next_form input[name=s]"
+attr = "value"
+
+[block]
+status = [403, 429, 503]
+selectors = ["div.anomaly-modal"]
+patterns = ["Unfortunately, bots use DuckDuckGo too", "anomaly-modal"]

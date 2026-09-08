@@ -1,0 +1,17 @@
+[
+  {
+    "name": "content sizes the indefinite percentage-height chain",
+    "color": "#087f5b",
+    "x": 0,
+    "y": 0,
+    "height": 24
+  },
+  {
+    "name": "following flow starts after the content-sized chain",
+    "color": "#e8590c",
+    "x": 0,
+    "y": 24,
+    "width": 400,
+    "height": 20
+  }
+]

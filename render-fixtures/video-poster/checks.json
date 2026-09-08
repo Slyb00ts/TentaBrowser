@@ -1,0 +1,44 @@
+{
+  "fixture": "video-poster",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#intrinsic",
+      "kind": "element",
+      "tag": "video",
+      "named": true,
+      "x": 20,
+      "y": 20,
+      "width": 300,
+      "height": 100
+    },
+    {
+      "selector": "#positioned",
+      "kind": "element",
+      "tag": "video",
+      "named": true,
+      "x": 20,
+      "y": 150,
+      "width": 100,
+      "height": 100
+    },
+    {
+      "selector": "#position-only",
+      "kind": "element",
+      "tag": "video",
+      "named": true,
+      "x": 150,
+      "y": 150,
+      "width": 100,
+      "height": 100
+    }
+  ]
+}

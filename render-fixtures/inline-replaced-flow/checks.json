@@ -1,0 +1,204 @@
+{
+  "fixture": "inline-replaced-flow",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#default-inline",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 300,
+      "height": 20
+    },
+    {
+      "selector": "#default-inline > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 60,
+      "height": 20
+    },
+    {
+      "selector": "#default-inline > img:nth-child(2)",
+      "kind": "element",
+      "tag": "img",
+      "named": false,
+      "x": 60,
+      "y": 0,
+      "width": 40,
+      "height": 20
+    },
+    {
+      "selector": "#default-inline > span:nth-child(3)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 100,
+      "y": 0,
+      "width": 70,
+      "height": 20
+    },
+    {
+      "selector": "#authored-block",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 60,
+      "width": 300,
+      "height": 60
+    },
+    {
+      "selector": "#authored-block > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 0,
+      "y": 60,
+      "width": 60,
+      "height": 20
+    },
+    {
+      "selector": "#authored-block > img:nth-child(2)",
+      "kind": "element",
+      "tag": "img",
+      "named": false,
+      "x": 0,
+      "y": 80,
+      "width": 40,
+      "height": 20
+    },
+    {
+      "selector": "#authored-block > span:nth-child(3)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 0,
+      "y": 100,
+      "width": 70,
+      "height": 20
+    },
+    {
+      "selector": "#mixed-cell",
+      "kind": "element",
+      "tag": "table",
+      "named": true,
+      "x": 0,
+      "y": 160,
+      "width": 300,
+      "height": 42
+    },
+    {
+      "selector": "#mixed-cell > tbody:nth-child(1)",
+      "kind": "element",
+      "tag": "tbody",
+      "named": false,
+      "x": 0,
+      "y": 160,
+      "width": 300,
+      "height": 42
+    },
+    {
+      "selector": "#mixed-cell > tbody:nth-child(1) > tr:nth-child(1)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 0,
+      "y": 160,
+      "width": 300,
+      "height": 42
+    },
+    {
+      "selector": "#mixed-cell > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 0,
+      "y": 160,
+      "width": 300,
+      "height": 42
+    },
+    {
+      "selector": "#mixed-cell > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > img:nth-child(1)",
+      "kind": "element",
+      "tag": "img",
+      "named": false,
+      "x": 0,
+      "y": 160,
+      "width": 0,
+      "height": 0
+    },
+    {
+      "selector": "#mixed-cell > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(2)",
+      "kind": "element",
+      "tag": "table",
+      "named": false,
+      "x": 0,
+      "y": 178,
+      "width": 300,
+      "height": 4
+    },
+    {
+      "selector": "#mixed-cell > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(2) > tbody:nth-child(1)",
+      "kind": "element",
+      "tag": "tbody",
+      "named": false,
+      "x": 0,
+      "y": 178,
+      "width": 300,
+      "height": 4
+    },
+    {
+      "selector": "#mixed-cell > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(2) > tbody:nth-child(1) > tr:nth-child(1)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 0,
+      "y": 178,
+      "width": 300,
+      "height": 4
+    },
+    {
+      "selector": "#mixed-cell > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(2) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 0,
+      "y": 178,
+      "width": 300,
+      "height": 4
+    },
+    {
+      "selector": "#mixed-cell > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > center:nth-child(3)",
+      "kind": "element",
+      "tag": "center",
+      "named": false,
+      "x": 0,
+      "y": 182,
+      "width": 300,
+      "height": 20
+    },
+    {
+      "selector": "#mixed-cell > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > center:nth-child(3) > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 100,
+      "y": 182,
+      "width": 100,
+      "height": 20
+    }
+  ]
+}

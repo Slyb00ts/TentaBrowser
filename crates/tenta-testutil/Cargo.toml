@@ -1,0 +1,49 @@
+[package]
+name = "tenta-testutil"
+description = "Test support: loopback fixture server with simulated latency, temporary directories, fixture paths. Never a dependency of a shipping crate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "fixture-server"
+path = "src/bin/fixture-server.rs"
+
+# Captures a live browser's ClientHello and HTTP/2 preface (docs/dev/fingerprint.md).
+# Gated behind `capture` so that the crates which only need the fixture server or the
+# fingerprint algorithms do not build BoringSSL.
+[[bin]]
+name = "fp-capture"
+path = "src/bin/fp-capture.rs"
+required-features = ["capture"]
+
+[features]
+default = []
+capture = ["dep:boring", "dep:rcgen"]
+
+[dependencies]
+tenta-core = { workspace = true }
+bytes = { workspace = true }
+serde_json = { workspace = true }
+# Fingerprint hashes: JA4 is sha256-based, JA3 is md5-based (docs/spec/03-network.md §2).
+sha2 = "0.11"
+md-5 = "0.11"
+# Dev-only crate: the server stack is declared here, not in the workspace table,
+# so no shipping crate can pick it up by accident.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "fs", "io-util", "signal", "sync"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+
+# `capture` only: the loopback TLS server that terminates the browser's handshake.
+# BoringSSL is the workspace's single libcrypto (docs/spec/03-network.md §1.1);
+# rcgen must stay on `ring` so that `aws-lc-sys` never enters the graph.
+boring = { version = "5", optional = true }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"], optional = true }
+
+[dev-dependencies]
+# The fingerprint conformance test reads profiles/*.toml.
+toml = { workspace = true }

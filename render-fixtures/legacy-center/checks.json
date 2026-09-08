@@ -1,0 +1,223 @@
+{
+  "fixture": "legacy-center",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 120
+    },
+    {
+      "selector": "#legacy",
+      "kind": "element",
+      "tag": "center",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 120
+    },
+    {
+      "selector": "#legacy > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 150,
+      "y": 0,
+      "width": 100,
+      "height": 20
+    },
+    {
+      "selector": "#legacy > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 150,
+      "y": 20,
+      "width": 100,
+      "height": 20
+    },
+    {
+      "selector": "#legacy > div:nth-child(3)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 150,
+      "y": 40,
+      "width": 100,
+      "height": 20
+    },
+    {
+      "selector": "#legacy > div:nth-child(3) > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 170,
+      "y": 40,
+      "width": 60,
+      "height": 20
+    },
+    {
+      "selector": "#legacy > div:nth-child(4)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 60,
+      "width": 400,
+      "height": 20
+    },
+    {
+      "selector": "#legacy > table:nth-child(5)",
+      "kind": "element",
+      "tag": "table",
+      "named": false,
+      "x": 100,
+      "y": 80,
+      "width": 200,
+      "height": 40
+    },
+    {
+      "selector": "#legacy > table:nth-child(5) > tbody:nth-child(1)",
+      "kind": "element",
+      "tag": "tbody",
+      "named": false,
+      "x": 100,
+      "y": 80,
+      "width": 200,
+      "height": 40
+    },
+    {
+      "selector": "#legacy > table:nth-child(5) > tbody:nth-child(1) > tr:nth-child(1)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 100,
+      "y": 80,
+      "width": 200,
+      "height": 20
+    },
+    {
+      "selector": "#legacy > table:nth-child(5) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 100,
+      "y": 80,
+      "width": 200,
+      "height": 20
+    },
+    {
+      "selector": "#legacy > table:nth-child(5) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 100,
+      "y": 80,
+      "width": 80,
+      "height": 20
+    },
+    {
+      "selector": "#legacy > table:nth-child(5) > tbody:nth-child(1) > tr:nth-child(2)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 100,
+      "y": 100,
+      "width": 200,
+      "height": 20
+    },
+    {
+      "selector": "#legacy > table:nth-child(5) > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 100,
+      "y": 100,
+      "width": 200,
+      "height": 20
+    },
+    {
+      "selector": "#legacy > table:nth-child(5) > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1) > center:nth-child(1)",
+      "kind": "element",
+      "tag": "center",
+      "named": false,
+      "x": 100,
+      "y": 100,
+      "width": 200,
+      "height": 20
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 120,
+      "width": 400,
+      "height": 120
+    },
+    {
+      "selector": "#override",
+      "kind": "element",
+      "tag": "center",
+      "named": true,
+      "x": 0,
+      "y": 120,
+      "width": 400,
+      "height": 24
+    },
+    {
+      "selector": "#override > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 0,
+      "y": 120,
+      "width": 80,
+      "height": 20
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(3)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 240,
+      "width": 400,
+      "height": 120
+    },
+    {
+      "selector": "#pure-center",
+      "kind": "element",
+      "tag": "center",
+      "named": true,
+      "x": 0,
+      "y": 240,
+      "width": 400,
+      "height": 20
+    },
+    {
+      "selector": "#pure-center::text(0)",
+      "kind": "text",
+      "text": "centered text",
+      "x": 158.91,
+      "y": 240,
+      "width": 82.17,
+      "height": 18
+    }
+  ]
+}

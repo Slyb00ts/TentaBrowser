@@ -1,0 +1,54 @@
+{
+  "fixture": "mixed-float-run",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#bar",
+      "kind": "element",
+      "tag": "ul",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 30
+    },
+    {
+      "selector": "#left-one",
+      "kind": "element",
+      "tag": "li",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 80,
+      "height": 30
+    },
+    {
+      "selector": "#left-two",
+      "kind": "element",
+      "tag": "li",
+      "named": true,
+      "x": 80,
+      "y": 0,
+      "width": 80,
+      "height": 30
+    },
+    {
+      "selector": "#right-one",
+      "kind": "element",
+      "tag": "li",
+      "named": true,
+      "x": 340,
+      "y": 0,
+      "width": 60,
+      "height": 30
+    }
+  ]
+}

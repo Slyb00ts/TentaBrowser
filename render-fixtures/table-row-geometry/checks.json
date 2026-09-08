@@ -1,0 +1,490 @@
+{
+  "fixture": "table-row-geometry",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#cell-height-is-minimum",
+      "kind": "element",
+      "tag": "table",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 90,
+      "height": 30
+    },
+    {
+      "selector": "#cell-height-is-minimum > tbody:nth-child(1)",
+      "kind": "element",
+      "tag": "tbody",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 90,
+      "height": 30
+    },
+    {
+      "selector": "#cell-height-is-minimum > tbody:nth-child(1) > tr:nth-child(1)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 90,
+      "height": 30
+    },
+    {
+      "selector": "#cell-height-is-minimum > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 40,
+      "height": 30
+    },
+    {
+      "selector": "#cell-height-is-minimum > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 5,
+      "width": 40,
+      "height": 20
+    },
+    {
+      "selector": "#cell-height-is-minimum > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(2)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 40,
+      "y": 0,
+      "width": 50,
+      "height": 30
+    },
+    {
+      "selector": "#cell-height-is-minimum > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(2) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 40,
+      "y": 0,
+      "width": 50,
+      "height": 30
+    },
+    {
+      "selector": "#text-over-height",
+      "kind": "element",
+      "tag": "table",
+      "named": true,
+      "x": 0,
+      "y": 60,
+      "width": 100,
+      "height": 15
+    },
+    {
+      "selector": "#text-over-height > tbody:nth-child(1)",
+      "kind": "element",
+      "tag": "tbody",
+      "named": false,
+      "x": 0,
+      "y": 60,
+      "width": 100,
+      "height": 15
+    },
+    {
+      "selector": "#text-over-height > tbody:nth-child(1) > tr:nth-child(1)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 0,
+      "y": 60,
+      "width": 100,
+      "height": 15
+    },
+    {
+      "selector": "#text-over-height > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 0,
+      "y": 60,
+      "width": 100,
+      "height": 15
+    },
+    {
+      "selector": "#row-height-is-minimum",
+      "kind": "element",
+      "tag": "table",
+      "named": true,
+      "x": 0,
+      "y": 110,
+      "width": 70,
+      "height": 40
+    },
+    {
+      "selector": "#row-height-is-minimum > tbody:nth-child(1)",
+      "kind": "element",
+      "tag": "tbody",
+      "named": false,
+      "x": 0,
+      "y": 110,
+      "width": 70,
+      "height": 40
+    },
+    {
+      "selector": "#row-height-is-minimum > tbody:nth-child(1) > tr:nth-child(1)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 0,
+      "y": 110,
+      "width": 70,
+      "height": 40
+    },
+    {
+      "selector": "#row-height-is-minimum > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 0,
+      "y": 110,
+      "width": 70,
+      "height": 40
+    },
+    {
+      "selector": "#row-height-is-minimum > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 120,
+      "width": 20,
+      "height": 20
+    },
+    {
+      "selector": "#rowspan",
+      "kind": "element",
+      "tag": "table",
+      "named": true,
+      "x": 0,
+      "y": 180,
+      "width": 90,
+      "height": 80
+    },
+    {
+      "selector": "#rowspan > tbody:nth-child(1)",
+      "kind": "element",
+      "tag": "tbody",
+      "named": false,
+      "x": 0,
+      "y": 180,
+      "width": 90,
+      "height": 80
+    },
+    {
+      "selector": "#rowspan > tbody:nth-child(1) > tr:nth-child(1)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 0,
+      "y": 180,
+      "width": 90,
+      "height": 40
+    },
+    {
+      "selector": "#rowspan > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 0,
+      "y": 180,
+      "width": 30,
+      "height": 80
+    },
+    {
+      "selector": "#rowspan > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 180,
+      "width": 30,
+      "height": 80
+    },
+    {
+      "selector": "#rowspan > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(2)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 30,
+      "y": 180,
+      "width": 60,
+      "height": 40
+    },
+    {
+      "selector": "#rowspan > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(2) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 30,
+      "y": 190,
+      "width": 60,
+      "height": 20
+    },
+    {
+      "selector": "#rowspan > tbody:nth-child(1) > tr:nth-child(2)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 0,
+      "y": 220,
+      "width": 90,
+      "height": 40
+    },
+    {
+      "selector": "#rowspan > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 30,
+      "y": 220,
+      "width": 60,
+      "height": 40
+    },
+    {
+      "selector": "#rowspan > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 30,
+      "y": 230,
+      "width": 60,
+      "height": 20
+    },
+    {
+      "selector": "#nested-row-reflow",
+      "kind": "element",
+      "tag": "table",
+      "named": true,
+      "x": 180,
+      "y": 0,
+      "width": 700,
+      "height": 39
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1)",
+      "kind": "element",
+      "tag": "tbody",
+      "named": false,
+      "x": 180,
+      "y": 0,
+      "width": 700,
+      "height": 39
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(1)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 180,
+      "y": 0,
+      "width": 700,
+      "height": 24
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 180,
+      "y": 0,
+      "width": 700,
+      "height": 24
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(1)",
+      "kind": "element",
+      "tag": "table",
+      "named": false,
+      "x": 180,
+      "y": 0,
+      "width": 700,
+      "height": 24
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1)",
+      "kind": "element",
+      "tag": "tbody",
+      "named": false,
+      "x": 182,
+      "y": 2,
+      "width": 696,
+      "height": 20
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 182,
+      "y": 2,
+      "width": 696,
+      "height": 20
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 182,
+      "y": 2,
+      "width": 56.03,
+      "height": 20
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 182,
+      "y": 2,
+      "width": 20,
+      "height": 20
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(2)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 238.03,
+      "y": 2,
+      "width": 512.31,
+      "height": 20
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(3)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 750.34,
+      "y": 2,
+      "width": 127.66,
+      "height": 20
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(2)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 180,
+      "y": 24,
+      "width": 700,
+      "height": 15
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 180,
+      "y": 24,
+      "width": 700,
+      "height": 15
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1) > table:nth-child(1)",
+      "kind": "element",
+      "tag": "table",
+      "named": false,
+      "x": 180,
+      "y": 24,
+      "width": 29.63,
+      "height": 15
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1)",
+      "kind": "element",
+      "tag": "tbody",
+      "named": false,
+      "x": 180,
+      "y": 24,
+      "width": 29.63,
+      "height": 15
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1)",
+      "kind": "element",
+      "tag": "tr",
+      "named": false,
+      "x": 180,
+      "y": 24,
+      "width": 29.63,
+      "height": 15
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 180,
+      "y": 24,
+      "width": 0,
+      "height": 15
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(2)",
+      "kind": "element",
+      "tag": "td",
+      "named": false,
+      "x": 180,
+      "y": 24,
+      "width": 29.63,
+      "height": 15
+    },
+    {
+      "selector": "#text-over-height > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "one line",
+      "x": 0,
+      "y": 60,
+      "width": 45.55,
+      "height": 15
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(2)::text(0)",
+      "kind": "text",
+      "text": "Header links remain on one line",
+      "x": 238.03,
+      "y": 4,
+      "width": 182.83,
+      "height": 15
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(3)::text(0)",
+      "kind": "text",
+      "text": "account",
+      "x": 750.34,
+      "y": 4.5,
+      "width": 45.55,
+      "height": 15
+    },
+    {
+      "selector": "#nested-row-reflow > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(2)::text(0)",
+      "kind": "text",
+      "text": "More",
+      "x": 180,
+      "y": 24,
+      "width": 29.63,
+      "height": 15
+    }
+  ]
+}

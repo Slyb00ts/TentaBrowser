@@ -1,0 +1,74 @@
+{
+  "fixture": "flex-post-ratio-cross-size",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 1080,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#stack",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 1080,
+      "height": 472.31
+    },
+    {
+      "selector": "#row",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 1080,
+      "height": 302.31
+    },
+    {
+      "selector": "#media",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 520,
+      "height": 302.31
+    },
+    {
+      "selector": "#visual",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 520,
+      "height": 296.17
+    },
+    {
+      "selector": "#copy",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 560,
+      "y": 0,
+      "width": 520,
+      "height": 150
+    },
+    {
+      "selector": "#after",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 452.31,
+      "width": 1080,
+      "height": 20
+    }
+  ]
+}

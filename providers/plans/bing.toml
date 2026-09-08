@@ -1,0 +1,51 @@
+# Bing web search. Fast path, no JavaScript. Surveyed 2026-09-06.
+provider = "bing"
+version = 1
+path = "fast"
+notes = """
+Stable markup: <ol id="b_results"> with <li class="b_algo"> per organic
+result, <li class="b_ad"> for ads, <li class="b_pag"> for pagination.
+Result hrefs are click-tracking wrappers (https://www.bing.com/ck/a?…&u=a1<base64url>)
+whose `u` parameter is "a1" + base64url of the destination; the plan decodes
+it. The response honours Accept-Language (html lang="pl" for pl-PL) even
+without setlang/cc. Bing sets a dozen cookies (MUID, SRCH*, _EDGE_*, _SS,
+ak_bmsc); none are required for results.
+"""
+
+[request]
+endpoint = "https://www.bing.com/search"
+method = "GET"
+query_param = "q"
+# `setlang` selects the UI language, `cc` the market/region, `mkt` both
+# ("pl-PL"). `first` is the 1-based offset of the first result (11, 21, …).
+locale = { setlang = "{language}", cc = "{region}" }
+safe = { header = "Cookie", strict = "SRCHHPGUSR=ADLT=STRICT", moderate = "SRCHHPGUSR=ADLT=DEMOTE", off = "SRCHHPGUSR=ADLT=OFF" }
+page = { param = "first", first = 1, step = 10 }
+
+[request.headers]
+Accept-Language = "{accept_language}"
+
+[cookies]
+policy = "session"
+
+[results]
+container = "ol#b_results"
+item = "li.b_algo"
+exclude = ["li.b_ad", "li.b_ans", "div.b_adSlug"]
+title = "h2 a"
+url = "h2 a"
+url_attr = "href"
+url_unwrap_param = "u"
+url_unwrap_decode = "bing-a1-base64url"
+display_url = "div.b_attribution cite"
+snippet = "div.b_caption p"
+
+[pagination]
+kind = "link"
+next = "a.sb_pagN"
+attr = "href"
+
+[block]
+status = [403, 429]
+selectors = ["div#b_captcha", "form#captcha_form"]
+patterns = ["b_captcha"]

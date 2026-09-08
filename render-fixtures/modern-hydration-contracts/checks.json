@@ -1,0 +1,63 @@
+{
+  "fixture": "modern-hydration-contracts",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#server-shell",
+      "kind": "element",
+      "tag": "main",
+      "named": true,
+      "x": 24,
+      "y": 24,
+      "width": 852,
+      "height": 90
+    },
+    {
+      "selector": "#result",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 24,
+      "y": 24,
+      "width": 360,
+      "height": 90
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": -1000,
+      "y": 114,
+      "width": 10,
+      "height": 10
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": -1015,
+      "y": 99,
+      "width": 100,
+      "height": 100
+    },
+    {
+      "selector": "#result::text(0)",
+      "kind": "text",
+      "text": "hydration contracts passed",
+      "x": 44,
+      "y": 44,
+      "width": 191.22,
+      "height": 18
+    }
+  ]
+}

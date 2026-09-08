@@ -1,0 +1,104 @@
+{
+  "fixture": "flex-whitespace-items",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#direct",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 900,
+      "height": 220
+    },
+    {
+      "selector": "#direct > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 900,
+      "height": 200
+    },
+    {
+      "selector": "#direct > div:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 225,
+      "y": 0,
+      "width": 675,
+      "height": 200
+    },
+    {
+      "selector": "#direct > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 225,
+      "height": 180
+    },
+    {
+      "selector": "#transparent",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 260,
+      "width": 600,
+      "height": 180
+    },
+    {
+      "selector": "#transparent > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    {
+      "selector": "#transparent > div:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 260,
+      "width": 600,
+      "height": 160
+    },
+    {
+      "selector": "#transparent > div:nth-child(1) > div:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 150,
+      "y": 260,
+      "width": 450,
+      "height": 160
+    },
+    {
+      "selector": "#transparent > div:nth-child(1) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 260,
+      "width": 150,
+      "height": 140
+    }
+  ]
+}

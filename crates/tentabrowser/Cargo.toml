@@ -1,0 +1,47 @@
+[package]
+name = "tentabrowser"
+description = "Public Rust API of the TentaBrowser headless browser engine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+# The feature set of `docs/spec/11-library-api.md` §1. Every flag below is a
+# no-op today: the crates behind them (JavaScript engines, render, media,
+# WebRTC, the protocol hosts, HTTP/3 and the TLS variants) land in P2 and
+# later, and each will gate its dependency here when it does. They exist now
+# so hosts can pin the feature names they will build with.
+default = []
+v8 = []
+quickjs = []
+render = []
+gpu = []
+media = []
+webrtc = []
+cdp = []
+mcp = []
+h3 = []
+rustls-tls = []
+boring-prefixed = []
+
+[dependencies]
+tenta-core = { workspace = true }
+tenta-net = { workspace = true }
+tenta-dom = { workspace = true }
+tenta-browser = { workspace = true }
+tenta-page = { workspace = true }
+tenta-search = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dev-dependencies]
+tenta-testutil = { workspace = true }
+url = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }

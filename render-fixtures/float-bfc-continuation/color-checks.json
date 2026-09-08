@@ -1,0 +1,42 @@
+[
+  {
+    "name": "float keeps its BFC band across wrappers",
+    "color": "#1971c2",
+    "x": 650,
+    "y": 0,
+    "width": 250,
+    "height": 400
+  },
+  {
+    "name": "direct flow uses the first available band",
+    "color": "#087f5b",
+    "x": 0,
+    "y": 0,
+    "width": 650,
+    "height": 250
+  },
+  {
+    "name": "later wrapper heading remains beside float",
+    "color": "#e8590c",
+    "x": 0,
+    "y": 250,
+    "width": 650,
+    "height": 50
+  },
+  {
+    "name": "later wrapper block remains beside float",
+    "color": "#7048e8",
+    "x": 0,
+    "y": 300,
+    "width": 650,
+    "height": 100
+  },
+  {
+    "name": "band widens after float bottom",
+    "color": "#a61e4d",
+    "x": 0,
+    "y": 400,
+    "width": 900,
+    "height": 70
+  }
+]

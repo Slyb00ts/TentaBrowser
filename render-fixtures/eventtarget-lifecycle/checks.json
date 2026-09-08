@@ -1,0 +1,33 @@
+{
+  "fixture": "eventtarget-lifecycle",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#result",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 420,
+      "height": 120
+    },
+    {
+      "selector": "#result::text(0)",
+      "kind": "text",
+      "text": "framework lifecycle completed",
+      "x": 32,
+      "y": 32,
+      "width": 241.09,
+      "height": 21
+    }
+  ]
+}

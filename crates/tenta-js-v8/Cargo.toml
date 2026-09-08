@@ -1,0 +1,13 @@
+[package]
+name = "tenta-js-v8"
+description = "V8 backend (rusty_v8): isolates, snapshots, fast API, native Wasm, worker isolates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+tenta-js = { workspace = true }

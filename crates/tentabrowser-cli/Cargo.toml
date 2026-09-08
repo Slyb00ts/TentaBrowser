@@ -1,0 +1,39 @@
+[package]
+name = "tentabrowser-cli"
+description = "The `tentabrowser` binary: fetch, search, test, screenshot, serve, mcp, scrape and daemon."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+tentabrowser = { workspace = true }
+tenta-cdp = { workspace = true }
+tenta-mcp = { workspace = true }
+# Tier 0/1 only: the CLI's `fetch --dump text` path must not reach a crate
+# above `tenta-net` (`docs/spec/13-performance.md` §1). `tests/tier.rs`
+# asserts the dependency graph stays free of v8, stylo and wgpu.
+tenta-net = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+clap = { version = "4", features = ["derive", "wrap_help"] }
+# The CLI owns the process runtime; the engine's io and page threads are its
+# own. A current-thread runtime keeps the cold start free of worker threads.
+tokio = { version = "1", features = ["rt", "macros", "time"] }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi", "std"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dev-dependencies]
+tenta-testutil = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+
+[[bin]]
+name = "tentabrowser"
+path = "src/main.rs"

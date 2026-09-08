@@ -1,0 +1,30 @@
+[package]
+name = "tenta-browser"
+description = "Browser and BrowserContext: cookies, storage, cache and Service Worker isolation, page threads, isolate pool."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+tenta-net = { workspace = true }
+tenta-page = { workspace = true }
+
+bytes = { workspace = true }
+hashbrown = { workspace = true }
+http = { workspace = true }
+parking_lot = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dev-dependencies]
+tenta-dom = { workspace = true }
+tenta-testutil = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }

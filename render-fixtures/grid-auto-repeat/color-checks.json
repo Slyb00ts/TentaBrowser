@@ -1,0 +1,16 @@
+[
+  {
+    "name": "auto-fill creates all fitting tracks",
+    "color": "#087f5b",
+    "width": 210,
+    "height": 60,
+    "count": 4
+  },
+  {
+    "name": "auto-fit collapses empty tracks",
+    "color": "#1971c2",
+    "width": 287,
+    "height": 60,
+    "count": 3
+  }
+]

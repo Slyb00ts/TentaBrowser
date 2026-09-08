@@ -1,0 +1,39 @@
+[package]
+name = "tenta-search"
+description = "Search providers, parse plans, result model, cache, escalation and the search session cache."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+tenta-net = { workspace = true }
+tenta-html = { workspace = true }
+tenta-dom = { workspace = true }
+
+memchr = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+unicode-normalization = { workspace = true }
+# Bing's `u=a1<base64url>` click wrappers (providers/plans/bing.toml).
+base64 = "0.23"
+# `SearchResult::published`; the same version tenta-net pins.
+time = { version = "0.3", features = ["parsing", "formatting", "macros"] }
+# Only the synchronisation primitives: the response cache coalesces identical
+# in-flight queries on a broadcast channel. No runtime is started here; the
+# caller drives the futures.
+tokio = { version = "1", default-features = false, features = ["sync"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dev-dependencies]
+tenta-testutil = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "net", "io-util"] }

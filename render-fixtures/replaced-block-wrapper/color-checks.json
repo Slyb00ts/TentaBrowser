@@ -1,0 +1,18 @@
+[
+  {
+    "name": "text alignment leaves the block frame at available width",
+    "color": "#1971c2",
+    "x": 450,
+    "y": 0,
+    "width": 450,
+    "height": 304
+  },
+  {
+    "name": "auto block wrapper contains its percentage image",
+    "color": "#c2255c",
+    "x": 498,
+    "y": 48,
+    "width": 354,
+    "height": 208
+  }
+]

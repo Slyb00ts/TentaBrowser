@@ -1,0 +1,74 @@
+{
+  "fixture": "right-float-navigation",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#bar",
+      "kind": "element",
+      "tag": "nav",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 30
+    },
+    {
+      "selector": "#left-one",
+      "kind": "element",
+      "tag": "span",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 60,
+      "height": 30
+    },
+    {
+      "selector": "#right-one",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 360,
+      "y": 0,
+      "width": 40,
+      "height": 30
+    },
+    {
+      "selector": "#left-two",
+      "kind": "element",
+      "tag": "span",
+      "named": true,
+      "x": 64,
+      "y": 0,
+      "width": 80,
+      "height": 30
+    },
+    {
+      "selector": "#right-two",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 310,
+      "y": 0,
+      "width": 50,
+      "height": 30
+    },
+    {
+      "selector": "#right-three",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 280,
+      "y": 0,
+      "width": 30,
+      "height": 30
+    }
+  ]
+}

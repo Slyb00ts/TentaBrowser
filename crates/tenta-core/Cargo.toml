@@ -1,0 +1,18 @@
+[package]
+name = "tenta-core"
+description = "Ids, arenas, atoms, error types, budgets, tracing spans, FsPolicy, feature flags and embedder traits shared by every TentaBrowser crate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+bytes = { workspace = true }
+hashbrown = { workspace = true }
+libc = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

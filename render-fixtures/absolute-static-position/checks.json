@@ -1,0 +1,134 @@
+{
+  "fixture": "absolute-static-position",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#cb",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 300
+    },
+    {
+      "selector": "#spacer",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 10,
+      "y": 10,
+      "width": 1,
+      "height": 80
+    },
+    {
+      "selector": "#flow",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 90,
+      "y": 90,
+      "width": 230,
+      "height": 120
+    },
+    {
+      "selector": "#top-static-inline",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 125,
+      "y": 60,
+      "width": 40,
+      "height": 30
+    },
+    {
+      "selector": "#left-static-block",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 210,
+      "y": 97,
+      "width": 50,
+      "height": 20
+    },
+    {
+      "selector": "#nested-cb",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 340,
+      "width": 400,
+      "height": 300
+    },
+    {
+      "selector": "#nested-spacer",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 10,
+      "y": 350,
+      "width": 1,
+      "height": 60
+    },
+    {
+      "selector": "#outer-flow",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 60,
+      "y": 410,
+      "width": 240,
+      "height": 140
+    },
+    {
+      "selector": "#outer-static",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 84,
+      "y": 390,
+      "width": 160,
+      "height": 100
+    },
+    {
+      "selector": "#inner-spacer",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 84,
+      "y": 390,
+      "width": 1,
+      "height": 20
+    },
+    {
+      "selector": "#inner-flow",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 114,
+      "y": 410,
+      "width": 110,
+      "height": 50
+    },
+    {
+      "selector": "#nested-static",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 154,
+      "y": 413,
+      "width": 20,
+      "height": 20
+    }
+  ]
+}

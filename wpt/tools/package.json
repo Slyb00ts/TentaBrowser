@@ -1,0 +1,11 @@
+{
+  "name": "tentabrowser-wpt-tools",
+  "version": "1.0.0",
+  "description": "Browser drivers for the WPT runner",
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "playwright": "^1.63.0"
+  },
+  "private": true
+}

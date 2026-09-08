@@ -1,0 +1,278 @@
+{
+  "fixture": "abs-fill",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(1)",
+      "kind": "element",
+      "tag": "p",
+      "named": false,
+      "x": 0,
+      "y": 16,
+      "width": 900,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 6,
+      "y": 50,
+      "width": 404,
+      "height": 122
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 8,
+      "y": 52,
+      "width": 255.22,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 8,
+      "y": 70,
+      "width": 400,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(2) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 8,
+      "y": 70,
+      "width": 400,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(3)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 6,
+      "y": 178,
+      "width": 404,
+      "height": 122
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(3) > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 8,
+      "y": 180,
+      "width": 161.02,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(3) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 8,
+      "y": 198,
+      "width": 400,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(3) > div:nth-child(2) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 8,
+      "y": 198,
+      "width": 400,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 6,
+      "y": 306,
+      "width": 404,
+      "height": 122
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 8,
+      "y": 308,
+      "width": 160.13,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 8,
+      "y": 326,
+      "width": 400,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > div:nth-child(2) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 8,
+      "y": 326,
+      "width": 400,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(5)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 6,
+      "y": 434,
+      "width": 404,
+      "height": 122
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(5) > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 8,
+      "y": 436,
+      "width": 209.77,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(5) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 8,
+      "y": 454,
+      "width": 400,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(5) > div:nth-child(2) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 8,
+      "y": 454,
+      "width": 400,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(6)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 6,
+      "y": 562,
+      "width": 404,
+      "height": 182
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(6) > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 8,
+      "y": 564,
+      "width": 233.88,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(6) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 8,
+      "y": 582,
+      "width": 400,
+      "height": 160
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(6) > div:nth-child(2) > img:nth-child(1)",
+      "kind": "element",
+      "tag": "img",
+      "named": false,
+      "x": 8,
+      "y": 582,
+      "width": 400,
+      "height": 160
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "Every colored area below must FILL its box. Before P0 all were 0x0 (blank).",
+      "x": 0,
+      "y": 16,
+      "width": 493.05,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > span:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "A rel(auto-width)+BLOCK, abs inset:0:",
+      "x": 8,
+      "y": 52,
+      "width": 255.22,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(3) > span:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "B rel+FLEX, abs inset:0:",
+      "x": 8,
+      "y": 180,
+      "width": 161.02,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > span:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "C rel+GRID, abs inset:0:",
+      "x": 8,
+      "y": 308,
+      "width": 160.13,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(5) > span:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "D abs width:100%/height:100%:",
+      "x": 8,
+      "y": 436,
+      "width": 209.77,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(6) > span:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "E padding-hack ratio + abs fill IMG:",
+      "x": 8,
+      "y": 564,
+      "width": 233.88,
+      "height": 18
+    }
+  ]
+}

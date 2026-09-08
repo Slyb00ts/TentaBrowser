@@ -1,0 +1,74 @@
+{
+  "fixture": "opposing-header-floats",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#header",
+      "kind": "element",
+      "tag": "header",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 900,
+      "height": 150
+    },
+    {
+      "selector": "#logo-link",
+      "kind": "element",
+      "tag": "a",
+      "named": true,
+      "x": 200,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    {
+      "selector": "#logo",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 200,
+      "height": 100
+    },
+    {
+      "selector": "#legacy-empty",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 900,
+      "height": 0
+    },
+    {
+      "selector": "#tagline",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 600,
+      "y": 60,
+      "width": 300,
+      "height": 40
+    },
+    {
+      "selector": "#menu",
+      "kind": "element",
+      "tag": "nav",
+      "named": true,
+      "x": 0,
+      "y": 100,
+      "width": 900,
+      "height": 50
+    }
+  ]
+}

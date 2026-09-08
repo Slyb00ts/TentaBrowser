@@ -1,0 +1,44 @@
+{
+  "fixture": "viewport-consistency",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#width-probe",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 10,
+      "y": 10,
+      "width": 200,
+      "height": 80
+    },
+    {
+      "selector": "#height-probe",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 10,
+      "y": 110,
+      "width": 200,
+      "height": 80
+    },
+    {
+      "selector": "#script-probe",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 10,
+      "y": 210,
+      "width": 200,
+      "height": 80
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+{
+  "fixture": "modern-containing-block-triggers",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 800,
+      "height": 200
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 20,
+      "y": 20,
+      "width": 760,
+      "height": 80
+    },
+    {
+      "selector": "#filter-cb",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 20,
+      "y": 20,
+      "width": 100,
+      "height": 80
+    },
+    {
+      "selector": "#filter-badge",
+      "kind": "element",
+      "tag": "span",
+      "named": true,
+      "x": 95,
+      "y": 75,
+      "width": 20,
+      "height": 20
+    },
+    {
+      "selector": "#filter-fixed",
+      "kind": "element",
+      "tag": "span",
+      "named": true,
+      "x": 25,
+      "y": 25,
+      "width": 10,
+      "height": 10
+    },
+    {
+      "selector": "#perspective-cb",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 140,
+      "y": 20,
+      "width": 100,
+      "height": 80
+    },
+    {
+      "selector": "#perspective-badge",
+      "kind": "element",
+      "tag": "span",
+      "named": true,
+      "x": 215,
+      "y": 75,
+      "width": 20,
+      "height": 20
+    },
+    {
+      "selector": "#contain-cb",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 260,
+      "y": 20,
+      "width": 100,
+      "height": 80
+    },
+    {
+      "selector": "#contain-badge",
+      "kind": "element",
+      "tag": "span",
+      "named": true,
+      "x": 335,
+      "y": 75,
+      "width": 20,
+      "height": 20
+    },
+    {
+      "selector": "#contain-fixed",
+      "kind": "element",
+      "tag": "span",
+      "named": true,
+      "x": 265,
+      "y": 25,
+      "width": 10,
+      "height": 10
+    },
+    {
+      "selector": "#container-cb",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 380,
+      "y": 20,
+      "width": 100,
+      "height": 80
+    },
+    {
+      "selector": "#container-badge",
+      "kind": "element",
+      "tag": "span",
+      "named": true,
+      "x": 775,
+      "y": 175,
+      "width": 20,
+      "height": 20
+    },
+    {
+      "selector": "#will-change-cb",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 500,
+      "y": 20,
+      "width": 100,
+      "height": 80
+    },
+    {
+      "selector": "#will-change-badge",
+      "kind": "element",
+      "tag": "span",
+      "named": true,
+      "x": 575,
+      "y": 75,
+      "width": 20,
+      "height": 20
+    },
+    {
+      "selector": "#visibility-cb",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 620,
+      "y": 20,
+      "width": 100,
+      "height": 80
+    },
+    {
+      "selector": "#visibility-badge",
+      "kind": "element",
+      "tag": "span",
+      "named": true,
+      "x": 695,
+      "y": 75,
+      "width": 20,
+      "height": 20
+    }
+  ]
+}

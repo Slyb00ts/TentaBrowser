@@ -1,0 +1,32 @@
+[package]
+name = "tenta-dom"
+description = "Tier 1: arena DOM, node lifetime, mutation observers, selectors, extraction and serialisation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+tenta-html = { workspace = true }
+
+cssparser = { workspace = true }
+hashbrown = { workspace = true }
+precomputed-hash = { workspace = true }
+selectors = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+smallvec = { workspace = true }
+url = { workspace = true }
+
+[[bench]]
+name = "parse"
+harness = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dev-dependencies]
+tenta-html = { workspace = true }

@@ -1,0 +1,1111 @@
+{
+  "meta": {
+    "date": "2026-09-06 13:12",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "location": "a consumer connection in Poland"
+  },
+  "records": [
+    {
+      "url": "https://html.duckduckgo.com/html/?q=rust+browser+engine",
+      "request_headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Encoding": "gzip, deflate",
+        "Sec-Ch-Ua": "\"Chromium\";v=\"151\", \"Google Chrome\";v=\"151\", \"Not_A Brand\";v=\"24\"",
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": "\"macOS\"",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive",
+        "Accept-Language": "en-US,en;q=0.9"
+      },
+      "redirects": [],
+      "ttfb_ms": 705.0,
+      "total_ms": 705.1,
+      "status": 200,
+      "final_url": "https://html.duckduckgo.com/html/?q=rust+browser+engine",
+      "response_headers": {
+        "Server": "nginx",
+        "Date": "Sun, 06 Sep 2026 13:09:25 GMT",
+        "Content-Type": "text/html; charset=UTF-8",
+        "Transfer-Encoding": "chunked",
+        "Connection": "close",
+        "Vary": "Origin",
+        "Server-Timing": "total;dur=539;desc=\"Backend Total [n]\"",
+        "Strict-Transport-Security": "max-age=31536000",
+        "X-Robots-Tag": "noindex",
+        "Permissions-Policy": "interest-cohort=()",
+        "Content-Security-Policy": "default-src 'none' ; connect-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; manifest-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; media-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; script-src blob:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; font-src data:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; img-src data:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; style-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; object-src 'none' ; worker-src blob: ; child-src blob:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; frame-src blob:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; frame-ancestors 'self' ; base-uri 'self' ; block-all-mixed-content ;",
+        "X-Frame-Options": "SAMEORIGIN",
+        "X-XSS-Protection": "1;mode=block",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "origin",
+        "Expect-CT": "max-age=0",
+        "Expires": "Sun, 06 Sep 2026 13:09:26 GMT",
+        "Cache-Control": "max-age=1",
+        "X-DuckDuckGo-Locale": "en_US",
+        "Content-Encoding": "gzip"
+      },
+      "cookies_set": [],
+      "body_bytes": 32343,
+      "provider": "duckduckgo_html",
+      "query": "rust browser engine",
+      "slug": "rust-browser-engine",
+      "accept_language": "en-US,en;q=0.9",
+      "fixture": "fixtures/duckduckgo_html/rust-browser-engine.html",
+      "fetched_at": "2026-09-06T13:09:25+00:00",
+      "blocks": [],
+      "previous_attempts": [
+        {
+          "fetched_at": "2026-09-06T13:07:10+00:00",
+          "status": null,
+          "error": "<urlopen error [Errno 54] Connection reset by peer>",
+          "final_url": null,
+          "blocks": [],
+          "ttfb_ms": null,
+          "total_ms": 147.6
+        }
+      ],
+      "analysis": {
+        "fixture_bytes": 32343,
+        "plan": "duckduckgo_html.toml",
+        "results": [
+          {
+            "rank": 1,
+            "title": "Servo aims to empower developers with a lightweight, high-performance ...",
+            "url": "https://servo.org/",
+            "display_url": "servo.org",
+            "snippet": "Servo is a web browser rendering engine written in Rust, with WebGL and WebGPU support, and adaptable to desktop, mobile, and embedded applications."
+          },
+          {
+            "rank": 2,
+            "title": "The Servo Parallel Browser Engine Project - GitHub",
+            "url": "https://github.com/servo/servo",
+            "display_url": "github.com/servo/servo",
+            "snippet": "Servo is a prototype web browser engine written in the Rust language. It is currently developed on 64-bit macOS, 64-bit Linux, 64-bit Windows, 64-bit OpenHarmony, and Android ..."
+          },
+          {
+            "rank": 3,
+            "title": "GitHub - tlarcombe/rust_browser: A Rust-based browser engine project",
+            "url": "https://github.com/tlarcombe/rust_browser",
+            "display_url": "github.com/tlarcombe/rust_browser",
+            "snippet": "A Rust-based browser engine project. Contribute to tlarcombe/rust_browser development by creating an account on GitHub."
+          }
+        ],
+        "count": 10,
+        "html_lang": null,
+        "selectors": {
+          "item": "div.result",
+          "title": "h2.result__title a.result__a",
+          "url": "a.result__a[@href]",
+          "snippet": "a.result__snippet",
+          "next_page": "div.nav-link form input[name=s]",
+          "exclude": "div.result--ad, div.result--sep, div.result--more"
+        },
+        "blocked_by_plan": null,
+        "next_page": "10"
+      }
+    },
+    {
+      "url": "https://html.duckduckgo.com/html/?q=warszawa+pogoda",
+      "request_headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Encoding": "gzip, deflate",
+        "Sec-Ch-Ua": "\"Chromium\";v=\"151\", \"Google Chrome\";v=\"151\", \"Not_A Brand\";v=\"24\"",
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": "\"macOS\"",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive",
+        "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8"
+      },
+      "redirects": [],
+      "ttfb_ms": 669.8,
+      "total_ms": 669.9,
+      "status": 200,
+      "final_url": "https://html.duckduckgo.com/html/?q=warszawa+pogoda",
+      "response_headers": {
+        "Server": "nginx",
+        "Date": "Sun, 06 Sep 2026 13:07:13 GMT",
+        "Content-Type": "text/html; charset=UTF-8",
+        "Transfer-Encoding": "chunked",
+        "Connection": "close",
+        "Vary": "Origin",
+        "Server-Timing": "total;dur=511;desc=\"Backend Total [n]\"",
+        "Strict-Transport-Security": "max-age=31536000",
+        "X-Robots-Tag": "noindex",
+        "Permissions-Policy": "interest-cohort=()",
+        "Content-Security-Policy": "default-src 'none' ; connect-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; manifest-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; media-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; script-src blob:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; font-src data:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; img-src data:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; style-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; object-src 'none' ; worker-src blob: ; child-src blob:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; frame-src blob:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; frame-ancestors 'self' ; base-uri 'self' ; block-all-mixed-content ;",
+        "X-Frame-Options": "SAMEORIGIN",
+        "X-XSS-Protection": "1;mode=block",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "origin",
+        "Expect-CT": "max-age=0",
+        "Expires": "Sun, 06 Sep 2026 13:07:14 GMT",
+        "Cache-Control": "max-age=1",
+        "X-DuckDuckGo-Locale": "pl_PL",
+        "Content-Encoding": "gzip"
+      },
+      "cookies_set": [],
+      "body_bytes": 32511,
+      "provider": "duckduckgo_html",
+      "query": "warszawa pogoda",
+      "slug": "warszawa-pogoda",
+      "accept_language": "pl-PL,pl;q=0.9,en;q=0.8",
+      "fixture": "fixtures/duckduckgo_html/warszawa-pogoda.html",
+      "fetched_at": "2026-09-06T13:07:13+00:00",
+      "blocks": [],
+      "analysis": {
+        "fixture_bytes": 32511,
+        "plan": "duckduckgo_html.toml",
+        "results": [
+          {
+            "rank": 1,
+            "title": "Pogoda długoterminowa Warszawa na 16, 25 i 45 dni - INTERIA.PL",
+            "url": "https://pogoda.interia.pl/prognoza-dlugoterminowa-warszawa,cId,36917",
+            "display_url": "pogoda.interia.pl/prognoza-dlugoterminowa-warszawa,cId,36917",
+            "snippet": "Warszawa - długoterminowa pogoda na 45 dni. Aktualizowana kilka razy dziennie, najdłuższa prognoza pogody. Warszawa temperatura, opady deszczu i zachmurzenie."
+          },
+          {
+            "rank": 2,
+            "title": "Pogoda Warszawa - Prognoza pogody godzinowa na dziś i jutro - Onet.pl",
+            "url": "https://pogoda.onet.pl/prognoza-pogody/warszawa-357732",
+            "display_url": "pogoda.onet.pl/prognoza-pogody/warszawa-357732",
+            "snippet": "Sprawdź prognozę pogody dla Warszawa. Pogoda na dziś, jutro, weekend i 45 dni. Temperatura, opady, wiatr i jakość powietrza dla Warszawa"
+          },
+          {
+            "rank": 3,
+            "title": "Trzydniowa prognoza pogody: Warszawa, Mazowieckie, Polska | AccuWeather",
+            "url": "https://www.accuweather.com/pl/pl/warsaw/274663/weather-forecast/274663",
+            "display_url": "www.accuweather.com/pl/pl/warsaw/274663/weather-forecast/274663",
+            "snippet": "Warszawa, Mazowieckie, Polska Weather Forecast, with current conditions, wind, air quality, and what to expect for the next 3 days."
+          }
+        ],
+        "count": 10,
+        "html_lang": null,
+        "selectors": {
+          "item": "div.result",
+          "title": "h2.result__title a.result__a",
+          "url": "a.result__a[@href]",
+          "snippet": "a.result__snippet",
+          "next_page": "div.nav-link form input[name=s]",
+          "exclude": "div.result--ad, div.result--sep, div.result--more"
+        },
+        "blocked_by_plan": null,
+        "next_page": "10"
+      }
+    },
+    {
+      "url": "https://lite.duckduckgo.com/lite/?q=rust+browser+engine",
+      "request_headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Encoding": "gzip, deflate",
+        "Sec-Ch-Ua": "\"Chromium\";v=\"151\", \"Google Chrome\";v=\"151\", \"Not_A Brand\";v=\"24\"",
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": "\"macOS\"",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive",
+        "Accept-Language": "en-US,en;q=0.9"
+      },
+      "redirects": [],
+      "ttfb_ms": 767.7,
+      "total_ms": 767.8,
+      "status": 200,
+      "final_url": "https://lite.duckduckgo.com/lite/?q=rust+browser+engine",
+      "response_headers": {
+        "Server": "nginx",
+        "Date": "Sun, 06 Sep 2026 13:07:16 GMT",
+        "Content-Type": "text/html; charset=UTF-8",
+        "Transfer-Encoding": "chunked",
+        "Connection": "close",
+        "Vary": "Origin",
+        "Server-Timing": "total;dur=579;desc=\"Backend Total [n]\"",
+        "Strict-Transport-Security": "max-age=31536000",
+        "X-Robots-Tag": "noindex",
+        "Permissions-Policy": "interest-cohort=()",
+        "Content-Security-Policy": "default-src 'none' ; connect-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; manifest-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; media-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; script-src blob:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; font-src data:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; img-src data:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; style-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; object-src 'none' ; worker-src blob: ; child-src blob:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; frame-src blob:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; frame-ancestors 'self' ; base-uri 'self' ; block-all-mixed-content ;",
+        "X-Frame-Options": "SAMEORIGIN",
+        "X-XSS-Protection": "1;mode=block",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "origin",
+        "Expect-CT": "max-age=0",
+        "Expires": "Sun, 06 Sep 2026 13:07:17 GMT",
+        "Cache-Control": "max-age=1",
+        "X-DuckDuckGo-Locale": "en_US",
+        "Content-Encoding": "gzip"
+      },
+      "cookies_set": [],
+      "body_bytes": 23042,
+      "provider": "duckduckgo_lite",
+      "query": "rust browser engine",
+      "slug": "rust-browser-engine",
+      "accept_language": "en-US,en;q=0.9",
+      "fixture": "fixtures/duckduckgo_lite/rust-browser-engine.html",
+      "fetched_at": "2026-09-06T13:07:16+00:00",
+      "blocks": [],
+      "analysis": {
+        "fixture_bytes": 23042,
+        "plan": "duckduckgo_lite.toml",
+        "results": [
+          {
+            "rank": 1,
+            "title": "Servo aims to empower developers with a lightweight, high-performance ...",
+            "url": "https://servo.org/",
+            "display_url": "servo.org",
+            "snippet": "Servo is a web browser rendering engine written in Rust, with WebGL and WebGPU support, and adaptable to desktop, mobile, and embedded applications."
+          },
+          {
+            "rank": 2,
+            "title": "The Servo Parallel Browser Engine Project - GitHub",
+            "url": "https://github.com/servo/servo",
+            "display_url": "github.com/servo/servo",
+            "snippet": "Servo is a prototype web browser engine written in the Rust language. It is currently developed on 64-bit macOS, 64-bit Linux, 64-bit Windows, 64-bit OpenHarmony, and Android ..."
+          },
+          {
+            "rank": 3,
+            "title": "Top 23 Rust Browser Projects | LibHunt",
+            "url": "https://www.libhunt.com/l/rust/topic/browser",
+            "display_url": "www.libhunt.com/l/rust/topic/browser",
+            "snippet": "Which are the best open-source Browser projects in Rust? This list will help you: servo, carbonyl, Weylus, extism, gosub-engine, percy, and kosmonaut."
+          }
+        ],
+        "count": 10,
+        "html_lang": null,
+        "selectors": {
+          "item": "tr:has(a.result-link)",
+          "title": "a.result-link",
+          "url": "a.result-link[@href]",
+          "snippet": "td.result-snippet",
+          "next_page": "form.next_form input[name=s]",
+          "exclude": "-"
+        },
+        "blocked_by_plan": null,
+        "next_page": "10"
+      }
+    },
+    {
+      "url": "https://lite.duckduckgo.com/lite/?q=warszawa+pogoda",
+      "request_headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Encoding": "gzip, deflate",
+        "Sec-Ch-Ua": "\"Chromium\";v=\"151\", \"Google Chrome\";v=\"151\", \"Not_A Brand\";v=\"24\"",
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": "\"macOS\"",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive",
+        "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8"
+      },
+      "redirects": [],
+      "ttfb_ms": 650.2,
+      "total_ms": 650.2,
+      "status": 200,
+      "final_url": "https://lite.duckduckgo.com/lite/?q=warszawa+pogoda",
+      "response_headers": {
+        "Server": "nginx",
+        "Date": "Sun, 06 Sep 2026 13:07:19 GMT",
+        "Content-Type": "text/html; charset=UTF-8",
+        "Transfer-Encoding": "chunked",
+        "Connection": "close",
+        "Vary": "Origin",
+        "Server-Timing": "total;dur=505;desc=\"Backend Total [n]\"",
+        "Strict-Transport-Security": "max-age=31536000",
+        "X-Robots-Tag": "noindex",
+        "Permissions-Policy": "interest-cohort=()",
+        "Content-Security-Policy": "default-src 'none' ; connect-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; manifest-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; media-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; script-src blob:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; font-src data:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; img-src data:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; style-src  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; object-src 'none' ; worker-src blob: ; child-src blob:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; frame-src blob:  https://duck.ai https://*.duck.ai https://duckduckgo.com https://*.duckduckgo.com https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ https://spreadprivacy.com ; frame-ancestors 'self' ; base-uri 'self' ; block-all-mixed-content ;",
+        "X-Frame-Options": "SAMEORIGIN",
+        "X-XSS-Protection": "1;mode=block",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "origin",
+        "Expect-CT": "max-age=0",
+        "Expires": "Sun, 06 Sep 2026 13:07:20 GMT",
+        "Cache-Control": "max-age=1",
+        "X-DuckDuckGo-Locale": "pl_PL",
+        "Content-Encoding": "gzip"
+      },
+      "cookies_set": [],
+      "body_bytes": 23002,
+      "provider": "duckduckgo_lite",
+      "query": "warszawa pogoda",
+      "slug": "warszawa-pogoda",
+      "accept_language": "pl-PL,pl;q=0.9,en;q=0.8",
+      "fixture": "fixtures/duckduckgo_lite/warszawa-pogoda.html",
+      "fetched_at": "2026-09-06T13:07:18+00:00",
+      "blocks": [],
+      "analysis": {
+        "fixture_bytes": 23002,
+        "plan": "duckduckgo_lite.toml",
+        "results": [
+          {
+            "rank": 1,
+            "title": "Pogoda długoterminowa Warszawa na 16, 25 i 45 dni - INTERIA.PL",
+            "url": "https://pogoda.interia.pl/prognoza-dlugoterminowa-warszawa,cId,36917",
+            "display_url": "pogoda.interia.pl/prognoza-dlugoterminowa-warszawa,cId,36917",
+            "snippet": "Warszawa - długoterminowa pogoda na 45 dni. Aktualizowana kilka razy dziennie, najdłuższa prognoza pogody. Warszawa temperatura, opady deszczu i zachmurzenie."
+          },
+          {
+            "rank": 2,
+            "title": "Pogoda Warszawa - Prognoza pogody godzinowa na dziś i jutro - Onet.pl",
+            "url": "https://pogoda.onet.pl/prognoza-pogody/warszawa-357732",
+            "display_url": "pogoda.onet.pl/prognoza-pogody/warszawa-357732",
+            "snippet": "Sprawdź prognozę pogody dla Warszawa. Pogoda na dziś, jutro, weekend i 45 dni. Temperatura, opady, wiatr i jakość powietrza dla Warszawa"
+          },
+          {
+            "rank": 3,
+            "title": "Trzydniowa prognoza pogody: Warszawa, Mazowieckie, Polska | AccuWeather",
+            "url": "https://www.accuweather.com/pl/pl/warsaw/274663/weather-forecast/274663",
+            "display_url": "www.accuweather.com/pl/pl/warsaw/274663/weather-forecast/274663",
+            "snippet": "Warszawa, Mazowieckie, Polska Weather Forecast, with current conditions, wind, air quality, and what to expect for the next 3 days."
+          }
+        ],
+        "count": 10,
+        "html_lang": null,
+        "selectors": {
+          "item": "tr:has(a.result-link)",
+          "title": "a.result-link",
+          "url": "a.result-link[@href]",
+          "snippet": "td.result-snippet",
+          "next_page": "form.next_form input[name=s]",
+          "exclude": "-"
+        },
+        "blocked_by_plan": null,
+        "next_page": "10"
+      }
+    },
+    {
+      "url": "https://www.bing.com/search?q=rust+browser+engine",
+      "request_headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Encoding": "gzip, deflate",
+        "Sec-Ch-Ua": "\"Chromium\";v=\"151\", \"Google Chrome\";v=\"151\", \"Not_A Brand\";v=\"24\"",
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": "\"macOS\"",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive",
+        "Accept-Language": "en-US,en;q=0.9"
+      },
+      "redirects": [],
+      "ttfb_ms": 255.1,
+      "total_ms": 335.7,
+      "status": 200,
+      "final_url": "https://www.bing.com/search?q=rust+browser+engine",
+      "response_headers": {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "private, max-age=0",
+        "Content-Encoding": "gzip",
+        "Expires": "Sun, 06 Sep 2026 13:06:21 GMT",
+        "Vary": "Accept-Encoding",
+        "X-EventID": "6a9d65897b7949348d3a3b49589bdeca",
+        "Accept-CH": "Sec-CH-UA-Bitness, Sec-CH-UA-Arch, Sec-CH-UA-Full-Version, Sec-CH-UA-Mobile, Sec-CH-UA-Model, Sec-CH-UA-Platform-Version, Sec-CH-UA-Full-Version-List, Sec-CH-UA-Platform, Sec-CH-UA, ECT, Sec-CH-Prefers-Color-Scheme, UA-Bitness, UA-Arch, UA-Full-Version, UA-Mobile, UA-Model, UA-Platform-Version, UA-Platform, UA",
+        "UserAgentReductionOptOut": "A7kgTC5xdZ2WIVGZEfb1hUoNuvjzOZX3VIV/BA6C18kQOOF50Q0D3oWoAm49k3BQImkujKILc7JmPysWk3CSjwUAAACMeyJvcmlnaW4iOiJodHRwczovL3d3dy5iaW5nLmNvbTo0NDMiLCJmZWF0dXJlIjoiU2VuZEZ1bGxVc2VyQWdlbnRBZnRlclJlZHVjdGlvbiIsImV4cGlyeSI6MTY4NDg4NjM5OSwiaXNTdWJkb21haW4iOnRydWUsImlzVGhpcmRQYXJ0eSI6dHJ1ZX0=",
+        "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+        "Permissions-Policy": "unload=()",
+        "Content-Security-Policy": "script-src https: 'strict-dynamic' 'report-sample' 'wasm-unsafe-eval' 'nonce-4YYjsWJVnDgFUdWjUeqNRZxmNFG6L4/oft61ySDUgl8='; base-uri 'self';report-to csp-endpoint",
+        "Report-To": "{\"group\":\"crossorigin-errors\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://aefd.nelreports.net/api/report?cat=bingserp\"}]}",
+        "P3P": "CP=\"NON UNI COM NAV STA LOC CURa DEVa PSAa PSDa OUR IND\"",
+        "X-Display-Context": "full",
+        "NEL": "{\"report_to\":\"network-errors\",\"max_age\":604800,\"success_fraction\":0.01,\"failure_fraction\":1.0,\"include_subdomains\":true}",
+        "Cross-Origin-Embedder-Policy-Report-Only": "'require-corp; report-to=\\\"crossorigin-errors\\\"'",
+        "Cross-Origin-Opener-Policy-Report-Only": "'same-origin; report-to=\\\"crossorigin-errors\\\"'",
+        "Date": "Sun, 06 Sep 2026 13:07:21 GMT",
+        "Transfer-Encoding": "chunked",
+        "Connection": "Transfer-Encoding",
+        "Alt-Svc": "h3=\":443\"; ma=93600",
+        "X-CDN-TraceID": "0.c43ad417.1788700041.5c020529",
+        "Set-Cookie": "<MUID, MUIDB, _EDGE_S, _EDGE_V, __Host-XY, SRCHHPGUSR, SRCHD, SRCHUID, SRCHUSR, _SS, ak_bmsc>"
+      },
+      "cookies_set": [
+        "MUID",
+        "MUIDB",
+        "SRCHD",
+        "SRCHHPGUSR",
+        "SRCHUID",
+        "SRCHUSR",
+        "_EDGE_S",
+        "_EDGE_V",
+        "_SS",
+        "__Host-XY",
+        "ak_bmsc"
+      ],
+      "body_bytes": 120902,
+      "provider": "bing",
+      "query": "rust browser engine",
+      "slug": "rust-browser-engine",
+      "accept_language": "en-US,en;q=0.9",
+      "fixture": "fixtures/bing/rust-browser-engine.html",
+      "fetched_at": "2026-09-06T13:07:21+00:00",
+      "blocks": [],
+      "analysis": {
+        "fixture_bytes": 120879,
+        "plan": "bing.toml",
+        "results": [
+          {
+            "rank": 1,
+            "title": "Rust — Explore, Build and Survive",
+            "url": "https://rust.facepunch.com/",
+            "display_url": "https://rust.facepunch.com",
+            "snippet": "The only aim in Rust is to survive. Everything wants you to die - the island’s wildlife and other inhabitants, the environment, other …"
+          },
+          {
+            "rank": 2,
+            "title": "Rust Programming Language",
+            "url": "https://rust-lang.org/",
+            "display_url": "https://rust-lang.org",
+            "snippet": "Reliability Rust’s rich type system and ownership model guarantee memory-safety and thread-safety — enabling you to eliminate …"
+          },
+          {
+            "rank": 3,
+            "title": "Rust on Steam",
+            "url": "https://store.steampowered.com/app/252490/Rust/",
+            "display_url": "https://store.steampowered.com › app",
+            "snippet": "The only aim in Rust is to survive. Everything wants you to die - the island’s wildlife, other inhabitants, the environment, and other …"
+          }
+        ],
+        "count": 10,
+        "html_lang": "en",
+        "selectors": {
+          "item": "li.b_algo",
+          "title": "h2 a",
+          "url": "h2 a[@href]",
+          "snippet": "div.b_caption p",
+          "next_page": "a.sb_pagN",
+          "exclude": "li.b_ad, li.b_ans, div.b_adSlug"
+        },
+        "blocked_by_plan": null,
+        "next_page": "/search?q=rust+browser+engine&FPIG=0622F5A91422466691E36ADA3BE11262&first=11&FORM=PORE"
+      }
+    },
+    {
+      "url": "https://www.bing.com/search?q=warszawa+pogoda",
+      "request_headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Encoding": "gzip, deflate",
+        "Sec-Ch-Ua": "\"Chromium\";v=\"151\", \"Google Chrome\";v=\"151\", \"Not_A Brand\";v=\"24\"",
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": "\"macOS\"",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive",
+        "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8"
+      },
+      "redirects": [],
+      "ttfb_ms": 199.5,
+      "total_ms": 282.2,
+      "status": 200,
+      "final_url": "https://www.bing.com/search?q=warszawa+pogoda",
+      "response_headers": {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "private, max-age=0",
+        "Content-Encoding": "gzip",
+        "Expires": "Sun, 06 Sep 2026 13:06:23 GMT",
+        "Vary": "Accept-Encoding",
+        "X-EventID": "6a9d658b165046f0a83a345050e3a9b7",
+        "Accept-CH": "Sec-CH-UA-Bitness, Sec-CH-UA-Arch, Sec-CH-UA-Full-Version, Sec-CH-UA-Mobile, Sec-CH-UA-Model, Sec-CH-UA-Platform-Version, Sec-CH-UA-Full-Version-List, Sec-CH-UA-Platform, Sec-CH-UA, ECT, Sec-CH-Prefers-Color-Scheme, UA-Bitness, UA-Arch, UA-Full-Version, UA-Mobile, UA-Model, UA-Platform-Version, UA-Platform, UA",
+        "UserAgentReductionOptOut": "A7kgTC5xdZ2WIVGZEfb1hUoNuvjzOZX3VIV/BA6C18kQOOF50Q0D3oWoAm49k3BQImkujKILc7JmPysWk3CSjwUAAACMeyJvcmlnaW4iOiJodHRwczovL3d3dy5iaW5nLmNvbTo0NDMiLCJmZWF0dXJlIjoiU2VuZEZ1bGxVc2VyQWdlbnRBZnRlclJlZHVjdGlvbiIsImV4cGlyeSI6MTY4NDg4NjM5OSwiaXNTdWJkb21haW4iOnRydWUsImlzVGhpcmRQYXJ0eSI6dHJ1ZX0=",
+        "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+        "Permissions-Policy": "unload=()",
+        "Content-Security-Policy": "script-src https: 'strict-dynamic' 'report-sample' 'wasm-unsafe-eval' 'nonce-B3zN55cCjJaPoeN2zg9+cCDAEznW9E927Zuov3sYdu0='; base-uri 'self';report-to csp-endpoint",
+        "Report-To": "{\"group\":\"crossorigin-errors\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://aefd.nelreports.net/api/report?cat=bingserp\"}]}",
+        "P3P": "CP=\"NON UNI COM NAV STA LOC CURa DEVa PSAa PSDa OUR IND\"",
+        "X-Display-Context": "full",
+        "NEL": "{\"report_to\":\"network-errors\",\"max_age\":604800,\"success_fraction\":0.01,\"failure_fraction\":1.0,\"include_subdomains\":true}",
+        "Cross-Origin-Embedder-Policy-Report-Only": "'require-corp; report-to=\\\"crossorigin-errors\\\"'",
+        "Cross-Origin-Opener-Policy-Report-Only": "'same-origin; report-to=\\\"crossorigin-errors\\\"'",
+        "Link": "</cdt/dictionary/search_en_us/gEceasrebwVYOALytzAPsOMjhB9SVREWEzzsQjve_K4>; rel=\"compression-dictionary\"",
+        "Date": "Sun, 06 Sep 2026 13:07:23 GMT",
+        "Transfer-Encoding": "chunked",
+        "Connection": "Transfer-Encoding",
+        "Alt-Svc": "h3=\":443\"; ma=93600",
+        "X-CDN-TraceID": "0.c63ad417.1788700043.543d0f84",
+        "Set-Cookie": "<MUID, MUIDB, _EDGE_S, _EDGE_V, __Host-XY, SRCHHPGUSR, SRCHD, SRCHUID, SRCHUSR, _SS, ak_bmsc>"
+      },
+      "cookies_set": [
+        "MUID",
+        "MUIDB",
+        "SRCHD",
+        "SRCHHPGUSR",
+        "SRCHUID",
+        "SRCHUSR",
+        "_EDGE_S",
+        "_EDGE_V",
+        "_SS",
+        "__Host-XY",
+        "ak_bmsc"
+      ],
+      "body_bytes": 121431,
+      "provider": "bing",
+      "query": "warszawa pogoda",
+      "slug": "warszawa-pogoda",
+      "accept_language": "pl-PL,pl;q=0.9,en;q=0.8",
+      "fixture": "fixtures/bing/warszawa-pogoda.html",
+      "fetched_at": "2026-09-06T13:07:23+00:00",
+      "blocks": [],
+      "analysis": {
+        "fixture_bytes": 121408,
+        "plan": "bing.toml",
+        "results": [
+          {
+            "rank": 1,
+            "title": "Pogoda długoterminowa Warszawa na 16, 25 i 45 dni - INTERIA.PL",
+            "url": "https://pogoda.interia.pl/prognoza-dlugoterminowa-warszawa,cId,36917",
+            "display_url": "https://pogoda.interia.pl",
+            "snippet": "Warszawa - długoterminowa pogoda na 45 dni. Aktualizowana kilka razy dziennie, najdłuższa prognoza pogody. Warszawa …"
+          },
+          {
+            "rank": 2,
+            "title": "Pogoda Warszawa - Prognoza pogody godzinowa na dziś i jutro",
+            "url": "https://pogoda.onet.pl/prognoza-pogody/warszawa-357732",
+            "display_url": "https://pogoda.onet.pl › prognoza-pogody",
+            "snippet": "Sprawdź prognozę pogody dla Warszawa. Pogoda na dziś, jutro, weekend i 45 dni. Temperatura, opady, wiatr i jakość powietrza dla …"
+          },
+          {
+            "rank": 3,
+            "title": "Trzydniowa prognoza pogody: Warszawa, Mazowieckie, Polska | AccuWeather",
+            "url": "https://www.accuweather.com/pl/pl/warsaw/274663/weather-forecast/274663",
+            "display_url": "https://www.accuweather.com › pl › pl › warsaw › weather-forecast › ...",
+            "snippet": "Warszawa, Mazowieckie, Polska Weather Forecast, with current conditions, wind, air quality, and what to expect for the next 3 days."
+          }
+        ],
+        "count": 10,
+        "html_lang": "pl",
+        "selectors": {
+          "item": "li.b_algo",
+          "title": "h2 a",
+          "url": "h2 a[@href]",
+          "snippet": "div.b_caption p",
+          "next_page": "a.sb_pagN",
+          "exclude": "li.b_ad, li.b_ans, div.b_adSlug"
+        },
+        "blocked_by_plan": null,
+        "next_page": "/search?q=warszawa+pogoda&FPIG=C6E5E204973444DAA4C18B34F24BB4FC&first=11&FORM=PORE"
+      }
+    },
+    {
+      "url": "https://search.brave.com/search?q=rust+browser+engine",
+      "request_headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Encoding": "gzip, deflate",
+        "Sec-Ch-Ua": "\"Chromium\";v=\"151\", \"Google Chrome\";v=\"151\", \"Not_A Brand\";v=\"24\"",
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": "\"macOS\"",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive",
+        "Accept-Language": "en-US,en;q=0.9"
+      },
+      "redirects": [],
+      "ttfb_ms": 624.7,
+      "total_ms": 679.3,
+      "status": 200,
+      "final_url": "https://search.brave.com/search?q=rust+browser+engine",
+      "response_headers": {
+        "Content-Type": "text/html; charset=utf-8",
+        "Transfer-Encoding": "chunked",
+        "Connection": "close",
+        "Date": "Sun, 06 Sep 2026 13:07:26 GMT",
+        "Content-Encoding": "gzip",
+        "ETag": "W/\"toaxz\"",
+        "X-Content-Type-Options": "nosniff",
+        "content-security-policy": "default-src 'self' https://*.search.brave.com https://*.safesearch.brave.com; worker-src 'self' blob:; connect-src 'self' https://*.search.brave.com https://*.safesearch.brave.com https://search-ads-confirmation.brave.com https://search.anonymous.ads.brave.com https://ads-serve.brave.com https://payment.rewards.brave.com; font-src 'self' data: https://cdn.search.brave.com; img-src 'self' blob: data: https://*.search.brave.com https://*.safesearch.brave.com; manifest-src 'self' data: https://cdn.search.brave.com; object-src 'none'; script-src 'self' 'wasm-unsafe-eval' blob: 'sha256-814SnTyn5ALg8TJXV+oyKfWuNiBuC4efTpUrmrxoOCg=' 'sha256-SmTwPjqn0XvcfrmE4x0RbrJTxpXaEf2fSzIn0kj7ckI=' 'sha256-d1dDypqZNlvvw7S73u6vZbvWfwqGGY0cgXENpwDs0Ak=' https://cdn.search.brave.com 'nonce-QoiRsGHTx3x3VEy7e0D3LA=='; script-src-attr 'self' 'unsafe-hashes' 'sha256-7dQwUgLau1NFCCGjfn9FsYptB6ZtWxJin6VohGIu20I='; style-src 'self' 'unsafe-inline' https://cdn.search.brave.com; base-uri 'self'; frame-ancestors 'self'; upgrade-insecure-requests",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+        "X-Download-Options": "noopen",
+        "X-Frame-Options": "SAMEORIGIN",
+        "Cache-Control": "private, max-age=0",
+        "Link": "<https://cdn.search.brave.com/serp/v3/_app/immutable/assets/inter-latin-wght-normal.Dx4kXJAl.woff2>; crossorigin=\"anonymous\"; type=\"font/woff2\"; rel=\"preload\"; as=\"font\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/assets/app.RH2be3N9.css>; rel=\"preload\"; as=\"style\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/entry/start.BgoR5hue.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/CMZHWi8p.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/CymRgjIC.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/B2DBTfrk.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/QTnfLwEv.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/entry/app.ByUVtspA.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/kNaey6uv.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/xihTtKlq.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/nodes/0.CuFbuCCA.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/BJmMWT8L.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/3TzS7OJK.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/CIbUVKCB.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/CEuKEONi.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/CMZk_uXR.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/otltGket.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/MM54wghI.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/BCcmTHmm.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/BBgJM898.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/BnMCWzzH.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/BHebku9l.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/B7S86G6w.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/BQYN9nU3.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/C__4iaiX.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/DssPCLoB.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/Dw5HhyW8.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/CHsij4uE.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/Dox7lMVc.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/gzNj3dgb.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/BPYWKcru.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/DMg4sTe_.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/BNm7HiJx.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/CCq9su-0.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/CtECrUqp.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/B_D4rpr7.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/CuGTt8Em.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/DEjAslhx.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/Bjo_U9Ou.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/B0E5PlfK.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/DmefmjMQ.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/C3jeK9xY.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/nxPpsiyy.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/B5RfONLu.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/ufRBgCWd.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/DUgzz-HA.js>; rel=\"modulepreload\"; nopush, <https://cdn.search.brave.com/serp/v3/_app/immutable/chunks/BVBzDOEU.js>; rel=\"modulepreload\"; nopush",
+        "server-timing": "serp-total;dur=287, serp-results;dur=276.55276399850845, serp-render;dur=10.447236001491547",
+        "X-XSS-Protection": "1; mode=block",
+        "Vary": "Accept-Encoding",
+        "X-Cache": "Miss from cloudfront",
+        "Via": "1.1 34fdfb7c7c11559df7e622af2b62f5ca.cloudfront.net (CloudFront)",
+        "X-Amz-Cf-Pop": "FRA56-P4",
+        "Alt-Svc": "h3=\":443\"; ma=86400",
+        "X-Amz-Cf-Id": "XUa4OedrLRFjeIT01Z9DRz_oaW7yReffNb6QCR3EOsCn66OzPocYag=="
+      },
+      "cookies_set": [],
+      "body_bytes": 296064,
+      "provider": "brave",
+      "query": "rust browser engine",
+      "slug": "rust-browser-engine",
+      "accept_language": "en-US,en;q=0.9",
+      "fixture": "fixtures/brave/rust-browser-engine.html",
+      "fetched_at": "2026-09-06T13:07:26+00:00",
+      "blocks": [],
+      "analysis": {
+        "fixture_bytes": 296064,
+        "plan": "brave.toml",
+        "results": [
+          {
+            "rank": 1,
+            "title": "Servo aims to empower developers with a lightweight, high-performance alternative for embedding web technologies in applications.",
+            "url": "https://servo.org/",
+            "display_url": "Servo servo.org",
+            "snippet": "Servo is a web browser rendering engine written in Rust, with WebGL and WebGPU support, and adaptable to desktop, mobile, and embedded applications."
+          },
+          {
+            "rank": 2,
+            "title": "The Servo Parallel Browser Engine Project",
+            "url": "https://github.com/servo/servo",
+            "display_url": "GitHub github.com › servo › servo",
+            "snippet": "3 weeks ago - Servo is a prototype web browser engine written in the Rust language."
+          },
+          {
+            "rank": 3,
+            "title": "r/opensource on Reddit: I tried Servo, the undercover web browser engine made with Rust",
+            "url": "https://www.reddit.com/r/opensource/comments/1md8jxb/i_tried_servo_the_undercover_web_browser_engine/",
+            "display_url": "Reddit reddit.com › r/opensource › i tried servo, the undercover web browser engine made with rust",
+            "snippet": "July 30, 2025 - Servo was supposed to be Firefox's future. Now it's an independent effort to make a fast and secure web browser engine. ... In case it's not clear from the article, both the servo project and the rust language were Mozilla projects intended to replace the gecko rendering engine."
+          }
+        ],
+        "count": 20,
+        "html_lang": "en-us",
+        "selectors": {
+          "item": "div.snippet[data-type=web]",
+          "title": "div.title",
+          "url": "div.result-content > a[@href]",
+          "snippet": "div.generic-snippet div.content",
+          "next_page": "div#pagination-snippet a[href*=offset]",
+          "exclude": "div#llm-snippet, div#discussions, div#infobox-snippet, div.snippet[data-type=cluster], div#related-queries, div#search-elsewhere"
+        },
+        "blocked_by_plan": null,
+        "next_page": "/search?q=rust+browser+engine&offset=1&spellcheck=0"
+      }
+    },
+    {
+      "url": "https://search.brave.com/search?q=warszawa+pogoda",
+      "request_headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Encoding": "gzip, deflate",
+        "Sec-Ch-Ua": "\"Chromium\";v=\"151\", \"Google Chrome\";v=\"151\", \"Not_A Brand\";v=\"24\"",
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": "\"macOS\"",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive",
+        "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8"
+      },
+      "redirects": [],
+      "ttfb_ms": 315.0,
+      "total_ms": 377.3,
+      "status": 429,
+      "final_url": "https://search.brave.com/search?q=warszawa+pogoda",
+      "response_headers": {
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Length": "78221",
+        "Connection": "close",
+        "Date": "Sun, 06 Sep 2026 13:07:28 GMT",
+        "Content-Security-Policy": "default-src 'self' https://*.search.brave.com https://*.safesearch.brave.com; worker-src 'self' blob:; connect-src 'self' https://*.search.brave.com https://*.safesearch.brave.com https://search-ads-confirmation.brave.com https://search.anonymous.ads.brave.com https://ads-serve.brave.com https://payment.rewards.brave.com; font-src 'self' data: https://cdn.search.brave.com; img-src 'self' blob: data: https://*.search.brave.com https://*.safesearch.brave.com; manifest-src 'self' data: https://cdn.search.brave.com; object-src 'none'; script-src 'self' 'wasm-unsafe-eval' blob: 'sha256-814SnTyn5ALg8TJXV+oyKfWuNiBuC4efTpUrmrxoOCg=' 'sha256-SmTwPjqn0XvcfrmE4x0RbrJTxpXaEf2fSzIn0kj7ckI=' 'sha256-d1dDypqZNlvvw7S73u6vZbvWfwqGGY0cgXENpwDs0Ak=' https://cdn.search.brave.com 'nonce-Ox7hL2S8B/cdSS/jwkvXKw=='; script-src-attr 'self' 'unsafe-hashes' 'sha256-7dQwUgLau1NFCCGjfn9FsYptB6ZtWxJin6VohGIu20I='; style-src 'self' 'unsafe-inline' https://cdn.search.brave.com; base-uri 'self'; frame-ancestors 'self'; upgrade-insecure-requests",
+        "Cache-Control": "no-store",
+        "X-Cache": "Error from cloudfront",
+        "Via": "1.1 2ba7b49ec4c4de4e67297e603c89a5e4.cloudfront.net (CloudFront)",
+        "X-Amz-Cf-Pop": "FRA56-P4",
+        "Alt-Svc": "h3=\":443\"; ma=86400",
+        "X-Amz-Cf-Id": "WD5ojCSVUfsKGtR5ugEy6k9wwaBm2lQkbHxTS5VZizrYVegwoG14Kw=="
+      },
+      "cookies_set": [],
+      "body_bytes": 78221,
+      "provider": "brave",
+      "query": "warszawa pogoda",
+      "slug": "warszawa-pogoda",
+      "accept_language": "pl-PL,pl;q=0.9,en;q=0.8",
+      "fixture": "fixtures/brave/warszawa-pogoda.html",
+      "fetched_at": "2026-09-06T13:07:28+00:00",
+      "blocks": [
+        "captcha",
+        "js_required"
+      ],
+      "analysis": {
+        "fixture_bytes": 78221,
+        "plan": "brave.toml",
+        "results": [],
+        "count": 0,
+        "html_lang": "pl",
+        "selectors": {
+          "item": "div.snippet[data-type=web]",
+          "title": "div.title",
+          "url": "div.result-content > a[@href]",
+          "snippet": "div.generic-snippet div.content",
+          "next_page": "div#pagination-snippet a[href*=offset]",
+          "exclude": "div#llm-snippet, div#discussions, div#infobox-snippet, div.snippet[data-type=cluster], div#related-queries, div#search-elsewhere"
+        },
+        "blocked_by_plan": "pattern 'request has been flagged as being suspicious'",
+        "next_page": null
+      }
+    },
+    {
+      "url": "https://www.google.com/search?q=rust+browser+engine",
+      "request_headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Encoding": "gzip, deflate",
+        "Sec-Ch-Ua": "\"Chromium\";v=\"151\", \"Google Chrome\";v=\"151\", \"Not_A Brand\";v=\"24\"",
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": "\"macOS\"",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive",
+        "Accept-Language": "en-US,en;q=0.9"
+      },
+      "redirects": [],
+      "ttfb_ms": 176.3,
+      "total_ms": 240.3,
+      "status": 200,
+      "final_url": "https://www.google.com/search?q=rust+browser+engine",
+      "response_headers": {
+        "Content-Type": "text/html; charset=UTF-8",
+        "Strict-Transport-Security": "max-age=31536000",
+        "Content-Security-Policy": "object-src 'none';base-uri 'self';script-src 'nonce-UH2LtGSX1ak7sRM7WZmjHg' 'strict-dynamic' 'report-sample' 'unsafe-eval' 'unsafe-inline' https: http:;report-uri https://csp.withgoogle.com/csp/gws/cdt1",
+        "Cross-Origin-Opener-Policy": "same-origin-allow-popups; report-to=\"gws\"",
+        "Report-To": "{\"group\":\"gws\",\"max_age\":2592000,\"endpoints\":[{\"url\":\"https://csp.withgoogle.com/csp/report-to/gws/cdt1\"}]}",
+        "Accept-CH": "Sec-CH-UA-WoW64",
+        "X-Content-Type-Options": "nosniff",
+        "Permissions-Policy": "unload=()",
+        "P3P": "CP=\"This is not a P3P policy! See g.co/p3phelp for more info.\"",
+        "Content-Encoding": "gzip",
+        "Date": "Sun, 06 Sep 2026 13:07:31 GMT",
+        "Server": "gws",
+        "X-XSS-Protection": "0",
+        "X-Frame-Options": "SAMEORIGIN",
+        "Expires": "Sun, 06 Sep 2026 13:07:31 GMT",
+        "Cache-Control": "private",
+        "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "Connection": "close",
+        "Transfer-Encoding": "chunked",
+        "Set-Cookie": "<AEC, __Secure-ENID>"
+      },
+      "cookies_set": [
+        "AEC",
+        "__Secure-ENID"
+      ],
+      "body_bytes": 93373,
+      "provider": "google_nojs",
+      "query": "rust browser engine",
+      "slug": "rust-browser-engine",
+      "accept_language": "en-US,en;q=0.9",
+      "fixture": "fixtures/google_nojs/rust-browser-engine.html",
+      "fetched_at": "2026-09-06T13:07:31+00:00",
+      "blocks": [
+        "js_required"
+      ],
+      "analysis": {
+        "fixture_bytes": 93373,
+        "plan": "google_nojs.toml",
+        "results": [],
+        "count": 0,
+        "html_lang": "pl",
+        "selectors": {
+          "item": "div.g",
+          "title": "h3",
+          "url": "a:has(h3)[@href]",
+          "snippet": "div[data-sncf]",
+          "next_page": "-",
+          "exclude": "-"
+        },
+        "blocked_by_plan": "selector meta[content*=enablejs]",
+        "next_page": null
+      }
+    },
+    {
+      "url": "https://www.google.com/search?q=warszawa+pogoda",
+      "request_headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Encoding": "gzip, deflate",
+        "Sec-Ch-Ua": "\"Chromium\";v=\"151\", \"Google Chrome\";v=\"151\", \"Not_A Brand\";v=\"24\"",
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": "\"macOS\"",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive",
+        "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8"
+      },
+      "redirects": [],
+      "ttfb_ms": 144.4,
+      "total_ms": 183.7,
+      "status": 200,
+      "final_url": "https://www.google.com/search?q=warszawa+pogoda",
+      "response_headers": {
+        "Content-Type": "text/html; charset=UTF-8",
+        "Strict-Transport-Security": "max-age=31536000",
+        "Content-Security-Policy": "object-src 'none';base-uri 'self';script-src 'nonce-w4q-A5OIEd8Pgz6WcGAhqA' 'strict-dynamic' 'report-sample' 'unsafe-eval' 'unsafe-inline' https: http:;report-uri https://csp.withgoogle.com/csp/gws/cdt1",
+        "Cross-Origin-Opener-Policy": "same-origin-allow-popups; report-to=\"gws\"",
+        "Report-To": "{\"group\":\"gws\",\"max_age\":2592000,\"endpoints\":[{\"url\":\"https://csp.withgoogle.com/csp/report-to/gws/cdt1\"}]}",
+        "Accept-CH": "Sec-CH-UA-WoW64",
+        "X-Content-Type-Options": "nosniff",
+        "Permissions-Policy": "unload=()",
+        "P3P": "CP=\"This is not a P3P policy! See g.co/p3phelp for more info.\"",
+        "Content-Encoding": "gzip",
+        "Date": "Sun, 06 Sep 2026 13:07:33 GMT",
+        "Server": "gws",
+        "X-XSS-Protection": "0",
+        "X-Frame-Options": "SAMEORIGIN",
+        "Expires": "Sun, 06 Sep 2026 13:07:33 GMT",
+        "Cache-Control": "private",
+        "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "Connection": "close",
+        "Transfer-Encoding": "chunked",
+        "Set-Cookie": "<AEC, __Secure-ENID>"
+      },
+      "cookies_set": [
+        "AEC",
+        "__Secure-ENID"
+      ],
+      "body_bytes": 93158,
+      "provider": "google_nojs",
+      "query": "warszawa pogoda",
+      "slug": "warszawa-pogoda",
+      "accept_language": "pl-PL,pl;q=0.9,en;q=0.8",
+      "fixture": "fixtures/google_nojs/warszawa-pogoda.html",
+      "fetched_at": "2026-09-06T13:07:33+00:00",
+      "blocks": [
+        "js_required"
+      ],
+      "analysis": {
+        "fixture_bytes": 93158,
+        "plan": "google_nojs.toml",
+        "results": [],
+        "count": 0,
+        "html_lang": "pl",
+        "selectors": {
+          "item": "div.g",
+          "title": "h3",
+          "url": "a:has(h3)[@href]",
+          "snippet": "div[data-sncf]",
+          "next_page": "-",
+          "exclude": "-"
+        },
+        "blocked_by_plan": "selector meta[content*=enablejs]",
+        "next_page": null
+      }
+    },
+    {
+      "url": "https://www.google.com/search?q=rust+browser+engine&hl=en&gl=US",
+      "executable": "$HOME/Library/Caches/ms-playwright/chromium-1243/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+      "redirects": [
+        {
+          "status": 302,
+          "from": "https://www.google.com/search?q=rust+browser+engine&hl=en&gl=US&sei=tGadavaCHMWXxc8PnIX9yAM",
+          "to": "https://www.google.com/sorry/index?continue=https://www.google.com/search%3Fq%3Drust%2Bbrowser%2Bengine%26hl%3Den%26gl%3DUS%26sei%3DtGadavaCHMWXxc8PnIX9yAM&hl=en&q=EgSyt89mGLTN9dQGIjAxdt1pILJHqfoo52VDHjxoTNEkbguEX_6akxzm6635D6C4jUUB6ZCwdOnrV2t7DT4yAVJaAUM"
+        }
+      ],
+      "consent_seen": false,
+      "consent_dismissed": false,
+      "notes": [],
+      "browser_version": "153.0.8010.12",
+      "ttfb_ms": 1791,
+      "status": 200,
+      "final_url": "https://www.google.com/sorry/index?continue=https://www.google.com/search%3Fq%3Drust%2Bbrowser%2Bengine%26hl%3Den%26gl%3DUS%26sei%3DtGadavaCHMWXxc8PnIX9yAM&hl=en&q=EgSyt89mGLTN9dQGIjAxdt1pILJHqfoo52VDHjxoTNEkbguEX_6akxzm6635D6C4jUUB6ZCwdOnrV2t7DT4yAVJaAUM",
+      "title": "https://www.google.com/search?q=rust+browser+engine&hl=en&gl=US&sei=tGadavaCHMWXxc8PnIX9yAM",
+      "captcha": true,
+      "js_required": false,
+      "h3_count": 0,
+      "cookies_set": [
+        "AEC",
+        "__Secure-ENID"
+      ],
+      "response_headers": {
+        "accept-ch": "Sec-CH-Prefers-Color-Scheme, Downlink, RTT, Sec-CH-UA-Form-Factors, Sec-CH-UA-Platform, Sec-CH-UA-Platform-Version, Sec-CH-UA-Full-Version, Sec-CH-UA-Arch, Sec-CH-UA-Model, Sec-CH-UA-Bitness, Sec-CH-UA-Full-Version-List, Sec-CH-UA-WoW64",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "cache-control": "private",
+        "content-encoding": "br",
+        "content-security-policy": "object-src 'none';base-uri 'self';script-src 'nonce-xZLIqI8-0VYIvlnj45o1eg' 'strict-dynamic' 'report-sample' 'unsafe-eval' 'unsafe-inline' https: http:;report-uri https://csp.withgoogle.com/csp/gws/cdt1",
+        "content-type": "text/html; charset=UTF-8",
+        "cross-origin-opener-policy": "same-origin-allow-popups; report-to=\"gws\"",
+        "date": "Sun, 06 Sep 2026 13:12:20 GMT",
+        "expires": "Sun, 06 Sep 2026 13:12:20 GMT",
+        "p3p": "CP=\"This is not a P3P policy! See g.co/p3phelp for more info.\"",
+        "permissions-policy": "unload=()",
+        "report-to": "{\"group\":\"gws\",\"max_age\":2592000,\"endpoints\":[{\"url\":\"https://csp.withgoogle.com/csp/report-to/gws/cdt1\"}]}",
+        "server": "gws",
+        "strict-transport-security": "max-age=31536000",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "SAMEORIGIN",
+        "x-xss-protection": "0",
+        "set-cookie": "<AEC, __Secure-ENID>"
+      },
+      "body_bytes": 6680,
+      "total_ms": 3147,
+      "request_headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "note": "remaining headers set by Chromium 153.0.8010.12"
+      },
+      "wall_ms": 4193.4,
+      "provider": "google_chromium",
+      "query": "rust browser engine",
+      "slug": "rust-browser-engine",
+      "accept_language": "en-US,en;q=0.9",
+      "fixture": "fixtures/google_chromium/rust-browser-engine.html",
+      "fetched_at": "2026-09-06T13:12:23+00:00",
+      "blocks": [
+        "captcha",
+        "js_required"
+      ],
+      "via": "headless Chromium (Playwright)",
+      "previous_attempts": [
+        {
+          "fetched_at": "2026-09-06T13:07:43+00:00",
+          "status": 200,
+          "error": null,
+          "final_url": "https://www.google.com/sorry/index?continue=https://www.google.com/search%3Fq%3Drust%2Bbrowser%2Bengine%26hl%3Den%26gl%3DUS%26sei%3DnWWdatvSBeGoxc8P1afZiAk&hl=en&q=EgSyt89mGJ3L9dQGIjBFfGM-ON0oz3EPS7lelbdIAjjqvBlsPwE3UAKfkhrx8gDrOLyPiO9gy92BGAkzrHsyAVJaAUM",
+          "blocks": [
+            "captcha",
+            "js_required"
+          ],
+          "ttfb_ms": 5911,
+          "total_ms": 7296
+        }
+      ],
+      "analysis": {
+        "fixture_bytes": 6680,
+        "plan": "google_chromium.toml",
+        "results": [],
+        "count": 0,
+        "html_lang": null,
+        "selectors": {
+          "item": "div.g, div[data-snhf]",
+          "title": "h3",
+          "url": "a:has(h3)[@href]",
+          "snippet": "div[data-sncf], div[data-content-feature]",
+          "next_page": "a#pnnext",
+          "exclude": "-"
+        },
+        "blocked_by_plan": "selector form#captcha-form",
+        "next_page": null
+      }
+    },
+    {
+      "url": "https://www.google.com/search?q=warszawa+pogoda&hl=pl&gl=PL",
+      "executable": "$HOME/Library/Caches/ms-playwright/chromium-1243/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+      "redirects": [
+        {
+          "status": 302,
+          "from": "https://www.google.com/search?q=warszawa+pogoda&hl=pl&gl=PL&sei=uWadavzDPOGsxc8P8uCyiQw",
+          "to": "https://www.google.com/sorry/index?continue=https://www.google.com/search%3Fq%3Dwarszawa%2Bpogoda%26hl%3Dpl%26gl%3DPL%26sei%3DuWadavzDPOGsxc8P8uCyiQw&hl=pl&q=EgSyt89mGLrN9dQGIjAQNOPZ76B1XGHIytaSR2wMoWqIoB0zW5M254LLqGDnT20G3WSUaXqXX4BQ9Lj4HfEyAVJaAUM"
+        }
+      ],
+      "consent_seen": false,
+      "consent_dismissed": false,
+      "notes": [],
+      "browser_version": "153.0.8010.12",
+      "ttfb_ms": 1292,
+      "status": 200,
+      "final_url": "https://www.google.com/sorry/index?continue=https://www.google.com/search%3Fq%3Dwarszawa%2Bpogoda%26hl%3Dpl%26gl%3DPL%26sei%3DuWadavzDPOGsxc8P8uCyiQw&hl=pl&q=EgSyt89mGLrN9dQGIjAQNOPZ76B1XGHIytaSR2wMoWqIoB0zW5M254LLqGDnT20G3WSUaXqXX4BQ9Lj4HfEyAVJaAUM",
+      "title": "https://www.google.com/search?q=warszawa+pogoda&hl=pl&gl=PL&sei=uWadavzDPOGsxc8P8uCyiQw",
+      "captcha": true,
+      "js_required": false,
+      "h3_count": 0,
+      "cookies_set": [
+        "AEC",
+        "__Secure-ENID"
+      ],
+      "response_headers": {
+        "accept-ch": "Sec-CH-Prefers-Color-Scheme, Downlink, RTT, Sec-CH-UA-Form-Factors, Sec-CH-UA-Platform, Sec-CH-UA-Platform-Version, Sec-CH-UA-Full-Version, Sec-CH-UA-Arch, Sec-CH-UA-Model, Sec-CH-UA-Bitness, Sec-CH-UA-Full-Version-List, Sec-CH-UA-WoW64",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "cache-control": "private",
+        "content-encoding": "br",
+        "content-security-policy": "object-src 'none';base-uri 'self';script-src 'nonce-Vhr0yIMZNNjFDDen8ViKFg' 'strict-dynamic' 'report-sample' 'unsafe-eval' 'unsafe-inline' https: http:;report-uri https://csp.withgoogle.com/csp/gws/cdt1",
+        "content-type": "text/html; charset=UTF-8",
+        "cross-origin-opener-policy": "same-origin-allow-popups; report-to=\"gws\"",
+        "date": "Sun, 06 Sep 2026 13:12:26 GMT",
+        "expires": "Sun, 06 Sep 2026 13:12:26 GMT",
+        "p3p": "CP=\"This is not a P3P policy! See g.co/p3phelp for more info.\"",
+        "permissions-policy": "unload=()",
+        "report-to": "{\"group\":\"gws\",\"max_age\":2592000,\"endpoints\":[{\"url\":\"https://csp.withgoogle.com/csp/report-to/gws/cdt1\"}]}",
+        "server": "gws",
+        "strict-transport-security": "max-age=31536000",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "SAMEORIGIN",
+        "x-xss-protection": "0",
+        "set-cookie": "<AEC, __Secure-ENID>"
+      },
+      "body_bytes": 6868,
+      "total_ms": 2614,
+      "request_headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
+        "note": "remaining headers set by Chromium 153.0.8010.12"
+      },
+      "wall_ms": 3109.7,
+      "provider": "google_chromium",
+      "query": "warszawa pogoda",
+      "slug": "warszawa-pogoda",
+      "accept_language": "pl-PL,pl;q=0.9,en;q=0.8",
+      "fixture": "fixtures/google_chromium/warszawa-pogoda.html",
+      "fetched_at": "2026-09-06T13:12:28+00:00",
+      "blocks": [
+        "captcha"
+      ],
+      "via": "headless Chromium (Playwright)",
+      "previous_attempts": [
+        {
+          "fetched_at": "2026-09-06T13:07:49+00:00",
+          "status": 200,
+          "error": null,
+          "final_url": "https://www.google.com/sorry/index?continue=https://www.google.com/search%3Fq%3Dwarszawa%2Bpogoda%26hl%3Dpl%26gl%3DPL%26sei%3DomWdav-9LPqTxc8PheK9iQg&hl=pl&q=EgSyt89mGKLL9dQGIjC3A-gqA20K5WTfLu3uwJb3Efh-cTw5-3ZwgwXfYwEciHmpzFK-1KMmx6hrCy5yFcsyAVJaAUM",
+          "blocks": [
+            "captcha"
+          ],
+          "ttfb_ms": 1828,
+          "total_ms": 3180
+        }
+      ],
+      "analysis": {
+        "fixture_bytes": 6868,
+        "plan": "google_chromium.toml",
+        "results": [],
+        "count": 0,
+        "html_lang": null,
+        "selectors": {
+          "item": "div.g, div[data-snhf]",
+          "title": "h3",
+          "url": "a:has(h3)[@href]",
+          "snippet": "div[data-sncf], div[data-content-feature]",
+          "next_page": "a#pnnext",
+          "exclude": "-"
+        },
+        "blocked_by_plan": "selector form#captcha-form",
+        "next_page": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>JS + XHR + fetch</title>
+</head>
+<body>
+<h1>JS, XHR and fetch</h1>
+<ul id="items">
+<li id="xhr">xhr: pending</li>
+<li id="fetch">fetch: pending</li>
+</ul>
+<p id="status">js-xhr: loading</p>
+<!-- One XMLHttpRequest and one fetch() to the fixture server's JSON echo,
+     both mutating the DOM into fixed slots so the final state is the same
+     whichever response arrives first. -->
+<script>
+(function () {
+  var status = document.getElementById('status');
+  var pending = 2;
+  function fill(id, value) {
+    document.getElementById(id).textContent = id + ': ' + value;
+  }
+  function done() {
+    pending -= 1;
+    if (pending === 0) {
+      status.textContent = 'js-xhr: done (2 requests)';
+      document.title = 'JS + XHR + fetch: done';
+      window.__settled = true;
+    }
+  }
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', '/api/echo?item=alpha&via=xhr');
+  xhr.onload = function () {
+    var reply = JSON.parse(xhr.responseText);
+    fill('xhr', reply.query);
+    done();
+  };
+  xhr.onerror = function () { fill('xhr', 'error'); done(); };
+  xhr.send();
+
+  fetch('/api/echo', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ item: 'beta', via: 'fetch' })
+  })
+    .then(function (response) { return response.json(); })
+    .then(function (reply) { fill('fetch', reply.json.item + ' via ' + reply.json.via); done(); })
+    .catch(function () { fill('fetch', 'error'); done(); });
+})();
+</script>
+</body>
+</html>

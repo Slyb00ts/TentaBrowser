@@ -1,0 +1,54 @@
+{
+  "fixture": "bootstrap-float-clearfix",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "html > body:nth-child(2) > section:nth-child(1)",
+      "kind": "element",
+      "tag": "section",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 900,
+      "height": 1000
+    },
+    {
+      "selector": "html > body:nth-child(2) > section:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 900,
+      "height": 1000
+    },
+    {
+      "selector": "html > body:nth-child(2) > section:nth-child(1) > div:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 900,
+      "height": 900
+    },
+    {
+      "selector": "html > body:nth-child(2) > section:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 250,
+      "y": 200,
+      "width": 400,
+      "height": 500
+    }
+  ]
+}

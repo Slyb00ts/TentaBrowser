@@ -1,0 +1,13 @@
+[package]
+name = "tenta-css"
+description = "CSS parsing, CSSOM objects and Stylo integration glue."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+tenta-dom = { workspace = true }

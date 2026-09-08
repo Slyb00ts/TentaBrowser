@@ -1,0 +1,136 @@
+{
+  "crate_versions": {
+    "boring": "5.2.0",
+    "boring-sys": "5.2.0",
+    "hickory-resolver": "0.26.2",
+    "hyper": "1.11.1",
+    "opusic-sys": "0.7.5",
+    "rav1d": "1.1.0",
+    "rcgen": "0.14.10",
+    "ring": "0.17.14",
+    "rustls": "0.23.43",
+    "shiguredo_libvpx": "2026.1.0",
+    "str0m": "0.23.1",
+    "str0m-apple-crypto": "0.6.0",
+    "tokio": "1.53.1",
+    "v8": "152.2.0"
+  },
+  "date": "2026-09-06T19:40:25Z",
+  "machine": {
+    "cpu": "Apple M4",
+    "memory_bytes": 17179869184,
+    "model": "Mac16,10",
+    "os": "macOS 26.5.2"
+  },
+  "method": {
+    "rss": "/usr/bin/time -l ./hello, maximum resident set size in bytes, median of 10 runs, process exits right after initialisation",
+    "rss_runs": 10,
+    "size": "stripped release binary size in bytes (std::fs::metadata)"
+  },
+  "profile": {
+    "codegen-units": 16,
+    "debug": false,
+    "lto": "thin",
+    "opt-level": 3,
+    "panic": "unwind",
+    "strip": "symbols"
+  },
+  "steps": [
+    {
+      "binary_size_bytes": 6578992,
+      "features": "base",
+      "max_rss_bytes_median": 12034048,
+      "max_rss_bytes_runs": [
+        12025856,
+        12025856,
+        12058624,
+        11993088,
+        12042240,
+        12124160,
+        12107776,
+        12025856,
+        12140544,
+        11976704
+      ],
+      "startup_ms_median": 8.1925
+    },
+    {
+      "binary_size_bytes": 7796528,
+      "features": "rtc",
+      "max_rss_bytes_median": 16195584,
+      "max_rss_bytes_runs": [
+        16384000,
+        16482304,
+        16187392,
+        16138240,
+        16203776,
+        16187392,
+        16138240,
+        16203776,
+        16154624,
+        16269312
+      ],
+      "startup_ms_median": 56.799
+    },
+    {
+      "binary_size_bytes": 9874496,
+      "features": "codecs",
+      "max_rss_bytes_median": 20267008,
+      "max_rss_bytes_runs": [
+        20152320,
+        20299776,
+        20037632,
+        20250624,
+        20250624,
+        20283392,
+        20414464,
+        20201472,
+        20348928,
+        20332544
+      ],
+      "startup_ms_median": 51.932
+    },
+    {
+      "binary_size_bytes": 49086240,
+      "features": "v8",
+      "max_rss_bytes_median": 20865024,
+      "max_rss_bytes_runs": [
+        20905984,
+        20840448,
+        20807680,
+        20873216,
+        20922368,
+        20840448,
+        20856832,
+        20840448,
+        20938752,
+        20922368
+      ],
+      "startup_ms_median": 7.032500000000001,
+      "v8_first_isolate_ms_median": 0.619,
+      "v8_platform_init_ms_median": 0.354
+    },
+    {
+      "binary_size_bytes": 52381184,
+      "features": "all",
+      "max_rss_bytes_median": 27099136,
+      "max_rss_bytes_runs": [
+        26902528,
+        26886144,
+        26918912,
+        27000832,
+        26722304,
+        27738112,
+        29573120,
+        29376512,
+        27197440,
+        27262976
+      ],
+      "startup_ms_median": 58.309,
+      "v8_first_isolate_ms_median": 0.7775,
+      "v8_platform_init_ms_median": 0.4535
+    }
+  ],
+  "target": "aarch64-apple-darwin",
+  "toolchain": "rustc 1.98.0 (88d9e12ae 2026-08-18)"
+}

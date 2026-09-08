@@ -1,0 +1,53 @@
+{
+  "fixture": "media-text-track",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "html > body:nth-child(2) > video:nth-child(1)",
+      "kind": "element",
+      "tag": "video",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    {
+      "selector": "#captions",
+      "kind": "element",
+      "tag": "track",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    {
+      "selector": "#result",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 420,
+      "height": 120
+    },
+    {
+      "selector": "#result::text(0)",
+      "kind": "text",
+      "text": "media text track completed",
+      "x": 32,
+      "y": 32,
+      "width": 215.11,
+      "height": 21
+    }
+  ]
+}

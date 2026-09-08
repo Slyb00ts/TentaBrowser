@@ -1,0 +1,124 @@
+{
+  "fixture": "ratio-only-inline-images",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#direct-case",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 280,
+      "height": 280
+    },
+    {
+      "selector": "#direct",
+      "kind": "element",
+      "tag": "img",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 280,
+      "height": 280
+    },
+    {
+      "selector": "#anchor-case",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 300,
+      "y": 0,
+      "width": 280,
+      "height": 280
+    },
+    {
+      "selector": "#anchor-case > a:nth-child(1)",
+      "kind": "element",
+      "tag": "a",
+      "named": false,
+      "x": 300,
+      "y": 266,
+      "width": 280,
+      "height": 18
+    },
+    {
+      "selector": "#anchored",
+      "kind": "element",
+      "tag": "img",
+      "named": true,
+      "x": 300,
+      "y": 0,
+      "width": 280,
+      "height": 280
+    },
+    {
+      "selector": "#inline-case",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 600,
+      "y": 0,
+      "width": 280,
+      "height": 280
+    },
+    {
+      "selector": "#authored-inline",
+      "kind": "element",
+      "tag": "img",
+      "named": true,
+      "x": 600,
+      "y": 0,
+      "width": 280,
+      "height": 280
+    },
+    {
+      "selector": "#block-case",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 300,
+      "width": 280,
+      "height": 280
+    },
+    {
+      "selector": "#authored-block",
+      "kind": "element",
+      "tag": "img",
+      "named": true,
+      "x": 0,
+      "y": 300,
+      "width": 280,
+      "height": 280
+    },
+    {
+      "selector": "#inline-block-case",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 300,
+      "y": 300,
+      "width": 280,
+      "height": 280
+    },
+    {
+      "selector": "#authored-inline-block",
+      "kind": "element",
+      "tag": "img",
+      "named": true,
+      "x": 300,
+      "y": 300,
+      "width": 280,
+      "height": 280
+    }
+  ]
+}

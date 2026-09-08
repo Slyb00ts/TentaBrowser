@@ -1,0 +1,32 @@
+[
+  {
+    "name": "content-box fixed",
+    "color": "#22aa55",
+    "width": 220,
+    "height": 90
+  },
+  {
+    "name": "border-box fixed",
+    "color": "#228866",
+    "width": 190,
+    "height": 60
+  },
+  {
+    "name": "content-box percent",
+    "color": "#668822",
+    "width": 220,
+    "height": 70
+  },
+  {
+    "name": "border-box percent",
+    "color": "#668822",
+    "width": 190,
+    "height": 40
+  },
+  {
+    "name": "inherited reset border-box",
+    "color": "#aa3377",
+    "width": 190,
+    "height": 60
+  }
+]

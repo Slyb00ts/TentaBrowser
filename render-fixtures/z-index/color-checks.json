@@ -1,0 +1,14 @@
+[
+  {
+    "name": "positive layer",
+    "color": "#008000",
+    "width": 200,
+    "height": 100
+  },
+  {
+    "name": "negative layer",
+    "color": "#ffa500",
+    "width": 260,
+    "height": 110
+  }
+]

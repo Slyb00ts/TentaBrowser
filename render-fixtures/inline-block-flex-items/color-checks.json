@@ -1,0 +1,26 @@
+[
+  {
+    "name": "inline block title keeps its max content width",
+    "color": "#087f5b",
+    "x": 32,
+    "y": 0,
+    "width": 350,
+    "height": 20
+  },
+  {
+    "name": "inline block list shrink wraps and stacks children",
+    "color": "#1971c2",
+    "x": 525,
+    "y": 0,
+    "width": 90,
+    "height": 60
+  },
+  {
+    "name": "table stand-in does not blockify inline-block list",
+    "color": "#c2255c",
+    "x": 0,
+    "y": 140,
+    "width": 90,
+    "height": 20
+  }
+]

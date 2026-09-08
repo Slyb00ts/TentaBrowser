@@ -1,0 +1,4 @@
+JS, XHR and fetch
+xhr: item=alpha&via=xhr
+fetch: beta via fetch
+js-xhr: done (2 requests)

@@ -1,0 +1,16 @@
+[
+  {
+    "name": "grid shorthand creates explicit columns",
+    "color": "#087f5b",
+    "width": 287,
+    "height": 60,
+    "count": 3
+  },
+  {
+    "name": "custom property grid shorthand creates explicit columns",
+    "color": "#1971c2",
+    "width": 287,
+    "height": 60,
+    "count": 3
+  }
+]

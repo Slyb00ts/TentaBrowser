@@ -1,0 +1,2449 @@
+{
+ "meta": {
+  "site": "ddg",
+  "title": "DuckDuckGo",
+  "tracer_version": "0.1.0",
+  "playwright_version": "1.63.0",
+  "chromium_version": "153.0.8010.12",
+  "channel": "chromium",
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+  "user_agent_raw": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.0.0 Safari/537.36",
+  "date": "2026-09-06T13:22:35.161Z",
+  "duration_ms": 16172,
+  "viewport": {
+   "width": 1280,
+   "height": 800
+  },
+  "locale": "en-US",
+  "urls": [
+   "https://duckduckgo.com/?q=rust+browser+engine",
+   "https://html.duckduckgo.com/html/?q=rust+browser+engine"
+  ],
+  "navigations": [
+   {
+    "url": "https://duckduckgo.com/?q=rust+browser+engine",
+    "at_ms": 1468
+   },
+   {
+    "url": "https://duckduckgo.com/?q=rust+browser+engine",
+    "at_ms": 1927
+   },
+   {
+    "url": "https://duckduckgo.com/?q=rust+browser+engine",
+    "at_ms": 2031
+   },
+   {
+    "url": "https://duckduckgo.com/?q=rust+browser+engine",
+    "at_ms": 2031
+   },
+   {
+    "url": "https://duckduckgo.com/?q=rust+browser+engine&ia=web",
+    "at_ms": 2430
+   },
+   {
+    "url": "https://duckduckgo.com/?q=rust+browser+engine&ia=web",
+    "at_ms": 2475
+   },
+   {
+    "url": "https://html.duckduckgo.com/html/?q=rust+browser+engine",
+    "at_ms": 12404
+   }
+  ],
+  "final_url": "https://html.duckduckgo.com/html/?q=rust+browser+engine",
+  "page_title": "rust browser engine at DuckDuckGo",
+  "steps": [
+   {
+    "label": "ddg-js",
+    "at_ms": 11721,
+    "url": "https://duckduckgo.com/?q=rust+browser+engine&ia=web",
+    "frames": 2,
+    "workers": 0,
+    "service_workers": 0
+   },
+   {
+    "label": "ddg-html",
+    "at_ms": 16138,
+    "url": "https://html.duckduckgo.com/html/?q=rust+browser+engine",
+    "frames": 1,
+    "workers": 0,
+    "service_workers": 0
+   },
+   {
+    "label": "final",
+    "at_ms": 16141,
+    "url": "https://html.duckduckgo.com/html/?q=rust+browser+engine",
+    "frames": 1,
+    "workers": 0,
+    "service_workers": 0
+   }
+  ],
+  "notes": [
+   "goto https://duckduckgo.com/?q=rust+browser+engine -> 200 https://duckduckgo.com/?q=rust+browser+engine&ia=web",
+   "results: {\"[data-testid=\\\"result\\\"]\":10,\"article\":10,\"h2 a\":10,\"title\":\"rust browser engine at DuckDuckGo\",\"text_sample\":\"DuckDuckGo Open menu All Images Videos News More Search Assist Duck.ai Search Settings Private Poland Safe search: moderate Any time Servo https://servo.org Servo aims to empower developers with a lightweight, high-performance ... Servo is a web browser rendering engine written in Rust, with Web\"}",
+   "goto https://html.duckduckgo.com/html/?q=rust+browser+engine -> 200 https://html.duckduckgo.com/html/?q=rust+browser+engine",
+   "html results: {\".result\":10,\".result__a\":10,\"form\":3,\"title\":\"rust browser engine at DuckDuckGo\",\"text_sample\":\"All Regions Argentina Australia Austria Belgium (fr) Belgium (nl) Brazil Bulgaria Canada (en) Canada (fr) Catalonia Chile China Colombia Croatia Czech Republic Denmark Estonia Finland France Germany Greece Hong Kong Hungary Iceland India (en) Indonesia (en) Ireland Israel (en) Italy Japan Korea Latv\"}"
+  ],
+  "limitations": [
+   "Dedicated, shared and service workers are traced after they attach (Playwright resumes them before the tracer can run), so their first synchronous statements are missed; workers that terminate before a harvest lose the counts since the previous harvest.",
+   "AudioWorklet and PaintWorklet global scopes are not traced (no injection path); worklet module URLs and AudioWorkletNode names are recorded from the page side.",
+   "[LegacyUnforgeable] members (Location.*, Window.location/document/window/top, Document.location) are non-configurable and cannot be wrapped; see meta.unwrappable.",
+   "ECMAScript intrinsics are not traced except Intl, the locale-sensitive Date/Number/String/Array methods, WebAssembly, SharedArrayBuffer and Atomics.wait/notify/waitAsync.",
+   "Cross-origin window property access (e.g. otherWindow.postMessage) goes through cross-origin wrappers, not the wrapped prototypes, and is undercounted.",
+   "HTTP protocol versions come from CDP Network.responseReceived on the main frame session plus best-effort sessions on out-of-process iframes; requests of frames that could not be attached are counted without a protocol.",
+   "Stylesheets are walked once per CSSStyleSheet object at harvest time; cross-origin sheets without CORS are counted in css.stylesheets.cross_origin_skipped only.",
+   "The User-Agent string had \"HeadlessChrome\" replaced by \"Chrome\" (Playwright then derives consistent navigator.userAgentData); no other fingerprint changes were made.",
+   "Only the results page for one query and the no-JS HTML endpoint were exercised; no pagination, image or news verticals."
+  ],
+  "page_errors": {
+   "count": 0,
+   "samples": []
+  },
+  "console_errors": 30,
+  "frames_traced": 8,
+  "workers_traced": 0,
+  "service_workers_traced": 0,
+  "unwrappable": [
+   "Window.window",
+   "Window.document",
+   "Window.location",
+   "Window.top"
+  ],
+  "tracer_errors": [],
+  "wrapped_members_top_frame": 6449,
+  "tracer_install_ms_top_frame": 22,
+  "interface_count": 56
+ },
+ "interfaces": {
+  "Node": {
+   "total": 6174,
+   "total_top": 6174,
+   "member_count": 18,
+   "realms": {
+    "window": 6174
+   },
+   "members": {
+    "nodeType": {
+     "get": 2308
+    },
+    "ownerDocument": {
+     "get": 1127
+    },
+    "appendChild": {
+     "call": 1086
+    },
+    "parentNode": {
+     "get": 910
+    },
+    "nodeName": {
+     "get": 366
+    },
+    "textContent": {
+     "get": 28,
+     "set": 139
+    },
+    "firstChild": {
+     "get": 148
+    },
+    "childNodes": {
+     "get": 22
+    },
+    "removeChild": {
+     "call": 16
+    },
+    "lastChild": {
+     "get": 7
+    },
+    "cloneNode": {
+     "call": 5
+    },
+    "insertBefore": {
+     "call": 5
+    },
+    "contains": {
+     "call": 2
+    },
+    "baseURI": {
+     "get": 1
+    },
+    "compareDocumentPosition": {
+     "call": 1
+    },
+    "nextSibling": {
+     "get": 1
+    },
+    "nodeValue": {
+     "set": 1
+    },
+    "parentElement": {
+     "get": 1
+    }
+   }
+  },
+  "EventTarget": {
+   "total": 4701,
+   "total_top": 4700,
+   "member_count": 3,
+   "realms": {
+    "window": 4701
+   },
+   "members": {
+    "addEventListener": {
+     "call": 4681
+    },
+    "removeEventListener": {
+     "call": 19
+    },
+    "dispatchEvent": {
+     "call": 1
+    }
+   }
+  },
+  "Element": {
+   "total": 2894,
+   "total_top": 2894,
+   "member_count": 23,
+   "realms": {
+    "window": 2894
+   },
+   "members": {
+    "setAttribute": {
+     "call": 2066
+    },
+    "getAttribute": {
+     "call": 316
+    },
+    "namespaceURI": {
+     "get": 145
+    },
+    "tagName": {
+     "get": 119
+    },
+    "className": {
+     "get": 55,
+     "set": 33
+    },
+    "innerHTML": {
+     "get": 7,
+     "set": 39
+    },
+    "getElementsByTagName": {
+     "call": 34
+    },
+    "classList": {
+     "get": 19
+    },
+    "id": {
+     "get": 10,
+     "set": 4
+    },
+    "querySelectorAll": {
+     "call": 10
+    },
+    "getElementsByClassName": {
+     "call": 9
+    },
+    "getBoundingClientRect": {
+     "call": 5
+    },
+    "removeAttribute": {
+     "call": 4
+    },
+    "clientWidth": {
+     "get": 3
+    },
+    "prepend": {
+     "call": 3
+    },
+    "querySelector": {
+     "call": 3
+    },
+    "clientHeight": {
+     "get": 2
+    },
+    "scrollHeight": {
+     "get": 2
+    },
+    "webkitMatchesSelector": {
+     "call": 2
+    },
+    "animate": {
+     "call": 1
+    },
+    "attributes": {
+     "get": 1
+    },
+    "hasAttribute": {
+     "call": 1
+    },
+    "outerHTML": {
+     "get": 1
+    }
+   }
+  },
+  "Document": {
+   "total": 2124,
+   "total_top": 2124,
+   "member_count": 25,
+   "realms": {
+    "window": 2124
+   },
+   "members": {
+    "createElement": {
+     "call": 832
+    },
+    "documentElement": {
+     "get": 711
+    },
+    "createElementNS": {
+     "call": 236
+    },
+    "createTextNode": {
+     "call": 61
+    },
+    "body": {
+     "get": 58
+    },
+    "activeElement": {
+     "get": 51
+    },
+    "defaultView": {
+     "get": 24
+    },
+    "getElementById": {
+     "call": 21
+    },
+    "getElementsByClassName": {
+     "call": 18
+    },
+    "head": {
+     "get": 18
+    },
+    "referrer": {
+     "get": 17
+    },
+    "createDocumentFragment": {
+     "call": 15
+    },
+    "getElementsByTagName": {
+     "call": 13
+    },
+    "prerendering": {
+     "get": 12
+    },
+    "querySelector": {
+     "call": 10
+    },
+    "readyState": {
+     "get": 7
+    },
+    "wasDiscarded": {
+     "get": 6
+    },
+    "cookie": {
+     "get": 5
+    },
+    "all": {
+     "get": 2
+    },
+    "querySelectorAll": {
+     "call": 2
+    },
+    "createComment": {
+     "call": 1
+    },
+    "getElementsByName": {
+     "call": 1
+    },
+    "hidden": {
+     "get": 1
+    },
+    "onreadystatechange": {
+     "set": 1
+    },
+    "visibilityState": {
+     "get": 1
+    }
+   }
+  },
+  "HTMLElement": {
+   "total": 1062,
+   "total_top": 1062,
+   "member_count": 11,
+   "realms": {
+    "window": 1062
+   },
+   "members": {
+    "style": {
+     "get": 762
+    },
+    "onclick": {
+     "get": 21,
+     "set": 179
+    },
+    "contentEditable": {
+     "get": 23
+    },
+    "onerror": {
+     "get": 4,
+     "set": 13
+    },
+    "onload": {
+     "get": 4,
+     "set": 13
+    },
+    "offsetTop": {
+     "get": 16
+    },
+    "offsetHeight": {
+     "get": 11
+    },
+    "lang": {
+     "get": 10
+    },
+    "offsetWidth": {
+     "get": 4
+    },
+    "blur": {
+     "call": 1
+    },
+    "offsetLeft": {
+     "get": 1
+    }
+   }
+  },
+  "Window": {
+   "total": 827,
+   "total_top": 826,
+   "member_count": 26,
+   "realms": {
+    "window": 827
+   },
+   "members": {
+    "navigator": {
+     "get": 254
+    },
+    "localStorage": {
+     "get": 157
+    },
+    "performance": {
+     "get": 120
+    },
+    "matchMedia": {
+     "call": 112
+    },
+    "self": {
+     "get": 39
+    },
+    "queueMicrotask": {
+     "call": 28
+    },
+    "setTimeout": {
+     "call": 18
+    },
+    "event": {
+     "get": 16
+    },
+    "requestAnimationFrame": {
+     "call": 15
+    },
+    "getComputedStyle": {
+     "call": 12
+    },
+    "sessionStorage": {
+     "get": 10
+    },
+    "clearTimeout": {
+     "call": 9
+    },
+    "history": {
+     "get": 8
+    },
+    "pageYOffset": {
+     "get": 7
+    },
+    "innerHeight": {
+     "get": 5
+    },
+    "innerWidth": {
+     "get": 3
+    },
+    "scrollY": {
+     "get": 3
+    },
+    "visualViewport": {
+     "get": 3
+    },
+    "btoa": {
+     "call": 1
+    },
+    "clearInterval": {
+     "call": 1
+    },
+    "devicePixelRatio": {
+     "get": 1
+    },
+    "length": {
+     "get": 1
+    },
+    "onerror": {
+     "set": 1
+    },
+    "onscrollend": {
+     "get": 1
+    },
+    "parent": {
+     "get": 1
+    },
+    "scrollX": {
+     "get": 1
+    }
+   }
+  },
+  "CSSStyleDeclaration": {
+   "total": 652,
+   "total_top": 652,
+   "member_count": 5,
+   "realms": {
+    "window": 652
+   },
+   "members": {
+    "setProperty": {
+     "call": 640
+    },
+    "getPropertyValue": {
+     "call": 6
+    },
+    "cssText": {
+     "set": 4
+    },
+    "cssFloat": {
+     "get": 1
+    },
+    "length": {
+     "get": 1
+    }
+   }
+  },
+  "Performance": {
+   "total": 610,
+   "total_top": 610,
+   "member_count": 3,
+   "realms": {
+    "window": 610
+   },
+   "members": {
+    "now": {
+     "call": 586
+    },
+    "getEntriesByType": {
+     "call": 22
+    },
+    "getEntriesByName": {
+     "call": 2
+    }
+   }
+  },
+  "Event": {
+   "total": 522,
+   "total_top": 522,
+   "member_count": 8,
+   "realms": {
+    "window": 522
+   },
+   "members": {
+    "target": {
+     "get": 437
+    },
+    "defaultPrevented": {
+     "get": 33
+    },
+    "bubbles": {
+     "get": 11
+    },
+    "cancelable": {
+     "get": 11
+    },
+    "eventPhase": {
+     "get": 11
+    },
+    "timeStamp": {
+     "get": 11
+    },
+    "type": {
+     "get": 7
+    },
+    "constructor": {
+     "construct": 1
+    }
+   }
+  },
+  "Intl": {
+   "total": 406,
+   "total_top": 406,
+   "member_count": 5,
+   "realms": {
+    "window": 406
+   },
+   "members": {
+    "String.prototype.localeCompare": {
+     "call": 385
+    },
+    "String.prototype.normalize": {
+     "call": 10
+    },
+    "Number.prototype.toLocaleString": {
+     "call": 5
+    },
+    "Date.prototype.toLocaleDateString": {
+     "call": 4
+    },
+    "Array.prototype.toLocaleString": {
+     "call": 2
+    }
+   }
+  },
+  "URLSearchParams": {
+   "total": 303,
+   "total_top": 303,
+   "member_count": 10,
+   "realms": {
+    "window": 303
+   },
+   "members": {
+    "get": {
+     "call": 124
+    },
+    "constructor": {
+     "construct": 94
+    },
+    "toString": {
+     "call": 31
+    },
+    "@@iterator": {
+     "call": 26
+    },
+    "set": {
+     "call": 14
+    },
+    "delete": {
+     "call": 6
+    },
+    "entries": {
+     "call": 5
+    },
+    "forEach": {
+     "call": 1
+    },
+    "has": {
+     "call": 1
+    },
+    "size": {
+     "get": 1
+    }
+   }
+  },
+  "HTMLCollection": {
+   "total": 222,
+   "total_top": 222,
+   "member_count": 1,
+   "realms": {
+    "window": 222
+   },
+   "members": {
+    "length": {
+     "get": 222
+    }
+   }
+  },
+  "Navigator": {
+   "total": 195,
+   "total_top": 195,
+   "member_count": 8,
+   "realms": {
+    "window": 195
+   },
+   "members": {
+    "userAgent": {
+     "get": 110
+    },
+    "sendBeacon": {
+     "call": 28
+    },
+    "webdriver": {
+     "get": 25
+    },
+    "maxTouchPoints": {
+     "get": 20
+    },
+    "cookieEnabled": {
+     "get": 5
+    },
+    "scheduling": {
+     "get": 4
+    },
+    "language": {
+     "get": 2
+    },
+    "connection": {
+     "get": 1
+    }
+   }
+  },
+  "URL": {
+   "total": 170,
+   "total_top": 170,
+   "member_count": 9,
+   "realms": {
+    "window": 170
+   },
+   "members": {
+    "hostname": {
+     "get": 73
+    },
+    "constructor": {
+     "construct": 72
+    },
+    "searchParams": {
+     "get": 13
+    },
+    "toString": {
+     "call": 4
+    },
+    "pathname": {
+     "get": 2,
+     "set": 1
+    },
+    "host": {
+     "get": 2
+    },
+    "hash": {
+     "get": 1
+    },
+    "href": {
+     "get": 1
+    },
+    "username": {
+     "get": 1
+    }
+   }
+  },
+  "MediaQueryList": {
+   "total": 117,
+   "total_top": 117,
+   "member_count": 2,
+   "realms": {
+    "window": 117
+   },
+   "members": {
+    "matches": {
+     "get": 115
+    },
+    "addListener": {
+     "call": 2
+    }
+   }
+  },
+  "Storage": {
+   "total": 102,
+   "total_top": 102,
+   "member_count": 4,
+   "realms": {
+    "window": 102
+   },
+   "members": {
+    "removeItem": {
+     "call": 72
+    },
+    "getItem": {
+     "call": 24
+    },
+    "setItem": {
+     "call": 5
+    },
+    "length": {
+     "get": 1
+    }
+   }
+  },
+  "PerformanceResourceTiming": {
+   "total": 92,
+   "total_top": 92,
+   "member_count": 15,
+   "realms": {
+    "window": 92
+   },
+   "members": {
+    "responseStart": {
+     "get": 46
+    },
+    "nextHopProtocol": {
+     "get": 6
+    },
+    "responseEnd": {
+     "get": 5
+    },
+    "decodedBodySize": {
+     "get": 4
+    },
+    "encodedBodySize": {
+     "get": 4
+    },
+    "serverTiming": {
+     "get": 4
+    },
+    "transferSize": {
+     "get": 4
+    },
+    "connectEnd": {
+     "get": 3
+    },
+    "requestStart": {
+     "get": 3
+    },
+    "secureConnectionStart": {
+     "get": 3
+    },
+    "connectStart": {
+     "get": 2
+    },
+    "domainLookupEnd": {
+     "get": 2
+    },
+    "domainLookupStart": {
+     "get": 2
+    },
+    "redirectEnd": {
+     "get": 2
+    },
+    "redirectStart": {
+     "get": 2
+    }
+   }
+  },
+  "HTMLLinkElement": {
+   "total": 75,
+   "total_top": 75,
+   "member_count": 4,
+   "realms": {
+    "window": 75
+   },
+   "members": {
+    "rel": {
+     "get": 39,
+     "set": 12
+    },
+    "href": {
+     "set": 12
+    },
+    "as": {
+     "set": 11
+    },
+    "type": {
+     "set": 1
+    }
+   }
+  },
+  "DOMParser": {
+   "total": 66,
+   "total_top": 66,
+   "member_count": 2,
+   "realms": {
+    "window": 66
+   },
+   "members": {
+    "constructor": {
+     "construct": 33
+    },
+    "parseFromString": {
+     "call": 33
+    }
+   }
+  },
+  "NodeList": {
+   "total": 39,
+   "total_top": 39,
+   "member_count": 2,
+   "realms": {
+    "window": 39
+   },
+   "members": {
+    "length": {
+     "get": 34
+    },
+    "forEach": {
+     "call": 5
+    }
+   }
+  },
+  "HTMLInputElement": {
+   "total": 38,
+   "total_top": 38,
+   "member_count": 7,
+   "realms": {
+    "window": 38
+   },
+   "members": {
+    "checked": {
+     "get": 4,
+     "set": 6
+    },
+    "value": {
+     "get": 8,
+     "set": 2
+    },
+    "defaultValue": {
+     "get": 4,
+     "set": 1
+    },
+    "form": {
+     "get": 5
+    },
+    "name": {
+     "get": 2,
+     "set": 2
+    },
+    "defaultChecked": {
+     "set": 2
+    },
+    "type": {
+     "get": 2
+    }
+   }
+  },
+  "PerformanceEntry": {
+   "total": 37,
+   "total_top": 37,
+   "member_count": 2,
+   "realms": {
+    "window": 37
+   },
+   "members": {
+    "startTime": {
+     "get": 20
+    },
+    "name": {
+     "get": 17
+    }
+   }
+  },
+  "IntersectionObserverEntry": {
+   "total": 31,
+   "total_top": 31,
+   "member_count": 3,
+   "realms": {
+    "window": 31
+   },
+   "members": {
+    "isIntersecting": {
+     "get": 14
+    },
+    "target": {
+     "get": 14
+    },
+    "intersectionRatio": {
+     "get": 3
+    }
+   }
+  },
+  "PerformanceNavigationTiming": {
+   "total": 30,
+   "total_top": 30,
+   "member_count": 6,
+   "realms": {
+    "window": 30
+   },
+   "members": {
+    "activationStart": {
+     "get": 13
+    },
+    "type": {
+     "get": 13
+    },
+    "domComplete": {
+     "get": 1
+    },
+    "domContentLoadedEventStart": {
+     "get": 1
+    },
+    "domInteractive": {
+     "get": 1
+    },
+    "redirectCount": {
+     "get": 1
+    }
+   }
+  },
+  "HTMLAnchorElement": {
+   "total": 28,
+   "total_top": 28,
+   "member_count": 1,
+   "realms": {
+    "window": 28
+   },
+   "members": {
+    "href": {
+     "get": 28
+    }
+   }
+  },
+  "HTMLImageElement": {
+   "total": 19,
+   "total_top": 19,
+   "member_count": 1,
+   "realms": {
+    "window": 19
+   },
+   "members": {
+    "src": {
+     "set": 19
+    }
+   }
+  },
+  "DOMTokenList": {
+   "total": 18,
+   "total_top": 18,
+   "member_count": 3,
+   "realms": {
+    "window": 18
+   },
+   "members": {
+    "remove": {
+     "call": 10
+    },
+    "contains": {
+     "call": 7
+    },
+    "add": {
+     "call": 1
+    }
+   }
+  },
+  "PerformanceObserver": {
+   "total": 18,
+   "total_top": 18,
+   "member_count": 4,
+   "realms": {
+    "window": 18
+   },
+   "members": {
+    "observe": {
+     "call": 6
+    },
+    "constructor": {
+     "construct": 5
+    },
+    "supportedEntryTypes": {
+     "get": 5,
+     "static": true
+    },
+    "disconnect": {
+     "call": 2
+    }
+   }
+  },
+  "History": {
+   "total": 15,
+   "total_top": 15,
+   "member_count": 2,
+   "realms": {
+    "window": 15
+   },
+   "members": {
+    "state": {
+     "get": 10
+    },
+    "replaceState": {
+     "call": 5
+    }
+   }
+  },
+  "HTMLScriptElement": {
+   "total": 14,
+   "total_top": 14,
+   "member_count": 4,
+   "realms": {
+    "window": 14
+   },
+   "members": {
+    "src": {
+     "set": 6
+    },
+    "charset": {
+     "set": 4
+    },
+    "async": {
+     "set": 2
+    },
+    "type": {
+     "set": 2
+    }
+   }
+  },
+  "MessagePort": {
+   "total": 13,
+   "total_top": 13,
+   "member_count": 2,
+   "realms": {
+    "window": 13
+   },
+   "members": {
+    "postMessage": {
+     "call": 12
+    },
+    "onmessage": {
+     "set": 1
+    }
+   }
+  },
+  "ResizeObserver": {
+   "total": 13,
+   "total_top": 13,
+   "member_count": 3,
+   "realms": {
+    "window": 13
+   },
+   "members": {
+    "constructor": {
+     "construct": 6
+    },
+    "observe": {
+     "call": 6
+    },
+    "unobserve": {
+     "call": 1
+    }
+   }
+  },
+  "IntersectionObserver": {
+   "total": 12,
+   "total_top": 12,
+   "member_count": 5,
+   "realms": {
+    "window": 12
+   },
+   "members": {
+    "observe": {
+     "call": 4
+    },
+    "constructor": {
+     "construct": 3
+    },
+    "thresholds": {
+     "get": 3
+    },
+    "disconnect": {
+     "call": 1
+    },
+    "unobserve": {
+     "call": 1
+    }
+   }
+  },
+  "MessageEvent": {
+   "total": 12,
+   "total_top": 12,
+   "member_count": 1,
+   "realms": {
+    "window": 12
+   },
+   "members": {
+    "data": {
+     "get": 12
+    }
+   }
+  },
+  "PageTransitionEvent": {
+   "total": 12,
+   "total_top": 12,
+   "member_count": 1,
+   "realms": {
+    "window": 12
+   },
+   "members": {
+    "persisted": {
+     "get": 12
+    }
+   }
+  },
+  "PerformanceObserverEntryList": {
+   "total": 11,
+   "total_top": 11,
+   "member_count": 1,
+   "realms": {
+    "window": 11
+   },
+   "members": {
+    "getEntries": {
+     "call": 11
+    }
+   }
+  },
+  "SVGElement": {
+   "total": 10,
+   "total_top": 10,
+   "member_count": 1,
+   "realms": {
+    "window": 10
+   },
+   "members": {
+    "onclick": {
+     "set": 10
+    }
+   }
+  },
+  "TransitionEvent": {
+   "total": 8,
+   "total_top": 8,
+   "member_count": 1,
+   "realms": {
+    "window": 8
+   },
+   "members": {
+    "propertyName": {
+     "get": 8
+    }
+   }
+  },
+  "LayoutShift": {
+   "total": 6,
+   "total_top": 6,
+   "member_count": 2,
+   "realms": {
+    "window": 6
+   },
+   "members": {
+    "hadRecentInput": {
+     "get": 3
+    },
+    "value": {
+     "get": 3
+    }
+   }
+  },
+  "Animation": {
+   "total": 5,
+   "total_top": 5,
+   "member_count": 5,
+   "realms": {
+    "window": 5
+   },
+   "members": {
+    "cancel": {
+     "call": 1
+    },
+    "currentTime": {
+     "get": 1
+    },
+    "onfinish": {
+     "set": 1
+    },
+    "playbackRate": {
+     "get": 1
+    },
+    "startTime": {
+     "set": 1
+    }
+   }
+  },
+  "DOMRectReadOnly": {
+   "total": 5,
+   "total_top": 5,
+   "member_count": 2,
+   "realms": {
+    "window": 5
+   },
+   "members": {
+    "top": {
+     "get": 4
+    },
+    "right": {
+     "get": 1
+    }
+   }
+  },
+  "DOMRect": {
+   "total": 4,
+   "total_top": 4,
+   "member_count": 2,
+   "realms": {
+    "window": 4
+   },
+   "members": {
+    "height": {
+     "get": 3
+    },
+    "width": {
+     "get": 1
+    }
+   }
+  },
+  "Intl.ListFormat": {
+   "total": 4,
+   "total_top": 4,
+   "member_count": 2,
+   "realms": {
+    "window": 4
+   },
+   "members": {
+    "constructor": {
+     "construct": 2
+    },
+    "formatToParts": {
+     "call": 2
+    }
+   }
+  },
+  "MutationObserver": {
+   "total": 4,
+   "total_top": 4,
+   "member_count": 2,
+   "realms": {
+    "window": 4
+   },
+   "members": {
+    "constructor": {
+     "construct": 2
+    },
+    "observe": {
+     "call": 2
+    }
+   }
+  },
+  "CSS": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "supports": {
+     "call": 3,
+     "static": true
+    }
+   }
+  },
+  "Intl.Locale": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 3,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "constructor": {
+     "construct": 1
+    },
+    "getTextInfo": {
+     "call": 1
+    },
+    "maximize": {
+     "call": 1
+    }
+   }
+  },
+  "MessageChannel": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 3,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "constructor": {
+     "construct": 1
+    },
+    "port1": {
+     "get": 1
+    },
+    "port2": {
+     "get": 1
+    }
+   }
+  },
+  "PerformanceServerTiming": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 3,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "description": {
+     "get": 1
+    },
+    "duration": {
+     "get": 1
+    },
+    "name": {
+     "get": 1
+    }
+   }
+  },
+  "console": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "warn": {
+     "call": 3,
+     "static": true
+    }
+   }
+  },
+  "HTMLOptionElement": {
+   "total": 2,
+   "total_top": 2,
+   "member_count": 2,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "disabled": {
+     "get": 1
+    },
+    "selected": {
+     "get": 1
+    }
+   }
+  },
+  "NetworkInformation": {
+   "total": 2,
+   "total_top": 2,
+   "member_count": 2,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "effectiveType": {
+     "get": 1
+    },
+    "saveData": {
+     "get": 1
+    }
+   }
+  },
+  "HTMLFormElement": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "enctype": {
+     "get": 1
+    }
+   }
+  },
+  "HTMLIFrameElement": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "src": {
+     "set": 1
+    }
+   }
+  },
+  "HTMLSelectElement": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "disabled": {
+     "set": 1
+    }
+   }
+  },
+  "Intl.DateTimeFormat": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "supportedLocalesOf": {
+     "call": 1,
+     "static": true
+    }
+   }
+  },
+  "XMLHttpRequest": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "constructor": {
+     "construct": 1
+    }
+   }
+  }
+ },
+ "events": {
+  "HTMLDivElement:click": 65,
+  "HTMLDivElement:mousemove": 65,
+  "HTMLDivElement:touchstart": 65,
+  "HTMLDivElement:animationend": 64,
+  "HTMLDivElement:animationiteration": 64,
+  "HTMLDivElement:animationstart": 64,
+  "HTMLDivElement:auxclick": 64,
+  "HTMLDivElement:change": 64,
+  "HTMLDivElement:compositionend": 64,
+  "HTMLDivElement:compositionstart": 64,
+  "HTMLDivElement:compositionupdate": 64,
+  "HTMLDivElement:contextmenu": 64,
+  "HTMLDivElement:copy": 64,
+  "HTMLDivElement:cut": 64,
+  "HTMLDivElement:dblclick": 64,
+  "HTMLDivElement:drag": 64,
+  "HTMLDivElement:dragend": 64,
+  "HTMLDivElement:dragenter": 64,
+  "HTMLDivElement:dragexit": 64,
+  "HTMLDivElement:dragleave": 64,
+  "HTMLDivElement:dragover": 64,
+  "HTMLDivElement:dragstart": 64,
+  "HTMLDivElement:drop": 64,
+  "HTMLDivElement:focusin": 64,
+  "HTMLDivElement:focusout": 64,
+  "HTMLDivElement:gotpointercapture": 64,
+  "HTMLDivElement:input": 64,
+  "HTMLDivElement:keydown": 64,
+  "HTMLDivElement:keypress": 64,
+  "HTMLDivElement:keyup": 64,
+  "HTMLDivElement:lostpointercapture": 64,
+  "HTMLDivElement:mousedown": 64,
+  "HTMLDivElement:mouseout": 64,
+  "HTMLDivElement:mouseover": 64,
+  "HTMLDivElement:mouseup": 64,
+  "HTMLDivElement:paste": 64,
+  "HTMLDivElement:pointercancel": 64,
+  "HTMLDivElement:pointerdown": 64,
+  "HTMLDivElement:pointermove": 64,
+  "HTMLDivElement:pointerout": 64,
+  "HTMLDivElement:pointerover": 64,
+  "HTMLDivElement:pointerup": 64,
+  "HTMLDivElement:reset": 64,
+  "HTMLDivElement:submit": 64,
+  "HTMLDivElement:textInput": 64,
+  "HTMLDivElement:touchcancel": 64,
+  "HTMLDivElement:touchend": 64,
+  "HTMLDivElement:touchmove": 64,
+  "HTMLDivElement:transitionend": 64,
+  "HTMLDivElement:wheel": 64,
+  "MediaQueryList:change": 59,
+  "HTMLAnchorElement:click": 37,
+  "HTMLDivElement:abort": 32,
+  "HTMLDivElement:cancel": 32,
+  "HTMLDivElement:canplay": 32,
+  "HTMLDivElement:canplaythrough": 32,
+  "HTMLDivElement:close": 32,
+  "HTMLDivElement:durationchange": 32,
+  "HTMLDivElement:emptied": 32,
+  "HTMLDivElement:encrypted": 32,
+  "HTMLDivElement:ended": 32,
+  "HTMLDivElement:error": 32,
+  "HTMLDivElement:invalid": 32,
+  "HTMLDivElement:load": 32,
+  "HTMLDivElement:loadeddata": 32,
+  "HTMLDivElement:loadedmetadata": 32,
+  "HTMLDivElement:loadstart": 32,
+  "HTMLDivElement:pause": 32,
+  "HTMLDivElement:play": 32,
+  "HTMLDivElement:playing": 32,
+  "HTMLDivElement:progress": 32,
+  "HTMLDivElement:ratechange": 32,
+  "HTMLDivElement:resize": 32,
+  "HTMLDivElement:scroll": 32,
+  "HTMLDivElement:seeked": 32,
+  "HTMLDivElement:seeking": 32,
+  "HTMLDivElement:stalled": 32,
+  "HTMLDivElement:suspend": 32,
+  "HTMLDivElement:timeupdate": 32,
+  "HTMLDivElement:toggle": 32,
+  "HTMLDivElement:volumechange": 32,
+  "HTMLDivElement:waiting": 32,
+  "HTMLButtonElement:pointercancel": 23,
+  "HTMLButtonElement:pointerdown": 23,
+  "HTMLButtonElement:pointerleave": 23,
+  "HTMLButtonElement:pointermove": 23,
+  "HTMLButtonElement:pointerup": 23,
+  "HTMLImageElement:error": 19,
+  "HTMLImageElement:load": 19,
+  "Window:keydown": 16,
+  "HTMLDocument:pointerup": 7,
+  "HTMLDocument:visibilitychange": 7,
+  "Window:pageshow": 7,
+  "undefined:pageshow": 7,
+  "Window:visibilitychange": 6,
+  "HTMLAnchorElement:pointercancel": 5,
+  "HTMLAnchorElement:pointerdown": 5,
+  "HTMLAnchorElement:pointerleave": 5,
+  "HTMLAnchorElement:pointermove": 5,
+  "HTMLAnchorElement:pointerup": 5,
+  "HTMLButtonElement:transitioncancel": 4,
+  "HTMLDocument:keydown": 4,
+  "HTMLBodyElement:transitionend": 3,
+  "HTMLDocument:pointerdown": 3,
+  "Window:popstate": 3,
+  "Window:resize": 3,
+  "Window:scroll": 3,
+  "HTMLBodyElement:animationend": 2,
+  "HTMLBodyElement:animationiteration": 2,
+  "HTMLBodyElement:animationstart": 2,
+  "HTMLBodyElement:auxclick": 2,
+  "HTMLBodyElement:change": 2,
+  "HTMLBodyElement:click": 2,
+  "HTMLBodyElement:compositionend": 2,
+  "HTMLBodyElement:compositionstart": 2,
+  "HTMLBodyElement:compositionupdate": 2,
+  "HTMLBodyElement:contextmenu": 2,
+  "HTMLBodyElement:copy": 2,
+  "HTMLBodyElement:cut": 2,
+  "HTMLBodyElement:dblclick": 2,
+  "HTMLBodyElement:drag": 2,
+  "HTMLBodyElement:dragend": 2,
+  "HTMLBodyElement:dragenter": 2,
+  "HTMLBodyElement:dragexit": 2,
+  "HTMLBodyElement:dragleave": 2,
+  "HTMLBodyElement:dragover": 2,
+  "HTMLBodyElement:dragstart": 2,
+  "HTMLBodyElement:drop": 2,
+  "HTMLBodyElement:focusin": 2,
+  "HTMLBodyElement:focusout": 2,
+  "HTMLBodyElement:gotpointercapture": 2,
+  "HTMLBodyElement:input": 2,
+  "HTMLBodyElement:keydown": 2,
+  "HTMLBodyElement:keypress": 2,
+  "HTMLBodyElement:keyup": 2,
+  "HTMLBodyElement:lostpointercapture": 2,
+  "HTMLBodyElement:mousedown": 2,
+  "HTMLBodyElement:mousemove": 2,
+  "HTMLBodyElement:mouseout": 2,
+  "HTMLBodyElement:mouseover": 2,
+  "HTMLBodyElement:mouseup": 2,
+  "HTMLBodyElement:paste": 2,
+  "HTMLBodyElement:pointercancel": 2,
+  "HTMLBodyElement:pointerdown": 2,
+  "HTMLBodyElement:pointermove": 2,
+  "HTMLBodyElement:pointerout": 2,
+  "HTMLBodyElement:pointerover": 2,
+  "HTMLBodyElement:pointerup": 2,
+  "HTMLBodyElement:reset": 2,
+  "HTMLBodyElement:submit": 2,
+  "HTMLBodyElement:textInput": 2,
+  "HTMLBodyElement:touchcancel": 2,
+  "HTMLBodyElement:touchend": 2,
+  "HTMLBodyElement:touchmove": 2,
+  "HTMLBodyElement:touchstart": 2,
+  "HTMLBodyElement:wheel": 2,
+  "HTMLButtonElement:click": 2,
+  "HTMLDocument:click": 2,
+  "HTMLDocument:keyup": 2,
+  "HTMLDocument:selectionchange": 2,
+  "HTMLInputElement:invalid": 2,
+  "Window:focus": 2,
+  "Window:online": 2,
+  "Window:test": 2,
+  "undefined:pagehide": 2,
+  "HTMLAnchorElement:mouseup": 1,
+  "HTMLAnchorElement:touchend": 1,
+  "HTMLBodyElement:abort": 1,
+  "HTMLBodyElement:cancel": 1,
+  "HTMLBodyElement:canplay": 1,
+  "HTMLBodyElement:canplaythrough": 1,
+  "HTMLBodyElement:close": 1,
+  "HTMLBodyElement:durationchange": 1,
+  "HTMLBodyElement:emptied": 1,
+  "HTMLBodyElement:encrypted": 1,
+  "HTMLBodyElement:ended": 1,
+  "HTMLBodyElement:error": 1,
+  "HTMLBodyElement:invalid": 1,
+  "HTMLBodyElement:load": 1,
+  "HTMLBodyElement:loadeddata": 1,
+  "HTMLBodyElement:loadedmetadata": 1,
+  "HTMLBodyElement:loadstart": 1,
+  "HTMLBodyElement:pause": 1,
+  "HTMLBodyElement:play": 1,
+  "HTMLBodyElement:playing": 1,
+  "HTMLBodyElement:progress": 1,
+  "HTMLBodyElement:ratechange": 1,
+  "HTMLBodyElement:resize": 1,
+  "HTMLBodyElement:scroll": 1,
+  "HTMLBodyElement:seeked": 1,
+  "HTMLBodyElement:seeking": 1,
+  "HTMLBodyElement:stalled": 1,
+  "HTMLBodyElement:suspend": 1,
+  "HTMLBodyElement:timeupdate": 1,
+  "HTMLBodyElement:toggle": 1,
+  "HTMLBodyElement:transitionrun": 1,
+  "HTMLBodyElement:volumechange": 1,
+  "HTMLBodyElement:waiting": 1,
+  "HTMLButtonElement:touchstart": 1,
+  "HTMLDocument:DOMContentLoaded": 1,
+  "HTMLDocument:mousedown": 1,
+  "HTMLDocument:pointermove": 1,
+  "HTMLSourceElement:error": 1,
+  "Window:beforeunload": 1,
+  "Window:blur": 1,
+  "Window:click": 1,
+  "Window:keyup": 1,
+  "Window:languagechange": 1,
+  "Window:load": 1,
+  "Window:message": 1,
+  "Window:mousemove": 1,
+  "Window:offline": 1,
+  "Window:pagehide": 1,
+  "Window:unhandledrejection": 1,
+  "undefined:beforeunload": 1,
+  "undefined:click": 1,
+  "undefined:keydown": 1,
+  "undefined:load": 1,
+  "undefined:prerenderingchange": 1,
+  "undefined:visibilitychange": 1
+ },
+ "elements": {
+  "div": 309,
+  "span": 195,
+  "svg:path": 117,
+  "a": 95,
+  "svg:svg": 92,
+  "p": 43,
+  "li": 35,
+  "button": 34,
+  "img": 19,
+  "svg:g": 18,
+  "link": 13,
+  "h2": 11,
+  "article": 10,
+  "h3": 9,
+  "strong": 9,
+  "script": 7,
+  "section": 6,
+  "ul": 5,
+  "input": 4,
+  "svg:stop": 4,
+  "nav": 3,
+  "td": 3,
+  "th": 3,
+  "tr": 3,
+  "form": 2,
+  "ol": 2,
+  "svg:defs": 2,
+  "svg:lineargradient": 2,
+  "header": 1,
+  "i": 1,
+  "iframe": 1,
+  "label": 1,
+  "modernizr": 1,
+  "option": 1,
+  "picture": 1,
+  "select": 1,
+  "source": 1,
+  "style": 1,
+  "svg:clippath": 1,
+  "table": 1,
+  "tbody": 1
+ },
+ "custom_elements": {},
+ "css": {
+  "set": {
+   "--*": 640,
+   "opacity": 2,
+   "-moz-filter": 1,
+   "-moz-opacity": 1,
+   "-ms-filter": 1,
+   "-ms-opacity": 1,
+   "-o-filter": 1,
+   "-o-opacity": 1,
+   "-webkit-filter": 1,
+   "-webkit-opacity": 1,
+   "filter": 1,
+   "float": 1,
+   "top": 1
+  },
+  "get": {
+   "float": 1
+  },
+  "computed": {
+   "display": 3,
+   "line-height": 3
+  },
+  "inserted": {},
+  "supports": {
+   "color: var(--test, red)": 3
+  },
+  "media_queries": {
+   "(max-width: 599px), (max-width: 799px) and (max-height: 499px)": 44,
+   "(prefers-reduced-motion: reduce)": 38,
+   "(max-width: 590px)": 14,
+   "(max-width: 600px)": 2,
+   "(max-width: 900px)": 2,
+   "(min-width: 1110px)": 2,
+   "(min-width: 1162px)": 2,
+   "(prefers-color-scheme: dark)": 2,
+   "(prefers-color-scheme: light)": 2,
+   "screen and (min-width: 640px)": 2,
+   "(orientation: portrait)": 1,
+   "(prefers-reduced-motion)": 1
+  },
+  "stylesheets": {
+   "sheets": 6,
+   "cross_origin_skipped": 1,
+   "rules": 8738,
+   "rule_types": {
+    "CSSStyleRule": 7853,
+    "CSSMediaRule": 584,
+    "CSSKeyframeRule": 182,
+    "CSSKeyframesRule": 76,
+    "CSSSupportsRule": 27,
+    "CSSFontFaceRule": 12,
+    "CSSStartingStyleRule": 2,
+    "CSSContainerRule": 1,
+    "CSSPropertyRule": 1
+   },
+   "properties": {
+    "display": 1325,
+    "color": 1154,
+    "width": 1054,
+    "background-color": 1035,
+    "padding-left": 876,
+    "height": 868,
+    "padding-top": 863,
+    "padding-right": 843,
+    "padding-bottom": 831,
+    "margin-top": 796,
+    "margin-bottom": 731,
+    "position": 722,
+    "margin-left": 707,
+    "margin-right": 690,
+    "font-size": 683,
+    "line-height": 532,
+    "background-position-x": 495,
+    "background-position-y": 495,
+    "--*": 483,
+    "border-bottom-color": 479,
+    "border-top-color": 458,
+    "border-left-color": 418,
+    "border-right-color": 418,
+    "font-weight": 404,
+    "top": 399,
+    "background-image": 397,
+    "border-top-right-radius": 394,
+    "opacity": 391,
+    "border-top-left-radius": 390,
+    "border-bottom-left-radius": 389,
+    "border-bottom-right-radius": 387,
+    "border-bottom-width": 353,
+    "border-bottom-style": 344,
+    "transform": 343,
+    "left": 337,
+    "border-top-width": 334,
+    "border-top-style": 327,
+    "overflow-x": 317,
+    "background-size": 315,
+    "overflow-y": 310,
+    "max-width": 307,
+    "background-repeat": 302,
+    "border-right-width": 299,
+    "border-left-width": 296,
+    "border-right-style": 291,
+    "border-left-style": 288,
+    "align-items": 286,
+    "background-clip": 284,
+    "background-origin": 284,
+    "background-attachment": 283,
+    "border-image-outset": 268,
+    "border-image-repeat": 268,
+    "border-image-slice": 268,
+    "border-image-source": 268,
+    "border-image-width": 268,
+    "right": 267,
+    "text-decoration-color": 253,
+    "text-decoration-thickness": 253,
+    "text-decoration-line": 252,
+    "text-decoration-style": 252,
+    "content": 244,
+    "text-align": 224,
+    "transition-delay": 207,
+    "transition-property": 201,
+    "transition-duration": 200,
+    "column-gap": 198,
+    "justify-content": 198,
+    "transition-timing-function": 198,
+    "cursor": 196,
+    "bottom": 195,
+    "text-wrap-mode": 195,
+    "transition-behavior": 192,
+    "flex-shrink": 189,
+    "row-gap": 189,
+    "z-index": 185,
+    "white-space-collapse": 180,
+    "flex-direction": 160,
+    "box-shadow": 159,
+    "vertical-align": 158,
+    "min-width": 144,
+    "max-height": 142,
+    "font-family": 139,
+    "box-sizing": 137,
+    "float": 123,
+    "flex-grow": 118,
+    "flex-basis": 110,
+    "visibility": 92,
+    "font-style": 90,
+    "text-transform": 89,
+    "min-height": 88,
+    "text-overflow": 88,
+    "letter-spacing": 87,
+    "animation-delay": 82,
+    "outline-color": 79,
+    "outline-style": 78,
+    "outline-width": 78,
+    "animation-direction": 70,
+    "animation-duration": 70,
+    "animation-fill-mode": 70,
+    "animation-iteration-count": 70,
+    "animation-name": 70,
+    "animation-play-state": 70,
+    "animation-range-end": 70,
+    "animation-range-start": 70,
+    "animation-timeline": 70,
+    "animation-timing-function": 70,
+    "-webkit-font-smoothing": 60,
+    "font-variant-alternates": 58,
+    "font-variant-caps": 58,
+    "font-variant-east-asian": 58,
+    "font-variant-emoji": 58,
+    "font-variant-ligatures": 58,
+    "font-variant-numeric": 58,
+    "font-variant-position": 58,
+    "pointer-events": 57,
+    "fill": 53,
+    "speak": 48,
+    "clear": 34,
+    "list-style-type": 33,
+    "-webkit-tap-highlight-color": 28,
+    "align-self": 26,
+    "filter": 26,
+    "flex-wrap": 26,
+    "transform-origin": 26,
+    "object-fit": 25,
+    "list-style-image": 24,
+    "list-style-position": 24,
+    "appearance": 22,
+    "overflow-wrap": 18,
+    "outline-offset": 16,
+    "text-indent": 16,
+    "grid-template-columns": 15,
+    "text-wrap-style": 15,
+    "font-feature-settings": 14,
+    "grid-column-start": 14,
+    "-webkit-line-clamp": 13,
+    "font-kerning": 13,
+    "font-language-override": 13,
+    "font-optical-sizing": 13,
+    "font-size-adjust": 13,
+    "font-stretch": 13,
+    "font-variation-settings": 13,
+    "object-position": 13,
+    "user-select": 13,
+    "will-change": 13,
+    "src": 12,
+    "grid-column-end": 11,
+    "grid-row-start": 11,
+    "order": 11,
+    "mask-image": 10,
+    "scrollbar-width": 10,
+    "clip": 9,
+    "grid-row-end": 9,
+    "backface-visibility": 8,
+    "clip-path": 8,
+    "aspect-ratio": 7,
+    "-webkit-box-orient": 6,
+    "counter-increment": 6,
+    "scroll-padding-left": 5,
+    "scroll-padding-right": 5,
+    "stroke": 5,
+    "text-shadow": 5,
+    "-webkit-border-horizontal-spacing": 4,
+    "-webkit-border-vertical-spacing": 4,
+    "align-content": 4,
+    "backdrop-filter": 4,
+    "border-collapse": 4,
+    "grid-template-rows": 4,
+    "overscroll-behavior-x": 3,
+    "overscroll-behavior-y": 3,
+    "padding-inline-start": 3,
+    "touch-action": 3,
+    "transform-style": 3,
+    "word-break": 3,
+    "-webkit-box-pack": 2,
+    "-webkit-mask-position-x": 2,
+    "-webkit-mask-position-y": 2,
+    "-webkit-text-fill-color": 2,
+    "break-inside": 2,
+    "column-count": 2,
+    "column-rule-color": 2,
+    "column-rule-style": 2,
+    "column-rule-width": 2,
+    "counter-reset": 2,
+    "fill-opacity": 2,
+    "hyphens": 2,
+    "isolation": 2,
+    "mask-repeat": 2,
+    "mask-size": 2,
+    "padding-inline-end": 2,
+    "resize": 2,
+    "scroll-snap-align": 2,
+    "scroll-snap-type": 2,
+    "stroke-width": 2,
+    "-webkit-box-align": 1,
+    "-webkit-box-flex": 1,
+    "caret-color": 1,
+    "contain": 1,
+    "container-name": 1,
+    "container-type": 1,
+    "content-visibility": 1,
+    "grid-template-areas": 1,
+    "margin-inline-end": 1,
+    "mix-blend-mode": 1,
+    "overflow-anchor": 1,
+    "padding-block-end": 1,
+    "padding-block-start": 1,
+    "perspective": 1,
+    "quotes": 1,
+    "tab-size": 1,
+    "table-layout": 1,
+    "text-size-adjust": 1,
+    "text-underline-offset": 1,
+    "text-underline-position": 1,
+    "transform-box": 1
+   },
+   "selectors": {
+    ":hover": 890,
+    ":not(": 710,
+    ":active": 363,
+    "::before": 314,
+    ":visited": 304,
+    "::after": 263,
+    ":focus": 162,
+    ":focus-visible": 105,
+    ":last-child": 80,
+    ":first-child": 68,
+    ":disabled": 53,
+    ":has(": 48,
+    ":nth-child(": 19,
+    ":first-of-type": 16,
+    ":empty": 15,
+    "::-webkit-scrollbar": 14,
+    ":last-of-type": 13,
+    ":root": 10,
+    ":focus-within": 7,
+    "::-webkit-input-placeholder": 6,
+    ":is(": 6,
+    ":only-child": 6,
+    "::placeholder": 5,
+    ":where(": 5,
+    ":checked": 4,
+    ":nth-of-type(": 4,
+    "::first-letter": 2,
+    "::marker": 2,
+    "::-webkit-search-cancel-button": 1,
+    "::-webkit-search-decoration": 1,
+    "::selection": 1,
+    ":link": 1
+   },
+   "media_queries": {
+    "(hover: hover) and (pointer: fine)": 105,
+    "(max-width: 590px)": 52,
+    "(max-width: 590px) and (prefers-reduced-motion: no-preference)": 38,
+    "(prefers-reduced-motion: reduce)": 37,
+    "only screen and (max-width: 590px)": 35,
+    "(max-width: 599px), (max-width: 799px) and (max-height: 499px)": 26,
+    "only screen and (max-width: 864px)": 17,
+    "only screen and (max-width: 425px)": 15,
+    "(max-width: 1079px)": 13,
+    "only screen and (min-width: 590px) and (min-height: 738px)": 10,
+    "only screen and (max-width: 1079px)": 9,
+    "screen and (max-width: 590px)": 9,
+    "(max-width: 980px)": 8,
+    "only screen and (min-width: 1440px)": 8,
+    "only screen and (min-width: 768px)": 8,
+    "(device-width: 768px) and (device-height: 1024px) and (orientation: portrait)": 7,
+    "only screen and (min-device-width: 1024px) and (max-device-width: 1366px) and (-webkit-min-device-pixel-ratio: 1.5)": 7,
+    "only screen and (max-height: 318.75px), only screen and (max-height: 382.5px) and (min-width: 425px)": 6,
+    "only screen and (max-height: 425px)": 6,
+    "(hover: hover)": 5,
+    "(max-width: 1350px)": 5,
+    "only screen and (max-height: 475px)": 5,
+    "only screen and (max-width: 1350px)": 5,
+    "only screen and (max-width: 501.5px)": 5,
+    "only screen and (min-width: 1186.9px)": 5,
+    "only screen and (min-width: 1944px)": 5,
+    "only screen and (min-width: 590px) and (max-height: 738px)": 5,
+    "only screen and (min-width: 864px)": 5,
+    "(max-width: 1000px)": 4,
+    "(prefers-reduced-motion)": 4,
+    "only screen and (max-width: 360px)": 4,
+    "only screen and (min-width: 1079px)": 4,
+    "only screen and (min-width: 1584px)": 4,
+    "only screen and (min-width: 1800px)": 4,
+    "only screen and (min-width: 971.1px)": 4,
+    "(prefers-reduced-motion: no-preference)": 3,
+    "only screen and (max-width: 767px)": 3,
+    "only screen and (min-width: 500px)": 3,
+    "(--is-mobile-only )": 2,
+    "(max-width: 863px)": 2,
+    "(prefers-color-scheme: dark)": 2,
+    "only screen and (-webkit-min-device-pixel-ratio: 2), only screen and (-moz-min-device-pixel-ratio: 2), only screen and (min--moz-device-pixel-ratio: 2), only screen and (-ms-min-device-pixel-ratio: 2), only screen and (min-device-pixel-ratio: 2), only screen and (min-resolution: 192dppx)": 2,
+    "only screen and (max-height: 453px) and (orientation: landscape)": 2,
+    "only screen and (max-width: 1079px) and (min-width: 591px)": 2,
+    "only screen and (max-width: 310px)": 2,
+    "only screen and (max-width: 400px)": 2,
+    "only screen and (max-width: 420px)": 2,
+    "only screen and (min-device-width: 425px) and (max-device-width: 1079px) and (orientation: landscape)": 2,
+    "only screen and (min-width: 1350px)": 2,
+    "only screen and (min-width: 980px)": 2,
+    "screen and (max-width: 365px)": 2,
+    "screen and (max-width: 414px)": 2,
+    "screen and (max-width: 980px)": 2,
+    "": 1,
+    "(hover: hover) and (prefers-reduced-motion: reduce)": 1,
+    "(hover: none), (pointer: coarse)": 1,
+    "(max-height: 600px)": 1,
+    "(max-height: 750px)": 1,
+    "(max-height: 770px)": 1,
+    "(max-width: 1073px) and (min-width: 864px)": 1,
+    "(max-width: 1628px)": 1,
+    "(max-width: 1828px)": 1,
+    "(max-width: 370px)": 1,
+    "(max-width: 389px)": 1,
+    "(max-width: 400px)": 1,
+    "(max-width: 639px)": 1,
+    "(max-width: 674px)": 1,
+    "(max-width: 756px)": 1,
+    "(min-height: 734px)": 1,
+    "(min-width: 1073px)": 1,
+    "(min-width: 864px)": 1,
+    "only screen and (-webkit-min-device-pixel-ratio: 3), only screen and (-moz-min-device-pixel-ratio: 3), only screen and (min--moz-device-pixel-ratio: 3), only screen and (-ms-min-device-pixel-ratio: 3), only screen and (min-device-pixel-ratio: 3), only screen and (min-resolution: 288dppx)": 1,
+    "only screen and (max-height: 590px)": 1,
+    "only screen and (max-height: 700px)": 1,
+    "only screen and (max-height: 800px)": 1,
+    "only screen and (max-width: 1072px)": 1,
+    "only screen and (max-width: 1079px) and (min-width: 591px) and (max-width: 864px)": 1,
+    "only screen and (max-width: 1100px)": 1,
+    "only screen and (max-width: 1130px)": 1,
+    "only screen and (max-width: 1200px)": 1,
+    "only screen and (max-width: 1210px)": 1,
+    "only screen and (max-width: 1340px)": 1,
+    "only screen and (max-width: 380px)": 1,
+    "only screen and (max-width: 480px)": 1,
+    "only screen and (max-width: 500px)": 1,
+    "only screen and (max-width: 650px)": 1,
+    "only screen and (max-width: 727px)": 1,
+    "only screen and (max-width: 750px)": 1,
+    "only screen and (max-width: 860px)": 1,
+    "only screen and (max-width: 979px)": 1,
+    "only screen and (max-width: 980px)": 1,
+    "only screen and (min-width: 320px) and (max-width: 359px)": 1,
+    "only screen and (min-width: 360px) and (max-width: 399px)": 1,
+    "only screen and (min-width: 400px) and (max-width: 499px)": 1,
+    "only screen and (min-width: 400px) and (max-width: 767px)": 1,
+    "only screen and (min-width: 425px)": 1,
+    "only screen and (min-width: 501.5px)": 1,
+    "screen and (-ms-high-contrast: active), screen and (-ms-high-contrast: none)": 1,
+    "screen and (-webkit-min-device-pixel-ratio: 0)": 1,
+    "screen and (max-width: 639px)": 1,
+    "screen and (max-width: 800px)": 1,
+    "screen and (max-width: 900px)": 1,
+    "screen and (min-width: 1150px)": 1,
+    "screen and (min-width: 2200px)": 1,
+    "screen and (min-width: 590px)": 1,
+    "screen and (min-width: 640px)": 1,
+    "screen and (min-width: 864px) and (max-width: 1186.9px)": 1,
+    "screen and (min-width: 901px)": 1,
+    "screen and (orientation: landscape) and (min-width: 590px) and (max-width: 800px)": 1
+   },
+   "supports_conditions": {
+    "(height: unset)": 8,
+    "(display:grid)": 5,
+    "((-webkit-clip-path:circle(50%)) or (clip-path:circle(50%)))": 2,
+    "(object-fit:cover)": 2,
+    "not selector(:focus-visible)": 2,
+    "(-moz-appearance: none)": 1,
+    "(-webkit-appearance: none)": 1,
+    "(-webkit-line-clamp:2)": 1,
+    "(-webkit-overflow-scrolling: touch)": 1,
+    "(backdrop-filter:blur(20px)) or (-webkit-backdrop-filter:blur(20px))": 1,
+    "(background:linear-gradient(red 0%,red 0% 1%,red 2%))": 1,
+    "(gap:unset)": 1,
+    "(transform-box:fill-box) and ((-webkit-clip-path:inset(0)) or (clip-path:inset(0)))": 1
+   },
+   "container_conditions": {
+    "about-card (max-width: 300px)": 1
+   }
+  }
+ },
+ "media": {
+  "can_play_type": {},
+  "is_type_supported": {},
+  "source_buffer_types": {},
+  "change_type": {},
+  "decoding_info": {},
+  "key_systems": {},
+  "get_user_media": {},
+  "get_display_media": 0,
+  "src_schemes": {},
+  "append_count": 0,
+  "append_bytes": 0
+ },
+ "audio": {
+  "contexts": 0,
+  "context_options": {},
+  "worklet_nodes": {},
+  "processor_options": {}
+ },
+ "canvas": {
+  "contexts": {},
+  "context_attributes": {},
+  "to_data_url": 0,
+  "to_blob": 0,
+  "get_image_data": 0
+ },
+ "webgl": {
+  "parameters": {},
+  "extensions": {}
+ },
+ "workers": {
+  "dedicated": {},
+  "shared": {},
+  "service": {},
+  "worklets": {}
+ },
+ "wasm": {
+  "module_bytes": [],
+  "total_bytes": 0,
+  "streaming_urls": {},
+  "memory_shared": 0,
+  "memory_unshared": 0
+ },
+ "intl": {
+  "ListFormat en-US {style,type}": 2,
+  "Locale en-US": 1
+ },
+ "rtc": {
+  "local_candidates": {},
+  "remote_candidates": {},
+  "ice_servers": {},
+  "config": {},
+  "codecs": {}
+ },
+ "storage": {
+  "indexeddb": {},
+  "caches": {},
+  "broadcast_channels": {}
+ },
+ "navigator": {
+  "high_entropy_hints": {},
+  "user_agent_data": {
+   "low_entropy": {
+    "brands": [
+     {
+      "brand": "Chromium",
+      "version": "153"
+     },
+     {
+      "brand": "Not_A Brand",
+      "version": "8"
+     }
+    ],
+    "mobile": false,
+    "platform": "macOS"
+   },
+   "high_entropy": {
+    "architecture": "x86",
+    "bitness": "64",
+    "brands": [
+     {
+      "brand": "Chromium",
+      "version": "153"
+     },
+     {
+      "brand": "Not_A Brand",
+      "version": "8"
+     }
+    ],
+    "formFactors": [
+     "Desktop"
+    ],
+    "fullVersionList": [
+     {
+      "brand": "Chromium",
+      "version": "153.0.8010.12"
+     },
+     {
+      "brand": "Not_A Brand",
+      "version": "8.0.0.0"
+     }
+    ],
+    "mobile": false,
+    "model": "",
+    "platform": "macOS",
+    "platformVersion": "10_15_7",
+    "uaFullVersion": "153.0.8010.12",
+    "wow64": false
+   }
+  }
+ },
+ "permissions": {},
+ "websockets": {},
+ "event_sources": {},
+ "network": {
+  "requests": 98,
+  "responses": 75,
+  "failed": 28,
+  "bytes_encoded": 2301891,
+  "http_versions": {
+   "h2": 72,
+   "data": 3
+  },
+  "resource_types": {
+   "image": 31,
+   "ping": 28,
+   "script": 16,
+   "other": 10,
+   "font": 5,
+   "stylesheet": 5,
+   "document": 3
+  },
+  "methods": {
+   "GET": 70,
+   "POST": 28
+  },
+  "status": {
+   "200": 68,
+   "404": 2
+  },
+  "hosts": {
+   "duckduckgo.com": 53,
+   "improving.duckduckgo.com": 28,
+   "external-content.duckduckgo.com": 15,
+   "html.duckduckgo.com": 1,
+   "links.duckduckgo.com": 1
+  },
+  "host_protocols": {
+   "duckduckgo.com": {
+    "h2": 55
+   },
+   "": {
+    "data": 3
+   },
+   "links.duckduckgo.com": {
+    "h2": 1
+   },
+   "external-content.duckduckgo.com": {
+    "h2": 15
+   },
+   "html.duckduckgo.com": {
+    "h2": 1
+   }
+  },
+  "mime_types": {
+   "application/x-javascript": 26,
+   "image/png": 15,
+   "image/svg+xml": 11,
+   "font/woff2": 5,
+   "text/css": 5,
+   "image/x-icon": 4,
+   "text/html": 3,
+   "image/gif": 2,
+   "image/webp": 2,
+   "application/x-font-woff": 1,
+   "image/vnd.microsoft.icon": 1
+  },
+  "content_encodings": {
+   "br": 51
+  },
+  "alt_svc_hosts": {},
+  "from_service_worker": 0,
+  "from_cache": 11,
+  "websockets": {},
+  "ws_frames_sent": 0,
+  "ws_frames_received": 0,
+  "failed_errors": {
+   "net::ERR_CONNECTION_REFUSED": 28
+  },
+  "ice": null
+ },
+ "realms": [
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "https://duckduckgo.com",
+   "is_top": true,
+   "dumps": 2,
+   "member_accesses": 21741,
+   "wrapped_count": 7912,
+   "install_ms": 20,
+   "sources": {
+    "ddg-js": 1,
+    "unload_flush": 1
+   }
+  },
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "https://duckduckgo.com",
+   "is_top": false,
+   "dumps": 2,
+   "member_accesses": 2,
+   "wrapped_count": 7912,
+   "install_ms": 19,
+   "sources": {
+    "ddg-js": 1,
+    "unload_flush": 1
+   }
+  },
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "https://html.duckduckgo.com",
+   "is_top": true,
+   "dumps": 3,
+   "member_accesses": 1,
+   "wrapped_count": 7912,
+   "install_ms": 19,
+   "sources": {
+    "ddg-html": 1,
+    "final": 1,
+    "unload_flush": 1
+   }
+  },
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "null",
+   "is_top": true,
+   "dumps": 1,
+   "member_accesses": 0,
+   "wrapped_count": 6449,
+   "install_ms": 22,
+   "sources": {
+    "unload_flush": 1
+   }
+  }
+ ]
+}

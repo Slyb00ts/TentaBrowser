@@ -1,0 +1,110 @@
+{
+  "fixture": "clear-float",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(1)",
+      "kind": "element",
+      "tag": "p",
+      "named": false,
+      "x": 0,
+      "y": 16,
+      "width": 500,
+      "height": 36
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 68,
+      "width": 500,
+      "height": 154
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 68,
+      "width": 120,
+      "height": 80
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > p:nth-child(2)",
+      "kind": "element",
+      "tag": "p",
+      "named": false,
+      "x": 0,
+      "y": 68,
+      "width": 500,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(3)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 148,
+      "width": 500,
+      "height": 40
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > p:nth-child(4)",
+      "kind": "element",
+      "tag": "p",
+      "named": false,
+      "x": 0,
+      "y": 204,
+      "width": 500,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "clear:both must drop BELOW the float at full width (orange bar under the blue...",
+      "x": 0,
+      "y": 16,
+      "width": 486.48,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > p:nth-child(2)::text(0)",
+      "kind": "text",
+      "text": "short text beside the float.",
+      "x": 120,
+      "y": 68,
+      "width": 183.22,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(3)::text(0)",
+      "kind": "text",
+      "text": "CLEARED: full width below",
+      "x": 0,
+      "y": 148,
+      "width": 192.97,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > p:nth-child(4)::text(0)",
+      "kind": "text",
+      "text": "after content flows normally.",
+      "x": 0,
+      "y": 204,
+      "width": 198.02,
+      "height": 18
+    }
+  ]
+}

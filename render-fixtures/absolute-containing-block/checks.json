@@ -1,0 +1,74 @@
+{
+  "fixture": "absolute-containing-block",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 60,
+      "y": 40,
+      "width": 400,
+      "height": 240
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 160,
+      "y": 120,
+      "width": 120,
+      "height": 80
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(1) > div:nth-child(1) > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 85,
+      "y": 75,
+      "width": 80,
+      "height": 60
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(1) > div:nth-child(1) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 350,
+      "y": 200,
+      "width": 70,
+      "height": 50
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(1) > div:nth-child(1) > div:nth-child(3)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 260,
+      "y": 160,
+      "width": 30,
+      "height": 30
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(1) > div:nth-child(1) > div:nth-child(4)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 520,
+      "y": 40,
+      "width": 90,
+      "height": 55
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "fixture": "background-shorthand-reset",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#underlay",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 300,
+      "height": 200
+    },
+    {
+      "selector": "#reset",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 300,
+      "height": 200
+    },
+    {
+      "selector": "#content",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 50,
+      "y": 50,
+      "width": 200,
+      "height": 100
+    }
+  ]
+}

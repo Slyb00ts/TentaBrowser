@@ -1,0 +1,42 @@
+[
+  {
+    "name": "inherited RTL places first flex item at inline start",
+    "color": "#e03131",
+    "x": 850,
+    "y": 0,
+    "width": 50,
+    "height": 40
+  },
+  {
+    "name": "inherited RTL reverses the flex row",
+    "color": "#1971c2",
+    "x": 800,
+    "y": 0,
+    "width": 50,
+    "height": 40
+  },
+  {
+    "name": "inherited RTL places first grid track at inline start",
+    "color": "#2f9e44",
+    "x": 850,
+    "y": 60,
+    "width": 50,
+    "height": 40
+  },
+  {
+    "name": "inherited RTL reverses explicit grid track placement",
+    "color": "#1971c2",
+    "x": 800,
+    "y": 60,
+    "width": 50,
+    "height": 40
+  },
+  {
+    "name": "inherited RTL resolves block under-constraint from right",
+    "color": "#862e9c",
+    "x": 850,
+    "y": 120,
+    "width": 50,
+    "height": 40
+  }
+]

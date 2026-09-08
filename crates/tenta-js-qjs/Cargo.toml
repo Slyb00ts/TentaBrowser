@@ -1,0 +1,13 @@
+[package]
+name = "tenta-js-qjs"
+description = "QuickJS-ng backend: runtimes, bytecode cache, shared-array-buffer hooks."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+tenta-js = { workspace = true }

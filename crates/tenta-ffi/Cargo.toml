@@ -1,0 +1,13 @@
+[package]
+name = "tenta-ffi"
+description = "C ABI and UniFFI bindings for Swift and Kotlin."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+tentabrowser = { workspace = true }

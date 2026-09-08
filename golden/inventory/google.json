@@ -1,0 +1,1334 @@
+{
+ "meta": {
+  "site": "google",
+  "title": "Google Search",
+  "tracer_version": "0.1.0",
+  "playwright_version": "1.63.0",
+  "chromium_version": "153.0.8010.12",
+  "channel": "chromium",
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+  "user_agent_raw": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.0.0 Safari/537.36",
+  "date": "2026-09-06T13:29:46.040Z",
+  "duration_ms": 26258,
+  "viewport": {
+   "width": 1280,
+   "height": 800
+  },
+  "locale": "en-US",
+  "urls": [
+   "https://www.google.com/search?q=rust+browser+engine&hl=en"
+  ],
+  "navigations": [
+   {
+    "url": "https://www.google.com/search?q=rust+browser+engine&hl=en",
+    "at_ms": 1273
+   },
+   {
+    "url": "https://www.google.com/sorry/index?<stripped>",
+    "at_ms": 1987
+   }
+  ],
+  "final_url": "https://www.google.com/sorry/index?<stripped>",
+  "page_title": "https://www.google.com/search?q=rust+browser+engine&hl=en&sei=y2qdatSRE7rXwPAPyqT1wQs",
+  "steps": [
+   {
+    "label": "google-serp",
+    "at_ms": 26195,
+    "url": "https://www.google.com/sorry/index?<stripped>",
+    "frames": 2,
+    "workers": 1,
+    "service_workers": 0
+   },
+   {
+    "label": "final",
+    "at_ms": 26213,
+    "url": "https://www.google.com/sorry/index?<stripped>",
+    "frames": 2,
+    "workers": 1,
+    "service_workers": 0
+   }
+  ],
+  "notes": [
+   "goto https://www.google.com/search?q=rust+browser+engine&hl=en -> 200 https://www.google.com/sorry/index?<stripped>",
+   "consent interstitial: not shown or not matched",
+   "google page: {\"#search a h3\":0,\"#rso\":0,\"#captcha-form\":1,\"iframe[src*=\\\"recaptcha\\\"]\":1,\"form#captcha-form\":1,\"title\":\"https://www.google.com/search?q=rust+browser+engine&hl=en&sei=y2qdatSRE7rXwPAPyqT1wQs\",\"text_sample\":\" About this page Our systems have detected unusual traffic from your computer network. This page checks to see if it's really you sending the requests, and not a robot. Why did this happen? IP address: <ip> Time: 2026-09-06T13:29:48Z URL: https://www.google.com/search?q=rust+browser+\"}; blocked=true"
+  ],
+  "limitations": [
+   "Dedicated, shared and service workers are traced after they attach (Playwright resumes them before the tracer can run), so their first synchronous statements are missed; workers that terminate before a harvest lose the counts since the previous harvest.",
+   "AudioWorklet and PaintWorklet global scopes are not traced (no injection path); worklet module URLs and AudioWorkletNode names are recorded from the page side.",
+   "[LegacyUnforgeable] members (Location.*, Window.location/document/window/top, Document.location) are non-configurable and cannot be wrapped; see meta.unwrappable.",
+   "ECMAScript intrinsics are not traced except Intl, the locale-sensitive Date/Number/String/Array methods, WebAssembly, SharedArrayBuffer and Atomics.wait/notify/waitAsync.",
+   "Cross-origin window property access (e.g. otherWindow.postMessage) goes through cross-origin wrappers, not the wrapped prototypes, and is undercounted.",
+   "HTTP protocol versions come from CDP Network.responseReceived on the main frame session plus best-effort sessions on out-of-process iframes; requests of frames that could not be attached are counted without a protocol.",
+   "Stylesheets are walked once per CSSStyleSheet object at harvest time; cross-origin sheets without CORS are counted in css.stylesheets.cross_origin_skipped only.",
+   "The User-Agent string had \"HeadlessChrome\" replaced by \"Chrome\" (Playwright then derives consistent navigator.userAgentData); no other fingerprint changes were made.",
+   "One query on the desktop SERP after accepting the consent interstitial; if Google served a block or CAPTCHA the inventory covers only what loaded (see meta.notes).",
+   "Google served a block/CAPTCHA page (https://www.google.com/sorry/index?<stripped>); the inventory reflects the interstitial and the block page only."
+  ],
+  "page_errors": {
+   "count": 4,
+   "samples": [
+    "solveSimpleChallenge is not defined",
+    "reCAPTCHA Timeout",
+    "reCAPTCHA Timeout (C)",
+    "reCAPTCHA Timeout (z)"
+   ]
+  },
+  "console_errors": 1,
+  "frames_traced": 11,
+  "workers_traced": 1,
+  "service_workers_traced": 0,
+  "unwrappable": [
+   "Window.window",
+   "Window.document",
+   "Window.location",
+   "Window.top"
+  ],
+  "tracer_errors": [],
+  "wrapped_members_top_frame": 6449,
+  "tracer_install_ms_top_frame": 35,
+  "interface_count": 39
+ },
+ "interfaces": {
+  "Window": {
+   "total": 1276,
+   "total_top": 1107,
+   "member_count": 25,
+   "realms": {
+    "window": 1276
+   },
+   "members": {
+    "performance": {
+     "get": 1000
+    },
+    "self": {
+     "get": 113
+    },
+    "navigator": {
+     "get": 99
+    },
+    "setTimeout": {
+     "call": 14
+    },
+    "trustedTypes": {
+     "get": 8
+    },
+    "getComputedStyle": {
+     "call": 6
+    },
+    "btoa": {
+     "call": 5
+    },
+    "postMessage": {
+     "call": 5
+    },
+    "atob": {
+     "call": 3
+    },
+    "localStorage": {
+     "get": 3
+    },
+    "parent": {
+     "get": 3
+    },
+    "clearTimeout": {
+     "call": 2
+    },
+    "pageXOffset": {
+     "get": 2
+    },
+    "pageYOffset": {
+     "get": 2
+    },
+    "devicePixelRatio": {
+     "get": 1
+    },
+    "history": {
+     "get": 1
+    },
+    "innerHeight": {
+     "get": 1
+    },
+    "innerWidth": {
+     "get": 1
+    },
+    "isSecureContext": {
+     "get": 1
+    },
+    "onerror": {
+     "set": 1
+    },
+    "opener": {
+     "get": 1
+    },
+    "outerHeight": {
+     "get": 1
+    },
+    "outerWidth": {
+     "get": 1
+    },
+    "screen": {
+     "get": 1
+    },
+    "sessionStorage": {
+     "get": 1
+    }
+   }
+  },
+  "Performance": {
+   "total": 1003,
+   "total_top": 998,
+   "member_count": 5,
+   "realms": {
+    "window": 1003
+   },
+   "members": {
+    "now": {
+     "call": 994
+    },
+    "timeOrigin": {
+     "get": 4
+    },
+    "timing": {
+     "get": 3
+    },
+    "getEntriesByType": {
+     "call": 1
+    },
+    "memory": {
+     "get": 1
+    }
+   }
+  },
+  "TrustedTypePolicy": {
+   "total": 240,
+   "total_top": 234,
+   "member_count": 3,
+   "realms": {
+    "window": 240
+   },
+   "members": {
+    "createScript": {
+     "call": 230
+    },
+    "createHTML": {
+     "call": 6
+    },
+    "createScriptURL": {
+     "call": 4
+    }
+   }
+  },
+  "Navigator": {
+   "total": 101,
+   "total_top": 47,
+   "member_count": 10,
+   "realms": {
+    "window": 101
+   },
+   "members": {
+    "userAgent": {
+     "get": 90
+    },
+    "userAgentData": {
+     "get": 3
+    },
+    "connection": {
+     "get": 1
+    },
+    "deviceMemory": {
+     "get": 1
+    },
+    "hardwareConcurrency": {
+     "get": 1
+    },
+    "languages": {
+     "get": 1
+    },
+    "maxTouchPoints": {
+     "get": 1
+    },
+    "mimeTypes": {
+     "get": 1
+    },
+    "plugins": {
+     "get": 1
+    },
+    "webdriver": {
+     "get": 1
+    }
+   }
+  },
+  "Element": {
+   "total": 90,
+   "total_top": 65,
+   "member_count": 14,
+   "realms": {
+    "window": 90
+   },
+   "members": {
+    "tagName": {
+     "get": 26
+    },
+    "getAttribute": {
+     "call": 16
+    },
+    "setAttribute": {
+     "call": 12
+    },
+    "getElementsByClassName": {
+     "call": 8
+    },
+    "innerHTML": {
+     "set": 6
+    },
+    "firstElementChild": {
+     "get": 4
+    },
+    "id": {
+     "get": 4
+    },
+    "hasAttribute": {
+     "call": 3
+    },
+    "children": {
+     "get": 2
+    },
+    "getBoundingClientRect": {
+     "call": 2
+    },
+    "getElementsByTagName": {
+     "call": 2
+    },
+    "scrollLeft": {
+     "get": 2
+    },
+    "scrollTop": {
+     "get": 2
+    },
+    "prepend": {
+     "call": 1
+    }
+   }
+  },
+  "Document": {
+   "total": 86,
+   "total_top": 38,
+   "member_count": 21,
+   "realms": {
+    "window": 86
+   },
+   "members": {
+    "defaultView": {
+     "get": 20
+    },
+    "createElement": {
+     "call": 15
+    },
+    "contentType": {
+     "get": 9
+    },
+    "body": {
+     "get": 6
+    },
+    "getElementById": {
+     "call": 5
+    },
+    "scrollingElement": {
+     "get": 4
+    },
+    "cookie": {
+     "get": 2,
+     "set": 1
+    },
+    "currentScript": {
+     "get": 3
+    },
+    "documentElement": {
+     "get": 3
+    },
+    "getElementsByClassName": {
+     "call": 3
+    },
+    "URL": {
+     "get": 2
+    },
+    "hasStorageAccess": {
+     "call": 2
+    },
+    "readyState": {
+     "get": 2
+    },
+    "requestStorageAccess": {
+     "call": 2
+    },
+    "createEvent": {
+     "call": 1
+    },
+    "getElementsByTagName": {
+     "call": 1
+    },
+    "head": {
+     "get": 1
+    },
+    "hidden": {
+     "get": 1
+    },
+    "querySelector": {
+     "call": 1
+    },
+    "querySelectorAll": {
+     "call": 1
+    },
+    "referrer": {
+     "get": 1
+    }
+   }
+  },
+  "EventTarget": {
+   "total": 76,
+   "total_top": 7,
+   "member_count": 2,
+   "realms": {
+    "window": 76
+   },
+   "members": {
+    "addEventListener": {
+     "call": 70
+    },
+    "removeEventListener": {
+     "call": 6
+    }
+   }
+  },
+  "MutationRecord": {
+   "total": 72,
+   "total_top": 72,
+   "member_count": 3,
+   "realms": {
+    "window": 72
+   },
+   "members": {
+    "target": {
+     "get": 36
+    },
+    "attributeName": {
+     "get": 24
+    },
+    "type": {
+     "get": 12
+    }
+   }
+  },
+  "Node": {
+   "total": 52,
+   "total_top": 25,
+   "member_count": 9,
+   "realms": {
+    "window": 52
+   },
+   "members": {
+    "nodeType": {
+     "get": 20
+    },
+    "ownerDocument": {
+     "get": 8
+    },
+    "appendChild": {
+     "call": 6
+    },
+    "childNodes": {
+     "get": 6
+    },
+    "insertBefore": {
+     "call": 5
+    },
+    "firstChild": {
+     "get": 3
+    },
+    "removeChild": {
+     "call": 2
+    },
+    "contains": {
+     "call": 1
+    },
+    "parentNode": {
+     "get": 1
+    }
+   }
+  },
+  "HTMLIFrameElement": {
+   "total": 50,
+   "total_top": 47,
+   "member_count": 6,
+   "realms": {
+    "window": 50
+   },
+   "members": {
+    "sandbox": {
+     "get": 32,
+     "set": 2
+    },
+    "contentWindow": {
+     "get": 9
+    },
+    "name": {
+     "set": 2
+    },
+    "scrolling": {
+     "set": 2
+    },
+    "src": {
+     "set": 2
+    },
+    "srcdoc": {
+     "set": 1
+    }
+   }
+  },
+  "TextDecoder": {
+   "total": 42,
+   "total_top": 0,
+   "member_count": 2,
+   "realms": {
+    "window": 42
+   },
+   "members": {
+    "decode": {
+     "call": 40
+    },
+    "constructor": {
+     "construct": 2
+    }
+   }
+  },
+  "HTMLElement": {
+   "total": 40,
+   "total_top": 34,
+   "member_count": 8,
+   "realms": {
+    "window": 40
+   },
+   "members": {
+    "style": {
+     "get": 28
+    },
+    "offsetHeight": {
+     "get": 2
+    },
+    "offsetWidth": {
+     "get": 2
+    },
+    "onload": {
+     "set": 2
+    },
+    "tabIndex": {
+     "get": 2
+    },
+    "title": {
+     "set": 2
+    },
+    "click": {
+     "call": 1
+    },
+    "onclick": {
+     "set": 1
+    }
+   }
+  },
+  "MessageEvent": {
+   "total": 18,
+   "total_top": 12,
+   "member_count": 4,
+   "realms": {
+    "window": 18
+   },
+   "members": {
+    "origin": {
+     "get": 6
+    },
+    "data": {
+     "get": 5
+    },
+    "ports": {
+     "get": 4
+    },
+    "source": {
+     "get": 3
+    }
+   }
+  },
+  "Event": {
+   "total": 15,
+   "total_top": 15,
+   "member_count": 4,
+   "realms": {
+    "window": 15
+   },
+   "members": {
+    "type": {
+     "get": 6
+    },
+    "defaultPrevented": {
+     "get": 3
+    },
+    "target": {
+     "get": 3
+    },
+    "timeStamp": {
+     "get": 3
+    }
+   }
+  },
+  "MessageChannel": {
+   "total": 15,
+   "total_top": 3,
+   "member_count": 3,
+   "realms": {
+    "window": 15
+   },
+   "members": {
+    "constructor": {
+     "construct": 5
+    },
+    "port1": {
+     "get": 5
+    },
+    "port2": {
+     "get": 5
+    }
+   }
+  },
+  "DOMTokenList": {
+   "total": 14,
+   "total_top": 14,
+   "member_count": 3,
+   "realms": {
+    "window": 14
+   },
+   "members": {
+    "add": {
+     "call": 6
+    },
+    "supports": {
+     "call": 6
+    },
+    "value": {
+     "set": 2
+    }
+   }
+  },
+  "MessagePort": {
+   "total": 14,
+   "total_top": 1,
+   "member_count": 2,
+   "realms": {
+    "window": 14
+   },
+   "members": {
+    "postMessage": {
+     "call": 7
+    },
+    "start": {
+     "call": 7
+    }
+   }
+  },
+  "NodeList": {
+   "total": 9,
+   "total_top": 5,
+   "member_count": 2,
+   "realms": {
+    "window": 9
+   },
+   "members": {
+    "length": {
+     "get": 8
+    },
+    "@@iterator": {
+     "call": 1
+    }
+   }
+  },
+  "TrustedTypePolicyFactory": {
+   "total": 8,
+   "total_top": 6,
+   "member_count": 2,
+   "realms": {
+    "window": 8
+   },
+   "members": {
+    "createPolicy": {
+     "call": 7
+    },
+    "emptyHTML": {
+     "get": 1
+    }
+   }
+  },
+  "HTMLScriptElement": {
+   "total": 6,
+   "total_top": 6,
+   "member_count": 6,
+   "realms": {
+    "window": 6
+   },
+   "members": {
+    "async": {
+     "set": 1
+    },
+    "charset": {
+     "set": 1
+    },
+    "crossOrigin": {
+     "set": 1
+    },
+    "integrity": {
+     "set": 1
+    },
+    "src": {
+     "set": 1
+    },
+    "type": {
+     "set": 1
+    }
+   }
+  },
+  "PerformanceResourceTiming": {
+   "total": 6,
+   "total_top": 6,
+   "member_count": 6,
+   "realms": {
+    "window": 6
+   },
+   "members": {
+    "connectEnd": {
+     "get": 1
+    },
+    "connectStart": {
+     "get": 1
+    },
+    "domainLookupEnd": {
+     "get": 1
+    },
+    "domainLookupStart": {
+     "get": 1
+    },
+    "requestStart": {
+     "get": 1
+    },
+    "responseStart": {
+     "get": 1
+    }
+   }
+  },
+  "Screen": {
+   "total": 6,
+   "total_top": 6,
+   "member_count": 6,
+   "realms": {
+    "window": 6
+   },
+   "members": {
+    "availHeight": {
+     "get": 1
+    },
+    "availLeft": {
+     "get": 1
+    },
+    "availTop": {
+     "get": 1
+    },
+    "availWidth": {
+     "get": 1
+    },
+    "height": {
+     "get": 1
+    },
+    "width": {
+     "get": 1
+    }
+   }
+  },
+  "Storage": {
+   "total": 6,
+   "total_top": 1,
+   "member_count": 2,
+   "realms": {
+    "window": 6
+   },
+   "members": {
+    "getItem": {
+     "call": 4
+    },
+    "setItem": {
+     "call": 2
+    }
+   }
+  },
+  "URL": {
+   "total": 6,
+   "total_top": 0,
+   "member_count": 3,
+   "realms": {
+    "window": 6
+   },
+   "members": {
+    "constructor": {
+     "construct": 2
+    },
+    "origin": {
+     "get": 2
+    },
+    "pathname": {
+     "get": 2
+    }
+   }
+  },
+  "DOMRectReadOnly": {
+   "total": 4,
+   "total_top": 2,
+   "member_count": 2,
+   "realms": {
+    "window": 4
+   },
+   "members": {
+    "left": {
+     "get": 2
+    },
+    "top": {
+     "get": 2
+    }
+   }
+  },
+  "PerformanceObserver": {
+   "total": 4,
+   "total_top": 0,
+   "member_count": 2,
+   "realms": {
+    "window": 4
+   },
+   "members": {
+    "constructor": {
+     "construct": 2
+    },
+    "observe": {
+     "call": 2
+    }
+   }
+  },
+  "TrustedScriptURL": {
+   "total": 4,
+   "total_top": 2,
+   "member_count": 1,
+   "realms": {
+    "window": 4
+   },
+   "members": {
+    "toString": {
+     "call": 4
+    }
+   }
+  },
+  "NetworkInformation": {
+   "total": 3,
+   "total_top": 3,
+   "member_count": 3,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "downlink": {
+     "get": 1
+    },
+    "effectiveType": {
+     "get": 1
+    },
+    "rtt": {
+     "get": 1
+    }
+   }
+  },
+  "TextEncoder": {
+   "total": 3,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 3
+   },
+   "members": {
+    "constructor": {
+     "construct": 3
+    }
+   }
+  },
+  "HTMLInputElement": {
+   "total": 2,
+   "total_top": 0,
+   "member_count": 1,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "value": {
+     "get": 2
+    }
+   }
+  },
+  "HTMLMetaElement": {
+   "total": 2,
+   "total_top": 2,
+   "member_count": 2,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "content": {
+     "set": 1
+    },
+    "httpEquiv": {
+     "set": 1
+    }
+   }
+  },
+  "MutationObserver": {
+   "total": 2,
+   "total_top": 2,
+   "member_count": 2,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "constructor": {
+     "construct": 1
+    },
+    "observe": {
+     "call": 1
+    }
+   }
+  },
+  "PerformanceTiming": {
+   "total": 2,
+   "total_top": 2,
+   "member_count": 2,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "navigationStart": {
+     "get": 1
+    },
+    "responseStart": {
+     "get": 1
+    }
+   }
+  },
+  "Worker": {
+   "total": 2,
+   "total_top": 0,
+   "member_count": 1,
+   "realms": {
+    "window": 2
+   },
+   "members": {
+    "constructor": {
+     "construct": 2
+    }
+   }
+  },
+  "HTMLCollection": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "length": {
+     "get": 1
+    }
+   }
+  },
+  "HTMLMediaElement": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "canPlayType": {
+     "call": 1
+    }
+   }
+  },
+  "History": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "length": {
+     "get": 1
+    }
+   }
+  },
+  "MouseEvent": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "screenX": {
+     "get": 1
+    }
+   }
+  },
+  "Permissions": {
+   "total": 1,
+   "total_top": 1,
+   "member_count": 1,
+   "realms": {
+    "window": 1
+   },
+   "members": {
+    "query": {
+     "call": 1
+    }
+   }
+  }
+ },
+ "events": {
+  "MessagePort:message": 7,
+  "HTMLSpanElement:keydown": 4,
+  "HTMLSpanElement:keyup": 4,
+  "Window:test": 4,
+  "Window:message": 3,
+  "HTMLDivElement:mouseenter": 2,
+  "HTMLDivElement:mouseleave": 2,
+  "HTMLDocument:click": 2,
+  "HTMLDocument:focus": 2,
+  "HTMLDocument:keydown": 2,
+  "HTMLLabelElement:click": 2,
+  "HTMLLabelElement:keydown": 2,
+  "HTMLLabelElement:keyup": 2,
+  "HTMLLabelElement:mousedown": 2,
+  "HTMLLabelElement:mouseout": 2,
+  "HTMLLabelElement:mouseover": 2,
+  "HTMLLabelElement:mouseup": 2,
+  "HTMLSpanElement:blur": 2,
+  "HTMLSpanElement:click": 2,
+  "HTMLSpanElement:contextmenu": 2,
+  "HTMLSpanElement:focus": 2,
+  "HTMLSpanElement:keypress": 2,
+  "HTMLSpanElement:mousecancel": 2,
+  "HTMLSpanElement:mousedown": 2,
+  "HTMLSpanElement:mouseout": 2,
+  "HTMLSpanElement:mouseover": 2,
+  "HTMLSpanElement:mouseup": 2,
+  "Worker:message": 2,
+  "Window:load": 1,
+  "Window:storage": 1
+ },
+ "elements": {
+  "div": 6,
+  "iframe": 5,
+  "a": 1,
+  "img": 1,
+  "meta": 1,
+  "script": 1
+ },
+ "custom_elements": {},
+ "css": {
+  "set": {},
+  "get": {},
+  "computed": {},
+  "inserted": {},
+  "supports": {},
+  "media_queries": {},
+  "stylesheets": {
+   "sheets": 3,
+   "cross_origin_skipped": 2,
+   "rules": 55,
+   "rule_types": {
+    "CSSFontFaceRule": 54,
+    "CSSStyleRule": 1
+   },
+   "properties": {
+    "font-family": 54,
+    "font-stretch": 54,
+    "font-style": 54,
+    "font-weight": 54,
+    "src": 54,
+    "unicode-range": 54,
+    "background-color": 1
+   },
+   "selectors": {},
+   "media_queries": {},
+   "supports_conditions": {},
+   "container_conditions": {}
+  }
+ },
+ "media": {
+  "can_play_type": {},
+  "is_type_supported": {},
+  "source_buffer_types": {},
+  "change_type": {},
+  "decoding_info": {},
+  "key_systems": {},
+  "get_user_media": {},
+  "get_display_media": 0,
+  "src_schemes": {},
+  "append_count": 0,
+  "append_bytes": 0
+ },
+ "audio": {
+  "contexts": 0,
+  "context_options": {},
+  "worklet_nodes": {},
+  "processor_options": {}
+ },
+ "canvas": {
+  "contexts": {},
+  "context_attributes": {},
+  "to_data_url": 0,
+  "to_blob": 0,
+  "get_image_data": 0
+ },
+ "webgl": {
+  "parameters": {},
+  "extensions": {}
+ },
+ "workers": {
+  "dedicated": {
+   "https://www.google.com/recaptcha/enterprise/webworker.js classic": 2
+  },
+  "shared": {},
+  "service": {},
+  "worklets": {}
+ },
+ "wasm": {
+  "module_bytes": [],
+  "total_bytes": 0,
+  "streaming_urls": {},
+  "memory_shared": 0,
+  "memory_unshared": 0
+ },
+ "intl": {},
+ "rtc": {
+  "local_candidates": {},
+  "remote_candidates": {},
+  "ice_servers": {},
+  "config": {},
+  "codecs": {}
+ },
+ "storage": {
+  "indexeddb": {},
+  "caches": {},
+  "broadcast_channels": {}
+ },
+ "navigator": {
+  "high_entropy_hints": {},
+  "user_agent_data": {
+   "low_entropy": {
+    "brands": [
+     {
+      "brand": "Chromium",
+      "version": "153"
+     },
+     {
+      "brand": "Not_A Brand",
+      "version": "8"
+     }
+    ],
+    "mobile": false,
+    "platform": "macOS"
+   },
+   "high_entropy": {
+    "architecture": "x86",
+    "bitness": "64",
+    "brands": [
+     {
+      "brand": "Chromium",
+      "version": "153"
+     },
+     {
+      "brand": "Not_A Brand",
+      "version": "8"
+     }
+    ],
+    "formFactors": [
+     "Desktop"
+    ],
+    "fullVersionList": [
+     {
+      "brand": "Chromium",
+      "version": "153.0.8010.12"
+     },
+     {
+      "brand": "Not_A Brand",
+      "version": "8.0.0.0"
+     }
+    ],
+    "mobile": false,
+    "model": "",
+    "platform": "macOS",
+    "platformVersion": "10_15_7",
+    "uaFullVersion": "153.0.8010.12",
+    "wow64": false
+   }
+  }
+ },
+ "permissions": {
+  "notifications": 1
+ },
+ "websockets": {},
+ "event_sources": {},
+ "network": {
+  "requests": 19,
+  "responses": 19,
+  "failed": 0,
+  "bytes_encoded": 542170,
+  "http_versions": {
+   "h3": 12,
+   "data": 4,
+   "h2": 3
+  },
+  "resource_types": {
+   "script": 6,
+   "document": 5,
+   "font": 2,
+   "image": 2,
+   "other": 2,
+   "stylesheet": 2
+  },
+  "methods": {
+   "GET": 19
+  },
+  "status": {
+   "200": 17,
+   "302": 1,
+   "429": 1
+  },
+  "hosts": {
+   "www.gstatic.com": 9,
+   "www.google.com": 8,
+   "fonts.gstatic.com": 2
+  },
+  "host_protocols": {
+   "www.google.com": {
+    "h3": 6
+   },
+   "www.gstatic.com": {
+    "h3": 4,
+    "h2": 3
+   },
+   "": {
+    "data": 4
+   },
+   "fonts.gstatic.com": {
+    "h3": 2
+   }
+  },
+  "mime_types": {
+   "image/png": 6,
+   "text/html": 4,
+   "text/javascript": 4,
+   "font/woff2": 2,
+   "text/css": 2,
+   "image/x-icon": 1
+  },
+  "content_encodings": {
+   "gzip": 9,
+   "br": 1
+  },
+  "alt_svc_hosts": {
+   "www.gstatic.com": 7,
+   "www.google.com": 6,
+   "fonts.gstatic.com": 2
+  },
+  "from_service_worker": 0,
+  "from_cache": 2,
+  "websockets": {},
+  "ws_frames_sent": 0,
+  "ws_frames_received": 0,
+  "failed_errors": {},
+  "failed_hosts": {}
+ },
+ "realms": [
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "https://www.google.com",
+   "is_top": true,
+   "dumps": 4,
+   "member_accesses": 2768,
+   "wrapped_count": 7912,
+   "install_ms": 27,
+   "sources": {
+    "unload_flush": 2,
+    "google-serp": 1,
+    "final": 1
+   }
+  },
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "https://www.google.com",
+   "is_top": false,
+   "dumps": 3,
+   "member_accesses": 516,
+   "wrapped_count": 7912,
+   "install_ms": 19,
+   "sources": {
+    "unload_flush": 1,
+    "google-serp": 1,
+    "final": 1
+   }
+  },
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "null",
+   "is_top": true,
+   "dumps": 1,
+   "member_accesses": 0,
+   "wrapped_count": 6449,
+   "install_ms": 35,
+   "sources": {
+    "unload_flush": 1
+   }
+  },
+  {
+   "kind": "window",
+   "global": "Window",
+   "origin": "null",
+   "is_top": false,
+   "dumps": 3,
+   "member_accesses": 0,
+   "wrapped_count": 7912,
+   "install_ms": 20,
+   "sources": {
+    "unload_flush": 3
+   }
+  },
+  {
+   "kind": "worker",
+   "global": "DedicatedWorkerGlobalScope",
+   "origin": "https://www.google.com",
+   "is_top": false,
+   "dumps": 2,
+   "member_accesses": 0,
+   "wrapped_count": 2367,
+   "install_ms": 6,
+   "sources": {
+    "google-serp": 1,
+    "final": 1
+   }
+  }
+ ]
+}

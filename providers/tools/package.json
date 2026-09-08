@@ -1,0 +1,9 @@
+{
+  "name": "tentabrowser-provider-tools",
+  "private": true,
+  "type": "module",
+  "description": "Node helpers for the search provider survey (Google via headless Chromium).",
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  }
+}

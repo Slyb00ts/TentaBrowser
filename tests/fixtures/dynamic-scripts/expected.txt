@@ -1,0 +1,6 @@
+Dynamically inserted scripts
+stage1: ran #1
+stage2: ran #3
+stage3: ran #4
+sidecar: ran #2
+dynamic-scripts: done (3 stages + sidecar)

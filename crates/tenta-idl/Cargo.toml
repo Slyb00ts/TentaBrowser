@@ -1,0 +1,34 @@
+[package]
+name = "tenta-idl"
+description = "WebIDL parser and binding code generator used at build time by feature crates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+# `format` runs the generated source through prettyplease. It changes only
+# whitespace, so golden files record the unformatted output.
+format = ["dep:prettyplease", "dep:syn"]
+# The generated prelude gates its engine glue on these names. tenta-idl has no
+# engine dependency of its own, so enabling them here only declares the cfgs
+# (which keeps `unexpected_cfgs` quiet when the tests compile generated code)
+# and switches the include test off; a consumer crate declares features with
+# the same names next to its `v8` and `rquickjs` dependencies.
+v8 = []
+quickjs = []
+
+[dependencies]
+weedle = { package = "weedle4", version = "0.4" }
+thiserror.workspace = true
+prettyplease = { version = "0.2", optional = true }
+syn = { version = "2", features = ["full", "parsing"], optional = true }
+
+[dev-dependencies]
+syn = { version = "2", features = ["full", "parsing"] }
+
+[[bin]]
+name = "tenta-idl"
+path = "src/bin/tenta-idl.rs"

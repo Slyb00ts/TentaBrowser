@@ -1,0 +1,292 @@
+{
+  "started_utc": "2026-09-06T14:05:07.538328+00:00",
+  "finished_utc": "2026-09-06T14:05:08.523438+00:00",
+  "label": "reference-wait0",
+  "machine": {
+    "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "cpu_count": 10,
+    "python": "3.14.7",
+    "psutil": null,
+    "cpu": "Apple M4",
+    "memory_bytes": 17179869184,
+    "os_version": "26.5.2"
+  },
+  "runs": 25,
+  "warmup": 2,
+  "interleaved": true,
+  "measurement": {
+    "wall_ms": "time.perf_counter around Popen..wait4 of the subject process",
+    "cpu_ms": "ru_utime + ru_stime from wait4 (user + system, subject process and its waited children)",
+    "peak_rss_bytes": "ru_maxrss from wait4 (the subject process itself; same source as /usr/bin/time -l)",
+    "peak_rss_tree_bytes": null,
+    "ttfr_ms": "first REQ logged by fixture-server minus the subject's spawn time (same wall clock)"
+  },
+  "subjects": {
+    "reference": {
+      "binary": "$REPOS/obscura-reference/target/release/obscura",
+      "version": "tentabrowser 0.1.0",
+      "available": true
+    }
+  },
+  "results": [
+    {
+      "scenario": "S-static-text-cli",
+      "subject": "reference",
+      "version": "tentabrowser 0.1.0",
+      "status": "ok",
+      "runs_ok": 25,
+      "runs_failed": 0,
+      "samples": [
+        {
+          "wall_ms": 36.33937519043684,
+          "cpu_ms": 22.59,
+          "peak_rss_bytes": 43663360,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 14.476,
+          "requests": 13
+        },
+        {
+          "wall_ms": 34.78387510403991,
+          "cpu_ms": 24.813999999999997,
+          "peak_rss_bytes": 44285952,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 8.161,
+          "requests": 13
+        },
+        {
+          "wall_ms": 35.73654196225107,
+          "cpu_ms": 24.621,
+          "peak_rss_bytes": 43630592,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 9.312,
+          "requests": 13
+        },
+        {
+          "wall_ms": 32.67620806582272,
+          "cpu_ms": 22.636999999999997,
+          "peak_rss_bytes": 43597824,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 12.915,
+          "requests": 13
+        },
+        {
+          "wall_ms": 34.7866250667721,
+          "cpu_ms": 24.021,
+          "peak_rss_bytes": 43532288,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 8.71,
+          "requests": 13
+        },
+        {
+          "wall_ms": 32.53800002858043,
+          "cpu_ms": 23.153,
+          "peak_rss_bytes": 43614208,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 10.044,
+          "requests": 13
+        },
+        {
+          "wall_ms": 36.64074977859855,
+          "cpu_ms": 25.905,
+          "peak_rss_bytes": 43532288,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 12.418,
+          "requests": 13
+        },
+        {
+          "wall_ms": 31.647290801629424,
+          "cpu_ms": 27.11,
+          "peak_rss_bytes": 43696128,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 7.973,
+          "requests": 13
+        },
+        {
+          "wall_ms": 37.390375044196844,
+          "cpu_ms": 29.955,
+          "peak_rss_bytes": 43696128,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 9.185,
+          "requests": 13
+        },
+        {
+          "wall_ms": 31.718749785795808,
+          "cpu_ms": 26.069,
+          "peak_rss_bytes": 44187648,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 9.293,
+          "requests": 13
+        },
+        {
+          "wall_ms": 39.63887505233288,
+          "cpu_ms": 25.044,
+          "peak_rss_bytes": 43712512,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 6.58,
+          "requests": 13
+        },
+        {
+          "wall_ms": 31.917166896164417,
+          "cpu_ms": 26.486,
+          "peak_rss_bytes": 43548672,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 7.042,
+          "requests": 13
+        },
+        {
+          "wall_ms": 42.025041999295354,
+          "cpu_ms": 25.133,
+          "peak_rss_bytes": 43630592,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 10.144,
+          "requests": 13
+        },
+        {
+          "wall_ms": 33.129250165075064,
+          "cpu_ms": 25.912,
+          "peak_rss_bytes": 43827200,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 8.724,
+          "requests": 13
+        },
+        {
+          "wall_ms": 29.739625053480268,
+          "cpu_ms": 24.695999999999998,
+          "peak_rss_bytes": 43696128,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 9.224,
+          "requests": 13
+        },
+        {
+          "wall_ms": 33.7345409207046,
+          "cpu_ms": 25.934999999999995,
+          "peak_rss_bytes": 43712512,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 9.91,
+          "requests": 13
+        },
+        {
+          "wall_ms": 29.146207962185144,
+          "cpu_ms": 24.473,
+          "peak_rss_bytes": 43696128,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 6.407,
+          "requests": 13
+        },
+        {
+          "wall_ms": 29.458124889060855,
+          "cpu_ms": 22.635999999999996,
+          "peak_rss_bytes": 43597824,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 8.728,
+          "requests": 13
+        },
+        {
+          "wall_ms": 33.67733396589756,
+          "cpu_ms": 24.912999999999997,
+          "peak_rss_bytes": 43810816,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 8.218,
+          "requests": 13
+        },
+        {
+          "wall_ms": 32.56974997930229,
+          "cpu_ms": 21.446,
+          "peak_rss_bytes": 44187648,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 11.253,
+          "requests": 13
+        },
+        {
+          "wall_ms": 33.347709104418755,
+          "cpu_ms": 25.36,
+          "peak_rss_bytes": 43696128,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 9.825,
+          "requests": 13
+        },
+        {
+          "wall_ms": 34.94070912711322,
+          "cpu_ms": 29.848,
+          "peak_rss_bytes": 43876352,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 8.052,
+          "requests": 13
+        },
+        {
+          "wall_ms": 37.074082996696234,
+          "cpu_ms": 29.35,
+          "peak_rss_bytes": 44056576,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 10.332,
+          "requests": 13
+        },
+        {
+          "wall_ms": 35.49254103563726,
+          "cpu_ms": 28.862,
+          "peak_rss_bytes": 44187648,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 9.438,
+          "requests": 13
+        },
+        {
+          "wall_ms": 33.011832972988486,
+          "cpu_ms": 27.228999999999996,
+          "peak_rss_bytes": 43646976,
+          "peak_rss_tree_bytes": null,
+          "ttfr_ms": 8.726,
+          "requests": 13
+        }
+      ],
+      "summary": {
+        "wall_ms": {
+          "n": 25,
+          "min": 29.146207962185144,
+          "p50": 33.67733396589756,
+          "p95": 39.63887505233288,
+          "max": 42.025041999295354,
+          "mean": 34.12642331793904
+        },
+        "cpu_ms": {
+          "n": 25,
+          "min": 21.446,
+          "p50": 25.133,
+          "p95": 29.848,
+          "max": 29.955,
+          "mean": 25.527919999999998
+        },
+        "peak_rss_bytes": {
+          "n": 25,
+          "min": 43532288,
+          "p50": 43696128,
+          "p95": 44187648,
+          "max": 44285952,
+          "mean": 43772805.12
+        },
+        "peak_rss_tree_bytes": null,
+        "ttfr_ms": {
+          "n": 25,
+          "min": 6.407,
+          "p50": 9.224,
+          "p95": 12.915,
+          "max": 14.476,
+          "mean": 9.4036
+        }
+      },
+      "command": [
+        "$REPOS/obscura-reference/target/release/obscura",
+        "fetch",
+        "http://127.0.0.1:59696/static-article/index.html",
+        "--dump",
+        "text",
+        "--allow-private-network",
+        "--quiet",
+        "--wait",
+        "0"
+      ],
+      "rtt_ms": 0,
+      "url": "http://127.0.0.1:59696/static-article/index.html"
+    }
+  ]
+}

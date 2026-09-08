@@ -1,0 +1,206 @@
+{
+  "fixture": "carousel-clip",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(1)",
+      "kind": "element",
+      "tag": "p",
+      "named": false,
+      "x": 0,
+      "y": 16,
+      "width": 900,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 8,
+      "y": 50,
+      "width": 304,
+      "height": 114
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": -290,
+      "y": 52,
+      "width": 900,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": -290,
+      "y": 52,
+      "width": 300,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(1) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 10,
+      "y": 52,
+      "width": 300,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(1) > div:nth-child(3)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 310,
+      "y": 52,
+      "width": 300,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(3)",
+      "kind": "element",
+      "tag": "p",
+      "named": false,
+      "x": 0,
+      "y": 180,
+      "width": 900,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 8,
+      "y": 214,
+      "width": 304,
+      "height": 114
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 10,
+      "y": 216,
+      "width": 900,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > div:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 10,
+      "y": 216,
+      "width": 300,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > div:nth-child(1) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 310,
+      "y": 216,
+      "width": 300,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > div:nth-child(1) > div:nth-child(3)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 610,
+      "y": 216,
+      "width": 300,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "Track translated -300px: ONLY slide TWO (green) may be visible.",
+      "x": 0,
+      "y": 16,
+      "width": 463.63,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(1) > div:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "ONE",
+      "x": -166.02,
+      "y": 88,
+      "width": 52.02,
+      "height": 28
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(1) > div:nth-child(2)::text(0)",
+      "kind": "text",
+      "text": "TWO",
+      "x": 132,
+      "y": 88,
+      "width": 55.98,
+      "height": 28
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(1) > div:nth-child(3)::text(0)",
+      "kind": "text",
+      "text": "THREE",
+      "x": 419.33,
+      "y": 88,
+      "width": 81.34,
+      "height": 28
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(3)::text(0)",
+      "kind": "text",
+      "text": "Control (transform:none): only slide ONE (red) visible.",
+      "x": 0,
+      "y": 180,
+      "width": 380.58,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > div:nth-child(1) > div:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "ONE",
+      "x": 133.98,
+      "y": 252,
+      "width": 52.02,
+      "height": 28
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > div:nth-child(1) > div:nth-child(2)::text(0)",
+      "kind": "text",
+      "text": "TWO",
+      "x": 432,
+      "y": 252,
+      "width": 55.98,
+      "height": 28
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > div:nth-child(1) > div:nth-child(3)::text(0)",
+      "kind": "text",
+      "text": "THREE",
+      "x": 719.33,
+      "y": 252,
+      "width": 81.34,
+      "height": 28
+    }
+  ]
+}

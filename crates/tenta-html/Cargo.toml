@@ -1,0 +1,21 @@
+[package]
+name = "tenta-html"
+description = "HTML tokenizer and tree builder with preload scanner and encoding sniffing; XML parser."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+encoding_rs = { workspace = true }
+memchr = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[[bench]]
+name = "parse"
+harness = false

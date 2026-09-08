@@ -1,0 +1,281 @@
+{
+  "browser": {
+    "name": "chrome",
+    "version": "144.0.7559.60",
+    "playwright": "1.63.0"
+  },
+  "settings": {
+    "viewport": [
+      900,
+      1000
+    ],
+    "device_scale_factor": 1,
+    "locale": "en-US",
+    "timezone_id": "UTC",
+    "color_scheme": "light",
+    "reduced_motion": "no-preference",
+    "wait_until": "load",
+    "settle_ms": 2000,
+    "remote_network": "blocked",
+    "screenshot": "viewport"
+  },
+  "captured_at": "2026-09-06T13:08:36.656Z",
+  "fixtures": {
+    "abs-fill": {
+      "checks": 27,
+      "page_errors": []
+    },
+    "absolute-containing-block": {
+      "checks": 6,
+      "page_errors": []
+    },
+    "absolute-static-position": {
+      "checks": 12,
+      "page_errors": []
+    },
+    "animation-fill-forwards": {
+      "checks": 2,
+      "page_errors": []
+    },
+    "background-shorthand-reset": {
+      "checks": 3,
+      "page_errors": []
+    },
+    "block-auto-margins": {
+      "checks": 10,
+      "page_errors": []
+    },
+    "block-whitespace-margin-collapse": {
+      "checks": 2,
+      "page_errors": []
+    },
+    "bootstrap-float-clearfix": {
+      "checks": 4,
+      "page_errors": []
+    },
+    "box-shadow-outset": {
+      "checks": 5,
+      "page_errors": []
+    },
+    "box-sizing": {
+      "checks": 18,
+      "page_errors": []
+    },
+    "carousel-clip": {
+      "checks": 20,
+      "page_errors": []
+    },
+    "cascade-priority": {
+      "checks": 14,
+      "page_errors": []
+    },
+    "clear-float": {
+      "checks": 10,
+      "page_errors": []
+    },
+    "contextual-css-math": {
+      "checks": 13,
+      "page_errors": []
+    },
+    "contextual-grid-gap": {
+      "checks": 5,
+      "page_errors": []
+    },
+    "direction-rtl": {
+      "checks": 8,
+      "page_errors": []
+    },
+    "display-contents-cascade": {
+      "checks": 4,
+      "page_errors": []
+    },
+    "eventtarget-lifecycle": {
+      "checks": 2,
+      "page_errors": []
+    },
+    "fixed-table-layout": {
+      "checks": 23,
+      "page_errors": []
+    },
+    "flex-flow": {
+      "checks": 16,
+      "page_errors": []
+    },
+    "flex-post-ratio-cross-size": {
+      "checks": 6,
+      "page_errors": []
+    },
+    "flex-whitespace-items": {
+      "checks": 9,
+      "page_errors": []
+    },
+    "float-bfc-continuation": {
+      "checks": 8,
+      "page_errors": []
+    },
+    "float-flow-bands": {
+      "checks": 10,
+      "page_errors": []
+    },
+    "font-metric-line-height": {
+      "checks": 172,
+      "page_errors": []
+    },
+    "font-shorthand": {
+      "checks": 2,
+      "page_errors": []
+    },
+    "forced-line-breaks": {
+      "checks": 28,
+      "page_errors": []
+    },
+    "form-control-geometry": {
+      "checks": 25,
+      "page_errors": []
+    },
+    "form-control-quirks": {
+      "checks": 7,
+      "page_errors": []
+    },
+    "grid-auto-repeat": {
+      "checks": 9,
+      "page_errors": []
+    },
+    "grid-shorthand": {
+      "checks": 8,
+      "page_errors": []
+    },
+    "img-density-and-alt": {
+      "checks": 34,
+      "page_errors": []
+    },
+    "inline-block-flex-items": {
+      "checks": 15,
+      "page_errors": []
+    },
+    "inline-replaced-flow": {
+      "checks": 19,
+      "page_errors": []
+    },
+    "item-self-alignment": {
+      "checks": 16,
+      "page_errors": []
+    },
+    "legacy-center": {
+      "checks": 21,
+      "page_errors": []
+    },
+    "list-indentation": {
+      "checks": 12,
+      "page_errors": []
+    },
+    "logical-borders": {
+      "checks": 4,
+      "page_errors": []
+    },
+    "long-full-page-capture": {
+      "checks": 3,
+      "page_errors": []
+    },
+    "max-height-replaced": {
+      "checks": 3,
+      "page_errors": []
+    },
+    "media-text-track": {
+      "checks": 4,
+      "page_errors": []
+    },
+    "mixed-content-block": {
+      "checks": 10,
+      "page_errors": []
+    },
+    "mixed-float-run": {
+      "checks": 4,
+      "page_errors": []
+    },
+    "modern-containing-block-triggers": {
+      "checks": 16,
+      "page_errors": []
+    },
+    "modern-hydration-contracts": {
+      "checks": 5,
+      "page_errors": []
+    },
+    "modern-streams": {
+      "checks": 2,
+      "page_errors": []
+    },
+    "nested-float-clearance": {
+      "checks": 5,
+      "page_errors": []
+    },
+    "opposing-header-floats": {
+      "checks": 6,
+      "page_errors": []
+    },
+    "pdf-print-media": {
+      "checks": 8,
+      "page_errors": []
+    },
+    "percentage-height-indefinite-parent": {
+      "checks": 8,
+      "page_errors": []
+    },
+    "ratio-only-inline-images": {
+      "checks": 11,
+      "page_errors": []
+    },
+    "relative-box-edges": {
+      "checks": 14,
+      "page_errors": []
+    },
+    "replaced-block-wrapper": {
+      "checks": 6,
+      "page_errors": []
+    },
+    "replaced-grid-order": {
+      "checks": 4,
+      "page_errors": []
+    },
+    "right-float-navigation": {
+      "checks": 6,
+      "page_errors": []
+    },
+    "supports-var-feature-query": {
+      "checks": 1,
+      "page_errors": []
+    },
+    "table-row-geometry": {
+      "checks": 48,
+      "page_errors": []
+    },
+    "table-track-geometry": {
+      "checks": 56,
+      "page_errors": []
+    },
+    "tables": {
+      "checks": 60,
+      "page_errors": []
+    },
+    "text-align-flex-items": {
+      "checks": 4,
+      "page_errors": []
+    },
+    "transform-containing-block": {
+      "checks": 8,
+      "page_errors": []
+    },
+    "video-poster": {
+      "checks": 3,
+      "page_errors": []
+    },
+    "viewport-consistency": {
+      "checks": 3,
+      "page_errors": []
+    },
+    "z-index": {
+      "checks": 10,
+      "page_errors": []
+    }
+  }
+}

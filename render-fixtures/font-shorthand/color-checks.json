@@ -1,0 +1,18 @@
+[
+  {
+    "name": "custom property font shorthand sets em geometry",
+    "color": "#1971c2",
+    "x": 0,
+    "y": 0,
+    "width": 200,
+    "height": 80
+  },
+  {
+    "name": "later font shorthand replaces prior longhands",
+    "color": "#e8590c",
+    "x": 0,
+    "y": 80,
+    "width": 200,
+    "height": 40
+  }
+]

@@ -1,0 +1,30 @@
+[package]
+name = "tenta-page"
+description = "Page, Frame, navigation, session history, lifecycle, settle, dialogs, tier control and watchdogs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+tenta-net = { workspace = true }
+tenta-html = { workspace = true }
+tenta-dom = { workspace = true }
+
+bytes = { workspace = true }
+hashbrown = { workspace = true }
+http = { workspace = true }
+parking_lot = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }

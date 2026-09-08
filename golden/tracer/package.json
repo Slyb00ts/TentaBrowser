@@ -1,0 +1,14 @@
+{
+  "name": "tentabrowser-golden-tracer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Proxy-based API tracer that captures golden-site API inventories in headless Chromium (docs/spec/15 section 7)",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "scripts": {
+    "trace": "node tracer.js"
+  },
+  "dependencies": {
+    "playwright": "^1.63.0"
+  }
+}

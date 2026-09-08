@@ -1,0 +1,345 @@
+{
+  "fixture": "img-density-and-alt",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(1)",
+      "kind": "element",
+      "tag": "p",
+      "named": false,
+      "x": 0,
+      "y": 16,
+      "width": 900,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 50,
+      "width": 900,
+      "height": 140
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 0,
+      "y": 164,
+      "width": 15.13,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 21.13,
+      "y": 56,
+      "width": 652,
+      "height": 128
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > div:nth-child(2) > img:nth-child(1)",
+      "kind": "element",
+      "tag": "img",
+      "named": false,
+      "x": 23.13,
+      "y": 58,
+      "width": 648,
+      "height": 120
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(3)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 190,
+      "width": 900,
+      "height": 80
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(3) > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 0,
+      "y": 244,
+      "width": 15.13,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(3) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 21.13,
+      "y": 196,
+      "width": 328,
+      "height": 68
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(3) > div:nth-child(2) > img:nth-child(1)",
+      "kind": "element",
+      "tag": "img",
+      "named": false,
+      "x": 23.13,
+      "y": 198,
+      "width": 324,
+      "height": 60
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 270,
+      "width": 900,
+      "height": 75.55
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > span:nth-child(1)",
+      "kind": "element",
+      "tag": "span",
+      "named": false,
+      "x": 0,
+      "y": 319.55,
+      "width": 16,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 22,
+      "y": 276,
+      "width": 303.95,
+      "height": 63.55
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > div:nth-child(2) > img:nth-child(1)",
+      "kind": "element",
+      "tag": "img",
+      "named": false,
+      "x": 24,
+      "y": 278,
+      "width": 299.95,
+      "height": 55.55
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(5)",
+      "kind": "element",
+      "tag": "p",
+      "named": false,
+      "x": 0,
+      "y": 361.55,
+      "width": 900,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(6)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 395.55,
+      "width": 900,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(6) > img:nth-child(1)",
+      "kind": "element",
+      "tag": "img",
+      "named": false,
+      "x": 20.45,
+      "y": 395.55,
+      "width": 254.36,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(7)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 413.55,
+      "width": 900,
+      "height": 64
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(7) > img:nth-child(1)",
+      "kind": "element",
+      "tag": "img",
+      "named": false,
+      "x": 19.56,
+      "y": 413.55,
+      "width": 200,
+      "height": 60
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(8)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 477.55,
+      "width": 900,
+      "height": 64
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(8) > img:nth-child(1)",
+      "kind": "element",
+      "tag": "img",
+      "named": false,
+      "x": 18.67,
+      "y": 477.55,
+      "width": 200,
+      "height": 60
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(9)",
+      "kind": "element",
+      "tag": "p",
+      "named": false,
+      "x": 0,
+      "y": 557.55,
+      "width": 900,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(10)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 120,
+      "y": 591.55,
+      "width": 304,
+      "height": 104
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(10) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": -28,
+      "y": 593.55,
+      "width": 300,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(10) > div:nth-child(1) > img:nth-child(1)",
+      "kind": "element",
+      "tag": "img",
+      "named": false,
+      "x": -28,
+      "y": 593.55,
+      "width": 300,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(10) > div:nth-child(1) > img:nth-child(2)",
+      "kind": "element",
+      "tag": "img",
+      "named": false,
+      "x": 272,
+      "y": 593.55,
+      "width": 300,
+      "height": 100
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "Density: A raw 648px, B srcset 2x -> ~324 CSS px, C 648w + sizes:300px -> ~300px",
+      "x": 0,
+      "y": 16,
+      "width": 598.11,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(2) > span:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "A:",
+      "x": 0,
+      "y": 164,
+      "width": 15.13,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(3) > span:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "B:",
+      "x": 0,
+      "y": 244,
+      "width": 15.13,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(4) > span:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "C:",
+      "x": 0,
+      "y": 319.55,
+      "width": 16,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(5)::text(0)",
+      "kind": "text",
+      "text": "Broken-image fallback: D alt text only, E alt=\"\" nothing, F no alt -> grey box",
+      "x": 0,
+      "y": 361.55,
+      "width": 528.67,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(6)::text(0)",
+      "kind": "text",
+      "text": "D:",
+      "x": 0,
+      "y": 395.55,
+      "width": 20.45,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(7)::text(0)",
+      "kind": "text",
+      "text": "E:",
+      "x": 0,
+      "y": 459.55,
+      "width": 19.56,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(8)::text(0)",
+      "kind": "text",
+      "text": "F:",
+      "x": 0,
+      "y": 523.55,
+      "width": 18.67,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(9)::text(0)",
+      "kind": "text",
+      "text": "G: cover img half-outside an overflow:hidden viewport must not bleed past the...",
+      "x": 0,
+      "y": 557.55,
+      "width": 634.13,
+      "height": 18
+    }
+  ]
+}

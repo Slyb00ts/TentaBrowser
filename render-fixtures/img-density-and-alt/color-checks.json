@@ -1,0 +1,23 @@
+[
+  {
+    "name": "raw intrinsic image keeps its 648 CSS pixel width",
+    "color": "#ff0000",
+    "width": 652
+  },
+  {
+    "name": "2x density descriptor halves the intrinsic CSS width",
+    "color": "#ff0000",
+    "width": 328
+  },
+  {
+    "name": "width descriptor and sizes establish a 300 pixel source size",
+    "color": "#ff0000",
+    "width": 304
+  },
+  {
+    "name": "overflow viewport retains its fixed border geometry",
+    "color": "#ff0000",
+    "width": 304,
+    "height": 104
+  }
+]

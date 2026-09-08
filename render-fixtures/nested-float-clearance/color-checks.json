@@ -1,0 +1,26 @@
+[
+  {
+    "name": "earlier tall float keeps its full shared-BFC endpoint",
+    "color": "#087f5b",
+    "x": 0,
+    "y": 0,
+    "width": 120,
+    "height": 100
+  },
+  {
+    "name": "later shorter descendant float shares the remaining band",
+    "color": "#1971c2",
+    "x": 120,
+    "y": 20,
+    "width": 200,
+    "height": 50
+  },
+  {
+    "name": "clearfix advances following flow below the tallest float",
+    "color": "#862e9c",
+    "x": 0,
+    "y": 100,
+    "width": 600,
+    "height": 20
+  }
+]

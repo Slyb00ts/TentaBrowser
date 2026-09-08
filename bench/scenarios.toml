@@ -1,0 +1,306 @@
+# Benchmark scenarios (docs/spec/15-testing-and-benchmarks.md §2), driven by bench/run.py.
+#
+# Fields per scenario:
+#   name           scenario id used on the command line and in results
+#   phase          roadmap phase in which the scenario becomes a gate or is first reported
+#   fixture        directory under tests/fixtures/ (or the P2+ location) the scenario loads
+#   path           URL path on the fixture server
+#   mode           how the harness drives it: "cli" = one cold process per run using
+#                  [scenario.commands]; "inprocess" = TentaBrowser library harness (P1+, not
+#                  runnable by run.py yet); "chromium" / "reference" = only measurable through
+#                  that subject's own tooling (CDP session, signalling server)
+#   applicable_to  subjects the scenario is meaningful for
+#   definition     one line, verbatim intent of the spec row
+#   rtt_ms         simulated round-trip time passed to the fixture server (default 0)
+#   fixture_root   directory the scenario's fixture server serves at / (default tests/fixtures);
+#                  the search scenarios point it at providers/fixtures so the recorded SERPs
+#                  are reachable, and the CLI's --search-endpoint aims a plan at one of them
+#   expect_stdout_contains   validation marker; a run whose stdout lacks it is a failure
+#   expect_output_file       the command writes {out}; the file must exist and be non-empty
+#   commands.<subject>       argv after the subject binary; placeholders: {url} {out} {profile}
+#
+# A subject with no command for a scenario is reported "not-implemented".
+
+[defaults]
+runs = 20
+warmup = 1
+timeout_s = 90
+
+[subjects.tentabrowser]
+bin = "target/release/tentabrowser"
+version_args = ["--version"]
+# P1 landed `fetch`, `search` and `scrape`. Scenarios that need JavaScript (P2)
+# or render (P3) simply have no `commands.tentabrowser` entry, which run.py
+# reports as not-implemented.
+
+[subjects.reference]
+bin = "~/repos/rust/obscura-reference/target/release/obscura"
+version_args = ["--version"]
+
+[subjects.chromium]
+bin = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+version_args = ["--version"]
+# `--incognito` matters: with a private `--user-data-dir` alone, Chrome 144 prints the DOM and then
+# never exits (profile services keep the browser process alive); incognito on the same directory
+# exits cleanly. It also means no disk cache between runs, which for a loopback fixture is
+# irrelevant (the OS page cache stays warm).
+common_args = [
+  "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+  "--hide-scrollbars", "--user-data-dir={profile}", "--incognito",
+]
+
+# ---------------------------------------------------------------------------
+# Tier 0 / Tier 1
+
+[[scenario]]
+name = "S-cold-fetch"
+phase = "P1"
+fixture = "tiny"
+path = "/tiny/index.html"
+mode = "cli"
+applicable_to = ["tentabrowser", "reference", "chromium"]
+definition = "CLI process start to first byte on the wire, `fetch` of a local URL, warm OS cache"
+rtt_ms = 0
+expect_stdout_contains = "Tiny fixture"
+[scenario.commands]
+tentabrowser = ["fetch", "{url}", "--dump", "text", "--allow-private-network"]
+# `--wait 0`: the tiny page has no pending work, so the reference's adaptive settle only adds
+# its own polling floor; ttfr_ms (first request seen by the fixture server) is the primary
+# number for this scenario, wall_ms includes the response and text dump.
+reference = ["fetch", "{url}", "--dump", "text", "--allow-private-network", "--quiet", "--wait", "0"]
+chromium = ["--dump-dom", "{url}"]
+
+[[scenario]]
+name = "S-static-text"
+phase = "P1"
+fixture = "static-article"
+path = "/static-article/index.html"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "in-process (library harness or daemon): 1 MB static article fixture, Tier 1, `goto` to settled text output, `--rtt 0`; time and RSS delta"
+rtt_ms = 0
+expect_stdout_contains = "END-OF-ARTICLE-7F3A"
+
+[[scenario]]
+name = "S-static-text-cli"
+phase = "P1"
+fixture = "static-article"
+path = "/static-article/index.html"
+mode = "cli"
+applicable_to = ["tentabrowser", "reference", "chromium"]
+definition = "same page through a cold CLI process, `fetch --dump text`; end to end"
+rtt_ms = 0
+expect_stdout_contains = "END-OF-ARTICLE-7F3A"
+[scenario.commands]
+tentabrowser = ["fetch", "{url}", "--dump", "text", "--allow-private-network"]
+reference = ["fetch", "{url}", "--dump", "text", "--allow-private-network", "--quiet"]
+chromium = ["--dump-dom", "{url}"]
+
+# ---------------------------------------------------------------------------
+# JavaScript
+
+[[scenario]]
+name = "S-js-xhr"
+phase = "P2"
+fixture = "js-xhr"
+path = "/js-xhr/index.html"
+mode = "cli"
+applicable_to = ["tentabrowser", "reference", "chromium"]
+definition = "fixture with inline script, one XHR and one `fetch` that mutate the DOM; JavaScript on; `--rtt 0` (spec: in-process; recorded via CLI for both subjects at P0)"
+rtt_ms = 0
+expect_stdout_contains = "js-xhr: done (2 requests)"
+[scenario.commands]
+# No `tentabrowser` entry: the fixture needs JavaScript, which is P2.
+reference = ["fetch", "{url}", "--dump", "text", "--allow-private-network", "--quiet"]
+# Chromium's --dump-dom serialises at `load`, before the XHR and fetch have settled; a virtual-time
+# budget lets pending async work (timers, in-flight responses) complete before the dump.
+chromium = ["--virtual-time-budget=1000", "--dump-dom", "{url}"]
+
+[[scenario]]
+name = "S-dynamic-scripts"
+phase = "P2"
+fixture = "dynamic-scripts"
+path = "/dynamic-scripts/index.html"
+mode = "cli"
+applicable_to = ["tentabrowser", "reference", "chromium"]
+definition = "fixture that injects scripts dynamically (the reference's \"dynamic scripts\" case)"
+rtt_ms = 0
+expect_stdout_contains = "dynamic-scripts: done (3 stages + sidecar)"
+[scenario.commands]
+# No `tentabrowser` entry: the fixture needs JavaScript, which is P2.
+reference = ["fetch", "{url}", "--dump", "text", "--allow-private-network", "--quiet"]
+chromium = ["--virtual-time-budget=1000", "--dump-dom", "{url}"]
+
+[[scenario]]
+name = "S-spa"
+phase = "P3"
+fixture = "spa-placeholder"
+path = "/spa-placeholder/index.html"
+mode = "inprocess"
+applicable_to = ["tentabrowser", "reference", "chromium"]
+definition = "the reference SPA: a pinned build of a public React 18 demo (`bench/apps/react-spa/`) served locally; hydrate, click one route, settle; RSS with Tier 3 style/layout and no paint"
+rtt_ms = 0
+
+[[scenario]]
+name = "S-spa-t2"
+phase = "P2"
+fixture = "spa-placeholder"
+path = "/spa-placeholder/index.html"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "`S-spa` with geometry stubs (before P3a): Tier 2 only; used for the P2 gate"
+rtt_ms = 0
+
+# ---------------------------------------------------------------------------
+# Render
+
+[[scenario]]
+name = "S-screenshot"
+phase = "P3"
+fixture = "static-article"
+path = "/static-article/index.html"
+mode = "cli"
+applicable_to = ["tentabrowser", "reference", "chromium"]
+definition = "`S-static-text` page + 1280×800 viewport screenshot, CPU; time and RSS delta"
+rtt_ms = 0
+expect_output_file = true
+[scenario.commands]
+# No `tentabrowser` entry: `screenshot` needs render, which is P3c.
+reference = ["screenshot", "{url}", "-o", "{out}", "--width", "1280", "--height", "800", "--allow-private-network"]
+chromium = ["--window-size=1280,800", "--screenshot={out}", "{url}"]
+
+[[scenario]]
+name = "S-fullpage"
+phase = "P3"
+fixture = "static-article"
+path = "/static-article/index.html"
+mode = "cli"
+applicable_to = ["tentabrowser", "reference", "chromium"]
+definition = "1280×12 000 full-page capture"
+rtt_ms = 0
+expect_output_file = true
+[scenario.commands]
+# No `tentabrowser` entry: `screenshot` needs render, which is P3c.
+# Neither subject has a full-page mode on the CLI; a 12 000 px viewport is the closest equivalent.
+reference = ["screenshot", "{url}", "-o", "{out}", "--width", "1280", "--height", "12000", "--allow-private-network"]
+chromium = ["--window-size=1280,12000", "--screenshot={out}", "{url}"]
+
+# ---------------------------------------------------------------------------
+# Search (fixtures come from providers/, the P0 provider survey)
+
+# The recorded SERP the two P1 search scenarios replay. `fixture_root` points the
+# scenario's fixture server at providers/fixtures, `path` is the file inside it, and
+# the CLI's hidden `--search-endpoint <plan>=<url>` aims the DuckDuckGo plan at it,
+# so the query goes to loopback with every plan parameter still on the query string.
+
+[[scenario]]
+name = "S-search-fast"
+phase = "P1"
+fixture = "providers"
+fixture_root = "providers/fixtures"
+path = "/duckduckgo_html/rust-browser-engine.html"
+mode = "cli"
+applicable_to = ["tentabrowser"]
+definition = "recorded DuckDuckGo/Bing/Brave SERPs replayed by the fixture server; warm pool; engine overhead = total − network"
+rtt_ms = 0
+expect_stdout_contains = "\"engine_overhead_ms\""
+[scenario.commands]
+# `--warm` pre-connects before the query, which is what "warm pool" means here;
+# `--json` puts the `engine_overhead_ms` the budget is on in the trailing meta line.
+tentabrowser = ["search", "rust browser engine", "--provider", "ddg", "--warm", "--json", "--limit", "10", "--allow-private-network", "--search-endpoint", "duckduckgo_html={url}"]
+
+[[scenario]]
+name = "S-search-cli-cold"
+phase = "P1"
+fixture = "providers"
+fixture_root = "providers/fixtures"
+path = "/duckduckgo_html/rust-browser-engine.html"
+mode = "cli"
+applicable_to = ["tentabrowser", "reference"]
+definition = "new CLI process, session cache warm, DuckDuckGo fixture"
+rtt_ms = 0
+expect_stdout_contains = "servo.org"
+[scenario.commands]
+# No `--warm`: this is the cold path, process start to printed results.
+tentabrowser = ["search", "rust browser engine", "--provider", "ddg", "--limit", "10", "--allow-private-network", "--search-endpoint", "duckduckgo_html={url}"]
+
+[[scenario]]
+name = "S-search-google-full"
+phase = "P2"
+fixture = "providers"
+path = "/providers/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "recorded Google SERP with its scripts, `Mode::Full`"
+rtt_ms = 0
+
+# ---------------------------------------------------------------------------
+# Engine internals
+
+[[scenario]]
+name = "S-dom-calls"
+phase = "P2"
+fixture = "none"
+path = "/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "10⁶ `hasAttribute('id')` (primitive return, one-byte string literal argument so the fast path applies) and 10⁶ `getAttribute('id')` (string return) calls after 10⁴ warm-up, mean ns per call"
+
+[[scenario]]
+name = "S-isolate"
+phase = "P2"
+fixture = "none"
+path = "/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "V8 platform init (time and RSS, `Engine::build` with `max_tier ≥ Js`, reported separately) and RSS delta of creating one V8 isolate + context from the snapshot"
+
+[[scenario]]
+name = "S-concurrency-t1"
+phase = "P1"
+fixture = "static-article"
+path = "/static-article/index.html"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "100 Tier 1 pages of `S-static-text` open simultaneously"
+rtt_ms = 0
+
+[[scenario]]
+name = "S-concurrency-qjs"
+phase = "P4"
+fixture = "js-xhr"
+path = "/js-xhr/index.html"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "100 QuickJS pages of `S-js-xhr` open simultaneously"
+rtt_ms = 0
+
+# ---------------------------------------------------------------------------
+# Media and real-time
+
+[[scenario]]
+name = "S-audio-quantum"
+phase = "P5"
+fixture = "none"
+path = "/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "20-node Web Audio graph, 1 000 quanta, max per-quantum time and allocation count"
+
+[[scenario]]
+name = "S-media-mse"
+phase = "P6"
+fixture = "media-mse"
+path = "/media-mse/index.html"
+mode = "inprocess"
+applicable_to = ["tentabrowser", "chromium"]
+definition = "local MSE fixture ladders (Opus/WebM, VP9/WebM, AAC/MP4, H.264/MP4)"
+
+[[scenario]]
+name = "S-rtc-loopback"
+phase = "P7"
+fixture = "rtc-loopback"
+path = "/rtc-loopback/index.html"
+mode = "inprocess"
+applicable_to = ["tentabrowser", "chromium"]
+definition = "two pages, audio + 720p30 VP8 both ways via local signalling and `coturn`"

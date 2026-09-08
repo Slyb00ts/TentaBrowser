@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dynamic scripts</title>
+</head>
+<body>
+<h1>Dynamically inserted scripts</h1>
+<ol id="stages">
+<li id="stage1">stage1: pending</li>
+<li id="stage2">stage2: pending</li>
+<li id="stage3">stage3: pending</li>
+<li id="sidecar">sidecar: pending</li>
+</ol>
+<p id="status">dynamic-scripts: loading</p>
+<!-- The reference's "dynamic scripts" shape: after a zero-delay timer the
+     inline script inserts an external script; that script inserts the next,
+     which inserts the third inside a freshly created container element
+     (nested insertion), plus one async sidecar. Each stage writes into its
+     own slot, so the final DOM does not depend on arrival order. -->
+<script>
+window.__order = [];
+window.__insert = function (src, parent, attrs) {
+  var script = document.createElement('script');
+  script.src = src;
+  if (attrs) {
+    for (var key in attrs) { script[key] = attrs[key]; }
+  }
+  (parent || document.body).appendChild(script);
+  return script;
+};
+window.__stage = function (name) {
+  window.__order.push(name);
+  document.getElementById(name).textContent = name + ': ran #' + window.__order.length;
+  if (window.__order.length === 4) {
+    document.getElementById('status').textContent = 'dynamic-scripts: done (3 stages + sidecar)';
+    document.title = 'Dynamic scripts: done';
+    window.__settled = true;
+  }
+};
+setTimeout(function () { window.__insert('stage1.js'); }, 0);
+</script>
+</body>
+</html>

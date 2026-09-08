@@ -1,0 +1,62 @@
+{
+  "fixture": "box-shadow-outset",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 40,
+      "y": 40,
+      "width": 820,
+      "height": 83
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 40,
+      "y": 40,
+      "width": 340,
+      "height": 83
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(1) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 440,
+      "y": 40,
+      "width": 340,
+      "height": 83
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(1) > div:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "Transparent background",
+      "x": 70,
+      "y": 70,
+      "width": 217.19,
+      "height": 23
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(1) > div:nth-child(2)::text(0)",
+      "kind": "text",
+      "text": "Opaque background",
+      "x": 470,
+      "y": 70,
+      "width": 181.25,
+      "height": 23
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+[package]
+name = "tenta-webrtc"
+description = "RTCPeerConnection over str0m: ICE, TURN client, DTLS/SRTP/SCTP, codec negotiation, simulcast, stats."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+tenta-net = { workspace = true }
+tenta-js = { workspace = true }
+tenta-media = { workspace = true }

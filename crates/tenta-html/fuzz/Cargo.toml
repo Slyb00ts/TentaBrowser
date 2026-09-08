@@ -1,0 +1,38 @@
+[package]
+name = "tenta-html-fuzz"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+
+# Excluded from the workspace (see the root Cargo.toml): `cargo fuzz` builds
+# it with its own nightly toolchain and sanitiser flags.
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tenta-html = { path = ".." }
+tenta-core = { path = "../../tenta-core" }
+
+[[bin]]
+name = "tokenizer"
+path = "fuzz_targets/tokenizer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tree_builder"
+path = "fuzz_targets/tree_builder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xml"
+path = "fuzz_targets/xml.rs"
+test = false
+doc = false
+bench = false

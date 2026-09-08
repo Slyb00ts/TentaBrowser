@@ -1,0 +1,55 @@
+# Google web search through a full page load (Mode::Full, Tier 2 with
+# JavaScript). Surveyed 2026-09-06 with Playwright + Chrome for Testing 151:
+# both queries were redirected by Google's own script to /sorry/index
+# ("unusual traffic from your computer network", reCAPTCHA), so the result
+# selectors below come from public knowledge of the JS SERP and are marked
+# unverified until a fixture with results is recorded. Consent
+# (consent.google.com, SOCS cookie) did not appear because the /sorry/ page
+# came first.
+provider = "google_chromium"
+version = 1
+path = "full"
+verified = false
+
+[request]
+endpoint = "https://www.google.com/search"
+method = "GET"
+query_param = "q"
+locale = { hl = "{language}", gl = "{region}" }
+safe = { param = "safe", strict = "active", moderate = "active", off = "off" }
+freshness = { param = "tbs", day = "qdr:d", week = "qdr:w", month = "qdr:m", year = "qdr:y" }
+page = { param = "start", first = 0, step = 10 }
+
+[request.headers]
+Accept-Language = "{accept_language}"
+
+[cookies]
+policy = "session"
+# Pre-setting SOCS (consent accepted/rejected) avoids the consent redirect in
+# the EU; the value is issued by consent.google.com and is not synthesised here.
+
+[consent]
+selectors = ["form[action*=consent]", "button#W0wltc", "button#L2AGLb"]
+reject = "button#W0wltc"
+
+[results]
+container = "div#rso"
+item = "div.g, div[data-snhf]"
+title = "h3"
+url = "a:has(h3)"
+url_attr = "href"
+snippet = "div[data-sncf], div[data-content-feature]"
+display_url = "cite"
+
+[pagination]
+kind = "link"
+next = "a#pnnext"
+attr = "href"
+
+[block]
+status = [403, 429, 503]
+selectors = ["form#captcha-form", "div#recaptcha", "meta[content*=enablejs]"]
+patterns = ["/sorry/", "unusual traffic", "nietypowy ruch", "/httpservice/retry/enablejs"]
+
+[expect]
+blocked = true

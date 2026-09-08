@@ -1,0 +1,92 @@
+{
+  "fixture": "pdf-print-media",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "html > body:nth-child(2) > main:nth-child(1)",
+      "kind": "element",
+      "tag": "main",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 800,
+      "height": 1000
+    },
+    {
+      "selector": "html > body:nth-child(2) > main:nth-child(1) > div:nth-child(1)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 80,
+      "y": 80,
+      "width": 640,
+      "height": 38.39
+    },
+    {
+      "selector": "html > body:nth-child(2) > main:nth-child(1) > div:nth-child(2)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    {
+      "selector": "html > body:nth-child(2) > main:nth-child(1) > div:nth-child(3)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 80,
+      "y": 198.39,
+      "width": 320,
+      "height": 180
+    },
+    {
+      "selector": "html > body:nth-child(2) > main:nth-child(1) > div:nth-child(4)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    {
+      "selector": "html > body:nth-child(2) > main:nth-child(1) > div:nth-child(5)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0
+    },
+    {
+      "selector": "html > body:nth-child(2) > main:nth-child(1) > div:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "SCREEN ONLY",
+      "x": 80,
+      "y": 80,
+      "width": 227.03,
+      "height": 37
+    },
+    {
+      "selector": "html > body:nth-child(2) > main:nth-child(1) > div:nth-child(3)::text(0)",
+      "kind": "text",
+      "text": "SCREEN STYLESHEET",
+      "x": 120,
+      "y": 238.39,
+      "width": 133.36,
+      "height": 37
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+[package]
+name = "tenta-mcp"
+description = "MCP server: tools, transports and schemas."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+tenta-browser = { workspace = true }
+tenta-page = { workspace = true }
+tenta-search = { workspace = true }

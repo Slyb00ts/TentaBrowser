@@ -1,0 +1,6 @@
+# Fixture robots.txt for `tentabrowser scrape` (docs/spec/20-platform-behaviour.md §11).
+# Served at the origin root, which is where RFC 9309 says a crawler looks.
+User-agent: *
+Disallow: /robots/private/
+
+Sitemap: /robots/sitemap.xml

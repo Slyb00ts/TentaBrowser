@@ -1,0 +1,11 @@
+{
+  "name": "tentabrowser-render-fixture-tools",
+  "version": "1.0.0",
+  "description": "Capture Chromium references for the render fixture corpus",
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "playwright": "^1.63.0"
+  },
+  "private": true
+}

@@ -1,0 +1,34 @@
+[
+  {
+    "name": "first cell starts at the grid origin",
+    "color": "#e03131",
+    "x": 0,
+    "y": 0,
+    "width": 10,
+    "height": 20
+  },
+  {
+    "name": "functional column gap uses root and viewport context",
+    "color": "#2f9e44",
+    "x": 38,
+    "y": 0,
+    "width": 10,
+    "height": 20
+  },
+  {
+    "name": "rem row gap uses the computed root font size",
+    "color": "#1971c2",
+    "x": 0,
+    "y": 60,
+    "width": 10,
+    "height": 20
+  },
+  {
+    "name": "both contextual gaps place the final cell",
+    "color": "#f08c00",
+    "x": 38,
+    "y": 60,
+    "width": 10,
+    "height": 20
+  }
+]

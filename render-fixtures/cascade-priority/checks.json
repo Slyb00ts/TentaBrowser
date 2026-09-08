@@ -1,0 +1,147 @@
+{
+  "fixture": "cascade-priority",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(1)",
+      "kind": "element",
+      "tag": "p",
+      "named": false,
+      "x": 0,
+      "y": 16,
+      "width": 900,
+      "height": 18
+    },
+    {
+      "selector": "#sheet-important",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 8,
+      "y": 50,
+      "width": 320,
+      "height": 36
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(3)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 8,
+      "y": 94,
+      "width": 320,
+      "height": 36
+    },
+    {
+      "selector": "#inline-important",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 8,
+      "y": 138,
+      "width": 320,
+      "height": 36
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(5)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 8,
+      "y": 182,
+      "width": 320,
+      "height": 36
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(6)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 8,
+      "y": 226,
+      "width": 320,
+      "height": 36
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(7)",
+      "kind": "element",
+      "tag": "div",
+      "named": false,
+      "x": 8,
+      "y": 270,
+      "width": 320,
+      "height": 36
+    },
+    {
+      "selector": "html > body:nth-child(2) > p:nth-child(1)::text(0)",
+      "kind": "text",
+      "text": "Every bar must be green and about 320px wide.",
+      "x": 0,
+      "y": 16,
+      "width": 340.66,
+      "height": 18
+    },
+    {
+      "selector": "#sheet-important::text(0)",
+      "kind": "text",
+      "text": "stylesheet important beats later normal",
+      "x": 8,
+      "y": 50,
+      "width": 275.69,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(3)::text(0)",
+      "kind": "text",
+      "text": "stylesheet important beats inline normal",
+      "x": 8,
+      "y": 94,
+      "width": 281.92,
+      "height": 18
+    },
+    {
+      "selector": "#inline-important::text(0)",
+      "kind": "text",
+      "text": "inline important beats stylesheet important",
+      "x": 8,
+      "y": 138,
+      "width": 299.72,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(5)::text(0)",
+      "kind": "text",
+      "text": "inline important beats later inline normal",
+      "x": 8,
+      "y": 182,
+      "width": 282.81,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(6)::text(0)",
+      "kind": "text",
+      "text": "important custom property wins",
+      "x": 8,
+      "y": 226,
+      "width": 222.31,
+      "height": 18
+    },
+    {
+      "selector": "html > body:nth-child(2) > div:nth-child(7)::text(0)",
+      "kind": "text",
+      "text": "author CSS beats a presentational hint",
+      "x": 8,
+      "y": 270,
+      "width": 274.84,
+      "height": 18
+    }
+  ]
+}

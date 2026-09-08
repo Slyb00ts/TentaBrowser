@@ -1,0 +1,29 @@
+# cargo-about configuration (docs/spec/21-project-operations.md §1).
+# The accepted list mirrors `[licenses].allow` in deny.toml; keep both in sync.
+# Generate with `cargo xtask notices` (runs `cargo about generate about.hbs -o THIRD_PARTY_NOTICES.md`).
+
+accepted = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "OFL-1.1",
+    "CC0-1.0",
+    "OpenSSL",
+]
+
+# Workspace crates are first-party and carry the project license; they are not third-party notices.
+ignore-build-dependencies = false
+ignore-dev-dependencies = false
+private = { ignore = true }
+
+# The Mozilla CA bundle ships under CDLA-Permissive-2.0, which covers the
+# certificate data rather than code; it is accepted for that crate only, and
+# mirrors the `[[licenses.exceptions]]` entry in deny.toml.
+[webpki-root-certs]
+accepted = ["CDLA-Permissive-2.0"]

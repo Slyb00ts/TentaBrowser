@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04, windows-2022]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-deny
+      - run: cargo fmt --all --check
+      - run: cargo xtask lint-deps
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy -p tenta-testutil --all-targets --features capture -- -D warnings
+      - run: cargo nextest run --workspace
+      - run: cargo deny check
+        if: matrix.os == 'ubuntu-24.04'
+
+  mobile-nightly:
+    name: ${{ matrix.target }} (tenta-core)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-linux-android
+            os: ubuntu-24.04
+          - target: aarch64-apple-ios
+            os: macos-14
+          - target: aarch64-apple-ios-sim
+            os: macos-14
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Android NDK
+        if: contains(matrix.target, 'android')
+        run: cargo install cargo-ndk && rustup target add ${{ matrix.target }}
+      - name: Build tenta-core (Android)
+        if: contains(matrix.target, 'android')
+        run: cargo ndk -t ${{ matrix.target }} build -p tenta-core
+      - name: Build tenta-core
+        if: "!contains(matrix.target, 'android')"
+        run: cargo build -p tenta-core --target ${{ matrix.target }}

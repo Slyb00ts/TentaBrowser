@@ -1,0 +1,56 @@
+[package]
+name = "tenta-net"
+description = "Tier 0: HTTP client, TLS profiles, cookie jar, cache, DNS, proxy, WebSocket and the socket factory."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+bytes = { workspace = true }
+hashbrown = { workspace = true }
+http = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+# Policy modules (cookies, cache, session cache, robots, private-network checks).
+psl = "2"
+httpdate = "1"
+time = { version = "0.3", features = ["parsing", "formatting", "macros"] }
+toml = { workspace = true }
+tenta-h2 = { workspace = true }
+# Transport (docs/spec/03-network.md §1). One libcrypto per process: BoringSSL
+# through `boring`/`boring-sys`; every other crate here must stay off aws-lc-rs
+# and openssl-sys (§1.1).
+tokio = { version = "1", features = ["rt", "net", "time", "io-util", "sync", "macros"] }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+http-body-util = "0.1"
+http-body = "1"
+boring = "5"
+boring-sys = "5"
+tokio-boring = "5"
+# Root store: the Mozilla bundle as DER certificates (BoringSSL needs whole
+# certificates, not the trust anchors `webpki-roots` exposes).
+webpki-root-certs = "1"
+# `foreign-types` is boring's FFI base; needed for the raw `SSL *` in tls/boring_ext.rs.
+foreign-types = "0.5"
+hickory-resolver = "0.26"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+brotli = { version = "9", default-features = false, features = ["std"] }
+zstd = "0.14"
+base64 = "0.23"
+pin-project-lite = "0.2"
+futures-core = { version = "0.3", default-features = false }
+
+[dev-dependencies]
+httparse = "1.10"
+tenta-testutil = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }

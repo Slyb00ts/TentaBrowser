@@ -1,0 +1,37 @@
+# Google web search without JavaScript. Detection-only plan: the survey
+# confirms that a plain GET with a Chrome UA returns a 93 KB page whose only
+# content is a <meta http-equiv="refresh"> to /httpservice/retry/enablejs
+# ("Turn on JavaScript"), so the fast path cannot serve Google. Kept so the
+# block detector has a fixture and so the monthly survey notices if Google
+# ever serves a no-JS SERP again. Surveyed 2026-09-06.
+provider = "google_nojs"
+version = 1
+path = "fast"
+
+[request]
+endpoint = "https://www.google.com/search"
+method = "GET"
+query_param = "q"
+locale = { hl = "{language}", gl = "{region}" }
+
+[request.headers]
+Accept-Language = "{accept_language}"
+
+[cookies]
+policy = "none"
+
+[results]
+container = "div#rso"
+item = "div.g"
+title = "h3"
+url = "a:has(h3)"
+url_attr = "href"
+snippet = "div[data-sncf]"
+
+[block]
+status = [403, 429, 503]
+selectors = ["meta[content*=enablejs]", "a[href*=enablejs]", "form#captcha-form"]
+patterns = ["/httpservice/retry/enablejs", "/sorry/", "unusual traffic"]
+
+[expect]
+blocked = true

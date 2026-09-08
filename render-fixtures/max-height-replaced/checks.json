@@ -1,0 +1,44 @@
+{
+  "fixture": "max-height-replaced",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#card",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 394,
+      "height": 608
+    },
+    {
+      "selector": "#media",
+      "kind": "element",
+      "tag": "figure",
+      "named": true,
+      "x": 32,
+      "y": 64,
+      "width": 330,
+      "height": 200
+    },
+    {
+      "selector": "#image",
+      "kind": "element",
+      "tag": "img",
+      "named": true,
+      "x": 32,
+      "y": 64,
+      "width": 330,
+      "height": 200
+    }
+  ]
+}

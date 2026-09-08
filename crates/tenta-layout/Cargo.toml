@@ -1,0 +1,15 @@
+[package]
+name = "tenta-layout"
+description = "Tier 3: box tree, block/inline/flex/grid/table/positioned layout, text and form controls."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tenta-core = { workspace = true }
+tenta-dom = { workspace = true }
+tenta-css = { workspace = true }
+tenta-js = { workspace = true }

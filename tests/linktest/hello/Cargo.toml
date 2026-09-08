@@ -1,0 +1,56 @@
+[package]
+name = "hello"
+description = "Feature ladder binary for the single-libcrypto link test and the hello size measurements."
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.98"
+license = "Apache-2.0"
+publish = false
+
+[features]
+default = []
+# The ladder of docs/spec/21-project-operations.md §4. `base` is always linked; the
+# feature exists so that every rung has a name on the command line.
+base = []
+rtc = ["base", "dep:str0m", "dep:rustls"]
+codecs = ["rtc", "dep:shiguredo_libvpx", "dep:rav1d", "dep:opus"]
+v8 = ["base", "dep:v8"]
+all = ["codecs", "v8"]
+
+[dependencies]
+tenta-core = { version = "0.0.1", path = "../../../crates/tenta-core" }
+
+tokio = { version = "1", features = ["rt", "net", "io-util", "macros", "time"] }
+hyper = { version = "1", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+boring = "5"
+tokio-boring = "5"
+hickory-resolver = { version = "0.26", default-features = false, features = ["tokio", "system-config", "tls-ring", "https-ring"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+
+# rtc: rustls with the ring provider only (rustls and tokio-rustls default to aws-lc-rs).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"], optional = true }
+
+# codecs. libvpx has no CMake build system; `shiguredo_libvpx` with `source-build`
+# clones libvpx v1.16.0 at build time and runs its configure/make (needs
+# `rustup component add llvm-tools` for the symbol-prefix pass). libopus is
+# built from the bundled source with cmake by `opusic-sys`.
+shiguredo_libvpx = { version = "2026.1", features = ["source-build"], optional = true }
+rav1d = { version = "1", optional = true }
+opus = { version = "0.4", optional = true }
+
+# v8: prebuilt download, default features (custom libc++, no pointer compression).
+v8 = { version = "152", optional = true }
+
+# str0m: defaults are `aws-lc-rs` + `examples`; the platform crypto backend per
+# docs/spec/03-network.md §1.1.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+str0m = { version = "0.23", default-features = false, features = ["apple-crypto"], optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+str0m = { version = "0.23", default-features = false, features = ["wincrypto"], optional = true }
+
+[target.'cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))'.dependencies]
+str0m = { version = "0.23", default-features = false, features = ["rust-crypto"], optional = true }

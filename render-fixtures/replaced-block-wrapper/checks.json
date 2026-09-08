@@ -1,0 +1,74 @@
+{
+  "fixture": "replaced-block-wrapper",
+  "viewport": [
+    900,
+    1000
+  ],
+  "device_scale_factor": 1,
+  "scroll_size": {
+    "width": 900,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "selector": "#grid",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 900,
+      "height": 304.45
+    },
+    {
+      "selector": "#description",
+      "kind": "element",
+      "tag": "section",
+      "named": true,
+      "x": 0,
+      "y": 0,
+      "width": 450,
+      "height": 300
+    },
+    {
+      "selector": "#media",
+      "kind": "element",
+      "tag": "div",
+      "named": true,
+      "x": 450,
+      "y": 0,
+      "width": 450,
+      "height": 304.45
+    },
+    {
+      "selector": "#frame",
+      "kind": "element",
+      "tag": "figure",
+      "named": true,
+      "x": 450,
+      "y": 0,
+      "width": 450,
+      "height": 304.45
+    },
+    {
+      "selector": "#wrapper",
+      "kind": "element",
+      "tag": "picture",
+      "named": true,
+      "x": 498,
+      "y": 48,
+      "width": 354,
+      "height": 208.45
+    },
+    {
+      "selector": "#image",
+      "kind": "element",
+      "tag": "img",
+      "named": true,
+      "x": 498,
+      "y": 48,
+      "width": 354,
+      "height": 208.45
+    }
+  ]
+}
