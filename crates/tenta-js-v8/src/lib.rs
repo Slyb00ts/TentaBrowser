@@ -278,6 +278,7 @@ impl Engine {
             let mut context_scope = v8::ContextScope::new(scope, local);
             v8::scope!(let inner, &mut context_scope);
             host::install(inner, local);
+            install_dom_exception(inner);
 
             // Materialise the `document` wrapper, expose it as a global, then
             // hand the world to the runtime so the generated getters can create
@@ -556,6 +557,84 @@ pub fn evaluate(source: &str) -> Result<String, JsError> {
 
 /// Compiles `source`, runs it, and coerces the result to a string, mapping any
 /// caught exception to [`JsError`].
+/// JavaScript that installs `globalThis.DOMException` with the legacy code
+/// table (<https://webidl.spec.whatwg.org/#idl-DOMException>). The binding throw
+/// path (`throw_js_error`) constructs instances with `new DOMException(message,
+/// name)`, so `e.name`, `e.message`, `e.code` and `e instanceof DOMException`
+/// all behave per the standard.
+const DOM_EXCEPTION_BOOTSTRAP: &str = r#"
+(function () {
+  "use strict";
+  const CODES = {
+    IndexSizeError: 1, HierarchyRequestError: 3, WrongDocumentError: 4,
+    InvalidCharacterError: 5, NoModificationAllowedError: 7, NotFoundError: 8,
+    NotSupportedError: 9, InUseAttributeError: 10, InvalidStateError: 11,
+    SyntaxError: 12, InvalidModificationError: 13, NamespaceError: 14,
+    InvalidAccessError: 15, TypeMismatchError: 17, SecurityError: 18,
+    NetworkError: 19, AbortError: 20, URLMismatchError: 21,
+    QuotaExceededError: 22, TimeoutError: 23, InvalidNodeTypeError: 24,
+    DataCloneError: 25,
+  };
+  function DOMException(message = "", name = "Error") {
+    const self = Object.create(DOMException.prototype);
+    Object.defineProperty(self, "message", {
+      value: String(message), enumerable: false, configurable: true,
+    });
+    Object.defineProperty(self, "name", {
+      value: String(name), enumerable: false, configurable: true,
+    });
+    if (typeof Error.captureStackTrace === "function") {
+      Error.captureStackTrace(self, DOMException);
+    }
+    return self;
+  }
+  DOMException.prototype = Object.create(Error.prototype);
+  Object.defineProperty(DOMException.prototype, "constructor", {
+    value: DOMException, writable: true, configurable: true,
+  });
+  Object.defineProperty(DOMException.prototype, "name", {
+    value: "Error", writable: true, configurable: true,
+  });
+  Object.defineProperty(DOMException.prototype, "message", {
+    value: "", writable: true, configurable: true,
+  });
+  Object.defineProperty(DOMException.prototype, "code", {
+    get() { return CODES[this.name] || 0; },
+    enumerable: false, configurable: true,
+  });
+  const CONSTANTS = {
+    INDEX_SIZE_ERR: 1, DOMSTRING_SIZE_ERR: 2, HIERARCHY_REQUEST_ERR: 3,
+    WRONG_DOCUMENT_ERR: 4, INVALID_CHARACTER_ERR: 5, NO_DATA_ALLOWED_ERR: 6,
+    NO_MODIFICATION_ALLOWED_ERR: 7, NOT_FOUND_ERR: 8, NOT_SUPPORTED_ERR: 9,
+    INUSE_ATTRIBUTE_ERR: 10, INVALID_STATE_ERR: 11, SYNTAX_ERR: 12,
+    INVALID_MODIFICATION_ERR: 13, NAMESPACE_ERR: 14, INVALID_ACCESS_ERR: 15,
+    VALIDATION_ERR: 16, TYPE_MISMATCH_ERR: 17, SECURITY_ERR: 18,
+    NETWORK_ERR: 19, ABORT_ERR: 20, URL_MISMATCH_ERR: 21,
+    QUOTA_EXCEEDED_ERR: 22, TIMEOUT_ERR: 23, INVALID_NODE_TYPE_ERR: 24,
+    DATA_CLONE_ERR: 25,
+  };
+  for (const key of Object.keys(CONSTANTS)) {
+    const descriptor = { value: CONSTANTS[key], enumerable: true };
+    Object.defineProperty(DOMException, key, descriptor);
+    Object.defineProperty(DOMException.prototype, key, descriptor);
+  }
+  Object.defineProperty(globalThis, "DOMException", {
+    value: DOMException, writable: true, configurable: true,
+  });
+})();
+"#;
+
+/// Installs the `DOMException` global into the entered context.
+fn install_dom_exception(scope: &mut v8::PinScope) {
+    let code = v8::String::new(scope, DOM_EXCEPTION_BOOTSTRAP)
+        .expect("the DOMException bootstrap fits the V8 string limit");
+    let script =
+        v8::Script::compile(scope, code, None).expect("the DOMException bootstrap compiles");
+    script
+        .run(scope)
+        .expect("the DOMException bootstrap runs without throwing");
+}
+
 fn compile_and_run(
     tc: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>,
     source: &str,

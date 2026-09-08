@@ -1192,12 +1192,14 @@ impl HTMLCollectionOps for HostObject {
     }
 }
 
-/// Maps a `tenta_core::Error` from a mutation to a `JsError`.
+/// Maps a `tenta_core::Error` from a mutation to a `JsError`. A DOM error
+/// carries its exception name in `code` and the human-readable text in
+/// `message`; the name is passed separately so the throw path can build a real
+/// `DOMException` rather than folding the name into the message.
 fn mutation_error(e: &tenta_core::Error) -> JsError {
-    if let Some(code) = tenta_dom::error::dom_exception_name(e) {
-        JsError::dom_exception(code, &e.to_string())
-    } else {
-        JsError::type_error(e.to_string())
+    match e {
+        tenta_core::Error::Other { code, message } => JsError::dom_exception(code, message),
+        _ => JsError::type_error(e.to_string()),
     }
 }
 

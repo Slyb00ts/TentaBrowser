@@ -189,6 +189,10 @@ pub struct JsSymbol(pub u64);
 pub struct JsError {
     kind: JsErrorKind,
     message: String,
+    /// The `DOMException` name (e.g. `IndexSizeError`), set only when `kind` is
+    /// `DomException`. Carried separately so the throw path can build a real
+    /// `DOMException` object with the right `name`/`code`.
+    dom_name: Option<String>,
 }
 
 /// The kind of error [`JsError`] carries.
@@ -210,6 +214,7 @@ impl JsError {
         Self {
             kind: JsErrorKind::Type,
             message: message.into(),
+            dom_name: None,
         }
     }
 
@@ -218,6 +223,7 @@ impl JsError {
         Self {
             kind: JsErrorKind::Range,
             message: message.into(),
+            dom_name: None,
         }
     }
 
@@ -226,14 +232,17 @@ impl JsError {
         Self {
             kind: JsErrorKind::Syntax,
             message: message.into(),
+            dom_name: None,
         }
     }
 
-    /// A `DOMException` with this name and message.
+    /// A `DOMException` with this name and message. The name is kept separate so
+    /// the throw path can build a real `DOMException` object.
     pub fn dom_exception(name: &str, message: &str) -> Self {
         Self {
             kind: JsErrorKind::DomException,
-            message: format!("{name}: {message}"),
+            message: message.to_string(),
+            dom_name: Some(name.to_string()),
         }
     }
 
@@ -246,6 +255,11 @@ impl JsError {
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    /// The `DOMException` name, present only for a `DomException` error.
+    pub fn dom_name(&self) -> Option<&str> {
+        self.dom_name.as_deref()
+    }
 }
 
 impl core::fmt::Display for JsError {
@@ -254,7 +268,7 @@ impl core::fmt::Display for JsError {
             JsErrorKind::Type => "TypeError",
             JsErrorKind::Range => "RangeError",
             JsErrorKind::Syntax => "SyntaxError",
-            JsErrorKind::DomException => "DOMException",
+            JsErrorKind::DomException => self.dom_name.as_deref().unwrap_or("DOMException"),
         };
         write!(f, "{prefix}: {}", self.message)
     }
@@ -913,9 +927,29 @@ pub fn throw_js_error(scope: &mut v8::PinScope<'_, '_>, error: &JsError) {
         return;
     };
     let exception = match error.kind() {
-        JsErrorKind::Type | JsErrorKind::DomException => v8::Exception::type_error(scope, message),
+        JsErrorKind::Type => v8::Exception::type_error(scope, message),
         JsErrorKind::Range => v8::Exception::range_error(scope, message),
         JsErrorKind::Syntax => v8::Exception::syntax_error(scope, message),
+        JsErrorKind::DomException => {
+            // Build a real `DOMException` by invoking the globally installed
+            // constructor: `new DOMException(message, name)`. Fall back to a
+            // `TypeError` carrying the same message when the constructor is
+            // absent (a context without the DOM bootstrap).
+            let name = error.dom_name().unwrap_or("Error");
+            let built = (|| {
+                let context = scope.get_current_context();
+                let global = context.global(scope);
+                let key = v8::String::new(scope, "DOMException")?;
+                let constructor = global.get(scope, key.into())?;
+                let constructor = v8::Local::<v8::Function>::try_from(constructor).ok()?;
+                let name_value = v8::String::new(scope, name)?;
+                let arguments = [message.into(), name_value.into()];
+                constructor
+                    .new_instance(scope, &arguments)
+                    .map(|object| object.into())
+            })();
+            built.unwrap_or_else(|| v8::Exception::type_error(scope, message))
+        }
     };
     scope.throw_exception(exception);
 }
@@ -1185,11 +1219,16 @@ unsafe impl<'js> rquickjs::JsLifetime<'js> for QuickJsWorldSlot {
 pub fn throw_quickjs_error(ctx: &rquickjs::Ctx<'_>, error: &JsError) -> rquickjs::Error {
     let message = error.message();
     match error.kind() {
-        JsErrorKind::Type | JsErrorKind::DomException => {
-            rquickjs::Exception::throw_type(ctx, message)
-        }
+        JsErrorKind::Type => rquickjs::Exception::throw_type(ctx, message),
         JsErrorKind::Range => rquickjs::Exception::throw_range(ctx, message),
         JsErrorKind::Syntax => rquickjs::Exception::throw_syntax(ctx, message),
+        JsErrorKind::DomException => {
+            // The QuickJS backend has no DOMException object yet (WP-b), so the
+            // name is folded back into the message, matching the previous
+            // behaviour until a real DOMException lands here too.
+            let name = error.dom_name().unwrap_or("Error");
+            rquickjs::Exception::throw_type(ctx, &format!("{name}: {message}"))
+        }
     }
 }
 
