@@ -694,7 +694,7 @@ impl AddEventListenerOptionsOrBoolean {
                 value.to_v8(scope)
             }
             AddEventListenerOptionsOrBoolean::Boolean(inner) => {
-                let value = inner;
+                let value = *inner;
                 Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, value).into())
             }
         }
@@ -763,7 +763,7 @@ impl EventListenerOptionsOrBoolean {
                 value.to_v8(scope)
             }
             EventListenerOptionsOrBoolean::Boolean(inner) => {
-                let value = inner;
+                let value = *inner;
                 Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, value).into())
             }
         }
@@ -825,7 +825,7 @@ impl NodeOrDomString {
     ) -> Result<v8::Local<'s, v8::Value>, JsError> {
         match self {
             NodeOrDomString::Node(inner) => {
-                let value = inner;
+                let value = *inner;
                 handle_to_v8::<Node>(scope, value)
             }
             NodeOrDomString::DomString(inner) => {

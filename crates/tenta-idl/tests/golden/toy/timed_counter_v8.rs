@@ -99,18 +99,18 @@ pub fn install_timed_counter<T: TimedCounterOps + CounterOps + 'static>(
 
 /// `TimedCounter` declares no `constructor`, so calling it throws, as WebIDL
 /// requires for an interface without a constructor operation.
-fn construct_timed_counter<T: TimedCounterOps + CounterOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments,
+fn construct_timed_counter<'s, T: TimedCounterOps + CounterOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
     throw_type_error(scope, "Illegal constructor");
 }
 
 /// Getter for `TimedCounter.interval`.
-fn get_timed_counter_interval<T: TimedCounterOps + CounterOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn get_timed_counter_interval<'s, T: TimedCounterOps + CounterOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -125,34 +125,6 @@ fn get_timed_counter_interval<T: TimedCounterOps + CounterOps + 'static>(
         }
     };
     rv.set_uint32(host.interval() as u32);
-}
-
-/// Setter for `TimedCounter.interval`.
-fn set_timed_counter_interval<T: TimedCounterOps + CounterOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    _rv: v8::ReturnValue<v8::Value>,
-) {
-    let this = args.this();
-    // SAFETY: the template carries the interface signature, so V8 has
-    // already checked that the receiver is an instance of it and that its
-    // host field was written by `attach_host::<T>`.
-    let host = match unsafe { unwrap_this::<T>(&this) } {
-        Ok(host) => host,
-        Err(error) => {
-            throw_js_error(scope, &error);
-            return;
-        }
-    };
-    let raw = args.get(0);
-    let value = match (u32_from_v8(scope, raw)) {
-        Ok(value) => value,
-        Err(error) => {
-            throw_js_error(scope, &error);
-            return;
-        }
-    };
-    host.set_interval(value);
 }
 
 /// Fast-API getter for `TimedCounter.interval`.
@@ -209,10 +181,38 @@ impl<T: TimedCounterOps + CounterOps + 'static> TimedCounterIntervalSetter<T> {
     )];
 }
 
+/// Setter for `TimedCounter.interval`.
+fn set_timed_counter_interval<'s, T: TimedCounterOps + CounterOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let this = args.this();
+    // SAFETY: the template carries the interface signature, so V8 has
+    // already checked that the receiver is an instance of it and that its
+    // host field was written by `attach_host::<T>`.
+    let host = match unsafe { unwrap_this::<T>(&this) } {
+        Ok(host) => host,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let raw = args.get(0);
+    let value = match u32_from_v8(scope, raw) {
+        Ok(value) => value,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    host.set_interval(value);
+}
+
 /// `TimedCounter.startTimer`.
-fn call_timed_counter_start_timer<T: TimedCounterOps + CounterOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_timed_counter_start_timer<'s, T: TimedCounterOps + CounterOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -259,9 +259,9 @@ impl<T: TimedCounterOps + CounterOps + 'static> TimedCounterStartTimerMethod<T> 
 }
 
 /// `TimedCounter.describe`.
-fn call_timed_counter_describe<T: TimedCounterOps + CounterOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_timed_counter_describe<'s, T: TimedCounterOps + CounterOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -282,7 +282,7 @@ fn call_timed_counter_describe<T: TimedCounterOps + CounterOps + 'static>(
             return;
         }
     };
-    match (string_to_v8(scope, &value)) {
+    match string_to_v8(scope, &value) {
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }

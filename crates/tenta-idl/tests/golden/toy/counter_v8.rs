@@ -139,9 +139,9 @@ pub fn install_counter<T: CounterOps + CounterConstructor + 'static>(
 }
 
 /// The `Counter` constructor.
-fn construct_counter<T: CounterOps + CounterConstructor + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn construct_counter<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     if !args.is_construct_call() {
@@ -153,7 +153,7 @@ fn construct_counter<T: CounterOps + CounterConstructor + 'static>(
     }
         let options = {
             let raw = args.get(0);
-            match (CounterOptions::from_v8(scope, raw)) {
+            match CounterOptions::from_v8(scope, raw) {
                 Ok(value) => value,
                 Err(error) => {
                     throw_js_error(scope, &error);
@@ -179,9 +179,9 @@ fn construct_counter<T: CounterOps + CounterConstructor + 'static>(
 }
 
 /// Getter for `Counter.count`.
-fn get_counter_count<T: CounterOps + CounterConstructor + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn get_counter_count<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -196,34 +196,6 @@ fn get_counter_count<T: CounterOps + CounterConstructor + 'static>(
         }
     };
     rv.set_uint32(host.count() as u32);
-}
-
-/// Setter for `Counter.count`.
-fn set_counter_count<T: CounterOps + CounterConstructor + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    _rv: v8::ReturnValue<v8::Value>,
-) {
-    let this = args.this();
-    // SAFETY: the template carries the interface signature, so V8 has
-    // already checked that the receiver is an instance of it and that its
-    // host field was written by `attach_host::<T>`.
-    let host = match unsafe { unwrap_this::<T>(&this) } {
-        Ok(host) => host,
-        Err(error) => {
-            throw_js_error(scope, &error);
-            return;
-        }
-    };
-    let raw = args.get(0);
-    let value = match (u32_from_v8(scope, raw)) {
-        Ok(value) => value,
-        Err(error) => {
-            throw_js_error(scope, &error);
-            return;
-        }
-    };
-    host.set_count(value);
 }
 
 /// Fast-API getter for `Counter.count`.
@@ -280,10 +252,38 @@ impl<T: CounterOps + CounterConstructor + 'static> CounterCountSetter<T> {
     )];
 }
 
+/// Setter for `Counter.count`.
+fn set_counter_count<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let this = args.this();
+    // SAFETY: the template carries the interface signature, so V8 has
+    // already checked that the receiver is an instance of it and that its
+    // host field was written by `attach_host::<T>`.
+    let host = match unsafe { unwrap_this::<T>(&this) } {
+        Ok(host) => host,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let raw = args.get(0);
+    let value = match u32_from_v8(scope, raw) {
+        Ok(value) => value,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    host.set_count(value);
+}
+
 /// Getter for `Counter.isActive`.
-fn get_counter_is_active<T: CounterOps + CounterConstructor + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn get_counter_is_active<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -300,10 +300,36 @@ fn get_counter_is_active<T: CounterOps + CounterConstructor + 'static>(
     rv.set_bool(host.is_active());
 }
 
+/// Fast-API getter for `Counter.isActive`.
+extern "C" fn fast_get_counter_is_active<T: CounterOps + CounterConstructor + 'static>(
+    receiver: v8::Local<v8::Object>,
+) -> bool {
+    // SAFETY: the fast callback is only reachable through a template that
+    // carries the interface signature, so the receiver is an instance.
+    match unsafe { unwrap_receiver::<T>(receiver) } {
+        Some(host) => host.is_active(),
+        None => false,
+    }
+}
+
+/// Fast-call table for the `Counter.isActive` getter.
+struct CounterIsActiveGetter<T: CounterOps + CounterConstructor + 'static>(core::marker::PhantomData<T>);
+
+impl<T: CounterOps + CounterConstructor + 'static> CounterIsActiveGetter<T> {
+    const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
+        fast_get_counter_is_active::<T> as *const std::ffi::c_void,
+        &v8::fast_api::CFunctionInfo::new(
+            v8::fast_api::Type::Bool.as_info(),
+            &[v8::fast_api::Type::V8Value.as_info()],
+            v8::fast_api::Int64Representation::Number,
+        ),
+    )];
+}
+
 /// Getter for `Counter.state`.
-fn get_counter_state<T: CounterOps + CounterConstructor + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn get_counter_state<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -324,16 +350,16 @@ fn get_counter_state<T: CounterOps + CounterConstructor + 'static>(
             return;
         }
     };
-    match (value.to_v8(scope)) {
+    match value.to_v8(scope) {
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }
 }
 
 /// `Counter.reset`.
-fn call_counter_reset<T: CounterOps + CounterConstructor + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_counter_reset<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -380,9 +406,9 @@ impl<T: CounterOps + CounterConstructor + 'static> CounterResetMethod<T> {
 }
 
 /// `Counter.advance`.
-fn call_counter_advance<T: CounterOps + CounterConstructor + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_counter_advance<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -398,7 +424,7 @@ fn call_counter_advance<T: CounterOps + CounterConstructor + 'static>(
     };
     let by = if args.length() > 0 && !args.get(0).is_undefined() {
         let raw = args.get(0);
-        match (u32_from_v8(scope, raw)) {
+        match u32_from_v8(scope, raw) {
             Ok(value) => Some(value),
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -420,9 +446,9 @@ fn call_counter_advance<T: CounterOps + CounterConstructor + 'static>(
 }
 
 /// `Counter.stop`.
-fn call_counter_stop<T: CounterOps + CounterConstructor + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_counter_stop<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -469,9 +495,9 @@ impl<T: CounterOps + CounterConstructor + 'static> CounterStopMethod<T> {
 }
 
 /// Getter for `Counter.stopped`.
-fn get_counter_stopped<T: CounterOps + CounterConstructor + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn get_counter_stopped<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -486,4 +512,30 @@ fn get_counter_stopped<T: CounterOps + CounterConstructor + 'static>(
         }
     };
     rv.set_bool(host.stopped());
+}
+
+/// Fast-API getter for `Counter.stopped`.
+extern "C" fn fast_get_counter_stopped<T: CounterOps + CounterConstructor + 'static>(
+    receiver: v8::Local<v8::Object>,
+) -> bool {
+    // SAFETY: the fast callback is only reachable through a template that
+    // carries the interface signature, so the receiver is an instance.
+    match unsafe { unwrap_receiver::<T>(receiver) } {
+        Some(host) => host.stopped(),
+        None => false,
+    }
+}
+
+/// Fast-call table for the `Counter.stopped` getter.
+struct CounterStoppedGetter<T: CounterOps + CounterConstructor + 'static>(core::marker::PhantomData<T>);
+
+impl<T: CounterOps + CounterConstructor + 'static> CounterStoppedGetter<T> {
+    const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
+        fast_get_counter_stopped::<T> as *const std::ffi::c_void,
+        &v8::fast_api::CFunctionInfo::new(
+            v8::fast_api::Type::Bool.as_info(),
+            &[v8::fast_api::Type::V8Value.as_info()],
+            v8::fast_api::Int64Representation::Number,
+        ),
+    )];
 }

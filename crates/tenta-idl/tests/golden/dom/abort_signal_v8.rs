@@ -130,23 +130,23 @@ pub fn install_abort_signal<T: AbortSignalOps + EventTargetOps + 'static>(
 
 /// `AbortSignal` declares no `constructor`, so calling it throws, as WebIDL
 /// requires for an interface without a constructor operation.
-fn construct_abort_signal<T: AbortSignalOps + EventTargetOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments,
+fn construct_abort_signal<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
     throw_type_error(scope, "Illegal constructor");
 }
 
 /// `AbortSignal.abort`.
-fn call_abort_signal_abort<T: AbortSignalOps + EventTargetOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_abort_signal_abort<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let reason = if args.length() > 0 && !args.get(0).is_undefined() {
         let raw = args.get(0);
-        match (value_from_v8(scope, raw).map(AnyValue)) {
+        match value_from_v8(scope, raw).map(AnyValue) {
             Ok(value) => Some(value),
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -163,16 +163,16 @@ fn call_abort_signal_abort<T: AbortSignalOps + EventTargetOps + 'static>(
             return;
         }
     };
-    match (handle_to_v8::<AbortSignal>(scope, value)) {
+    match handle_to_v8::<AbortSignal>(scope, value) {
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }
 }
 
 /// `AbortSignal.timeout`.
-fn call_abort_signal_timeout<T: AbortSignalOps + EventTargetOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_abort_signal_timeout<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     if args.length() < 1 {
@@ -184,7 +184,7 @@ fn call_abort_signal_timeout<T: AbortSignalOps + EventTargetOps + 'static>(
     }
     let milliseconds = {
         let raw = args.get(0);
-        match (number_from_v8(scope, raw).and_then(enforce_unsigned_long_long)) {
+        match number_from_v8(scope, raw).and_then(enforce_unsigned_long_long) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -199,16 +199,16 @@ fn call_abort_signal_timeout<T: AbortSignalOps + EventTargetOps + 'static>(
             return;
         }
     };
-    match (handle_to_v8::<AbortSignal>(scope, value)) {
+    match handle_to_v8::<AbortSignal>(scope, value) {
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }
 }
 
 /// `AbortSignal.any`.
-fn call_abort_signal_any<T: AbortSignalOps + EventTargetOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_abort_signal_any<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     if args.length() < 1 {
@@ -220,7 +220,7 @@ fn call_abort_signal_any<T: AbortSignalOps + EventTargetOps + 'static>(
     }
     let signals = {
         let raw = args.get(0);
-        match (sequence_from_v8(scope, raw, |scope, item| handle_from_v8::<AbortSignal>(scope, item))) {
+        match sequence_from_v8(scope, raw, |scope, item| handle_from_v8::<AbortSignal>(scope, item)) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -235,16 +235,16 @@ fn call_abort_signal_any<T: AbortSignalOps + EventTargetOps + 'static>(
             return;
         }
     };
-    match (handle_to_v8::<AbortSignal>(scope, value)) {
+    match handle_to_v8::<AbortSignal>(scope, value) {
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }
 }
 
 /// Getter for `AbortSignal.aborted`.
-fn get_abort_signal_aborted<T: AbortSignalOps + EventTargetOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn get_abort_signal_aborted<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -261,10 +261,36 @@ fn get_abort_signal_aborted<T: AbortSignalOps + EventTargetOps + 'static>(
     rv.set_bool(host.aborted());
 }
 
+/// Fast-API getter for `AbortSignal.aborted`.
+extern "C" fn fast_get_abort_signal_aborted<T: AbortSignalOps + EventTargetOps + 'static>(
+    receiver: v8::Local<v8::Object>,
+) -> bool {
+    // SAFETY: the fast callback is only reachable through a template that
+    // carries the interface signature, so the receiver is an instance.
+    match unsafe { unwrap_receiver::<T>(receiver) } {
+        Some(host) => host.aborted(),
+        None => false,
+    }
+}
+
+/// Fast-call table for the `AbortSignal.aborted` getter.
+struct AbortSignalAbortedGetter<T: AbortSignalOps + EventTargetOps + 'static>(core::marker::PhantomData<T>);
+
+impl<T: AbortSignalOps + EventTargetOps + 'static> AbortSignalAbortedGetter<T> {
+    const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
+        fast_get_abort_signal_aborted::<T> as *const std::ffi::c_void,
+        &v8::fast_api::CFunctionInfo::new(
+            v8::fast_api::Type::Bool.as_info(),
+            &[v8::fast_api::Type::V8Value.as_info()],
+            v8::fast_api::Int64Representation::Number,
+        ),
+    )];
+}
+
 /// Getter for `AbortSignal.reason`.
-fn get_abort_signal_reason<T: AbortSignalOps + EventTargetOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn get_abort_signal_reason<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -285,16 +311,16 @@ fn get_abort_signal_reason<T: AbortSignalOps + EventTargetOps + 'static>(
             return;
         }
     };
-    match (value_to_v8(scope, value.0)) {
+    match value_to_v8(scope, value.0) {
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }
 }
 
 /// `AbortSignal.throwIfAborted`.
-fn call_abort_signal_throw_if_aborted<T: AbortSignalOps + EventTargetOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_abort_signal_throw_if_aborted<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -341,9 +367,9 @@ impl<T: AbortSignalOps + EventTargetOps + 'static> AbortSignalThrowIfAbortedMeth
 }
 
 /// Getter for `AbortSignal.onabort`.
-fn get_abort_signal_onabort<T: AbortSignalOps + EventTargetOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn get_abort_signal_onabort<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -364,16 +390,16 @@ fn get_abort_signal_onabort<T: AbortSignalOps + EventTargetOps + 'static>(
             return;
         }
     };
-    match (match value { Some(inner) => value_to_v8(scope, inner.bits()), None => Ok(v8::null(scope).into()) }) {
+    match match value { Some(inner) => value_to_v8(scope, inner.bits()), None => Ok(v8::null(scope).into()) } {
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }
 }
 
 /// Setter for `AbortSignal.onabort`.
-fn set_abort_signal_onabort<T: AbortSignalOps + EventTargetOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn set_abort_signal_onabort<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -388,7 +414,7 @@ fn set_abort_signal_onabort<T: AbortSignalOps + EventTargetOps + 'static>(
         }
     };
     let raw = args.get(0);
-    let value = match (if raw.is_null_or_undefined() { Ok(None) } else { (value_from_v8(scope, raw).map(EventHandlerNonNull::from_bits)).map(Some) }) {
+    let value = match if raw.is_null_or_undefined() { Ok(None) } else { (value_from_v8(scope, raw).map(EventHandlerNonNull::from_bits)).map(Some) } {
         Ok(value) => value,
         Err(error) => {
             throw_js_error(scope, &error);

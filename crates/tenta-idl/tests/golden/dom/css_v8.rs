@@ -74,9 +74,9 @@ pub fn install_css<T: CSSOps + 'static>(
 
 /// Overload dispatcher for `CSS.supports`; WebIDL selects an overload by
 /// argument count first.
-fn call_css_supports<T: CSSOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_css_supports<'s, T: CSSOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<v8::Value>,
 ) {
     match args.length() {
@@ -90,9 +90,9 @@ fn call_css_supports<T: CSSOps + 'static>(
 }
 
 /// `CSS.supports`.
-fn call_css_supports_2<T: CSSOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_css_supports_2<'s, T: CSSOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     if args.length() < 2 {
@@ -104,7 +104,7 @@ fn call_css_supports_2<T: CSSOps + 'static>(
     }
     let property = {
         let raw = args.get(0);
-        match (Ok::<String, JsError>(string_from_v8(scope, raw))) {
+        match Ok::<String, JsError>(string_from_v8(scope, raw)) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -114,7 +114,7 @@ fn call_css_supports_2<T: CSSOps + 'static>(
     };
     let value = {
         let raw = args.get(1);
-        match (Ok::<String, JsError>(string_from_v8(scope, raw))) {
+        match Ok::<String, JsError>(string_from_v8(scope, raw)) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -129,16 +129,16 @@ fn call_css_supports_2<T: CSSOps + 'static>(
             return;
         }
     };
-    match (Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, value).into())) {
+    match Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, value).into()) {
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }
 }
 
 /// `CSS.supports`.
-fn call_css_supports_1<T: CSSOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_css_supports_1<'s, T: CSSOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     if args.length() < 1 {
@@ -150,7 +150,7 @@ fn call_css_supports_1<T: CSSOps + 'static>(
     }
     let condition_text = {
         let raw = args.get(0);
-        match (Ok::<String, JsError>(string_from_v8(scope, raw))) {
+        match Ok::<String, JsError>(string_from_v8(scope, raw)) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -165,16 +165,16 @@ fn call_css_supports_1<T: CSSOps + 'static>(
             return;
         }
     };
-    match (Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, value).into())) {
+    match Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, value).into()) {
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }
 }
 
 /// `CSS.escape`.
-fn call_css_escape<T: CSSOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_css_escape<'s, T: CSSOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     if args.length() < 1 {
@@ -186,7 +186,7 @@ fn call_css_escape<T: CSSOps + 'static>(
     }
     let ident = {
         let raw = args.get(0);
-        match (Ok::<String, JsError>(string_from_v8(scope, raw))) {
+        match Ok::<String, JsError>(string_from_v8(scope, raw)) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -201,7 +201,7 @@ fn call_css_escape<T: CSSOps + 'static>(
             return;
         }
     };
-    match (string_to_v8(scope, &value)) {
+    match string_to_v8(scope, &value) {
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }

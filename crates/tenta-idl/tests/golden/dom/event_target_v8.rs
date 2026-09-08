@@ -91,9 +91,9 @@ pub fn install_event_target<T: EventTargetOps + EventTargetConstructor + 'static
 }
 
 /// The `EventTarget` constructor.
-fn construct_event_target<T: EventTargetOps + EventTargetConstructor + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn construct_event_target<'s, T: EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     if !args.is_construct_call() {
@@ -114,9 +114,9 @@ fn construct_event_target<T: EventTargetOps + EventTargetConstructor + 'static>(
 }
 
 /// `EventTarget.addEventListener`.
-fn call_event_target_add_event_listener<T: EventTargetOps + EventTargetConstructor + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_event_target_add_event_listener<'s, T: EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     if args.length() < 2 {
@@ -139,7 +139,7 @@ fn call_event_target_add_event_listener<T: EventTargetOps + EventTargetConstruct
     };
     let r#type = {
         let raw = args.get(0);
-        match (Ok::<String, JsError>(string_from_v8(scope, raw))) {
+        match Ok::<String, JsError>(string_from_v8(scope, raw)) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -149,7 +149,7 @@ fn call_event_target_add_event_listener<T: EventTargetOps + EventTargetConstruct
     };
     let callback = {
         let raw = args.get(1);
-        match (if raw.is_null_or_undefined() { Ok(None) } else { (value_from_v8(scope, raw).map(EventListener::from_bits)).map(Some) }) {
+        match if raw.is_null_or_undefined() { Ok(None) } else { (value_from_v8(scope, raw).map(EventListener::from_bits)).map(Some) } {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -159,7 +159,7 @@ fn call_event_target_add_event_listener<T: EventTargetOps + EventTargetConstruct
     };
     let options = if args.length() > 2 && !args.get(2).is_undefined() {
         let raw = args.get(2);
-        match (AddEventListenerOptionsOrBoolean::from_v8(scope, raw)) {
+        match AddEventListenerOptionsOrBoolean::from_v8(scope, raw) {
             Ok(value) => Some(value),
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -181,9 +181,9 @@ fn call_event_target_add_event_listener<T: EventTargetOps + EventTargetConstruct
 }
 
 /// `EventTarget.removeEventListener`.
-fn call_event_target_remove_event_listener<T: EventTargetOps + EventTargetConstructor + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_event_target_remove_event_listener<'s, T: EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     if args.length() < 2 {
@@ -206,7 +206,7 @@ fn call_event_target_remove_event_listener<T: EventTargetOps + EventTargetConstr
     };
     let r#type = {
         let raw = args.get(0);
-        match (Ok::<String, JsError>(string_from_v8(scope, raw))) {
+        match Ok::<String, JsError>(string_from_v8(scope, raw)) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -216,7 +216,7 @@ fn call_event_target_remove_event_listener<T: EventTargetOps + EventTargetConstr
     };
     let callback = {
         let raw = args.get(1);
-        match (if raw.is_null_or_undefined() { Ok(None) } else { (value_from_v8(scope, raw).map(EventListener::from_bits)).map(Some) }) {
+        match if raw.is_null_or_undefined() { Ok(None) } else { (value_from_v8(scope, raw).map(EventListener::from_bits)).map(Some) } {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -226,7 +226,7 @@ fn call_event_target_remove_event_listener<T: EventTargetOps + EventTargetConstr
     };
     let options = if args.length() > 2 && !args.get(2).is_undefined() {
         let raw = args.get(2);
-        match (EventListenerOptionsOrBoolean::from_v8(scope, raw)) {
+        match EventListenerOptionsOrBoolean::from_v8(scope, raw) {
             Ok(value) => Some(value),
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -248,9 +248,9 @@ fn call_event_target_remove_event_listener<T: EventTargetOps + EventTargetConstr
 }
 
 /// `EventTarget.dispatchEvent`.
-fn call_event_target_dispatch_event<T: EventTargetOps + EventTargetConstructor + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_event_target_dispatch_event<'s, T: EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     if args.length() < 1 {
@@ -273,7 +273,7 @@ fn call_event_target_dispatch_event<T: EventTargetOps + EventTargetConstructor +
     };
     let event = {
         let raw = args.get(0);
-        match (handle_from_v8::<Event>(scope, raw)) {
+        match handle_from_v8::<Event>(scope, raw) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -288,7 +288,7 @@ fn call_event_target_dispatch_event<T: EventTargetOps + EventTargetConstructor +
             return;
         }
     };
-    match (Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, value).into())) {
+    match Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, value).into()) {
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }

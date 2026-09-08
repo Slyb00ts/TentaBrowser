@@ -94,18 +94,18 @@ pub fn install_node_list<T: NodeListOps + 'static>(
 
 /// `NodeList` declares no `constructor`, so calling it throws, as WebIDL
 /// requires for an interface without a constructor operation.
-fn construct_node_list<T: NodeListOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments,
+fn construct_node_list<'s, T: NodeListOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
     throw_type_error(scope, "Illegal constructor");
 }
 
 /// `NodeList.item`.
-fn call_node_list_item<T: NodeListOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn call_node_list_item<'s, T: NodeListOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     if args.length() < 1 {
@@ -128,7 +128,7 @@ fn call_node_list_item<T: NodeListOps + 'static>(
     };
     let index = {
         let raw = args.get(0);
-        match (u32_from_v8(scope, raw)) {
+        match u32_from_v8(scope, raw) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -143,16 +143,16 @@ fn call_node_list_item<T: NodeListOps + 'static>(
             return;
         }
     };
-    match (match value { Some(inner) => handle_to_v8::<Node>(scope, inner), None => Ok(v8::null(scope).into()) }) {
+    match match value { Some(inner) => handle_to_v8::<Node>(scope, inner), None => Ok(v8::null(scope).into()) } {
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }
 }
 
 /// Getter for `NodeList.length`.
-fn get_node_list_length<T: NodeListOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
+fn get_node_list_length<'s, T: NodeListOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let this = args.this();
@@ -169,12 +169,38 @@ fn get_node_list_length<T: NodeListOps + 'static>(
     rv.set_uint32(host.length() as u32);
 }
 
+/// Fast-API getter for `NodeList.length`.
+extern "C" fn fast_get_node_list_length<T: NodeListOps + 'static>(
+    receiver: v8::Local<v8::Object>,
+) -> u32 {
+    // SAFETY: the fast callback is only reachable through a template that
+    // carries the interface signature, so the receiver is an instance.
+    match unsafe { unwrap_receiver::<T>(receiver) } {
+        Some(host) => host.length(),
+        None => 0,
+    }
+}
+
+/// Fast-call table for the `NodeList.length` getter.
+struct NodeListLengthGetter<T: NodeListOps + 'static>(core::marker::PhantomData<T>);
+
+impl<T: NodeListOps + 'static> NodeListLengthGetter<T> {
+    const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
+        fast_get_node_list_length::<T> as *const std::ffi::c_void,
+        &v8::fast_api::CFunctionInfo::new(
+            v8::fast_api::Type::Uint32.as_info(),
+            &[v8::fast_api::Type::V8Value.as_info()],
+            v8::fast_api::Int64Representation::Number,
+        ),
+    )];
+}
+
 /// Indexed property getter for `NodeList`, installed with
 /// `ObjectTemplate::set_indexed_property_handler`.
-fn indexed_get_node_list<T: NodeListOps + 'static>(
-    scope: &mut v8::PinScope<'_, '_>,
+fn indexed_get_node_list<'s, T: NodeListOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
-    args: v8::PropertyCallbackArguments,
+    args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) -> v8::Intercepted {
     let this = args.holder();
@@ -190,7 +216,7 @@ fn indexed_get_node_list<T: NodeListOps + 'static>(
             return v8::Intercepted::kYes;
         }
     };
-    match (match value { Some(inner) => handle_to_v8::<Node>(scope, inner), None => Ok(v8::null(scope).into()) }) {
+    match match value { Some(inner) => handle_to_v8::<Node>(scope, inner), None => Ok(v8::null(scope).into()) } {
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }
