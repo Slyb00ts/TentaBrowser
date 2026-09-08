@@ -752,6 +752,15 @@ impl ElementOps for HostObject {
         doc.borrow().attribute_str(id, &lower_name).is_some()
     }
 
+    fn get_attribute_names(&self) -> Result<Vec<String>, JsError> {
+        let (doc, id) = self.anchor();
+        Ok(doc
+            .borrow()
+            .attributes(id)
+            .map(|(name, _)| qualified_attr_name(&name))
+            .collect())
+    }
+
     fn inner_html(&self) -> Result<String, JsError> {
         let (doc, id) = self.anchor();
         Ok(doc.borrow().inner_html(id))
@@ -1214,6 +1223,16 @@ fn node_name(doc: &Document, id: NodeId) -> String {
 
 /// The DOM `tagName` of an element: the qualified name, ASCII-uppercased for
 /// elements in the HTML namespace (https://dom.spec.whatwg.org/#dom-element-tagname).
+/// The qualified name of an attribute (`prefix:local`, or just `local` when
+/// there is no prefix), as `getAttributeNames` reports it
+/// (<https://dom.spec.whatwg.org/#dom-element-getattributenames>).
+fn qualified_attr_name(name: &QualName) -> String {
+    match &name.prefix {
+        Some(prefix) => format!("{}:{}", prefix.as_str(), name.local.as_str()),
+        None => name.local.as_str().to_owned(),
+    }
+}
+
 fn element_tag_name(doc: &Document, id: NodeId) -> String {
     let Some(local) = doc.tag(id) else {
         return String::new();

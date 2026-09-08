@@ -516,3 +516,77 @@ fn node_value_element() {
         "true"
     );
 }
+
+#[test]
+fn get_attribute_names_returns_empty_for_no_attributes() {
+    assert_eq!(
+        eval(
+            r#"
+        const div = document.createElement("div");
+        JSON.stringify(div.getAttributeNames())
+    "#
+        ),
+        "[]"
+    );
+}
+
+#[test]
+fn get_attribute_names_lists_names_in_order() {
+    assert_eq!(
+        eval(
+            r#"
+        const div = document.createElement("div");
+        div.setAttribute("id", "x");
+        div.setAttribute("class", "y");
+        div.setAttribute("data-role", "z");
+        div.getAttributeNames().join(",")
+    "#
+        ),
+        "id,class,data-role"
+    );
+}
+
+#[test]
+fn get_attribute_names_reflects_removal() {
+    assert_eq!(
+        eval(
+            r#"
+        const div = document.createElement("div");
+        div.setAttribute("a", "1");
+        div.setAttribute("b", "2");
+        div.removeAttribute("a");
+        div.getAttributeNames().join(",")
+    "#
+        ),
+        "b"
+    );
+}
+
+#[test]
+fn get_attribute_names_returns_a_js_array() {
+    assert_eq!(
+        eval(
+            r#"
+        const div = document.createElement("div");
+        div.setAttribute("id", "x");
+        const names = div.getAttributeNames();
+        (Array.isArray(names) && names.length === 1 && names[0] === "id") ? "true" : "false"
+    "#
+        ),
+        "true"
+    );
+}
+
+#[test]
+fn get_attribute_names_on_element_from_document() {
+    // The pre-built <div id="app"> carries an id attribute.
+    assert_eq!(
+        eval(
+            r#"
+        const div = document.getElementById("app");
+        div.getAttributeNames().join(",")
+    "#
+        ),
+        "id"
+    );
+}
