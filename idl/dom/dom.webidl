@@ -93,6 +93,11 @@ interface Element : Node {
 
   // Phase 2b-1: innerHTML (getter + setter - note: setter is fast-API eligible so non-throwing)
   attribute DOMString innerHTML;
+
+  // Phase 2b-5: outerHTML (getter + [Throws] setter forces the fallible path)
+  // and insertAdjacentHTML.
+  [Throws] attribute DOMString outerHTML;
+  [Throws] undefined insertAdjacentHTML(DOMString position, DOMString text);
 };
 
 [Exposed=Window]

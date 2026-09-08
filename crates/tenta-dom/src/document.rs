@@ -15,7 +15,9 @@ use crate::arena::{
     AttrName, AttrValue, DocTypeData, DomArena, NodeFlags, NodeKind, NodeList, PiData, StyleHandle,
     WrapperSlot,
 };
-use crate::error::{hierarchy_request, index_size, invalid_state, not_found};
+use crate::error::{
+    hierarchy_request, index_size, invalid_state, no_modification_allowed, not_found, syntax,
+};
 use crate::interner::{DocInterner, LocalName};
 use crate::mutation::{Mutation, MutationObserverSink, MutationRecord, NoopObserverSink};
 use crate::selectors::SelectorCache;
@@ -55,6 +57,12 @@ pub type StopPredicate = Box<dyn FnMut(&Document, NodeId) -> bool + Send>;
 fn next_document_id() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The fallback fragment-parsing context (`<body>`) used when a node's parent
+/// is not an element, matching the HTML fragment serialisation algorithm.
+fn body_context() -> QualName {
+    QualName::new(atoms::NS_HTML, atoms::BODY)
 }
 
 /// The length of `s` in UTF-16 code units, as DOM `CharacterData` offsets are
@@ -1938,34 +1946,12 @@ impl Document {
     /// Returns an error if the element is not an Element node or if parsing
     /// or mutation operations fail.
     pub fn set_inner_html(&mut self, element: NodeId, html: &str) -> Result<()> {
-        use tenta_html::{Parser, ParserOptions};
-
         // Verify that the node is an element
         let ctx_name = self.element_name(element).ok_or_else(|| {
             tenta_core::Error::invalid("cannot set innerHTML on non-Element node")
         })?;
 
-        // Snapshot the document node's current children before parsing
-        let before: Vec<NodeId> = self.children(self.document_node()).collect();
-
-        // Parse the fragment into this Document's own arena.
-        // The parser consumes the sink by value, so we move self out and back.
-        let taken = std::mem::take(self);
-        let opts = ParserOptions {
-            fragment_context: Some(ctx_name),
-            scripting_enabled: false,
-            ..ParserOptions::default()
-        };
-        let mut parser = Parser::new(taken, opts);
-        parser.feed_str(html);
-        *self = parser.finish();
-
-        // Find the new fragment root: the bare <html> created by create_root
-        // that was appended to document_node after the snapshot.
-        let frag_root = self
-            .children(self.document_node())
-            .find(|c| !before.contains(c))
-            .ok_or_else(|| tenta_core::Error::invalid("fragment parsing produced no root"))?;
+        let frag_root = self.parse_fragment(ctx_name, html)?;
 
         // Remove all existing children of the element
         let child_ids: Vec<NodeId> = self.children(element).collect();
@@ -1982,6 +1968,131 @@ impl Document {
         // Remove the now-empty fragment root
         self.mutate(Mutation::Remove { child: frag_root })?;
 
+        Ok(())
+    }
+
+    /// Replaces `element` with the nodes parsed from `html`.
+    ///
+    /// The fragment is parsed in the context of `element`'s parent, then its
+    /// nodes are inserted where `element` was and `element` is detached.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NoModificationAllowedError` when the element's parent is the
+    /// document node. A detached element (no parent) is a no-op, matching the
+    /// DOM standard. Returns an error if the node is not an element.
+    pub fn set_outer_html(&mut self, element: NodeId, html: &str) -> Result<()> {
+        if self.kind(element) != NodeKind::Element {
+            return Err(tenta_core::Error::invalid(
+                "cannot set outerHTML on non-Element node",
+            ));
+        }
+        let parent = self.parent(element);
+        if parent == NodeId::NONE {
+            // A detached element has no parent to insert into: setting
+            // outerHTML does nothing, per the DOM standard.
+            return Ok(());
+        }
+        if parent == self.document_node() {
+            return Err(no_modification_allowed(
+                "cannot set outerHTML on a child of the document",
+            ));
+        }
+        let ctx_name = self.element_name(parent).unwrap_or_else(body_context);
+        let frag_root = self.parse_fragment(ctx_name, html)?;
+        self.insert_fragment(frag_root, parent, element)?;
+        self.mutate(Mutation::Remove { child: element })?;
+        Ok(())
+    }
+
+    /// Parses `html` and inserts the resulting nodes relative to `element`.
+    ///
+    /// `position` is ASCII case-insensitive and one of `beforebegin`,
+    /// `afterbegin`, `beforeend` or `afterend`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SyntaxError` for an unknown position, and
+    /// `NoModificationAllowedError` when `beforebegin`/`afterend` are used on a
+    /// node whose parent is missing or is the document node.
+    pub fn insert_adjacent_html(
+        &mut self,
+        element: NodeId,
+        position: &str,
+        html: &str,
+    ) -> Result<()> {
+        // (context node for parsing, insertion parent, reference sibling)
+        let (ctx_node, parent, before) = if position.eq_ignore_ascii_case("beforebegin")
+            || position.eq_ignore_ascii_case("afterend")
+        {
+            let element_parent = self.parent(element);
+            if element_parent == NodeId::NONE || element_parent == self.document_node() {
+                return Err(no_modification_allowed(format!(
+                    "cannot insert '{position}' relative to a node without an element parent"
+                )));
+            }
+            let before = if position.eq_ignore_ascii_case("beforebegin") {
+                element
+            } else {
+                self.next_sibling(element)
+            };
+            (element_parent, element_parent, before)
+        } else if position.eq_ignore_ascii_case("afterbegin") {
+            (element, element, self.first_child(element))
+        } else if position.eq_ignore_ascii_case("beforeend") {
+            (element, element, NodeId::NONE)
+        } else {
+            return Err(syntax(format!(
+                "invalid insertAdjacentHTML position '{position}'"
+            )));
+        };
+
+        let ctx_name = self.element_name(ctx_node).unwrap_or_else(body_context);
+        let frag_root = self.parse_fragment(ctx_name, html)?;
+        self.insert_fragment(frag_root, parent, before)
+    }
+
+    /// Parses `html` as an HTML fragment in the context of `ctx_name` and
+    /// returns the fragment root: a bare `<html>` element appended to the
+    /// document node whose children are the parsed nodes. Callers move the
+    /// children out and remove the root.
+    fn parse_fragment(&mut self, ctx_name: QualName, html: &str) -> Result<NodeId> {
+        use tenta_html::{Parser, ParserOptions};
+
+        // Snapshot the document node's current children before parsing.
+        let before: Vec<NodeId> = self.children(self.document_node()).collect();
+
+        // Parse the fragment into this Document's own arena.
+        // The parser consumes the sink by value, so we move self out and back.
+        let taken = std::mem::take(self);
+        let opts = ParserOptions {
+            fragment_context: Some(ctx_name),
+            scripting_enabled: false,
+            ..ParserOptions::default()
+        };
+        let mut parser = Parser::new(taken, opts);
+        parser.feed_str(html);
+        *self = parser.finish();
+
+        // The new fragment root is the bare <html> created by create_root and
+        // appended to document_node after the snapshot.
+        self.children(self.document_node())
+            .find(|c| !before.contains(c))
+            .ok_or_else(|| tenta_core::Error::invalid("fragment parsing produced no root"))
+    }
+
+    /// Moves every child of `frag_root` into `parent` before `before` (in
+    /// order, `NodeId::NONE` appends), then removes the now-empty `frag_root`.
+    fn insert_fragment(&mut self, frag_root: NodeId, parent: NodeId, before: NodeId) -> Result<()> {
+        let children: Vec<NodeId> = self.children(frag_root).collect();
+        for child in children {
+            self.mutate(Mutation::InsertBefore {
+                parent,
+                child,
+                before,
+            })?;
+        }
+        self.mutate(Mutation::Remove { child: frag_root })?;
         Ok(())
     }
 

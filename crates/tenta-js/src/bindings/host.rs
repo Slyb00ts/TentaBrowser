@@ -778,6 +778,25 @@ impl ElementOps for HostObject {
         let mut doc = doc.borrow_mut();
         let _ = doc.set_inner_html(id, value);
     }
+
+    fn outer_html(&self) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        Ok(doc.borrow().outer_html(id))
+    }
+
+    fn set_outer_html(&self, value: &str) -> Result<(), JsError> {
+        let (doc, id) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        doc.set_outer_html(id, value)
+            .map_err(|e| mutation_error(&e))
+    }
+
+    fn insert_adjacent_html(&self, position: &str, text: &str) -> Result<(), JsError> {
+        let (doc, id) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        doc.insert_adjacent_html(id, position, text)
+            .map_err(|e| mutation_error(&e))
+    }
 }
 
 impl DocumentOps for HostObject {

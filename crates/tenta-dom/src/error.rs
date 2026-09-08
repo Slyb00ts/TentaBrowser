@@ -36,6 +36,13 @@ pub fn syntax(message: impl Into<String>) -> Error {
     dom("SyntaxError", message)
 }
 
+/// The modification cannot be performed at this position (e.g. setting
+/// `outerHTML` on a node whose parent is the document, or `insertAdjacentHTML`
+/// with `beforebegin`/`afterend` on a node without an element parent).
+pub fn no_modification_allowed(message: impl Into<String>) -> Error {
+    dom("NoModificationAllowedError", message)
+}
+
 /// An index or offset is outside the allowed range (e.g. a `CharacterData`
 /// offset past the node's length).
 pub fn index_size(message: impl Into<String>) -> Error {

@@ -1032,11 +1032,12 @@ impl<'a> Lowerer<'a> {
         } else {
             Some(naming::snake_case(&format!("set_{name}")))
         };
+        let throws = attrs.has("Throws");
         let fast_getter = classify_getter(&lowered_type, is_static);
         let fast_setter = if readonly {
             None
         } else {
-            Some(classify_setter(&lowered_type, is_static))
+            Some(classify_setter(&lowered_type, is_static, throws))
         };
         Ok(Attribute {
             name: name.to_string(),
@@ -1361,9 +1362,12 @@ fn classify_getter(ty: &Type, is_static: bool) -> FastApi {
     }
 }
 
-fn classify_setter(ty: &Type, is_static: bool) -> FastApi {
+fn classify_setter(ty: &Type, is_static: bool, throws: bool) -> FastApi {
     if is_static {
         return FastApi::Ineligible(NotFastBecause::Static);
+    }
+    if throws {
+        return FastApi::Ineligible(NotFastBecause::Throws);
     }
     if ty.is_fast_primitive() || ty.is_one_byte_string() {
         FastApi::Eligible
