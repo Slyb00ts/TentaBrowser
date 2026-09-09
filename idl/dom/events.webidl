@@ -40,6 +40,8 @@ interface Event {
   readonly attribute DOMString type;
   readonly attribute EventTarget? target;
   readonly attribute EventTarget? currentTarget;
+  readonly attribute EventTarget? srcElement;
+  sequence<EventTarget> composedPath();
 
   const unsigned short NONE = 0;
   const unsigned short CAPTURING_PHASE = 1;
@@ -48,10 +50,12 @@ interface Event {
   readonly attribute unsigned short eventPhase;
 
   undefined stopPropagation();
+  attribute boolean cancelBubble;
   undefined stopImmediatePropagation();
 
   readonly attribute boolean bubbles;
   readonly attribute boolean cancelable;
+  attribute boolean returnValue;
   undefined preventDefault();
   readonly attribute boolean defaultPrevented;
   readonly attribute boolean composed;

@@ -354,3 +354,98 @@ fn same_callback_on_two_types_removes_independently() {
         "1"
     );
 }
+
+#[test]
+fn src_element_aliases_target() {
+    // srcElement is the legacy alias of target.
+    assert_eq!(
+        eval(
+            r#"
+            const el = document.querySelector('#target');
+            let out = '';
+            el.addEventListener('x', (e) => {
+                out = (e.srcElement === e.target) + '/' + (e.srcElement === el);
+            });
+            const ev = document.createEvent('Event');
+            ev.initEvent('x', false, false);
+            el.dispatchEvent(ev);
+            out;
+        "#
+        ),
+        "true/true"
+    );
+}
+
+#[test]
+fn composed_path_is_the_propagation_chain_during_dispatch_only() {
+    // composedPath() returns [target, ...ancestors] while dispatching and an
+    // empty array otherwise.
+    assert_eq!(
+        eval(
+            r#"
+            const el = document.querySelector('#target');
+            function chain(n) { const a = []; for (; n; n = n.parentNode) a.push(n); return a; }
+            let result = 'not-run';
+            el.addEventListener('x', (e) => {
+                const cp = e.composedPath();
+                const expected = chain(el);
+                let ok = cp.length === expected.length;
+                for (let i = 0; i < cp.length; i++) if (cp[i] !== expected[i]) ok = false;
+                result = ok + '/' + cp.length + '/' + (cp[0] === el)
+                    + '/' + (cp[cp.length - 1] === document);
+            });
+            const ev = document.createEvent('Event');
+            ev.initEvent('x', true, true);
+            el.dispatchEvent(ev);
+            result + '/outside:' + ev.composedPath().length;
+        "#
+        ),
+        "true/4/true/true/outside:0"
+    );
+}
+
+#[test]
+fn cancel_bubble_stops_propagation_to_ancestors() {
+    // Setting cancelBubble = true stops the event bubbling to ancestor targets;
+    // the getter reflects the "stop propagation" flag.
+    assert_eq!(
+        eval(
+            r#"
+            const el = document.querySelector('#target');
+            const body = el.parentNode;
+            const out = [];
+            body.addEventListener('x', () => out.push('body'));
+            el.addEventListener('x', (e) => {
+                out.push('el:' + e.cancelBubble);
+                e.cancelBubble = true;
+                out.push('el:' + e.cancelBubble);
+            });
+            const ev = document.createEvent('Event');
+            ev.initEvent('x', true, false);
+            el.dispatchEvent(ev);
+            out.join(',');
+        "#
+        ),
+        "el:false,el:true"
+    );
+}
+
+#[test]
+fn return_value_false_cancels_a_cancelable_event() {
+    // returnValue is the legacy inverse of defaultPrevented; setting it false
+    // cancels a cancelable event.
+    assert_eq!(
+        eval(
+            r#"
+            const el = document.querySelector('#target');
+            let seen;
+            el.addEventListener('x', (e) => { seen = e.returnValue; e.returnValue = false; });
+            const ev = document.createEvent('Event');
+            ev.initEvent('x', false, true);
+            const r = el.dispatchEvent(ev);
+            seen + '/' + r + '/' + ev.returnValue + '/' + ev.defaultPrevented;
+        "#
+        ),
+        "true/false/false/true"
+    );
+}

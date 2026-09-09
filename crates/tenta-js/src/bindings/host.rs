@@ -1409,6 +1409,48 @@ impl EventOps for HostObject {
         self.with_event(0.0, |r| r.time_stamp)
     }
 
+    fn src_element(&self) -> Result<Option<Handle<EventTarget>>, JsError> {
+        // Legacy alias of `target`.
+        Ok(self.with_event(None, |r| r.target.map(Handle::from_bits)))
+    }
+
+    fn composed_path(&self) -> Result<Vec<Handle<EventTarget>>, JsError> {
+        // The propagation path, populated during dispatch and cleared after, so
+        // this returns an empty array when the event is not being dispatched.
+        Ok(self.with_event(Vec::new(), |r| {
+            r.path.iter().copied().map(Handle::from_bits).collect()
+        }))
+    }
+
+    fn cancel_bubble(&self) -> bool {
+        // Legacy alias of the "stop propagation" flag.
+        self.with_event(false, |r| r.flags.stop_propagation)
+    }
+
+    fn set_cancel_bubble(&self, value: bool) {
+        // Setting true stops propagation; setting false is a no-op (per the
+        // legacy attribute's definition).
+        if value {
+            self.with_event_mut(|r| r.flags.stop_propagation = true);
+        }
+    }
+
+    fn return_value(&self) -> bool {
+        // Legacy inverse of `defaultPrevented`: false once the event is canceled.
+        self.with_event(true, |r| !r.flags.canceled)
+    }
+
+    fn set_return_value(&self, value: bool) {
+        // Setting false cancels the event (as `preventDefault`); true is a no-op.
+        if !value {
+            self.with_event_mut(|r| {
+                if r.cancelable && !r.flags.in_passive_listener {
+                    r.flags.canceled = true;
+                }
+            });
+        }
+    }
+
     fn init_event(
         &self,
         r#type: &str,
