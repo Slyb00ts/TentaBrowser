@@ -278,6 +278,14 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the Element interface");
+            // SVGElement : Element — installs after Element; SVG-namespace
+            // elements get this prototype (see world.rs interface selection).
+            tenta_js::bindings::install_svg_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the SVGElement interface");
             // HTMLElement's prototype chain roots at Element, so it installs
             // after Element and before Document (HTML-namespace elements get
             // the HTMLElement prototype; see world.rs interface selection).
@@ -287,6 +295,15 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the HTMLElement interface");
+            // HTMLIFrameElement : HTMLElement — installs after HTMLElement;
+            // `<iframe>` elements get this prototype. (The snake name fuses the
+            // `HTMLI` capital run per the generator's word splitter.)
+            tenta_js::bindings::install_htmli_frame_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLIFrameElement interface");
             tenta_js::bindings::install_document::<HostObject>(
                 scope,
                 global_template,

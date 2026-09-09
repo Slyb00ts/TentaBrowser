@@ -89,6 +89,15 @@ pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>) {
         "cancelAnimationFrame",
         cancel_animation_frame,
     );
+
+    // The window/global self-aliases: `window`, `self`, `frames`, `top` and
+    // `parent` all name the global object itself — this is a single, same-origin
+    // top-level browsing context. Frameworks gate `canUseDOM`/`inBrowser` on
+    // `typeof window`, and read `window.event`/`window.HTMLIFrameElement`.
+    for name in ["window", "self", "frames", "top", "parent"] {
+        let key = v8::String::new(scope, name).expect("global alias name fits the V8 string limit");
+        global.set(scope, key.into(), global.into());
+    }
 }
 
 /// Defines one own property on `target` whose value is a native function.

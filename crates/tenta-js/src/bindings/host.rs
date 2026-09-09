@@ -23,8 +23,9 @@ use super::{
     CustomEventConstructor, CustomEventInit, CustomEventOps, DocumentOps, Element, ElementOps,
     Event, EventConstructor, EventInit, EventListener, EventListenerOptionsOrBoolean, EventOps,
     EventTarget, EventTargetOps, HTMLCollection, HTMLCollectionOps, HTMLElement, HTMLElementOps,
-    Handle, JsError, MouseEventConstructor, MouseEventInit, MouseEventOps, Node, NodeList,
-    NodeListOps, NodeOps, Realm, Text, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
+    HTMLIFrameElementOps, Handle, JsError, MouseEventConstructor, MouseEventInit, MouseEventOps,
+    Node, NodeList, NodeListOps, NodeOps, Realm, SVGElementOps, Text, TextOps, UIEventConstructor,
+    UIEventInit, UIEventOps,
 };
 use crate::dom::events::{
     CallbackRef, EventKey, EventKind, EventRecord, EventSlab, ListenerTable, ScriptHost, dispatch,
@@ -1887,6 +1888,13 @@ impl HTMLElementOps for HostObject {
         result
     }
 }
+
+// `HTMLIFrameElement` and `SVGElement` are interface shells for now: they add no
+// members of their own, so their `Ops` traits are empty and the host satisfies
+// them through its `HTMLElementOps`/`ElementOps` impls. They exist so the global
+// constructors and `instanceof` behave; behaviour arrives in a later phase.
+impl HTMLIFrameElementOps for HostObject {}
+impl SVGElementOps for HostObject {}
 
 impl HostObject {
     /// Builds and dispatches the synthetic, untrusted `click` `MouseEvent` for

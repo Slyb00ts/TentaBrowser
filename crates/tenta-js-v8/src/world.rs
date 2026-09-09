@@ -337,14 +337,20 @@ impl WrapperWorld for V8World {
                 let doc = self.ctx.doc.borrow();
                 match doc.kind(node_id) {
                     // HTML-namespace elements get the `HTMLElement` prototype
-                    // (which carries `click()`); other elements stay `Element`.
-                    NodeKind::Element => {
-                        if doc.namespace(node_id) == Some(atoms::NS_HTML) {
-                            "HTMLElement"
-                        } else {
-                            "Element"
+                    // (which carries `click()`), with `<iframe>` refined to
+                    // `HTMLIFrameElement`; SVG-namespace elements get
+                    // `SVGElement`; everything else stays `Element`.
+                    NodeKind::Element => match doc.namespace(node_id) {
+                        Some(ns) if ns == atoms::NS_HTML => {
+                            if doc.tag(node_id) == Some(atoms::IFRAME) {
+                                "HTMLIFrameElement"
+                            } else {
+                                "HTMLElement"
+                            }
                         }
-                    }
+                        Some(ns) if ns == atoms::NS_SVG => "SVGElement",
+                        _ => "Element",
+                    },
                     NodeKind::Document => "Document",
                     NodeKind::Text => "Text",
                     NodeKind::Comment => "Comment",

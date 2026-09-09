@@ -167,3 +167,13 @@ interface NodeList {
 interface HTMLElement : Element {
   [Throws] undefined click();
 };
+
+// Phase 4a-2: interface shells so `instanceof` and the global constructor exist.
+// A framework reads `element instanceof win.HTMLIFrameElement` (React's
+// `getActiveElementDeep`) and `container instanceof SVGElement` (Vue's root
+// namespace resolution); both throw if the right-hand side is undefined.
+[Exposed=Window]
+interface HTMLIFrameElement : HTMLElement {};
+
+[Exposed=Window]
+interface SVGElement : Element {};

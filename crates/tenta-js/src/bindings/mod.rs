@@ -45,6 +45,8 @@ include!(concat!(env!("OUT_DIR"), "/custom_event_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/ui_event_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/mouse_event_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/htmli_frame_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/svg_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_target_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/comment_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/document_ops.rs"));
@@ -60,6 +62,8 @@ include!(concat!(env!("OUT_DIR"), "/custom_event_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/ui_event_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/mouse_event_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/htmli_frame_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/svg_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_target_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/comment_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/document_register.rs"));
@@ -81,6 +85,10 @@ include!(concat!(env!("OUT_DIR"), "/ui_event_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/mouse_event_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/html_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/htmli_frame_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/svg_element_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/event_target_v8.rs"));
 #[cfg(feature = "v8")]
