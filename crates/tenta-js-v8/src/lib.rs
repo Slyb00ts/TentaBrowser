@@ -336,6 +336,12 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the HTMLCollection interface");
+            tenta_js::bindings::install_dom_token_list::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the DOMTokenList interface");
             // Event has no DOM parent (its prototype chain roots at Object), so
             // its install order relative to the node types is free.
             tenta_js::bindings::install_event::<HostObject>(scope, global_template, &mut registry)

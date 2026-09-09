@@ -20,13 +20,13 @@ use tenta_html::{ElementFlags, QualName};
 
 use super::{
     AddEventListenerOptionsOrBoolean, AnyValue, CharacterDataOps, Comment, CommentOps,
-    CustomEventConstructor, CustomEventInit, CustomEventOps, DocumentFragment, DocumentFragmentOps,
-    DocumentOps, Element, ElementOps, Event, EventConstructor, EventInit, EventListener,
-    EventListenerOptionsOrBoolean, EventOps, EventTarget, EventTargetOps, HTMLCollection,
-    HTMLCollectionOps, HTMLElement, HTMLElementOps, HTMLIFrameElementOps, HTMLTemplateElementOps,
-    Handle, JsError, MouseEventConstructor, MouseEventInit, MouseEventOps, Node, NodeList,
-    NodeListOps, NodeOps, Realm, SVGElementOps, Text, TextOps, UIEventConstructor, UIEventInit,
-    UIEventOps,
+    CustomEventConstructor, CustomEventInit, CustomEventOps, DOMTokenList, DOMTokenListOps,
+    DocumentFragment, DocumentFragmentOps, DocumentOps, Element, ElementOps, Event,
+    EventConstructor, EventInit, EventListener, EventListenerOptionsOrBoolean, EventOps,
+    EventTarget, EventTargetOps, HTMLCollection, HTMLCollectionOps, HTMLElement, HTMLElementOps,
+    HTMLIFrameElementOps, HTMLTemplateElementOps, Handle, JsError, MouseEventConstructor,
+    MouseEventInit, MouseEventOps, Node, NodeList, NodeListOps, NodeOps, Realm, SVGElementOps,
+    Text, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
 };
 use crate::dom::events::{
     CallbackRef, EventKey, EventKind, EventRecord, EventSlab, ListenerTable, ScriptHost, dispatch,
@@ -220,6 +220,13 @@ pub enum HostObject {
         /// The key to the event record in the slab.
         key: EventKey,
     },
+    /// A wrapper for the live `DOMTokenList` (`classList`) of `owner`.
+    TokenList {
+        /// The context the token list's owner lives in.
+        ctx: SharedContext,
+        /// A generational reference to the element whose `class` the list reflects.
+        owner: NodeRef,
+    },
 }
 
 impl HostObject {
@@ -236,6 +243,11 @@ impl HostObject {
     /// Builds an `HTMLCollection` host for the element children of `owner` in `ctx`.
     pub fn html_collection(ctx: SharedContext, owner: NodeRef) -> Self {
         Self::HtmlCollection { ctx, owner }
+    }
+
+    /// Builds a `DOMTokenList` host for the `classList` of `owner` in `ctx`.
+    pub fn token_list(ctx: SharedContext, owner: NodeRef) -> Self {
+        Self::TokenList { ctx, owner }
     }
 
     /// Builds a `NodeList` host for a static snapshot.
@@ -261,7 +273,8 @@ impl HostObject {
             | HostObject::HtmlCollection { ctx, .. }
             | HostObject::StaticNodeList { ctx, .. }
             | HostObject::StaticHtmlCollection { ctx, .. }
-            | HostObject::Event { ctx, .. } => ctx,
+            | HostObject::Event { ctx, .. }
+            | HostObject::TokenList { ctx, .. } => ctx,
         }
     }
 
@@ -304,6 +317,7 @@ impl HostObject {
                 encode_snapshot(TAG_STATIC_HTML_COLLECTION, *key)
             }
             HostObject::Event { key, .. } => encode_event(*key),
+            HostObject::TokenList { owner, .. } => encode_token_list(*owner),
         }
     }
 
@@ -317,6 +331,7 @@ impl HostObject {
             HostObject::Node { ctx, node } => (&ctx.doc, node.id),
             HostObject::NodeList { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::HtmlCollection { ctx, owner } => (&ctx.doc, owner.id),
+            HostObject::TokenList { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::StaticNodeList { ctx, .. } => (&ctx.doc, NodeId::NONE),
             HostObject::StaticHtmlCollection { ctx, .. } => (&ctx.doc, NodeId::NONE),
             HostObject::Event { ctx, .. } => (&ctx.doc, NodeId::NONE),
@@ -342,6 +357,28 @@ impl HostObject {
     fn remove_from_parent(&self) {
         let (doc, id) = self.anchor();
         let _ = doc.borrow_mut().mutate(Mutation::Remove { child: id });
+    }
+
+    /// The anchored element's `class` attribute parsed as a DOM ordered set:
+    /// ASCII-whitespace-split, empties dropped, first occurrence of each token
+    /// kept. Backs the `DOMTokenList` read and mutation ops.
+    fn class_tokens(&self) -> Vec<String> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        let mut tokens: Vec<String> = Vec::new();
+        if let Some(value) = doc.attribute_str(id, "class") {
+            for token in value.split_ascii_whitespace() {
+                if !tokens.iter().any(|existing| existing == token) {
+                    tokens.push(token.to_owned());
+                }
+            }
+        }
+        tokens
+    }
+
+    /// Serialises an ordered set back into the `class` attribute (space-joined).
+    fn set_class_tokens(&self, tokens: &[String]) {
+        self.reflect_attribute("class", &tokens.join(" "));
     }
 
     /// Applies a navigation step to the anchored node and wraps the result as a
@@ -660,6 +697,12 @@ impl ElementOps for HostObject {
         let (doc, id) = self.anchor();
         let owner = doc.borrow().node_ref(id);
         Ok(Handle::from_bits(encode_html_collection(owner)))
+    }
+
+    fn class_list(&self) -> Result<Handle<DOMTokenList>, JsError> {
+        let (doc, id) = self.anchor();
+        let owner = doc.borrow().node_ref(id);
+        Ok(Handle::from_bits(encode_token_list(owner)))
     }
 
     fn closest(&self, selectors: &str) -> Result<Option<Handle<Element>>, JsError> {
@@ -2040,6 +2083,114 @@ impl HTMLTemplateElementOps for HostObject {
     }
 }
 
+impl DOMTokenListOps for HostObject {
+    fn length(&self) -> u32 {
+        self.class_tokens().len() as u32
+    }
+
+    fn item(&self, index: u32) -> Result<Option<String>, JsError> {
+        Ok(self.class_tokens().into_iter().nth(index as usize))
+    }
+
+    fn contains(&self, token: &str) -> bool {
+        self.class_tokens().iter().any(|existing| existing == token)
+    }
+
+    fn add(&self, tokens: Vec<String>) -> Result<(), JsError> {
+        for token in &tokens {
+            validate_token(token)?;
+        }
+        let mut set = self.class_tokens();
+        for token in tokens {
+            if !set.contains(&token) {
+                set.push(token);
+            }
+        }
+        self.set_class_tokens(&set);
+        Ok(())
+    }
+
+    fn remove(&self, tokens: Vec<String>) -> Result<(), JsError> {
+        for token in &tokens {
+            validate_token(token)?;
+        }
+        let mut set = self.class_tokens();
+        set.retain(|existing| !tokens.iter().any(|token| token == existing));
+        self.set_class_tokens(&set);
+        Ok(())
+    }
+
+    fn toggle(&self, token: &str, force: Option<bool>) -> Result<bool, JsError> {
+        validate_token(token)?;
+        let mut set = self.class_tokens();
+        let present = set.iter().any(|existing| existing == token);
+        match force {
+            // `force` pins the outcome: present-if-true, absent-if-false.
+            Some(true) => {
+                if !present {
+                    set.push(token.to_owned());
+                    self.set_class_tokens(&set);
+                }
+                Ok(true)
+            }
+            Some(false) => {
+                if present {
+                    set.retain(|existing| existing != token);
+                    self.set_class_tokens(&set);
+                }
+                Ok(false)
+            }
+            None if present => {
+                set.retain(|existing| existing != token);
+                self.set_class_tokens(&set);
+                Ok(false)
+            }
+            None => {
+                set.push(token.to_owned());
+                self.set_class_tokens(&set);
+                Ok(true)
+            }
+        }
+    }
+
+    fn replace(&self, token: &str, new_token: &str) -> Result<bool, JsError> {
+        validate_token(token)?;
+        validate_token(new_token)?;
+        let mut set = self.class_tokens();
+        let Some(position) = set.iter().position(|existing| existing == token) else {
+            return Ok(false);
+        };
+        set[position] = new_token.to_owned();
+        // Replacing may collide with a later token; keep the ordered set unique.
+        let mut seen: Vec<String> = Vec::new();
+        set.retain(|existing| {
+            if seen.iter().any(|kept| kept == existing) {
+                false
+            } else {
+                seen.push(existing.clone());
+                true
+            }
+        });
+        self.set_class_tokens(&set);
+        Ok(true)
+    }
+
+    fn value(&self) -> Result<String, JsError> {
+        // The `value` getter returns the underlying attribute verbatim, not the
+        // re-serialised ordered set.
+        let (doc, id) = self.anchor();
+        Ok(doc
+            .borrow()
+            .attribute_str(id, "class")
+            .unwrap_or("")
+            .to_owned())
+    }
+
+    fn set_value(&self, value: &str) {
+        self.reflect_attribute("class", value);
+    }
+}
+
 impl HostObject {
     /// Builds and dispatches the synthetic, untrusted `click` `MouseEvent` for
     /// [`HTMLElementOps::click`]. The event bubbles, is cancelable and composed,
@@ -2156,6 +2307,25 @@ fn validate_attribute_name(name: &str) -> Result<(), JsError> {
     Ok(())
 }
 
+/// Validates a `DOMTokenList` token (`add`/`remove`/`toggle`/`replace`): an
+/// empty token is a `SyntaxError`, a token with ASCII whitespace is an
+/// `InvalidCharacterError` (<https://dom.spec.whatwg.org/#dom-domtokenlist-add>).
+fn validate_token(token: &str) -> Result<(), JsError> {
+    if token.is_empty() {
+        return Err(JsError::dom_exception(
+            "SyntaxError",
+            "The token must not be empty",
+        ));
+    }
+    if token.chars().any(|c| c.is_ascii_whitespace()) {
+        return Err(JsError::dom_exception(
+            "InvalidCharacterError",
+            "The token must not contain ASCII whitespace",
+        ));
+    }
+    Ok(())
+}
+
 /// The WHATWG "validate and extract" algorithm for `createElementNS`
 /// (<https://dom.spec.whatwg.org/#validate-and-extract>): resolve the namespace,
 /// split off any prefix, and reject the prefix/namespace combinations the spec
@@ -2252,6 +2422,9 @@ pub const TAG_STATIC_NODE_LIST: u8 = 3;
 pub const TAG_STATIC_HTML_COLLECTION: u8 = 4;
 /// Handle tag for an `Event` (and its subclasses), keyed into the event slab.
 pub const TAG_EVENT: u8 = 5;
+/// Handle tag for an element's `DOMTokenList` (`classList`); like a live
+/// collection, it anchors to the owning element's node.
+pub const TAG_TOKEN_LIST: u8 = 6;
 
 /// A handle decoded back into its parts.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2270,8 +2443,8 @@ impl DecodedHandle {
     /// when sweeping dead wrappers.
     pub fn node_anchor(&self) -> Option<NodeId> {
         match self.tag {
-            TAG_NODE | TAG_NODE_LIST | TAG_HTML_COLLECTION => Some(self.node_id),
-            _ => None, // Snapshot tags 3 and 4
+            TAG_NODE | TAG_NODE_LIST | TAG_HTML_COLLECTION | TAG_TOKEN_LIST => Some(self.node_id),
+            _ => None, // Snapshot tags 3 and 4, and TAG_EVENT
         }
     }
 
@@ -2320,6 +2493,11 @@ pub fn encode_collection(owner: NodeRef) -> u64 {
 /// Packs a collection owner's reference into a [`TAG_HTML_COLLECTION`] handle.
 pub fn encode_html_collection(owner: NodeRef) -> u64 {
     pack(TAG_HTML_COLLECTION, owner)
+}
+
+/// Packs a token-list owner's reference into a [`TAG_TOKEN_LIST`] handle.
+pub fn encode_token_list(owner: NodeRef) -> u64 {
+    pack(TAG_TOKEN_LIST, owner)
 }
 
 /// Packs a snapshot tag and key into handle bits.

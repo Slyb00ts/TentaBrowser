@@ -92,6 +92,10 @@ interface Element : Node {
 
   [SameObject] readonly attribute HTMLCollection children;
 
+  // Phase 4c-1: classList reflects the `class` attribute as an ordered set of
+  // tokens; frameworks toggle classes through it constantly.
+  [SameObject] readonly attribute DOMTokenList classList;
+
   Element? querySelector(DOMString selectors);
   [NewObject] NodeList querySelectorAll(DOMString selectors);
   boolean matches(DOMString selectors);
@@ -172,6 +176,22 @@ interface HTMLCollection {
 interface NodeList {
   readonly attribute unsigned long length;
   getter Node? item(unsigned long index);
+};
+
+// Phase 4c-1: DOMTokenList backs Element.classList. Backed by the `class`
+// attribute as an ordered set of tokens (whitespace-split, de-duplicated).
+// `item` is a plain operation (not an indexed getter) and iteration is
+// deferred; frameworks reach for contains/add/remove/toggle, not `list[i]`.
+[Exposed=Window]
+interface DOMTokenList {
+  readonly attribute unsigned long length;
+  DOMString? item(unsigned long index);
+  boolean contains(DOMString token);
+  [Throws] undefined add(DOMString... tokens);
+  [Throws] undefined remove(DOMString... tokens);
+  [Throws] boolean toggle(DOMString token, optional boolean force);
+  [Throws] boolean replace(DOMString token, DOMString newToken);
+  attribute DOMString value;
 };
 
 // Phase 3d: HTMLElement — the interface HTML-namespace element wrappers get.

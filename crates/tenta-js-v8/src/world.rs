@@ -24,7 +24,8 @@ use tenta_core::NodeId;
 use tenta_core::atom::atoms;
 use tenta_dom::NodeKind;
 use tenta_js::bindings::host::{
-    HostObject, SharedContext, TAG_EVENT, TAG_HTML_COLLECTION, TAG_NODE_LIST, decode,
+    HostObject, SharedContext, TAG_EVENT, TAG_HTML_COLLECTION, TAG_NODE_LIST, TAG_TOKEN_LIST,
+    decode,
 };
 use tenta_js::bindings::{
     InterfaceDescriptor, InterfaceRegistry, WRAPPER_HOST_FIELD, WRAPPER_TAG, WrapperWorld,
@@ -333,6 +334,8 @@ impl WrapperWorld for V8World {
                 "NodeList"
             } else if decoded.tag == TAG_HTML_COLLECTION {
                 "HTMLCollection"
+            } else if decoded.tag == TAG_TOKEN_LIST {
+                "DOMTokenList"
             } else {
                 let doc = self.ctx.doc.borrow();
                 match doc.kind(node_id) {
@@ -361,6 +364,8 @@ impl WrapperWorld for V8World {
                 HostObject::node_list(self.ctx.clone(), node)
             } else if decoded.tag == TAG_HTML_COLLECTION {
                 HostObject::html_collection(self.ctx.clone(), node)
+            } else if decoded.tag == TAG_TOKEN_LIST {
+                HostObject::token_list(self.ctx.clone(), node)
             } else {
                 HostObject::node(self.ctx.clone(), node)
             });

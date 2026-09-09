@@ -55,6 +55,7 @@ include!(concat!(env!("OUT_DIR"), "/document_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_collection_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_list_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/dom_token_list_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_ops.rs"));
 
@@ -77,6 +78,7 @@ include!(concat!(env!("OUT_DIR"), "/document_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_collection_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_list_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/dom_token_list_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_register.rs"));
 
@@ -112,6 +114,8 @@ include!(concat!(env!("OUT_DIR"), "/element_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_collection_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/node_list_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/dom_token_list_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/node_v8.rs"));
 #[cfg(feature = "v8")]
