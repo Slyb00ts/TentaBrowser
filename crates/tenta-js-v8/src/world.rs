@@ -341,19 +341,18 @@ impl WrapperWorld for V8World {
                     // `HTMLIFrameElement`; SVG-namespace elements get
                     // `SVGElement`; everything else stays `Element`.
                     NodeKind::Element => match doc.namespace(node_id) {
-                        Some(ns) if ns == atoms::NS_HTML => {
-                            if doc.tag(node_id) == Some(atoms::IFRAME) {
-                                "HTMLIFrameElement"
-                            } else {
-                                "HTMLElement"
-                            }
-                        }
+                        Some(ns) if ns == atoms::NS_HTML => match doc.tag(node_id) {
+                            Some(tag) if tag == atoms::IFRAME => "HTMLIFrameElement",
+                            Some(tag) if tag == atoms::TEMPLATE => "HTMLTemplateElement",
+                            _ => "HTMLElement",
+                        },
                         Some(ns) if ns == atoms::NS_SVG => "SVGElement",
                         _ => "Element",
                     },
                     NodeKind::Document => "Document",
                     NodeKind::Text => "Text",
                     NodeKind::Comment => "Comment",
+                    NodeKind::Fragment => "DocumentFragment",
                     _ => "Node",
                 }
             };

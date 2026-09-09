@@ -151,6 +151,12 @@ interface Document : Node {
   [NewObject] Text createTextNode(DOMString data);
   [NewObject] Comment createComment(DOMString data);
 
+  // Phase 4b-3: fragment and namespace-aware creation. Frameworks batch node
+  // inserts into a DocumentFragment (React range insertion, Vue fragment
+  // blocks) and reach for createElementNS to build SVG/MathML subtrees.
+  [NewObject] DocumentFragment createDocumentFragment();
+  [Throws, NewObject] Element createElementNS(DOMString? namespace, DOMString qualifiedName);
+
   // Phase 3a: event factory (createEvent + initEvent path, no constructors yet).
   [Throws, NewObject] Event createEvent(DOMString interface);
 };
@@ -185,6 +191,20 @@ interface HTMLIFrameElement : HTMLElement {};
 
 [Exposed=Window]
 interface SVGElement : Element {};
+
+// Phase 4b-3: DocumentFragment — a lightweight parentless container. Appending
+// a fragment moves its children into the target and empties the fragment.
+[Exposed=Window]
+interface DocumentFragment : Node {};
+
+// Phase 4b-3: <template> keeps its parsed children inert inside a separate
+// DocumentFragment reachable only through `.content`; Vue's compiler and other
+// templating paths read it. The contents fragment is owned by the template
+// element, so `content` is [SameObject].
+[Exposed=Window]
+interface HTMLTemplateElement : HTMLElement {
+  [SameObject] readonly attribute DocumentFragment content;
+};
 
 // Phase 4b-2: the ChildNode mixin (the first `includes` in idl/dom). Frameworks
 // call `node.remove()` to detach a node from its parent; it is shared by Element

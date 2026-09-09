@@ -304,6 +304,20 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the HTMLIFrameElement interface");
+            // HTMLTemplateElement : HTMLElement — its `content` returns a
+            // DocumentFragment, so DocumentFragment must be installed too.
+            tenta_js::bindings::install_html_template_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLTemplateElement interface");
+            tenta_js::bindings::install_document_fragment::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the DocumentFragment interface");
             tenta_js::bindings::install_document::<HostObject>(
                 scope,
                 global_template,

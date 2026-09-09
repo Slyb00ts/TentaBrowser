@@ -16,16 +16,17 @@ use std::rc::Rc;
 use tenta_core::atom::atoms;
 use tenta_core::{Atom, NodeId, NodeRef};
 use tenta_dom::{Document, Mutation, NodeKind};
-use tenta_html::QualName;
+use tenta_html::{ElementFlags, QualName};
 
 use super::{
     AddEventListenerOptionsOrBoolean, AnyValue, CharacterDataOps, Comment, CommentOps,
-    CustomEventConstructor, CustomEventInit, CustomEventOps, DocumentOps, Element, ElementOps,
-    Event, EventConstructor, EventInit, EventListener, EventListenerOptionsOrBoolean, EventOps,
-    EventTarget, EventTargetOps, HTMLCollection, HTMLCollectionOps, HTMLElement, HTMLElementOps,
-    HTMLIFrameElementOps, Handle, JsError, MouseEventConstructor, MouseEventInit, MouseEventOps,
-    Node, NodeList, NodeListOps, NodeOps, Realm, SVGElementOps, Text, TextOps, UIEventConstructor,
-    UIEventInit, UIEventOps,
+    CustomEventConstructor, CustomEventInit, CustomEventOps, DocumentFragment, DocumentFragmentOps,
+    DocumentOps, Element, ElementOps, Event, EventConstructor, EventInit, EventListener,
+    EventListenerOptionsOrBoolean, EventOps, EventTarget, EventTargetOps, HTMLCollection,
+    HTMLCollectionOps, HTMLElement, HTMLElementOps, HTMLIFrameElementOps, HTMLTemplateElementOps,
+    Handle, JsError, MouseEventConstructor, MouseEventInit, MouseEventOps, Node, NodeList,
+    NodeListOps, NodeOps, Realm, SVGElementOps, Text, TextOps, UIEventConstructor, UIEventInit,
+    UIEventOps,
 };
 use crate::dom::events::{
     CallbackRef, EventKey, EventKind, EventRecord, EventSlab, ListenerTable, ScriptHost, dispatch,
@@ -1070,9 +1071,48 @@ impl DocumentOps for HostObject {
         }
         let (doc, _) = self.anchor();
         let mut doc = doc.borrow_mut();
-        // HTML elements are lowercased
+        // HTML element names are lowercased.
         let atom = tenta_core::atom::Atom::new(&local_name.to_ascii_lowercase());
-        let id = doc.create_html_element(atom);
+        // A `<template>` owns a separate contents fragment; the create path must
+        // request it so a script-created template matches a parsed one and its
+        // `.content` resolves.
+        let flags = ElementFlags {
+            template: atom == atoms::TEMPLATE,
+            ..ElementFlags::default()
+        };
+        let id = doc
+            .create_element(QualName::new(atoms::NS_HTML, atom), Vec::new(), flags)
+            .map_err(|e| mutation_error(&e))?;
+        Ok(Handle::from_bits(encode_node(doc.node_ref(id))))
+    }
+
+    fn create_document_fragment(&self) -> Result<Handle<DocumentFragment>, JsError> {
+        let (doc, _) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        let id = doc.create_fragment();
+        Ok(Handle::from_bits(encode_node(doc.node_ref(id))))
+    }
+
+    fn create_element_ns(
+        &self,
+        namespace: Option<&str>,
+        qualified_name: &str,
+    ) -> Result<Handle<Element>, JsError> {
+        let (ns, prefix, local) = validate_and_extract(namespace, qualified_name)?;
+        let (doc, _) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        let name = QualName {
+            ns,
+            prefix,
+            local: Atom::new(local),
+        };
+        let flags = ElementFlags {
+            template: ns == atoms::NS_HTML && local == atoms::TEMPLATE.as_str(),
+            ..ElementFlags::default()
+        };
+        let id = doc
+            .create_element(name, Vec::new(), flags)
+            .map_err(|e| mutation_error(&e))?;
         Ok(Handle::from_bits(encode_node(doc.node_ref(id))))
     }
 
@@ -1985,6 +2025,20 @@ impl HTMLElementOps for HostObject {
 // constructors and `instanceof` behave; behaviour arrives in a later phase.
 impl HTMLIFrameElementOps for HostObject {}
 impl SVGElementOps for HostObject {}
+impl DocumentFragmentOps for HostObject {}
+
+impl HTMLTemplateElementOps for HostObject {
+    fn content(&self) -> Result<Handle<DocumentFragment>, JsError> {
+        // The contents fragment is created with the template element and owned
+        // by it, so an HTML `<template>` always has one.
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        let contents = doc.template_contents(id).ok_or_else(|| {
+            JsError::dom_exception("InvalidStateError", "template has no contents fragment")
+        })?;
+        Ok(Handle::from_bits(encode_node(doc.node_ref(contents))))
+    }
+}
 
 impl HostObject {
     /// Builds and dispatches the synthetic, untrusted `click` `MouseEvent` for
@@ -2100,6 +2154,72 @@ fn validate_attribute_name(name: &str) -> Result<(), JsError> {
         ));
     }
     Ok(())
+}
+
+/// The WHATWG "validate and extract" algorithm for `createElementNS`
+/// (<https://dom.spec.whatwg.org/#validate-and-extract>): resolve the namespace,
+/// split off any prefix, and reject the prefix/namespace combinations the spec
+/// forbids. Returns `(namespace, prefix, local name)`.
+fn validate_and_extract<'a>(
+    namespace: Option<&str>,
+    qualified_name: &'a str,
+) -> Result<(Atom, Option<Atom>, &'a str), JsError> {
+    // An empty namespace string is treated as the null namespace.
+    let namespace = namespace.filter(|ns| !ns.is_empty());
+
+    validate_attribute_name(qualified_name)?;
+    if qualified_name.chars().any(|c| {
+        matches!(
+            c,
+            ' ' | '\t' | '\n' | '\r' | '"' | '\'' | '>' | '<' | '&' | '/'
+        )
+    }) {
+        return Err(JsError::dom_exception(
+            "InvalidCharacterError",
+            "Qualified name contains an invalid character",
+        ));
+    }
+
+    // Split an optional single prefix. A trailing or doubled colon is invalid.
+    let (prefix, local) = match qualified_name.split_once(':') {
+        Some((prefix, local))
+            if !prefix.is_empty() && !local.is_empty() && !local.contains(':') =>
+        {
+            (Some(prefix), local)
+        }
+        Some(_) => {
+            return Err(JsError::dom_exception(
+                "InvalidCharacterError",
+                "Qualified name has a malformed prefix",
+            ));
+        }
+        None => (None, qualified_name),
+    };
+
+    let ns = namespace.map(Atom::new);
+    let namespace_error = |msg: &str| JsError::dom_exception("NamespaceError", msg);
+    // A prefix requires a namespace; `xml`/`xmlns` are pinned to their namespaces.
+    if prefix.is_some() && ns.is_none() {
+        return Err(namespace_error("A prefix requires a non-null namespace"));
+    }
+    if prefix == Some("xml") && ns != Some(atoms::NS_XML) {
+        return Err(namespace_error(
+            "The `xml` prefix requires the XML namespace",
+        ));
+    }
+    let is_xmlns = qualified_name == "xmlns" || prefix == Some("xmlns");
+    if is_xmlns && ns != Some(atoms::NS_XMLNS) {
+        return Err(namespace_error(
+            "The `xmlns` name requires the XMLNS namespace",
+        ));
+    }
+    if ns == Some(atoms::NS_XMLNS) && !is_xmlns {
+        return Err(namespace_error(
+            "The XMLNS namespace requires the `xmlns` name",
+        ));
+    }
+
+    Ok((ns.unwrap_or(atoms::EMPTY), prefix.map(Atom::new), local))
 }
 
 fn element_tag_name(doc: &Document, id: NodeId) -> String {
