@@ -18,10 +18,11 @@ use tenta_dom::{Document, Mutation, NodeKind};
 use tenta_html::QualName;
 
 use super::{
-    AddEventListenerOptionsOrBoolean, CharacterDataOps, Comment, CommentOps, DocumentOps, Element,
-    ElementOps, Event, EventListener, EventListenerOptionsOrBoolean, EventOps, EventTarget,
-    EventTargetOps, HTMLCollection, HTMLCollectionOps, Handle, JsError, Node, NodeList,
-    NodeListOps, NodeOps, Text, TextOps,
+    AddEventListenerOptionsOrBoolean, AnyValue, CharacterDataOps, Comment, CommentOps,
+    CustomEventConstructor, CustomEventInit, CustomEventOps, DocumentOps, Element, ElementOps,
+    Event, EventConstructor, EventInit, EventListener, EventListenerOptionsOrBoolean, EventOps,
+    EventTarget, EventTargetOps, HTMLCollection, HTMLCollectionOps, Handle, JsError, Node,
+    NodeList, NodeListOps, NodeOps, Realm, Text, TextOps,
 };
 use crate::dom::events::{
     CallbackRef, EventKey, EventKind, EventRecord, EventSlab, ListenerTable, ScriptHost, dispatch,
@@ -888,6 +889,7 @@ impl DocumentOps for HostObject {
         // CustomEvent families arrive with their wrapper prototypes in 3c/3d.
         let kind = match interface.to_ascii_lowercase().as_str() {
             "event" | "events" | "htmlevents" => EventKind::Plain,
+            "customevent" => EventKind::Custom { detail: None },
             _ => {
                 return Err(JsError::dom_exception(
                     "NotSupportedError",
@@ -1462,16 +1464,162 @@ impl EventOps for HostObject {
             if r.flags.dispatch {
                 return;
             }
-            r.flags.initialized = true;
-            r.flags.stop_propagation = false;
-            r.flags.stop_immediate = false;
-            r.flags.canceled = false;
-            r.is_trusted = false;
-            r.target = None;
-            r.type_ = r#type.to_owned();
-            r.bubbles = bubbles.unwrap_or(false);
-            r.cancelable = cancelable.unwrap_or(false);
+            reset_for_init(
+                r,
+                r#type,
+                bubbles.unwrap_or(false),
+                cancelable.unwrap_or(false),
+            );
         });
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Event and CustomEvent constructors (`new Event(...)`, `new CustomEvent(...)`)
+// ---------------------------------------------------------------------------
+
+/// Downcasts a [`Realm`] back to the [`SharedContext`] it actually is. The
+/// wrapper world hands its own context as the realm, so this only fails if a
+/// foreign world is installed — a wiring bug surfaced as a `TypeError` rather
+/// than a panic.
+fn realm_context(realm: &Realm) -> Result<SharedContext, JsError> {
+    realm
+        .clone()
+        .downcast::<HostContext>()
+        .map_err(|_| JsError::type_error("event constructor: the realm is not a HostContext"))
+}
+
+/// Resets an event record to its post-`initEvent` state: initialized, every
+/// propagation/cancel flag cleared, untrusted, no target, with the given type,
+/// `bubbles` and `cancelable`. Shared by `initEvent` and `initCustomEvent`.
+fn reset_for_init(record: &mut EventRecord, r#type: &str, bubbles: bool, cancelable: bool) {
+    record.flags.initialized = true;
+    record.flags.stop_propagation = false;
+    record.flags.stop_immediate = false;
+    record.flags.canceled = false;
+    record.is_trusted = false;
+    record.target = None;
+    record.current_target = None;
+    record.type_ = r#type.to_owned();
+    record.bubbles = bubbles;
+    record.cancelable = cancelable;
+}
+
+/// Builds an initialized, untrusted event record of `kind` and inserts it into
+/// `ctx`'s slab, returning the host that stands for it. Shared by the `Event`
+/// and `CustomEvent` constructors.
+fn new_event(
+    ctx: &SharedContext,
+    r#type: &str,
+    bubbles: bool,
+    cancelable: bool,
+    composed: bool,
+    kind: EventKind,
+) -> HostObject {
+    let mut record = EventRecord::new(r#type.to_owned(), kind, ctx.time_stamp());
+    record.bubbles = bubbles;
+    record.cancelable = cancelable;
+    record.composed = composed;
+    // A script-constructed event is initialized but never trusted.
+    record.flags.initialized = true;
+    record.is_trusted = false;
+    let key = ctx.events.borrow_mut().insert(record);
+    HostObject::event(ctx.clone(), key)
+}
+
+impl EventConstructor for HostObject {
+    fn construct(
+        realm: &Realm,
+        r#type: &str,
+        event_init_dict: Option<EventInit>,
+    ) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        let init = event_init_dict.unwrap_or_default();
+        Ok(new_event(
+            &ctx,
+            r#type,
+            init.bubbles,
+            init.cancelable,
+            init.composed,
+            EventKind::Plain,
+        ))
+    }
+}
+
+impl CustomEventConstructor for HostObject {
+    fn construct(
+        realm: &Realm,
+        r#type: &str,
+        event_init_dict: Option<CustomEventInit>,
+    ) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        let init = event_init_dict.unwrap_or_default();
+        // `detail` is an `any` the glue already interned into the value store
+        // (+1 ref) during dictionary conversion; the record owns that reference
+        // until it is reclaimed (the world's dead-event sweep releases it). An
+        // absent member and an explicit `null` both read back as `null`.
+        let detail = init.detail.map(|value| value.0);
+        Ok(new_event(
+            &ctx,
+            r#type,
+            init.bubbles,
+            init.cancelable,
+            init.composed,
+            EventKind::Custom { detail },
+        ))
+    }
+}
+
+impl CustomEventOps for HostObject {
+    fn detail(&self) -> Result<AnyValue, JsError> {
+        Ok(self.with_event(AnyValue::NULL, |r| match &r.kind {
+            EventKind::Custom { detail: Some(bits) } => AnyValue(*bits),
+            _ => AnyValue::NULL,
+        }))
+    }
+
+    fn init_custom_event(
+        &self,
+        r#type: &str,
+        bubbles: Option<bool>,
+        cancelable: Option<bool>,
+        detail: Option<AnyValue>,
+    ) -> Result<(), JsError> {
+        let HostObject::Event { ctx, key } = self else {
+            return Ok(());
+        };
+        let new_detail = detail.map(|value| value.0);
+
+        // Mutate the record under a short borrow, deciding which stale detail
+        // (if any) to release afterwards. The release must happen outside the
+        // slab borrow, since `release_stored` borrows the script host.
+        let released = {
+            let mut events = ctx.events.borrow_mut();
+            match events.get_mut(*key) {
+                // Ignored while dispatching, or if the record is gone: keep any
+                // existing detail and drop the new argument's stored reference.
+                Some(record) if record.flags.dispatch => new_detail,
+                None => new_detail,
+                Some(record) => {
+                    reset_for_init(
+                        record,
+                        r#type,
+                        bubbles.unwrap_or(false),
+                        cancelable.unwrap_or(false),
+                    );
+                    let old = match record.kind {
+                        EventKind::Custom { detail } => detail,
+                        _ => None,
+                    };
+                    record.kind = EventKind::Custom { detail: new_detail };
+                    old
+                }
+            }
+        };
+        if let Some(bits) = released {
+            self.release_stored(bits);
+        }
         Ok(())
     }
 }

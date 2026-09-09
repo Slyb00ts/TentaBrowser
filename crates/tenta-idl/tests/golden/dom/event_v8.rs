@@ -286,10 +286,20 @@ fn construct_event<'s, T: EventOps + EventConstructor + 'static>(
         );
         return;
     }
-    match T::construct(&r#type, event_init_dict) {
+    let realm = match world_realm(scope) {
+        Ok(realm) => realm,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    match T::construct(&realm, &r#type, event_init_dict) {
         Ok(host) => {
             let this = args.this();
-            attach_host(&this, host);
+            if let Err(error) = adopt_host(scope, "Event", this, host) {
+                throw_js_error(scope, &error);
+                return;
+            }
             rv.set(this.into());
         }
         Err(error) => throw_js_error(scope, &error),

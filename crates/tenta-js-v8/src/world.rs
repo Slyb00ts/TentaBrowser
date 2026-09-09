@@ -29,6 +29,8 @@ use tenta_js::bindings::{
     InterfaceDescriptor, InterfaceRegistry, WRAPPER_HOST_FIELD, WRAPPER_TAG, WrapperWorld,
     cached_template, unwrap_this,
 };
+use tenta_js::bindings::{JsError, Realm};
+use tenta_js::dom::events::{EventKind, EventSlab};
 
 /// One entry in the value slab: a stored JS value with a reference count and,
 /// for objects, the identity hash it was interned under (so it can leave the
@@ -166,6 +168,12 @@ impl WorldState {
     pub fn take_dead_snapshots(&mut self) -> Vec<u64> {
         std::mem::take(&mut self.dead_snapshots)
     }
+
+    /// The number of live stored values (test-only): a leaked `CustomEvent`
+    /// detail would keep its slot occupied here after the event is reclaimed.
+    pub fn value_count(&self) -> usize {
+        self.values.iter().filter(|slot| slot.is_some()).count()
+    }
 }
 
 /// The V8 wrapper world. Holds shared handles to the world state and the context
@@ -180,6 +188,29 @@ impl V8World {
     /// Builds a world over `state` and `ctx`.
     pub fn new(state: Rc<RefCell<WorldState>>, ctx: SharedContext) -> Self {
         Self { state, ctx }
+    }
+}
+
+/// Reclaims the event-slab records of `dead_event_bits` — event wrappers a
+/// finalizer collected — releasing any interned `CustomEvent` detail each owned
+/// and disarming their tombstone `Weak`s. Shared by [`V8World::wrapper`]'s
+/// sweep and the engine's teardown so both keep the same "record removed
+/// implies detail released" invariant.
+pub fn reclaim_dead_events(
+    state: &mut WorldState,
+    events: &RefCell<EventSlab>,
+    dead_event_bits: Vec<u64>,
+) {
+    for bits in dead_event_bits {
+        let event_key = decode(bits).event_key();
+        let removed = events.borrow_mut().remove(event_key);
+        if let Some(EventKind::Custom {
+            detail: Some(detail_bits),
+        }) = removed.map(|record| record.kind)
+        {
+            state.release_value(detail_bits);
+        }
+        state.wrappers.remove(&bits);
     }
 }
 
@@ -217,14 +248,11 @@ impl WrapperWorld for V8World {
             state_mut.wrappers.remove(&bits);
         }
 
-        // Clean up dead event wrappers: remove their event-slab records and
-        // disarm tombstone Weaks.
+        // Clean up dead event wrappers: remove their event-slab records,
+        // release any interned `CustomEvent` detail they owned, and disarm
+        // tombstone Weaks.
         let dead_event_bits = state_mut.take_dead_events();
-        for bits in dead_event_bits {
-            let event_key = decode(bits).event_key();
-            self.ctx.events.borrow_mut().remove(event_key);
-            state_mut.wrappers.remove(&bits);
-        }
+        reclaim_dead_events(&mut state_mut, &self.ctx.events, dead_event_bits);
         drop(state_mut);
 
         // Fast path: a live wrapper for this handle is revived and reused, so a
@@ -452,6 +480,76 @@ impl WrapperWorld for V8World {
         let state = self.state.borrow();
         let slot = state.values.get(bits as usize)?.as_ref()?;
         Some(v8::Local::new(scope, &slot.global))
+    }
+
+    fn realm(&self) -> Realm {
+        // The wrapper world's context, type-erased. `realm_context` in the host
+        // downcasts it straight back to the same `Rc<HostContext>`.
+        self.ctx.clone()
+    }
+
+    fn adopt(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        interface: &'static str,
+        wrapper: v8::Local<v8::Object>,
+        host: Box<dyn std::any::Any>,
+    ) -> Result<(), JsError> {
+        // The constructor counterpart of `wrapper`: rather than instantiate a
+        // fresh template object, take the `this` object V8 already allocated for
+        // the `new` call (which carries the base template's internal field, even
+        // for `class E extends Event`) and attach the freshly constructed host.
+        //
+        // INVARIANT: like `wrapper`, nothing here may call back into
+        // `handle_to_v8`/`value_from_v8` — the wrapper-world slot is removed for
+        // the duration of this call. Attaching a host and installing a finalizer
+        // runs no script, so re-entry cannot happen.
+        let _ = interface;
+        let host: Box<HostObject> = host
+            .downcast::<HostObject>()
+            .map_err(|_| JsError::type_error("adopt: the host is not a HostObject"))?;
+        let handle = host.handle_bits();
+        let decoded = decode(handle);
+        if decoded.tag != TAG_EVENT {
+            return Err(JsError::type_error(
+                "adopt: only Event objects are constructible",
+            ));
+        }
+        let key = decoded.event_key();
+
+        // Mark the record wrapped, mirroring the TAG_EVENT branch of `wrapper`,
+        // so the dead-event sweep reclaims it exactly once.
+        {
+            let mut events = self.ctx.events.borrow_mut();
+            let record = events
+                .get_mut(key)
+                .ok_or_else(|| JsError::type_error("adopt: the event record is gone"))?;
+            record.has_wrapper = true;
+        }
+
+        // Box address is stable across map growth: only the pointer moves.
+        let raw = host.as_ref() as *const HostObject as *const c_void;
+        wrapper.set_aligned_pointer_in_internal_field(WRAPPER_HOST_FIELD, raw, WRAPPER_TAG);
+
+        let state = self.state.clone();
+        let weak = v8::Weak::with_finalizer(
+            scope,
+            wrapper,
+            Box::new(move |_isolate| {
+                // Same discipline as the event branch of `wrapper`: touch only
+                // `state`, never the document or a `Weak`, and record the handle
+                // for a later dead-event sweep.
+                let mut state = state.borrow_mut();
+                if state.hosts.remove(&handle).is_some() {
+                    state.dead_events.push(handle);
+                }
+            }),
+        );
+
+        let mut state = self.state.borrow_mut();
+        state.hosts.insert(handle, host);
+        state.wrappers.insert(handle, weak);
+        Ok(())
     }
 }
 

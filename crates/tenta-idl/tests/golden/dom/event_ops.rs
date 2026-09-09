@@ -126,5 +126,5 @@ pub trait EventOps {
 /// derived interface does not inherit a constructor its IDL does not declare.
 pub trait EventConstructor: EventOps + Sized {
     /// `constructor(DOMString type, optional EventInit eventInitDict = {});`
-    fn construct(r#type: &str, event_init_dict: Option<EventInit>) -> Result<Self, JsError>;
+    fn construct(realm: &Realm, r#type: &str, event_init_dict: Option<EventInit>) -> Result<Self, JsError>;
 }

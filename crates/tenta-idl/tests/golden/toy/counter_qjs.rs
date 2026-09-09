@@ -51,7 +51,8 @@ impl<'js, T: CounterOps + CounterConstructor + 'static> rquickjs::class::JsClass
         let constructor = rquickjs::function::Constructor::new_class::<Self, _, _>(
             ctx.clone(),
             |ctx: rquickjs::Ctx<'js>, options: CounterOptions| -> rquickjs::Result<rquickjs::Value<'js>> {
-                let host = T::construct(options).map_err(|error| throw_quickjs_error(&ctx, &error))?;
+                let realm = world_realm_quickjs(&ctx)?;
+                let host = T::construct(&realm, options).map_err(|error| throw_quickjs_error(&ctx, &error))?;
                 let instance = rquickjs::Class::instance(ctx.clone(), CounterClass(host))?;
                 Ok(instance.into_value())
             },

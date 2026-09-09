@@ -181,6 +181,12 @@ pub trait InterfaceMarker {
     const INTERFACE_NAME: &'static str;
 }
 
+/// The per-world host state a constructor receives. In `tenta-js` this is the
+/// `Rc<HostContext>`; it is kept opaque here so the generated `*Constructor`
+/// traits stay engine-independent. A constructor downcasts it to the concrete
+/// context to reach the document and the event slab.
+pub type Realm = std::rc::Rc<dyn std::any::Any>;
+
 /// A promise the host settles later. `T` is the resolution type.
 pub struct Promise<T> {
     bits: u64,
@@ -269,6 +275,13 @@ impl<Args, Ret> core::fmt::Debug for Callback<Args, Ret> {
 /// The WebIDL `any` type: an arbitrary JavaScript value held by the runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct AnyValue(pub u64);
+
+impl AnyValue {
+    /// The sentinel bits for the JavaScript `null` value, distinct from every
+    /// value-table index (which the world assigns from 0 upward). `value_to_v8`
+    /// and `value_from_v8` map it to and from `null` without touching the table.
+    pub const NULL: AnyValue = AnyValue(u64::MAX);
+}
 
 /// The WebIDL `object` type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -568,6 +581,23 @@ pub trait WrapperWorld: 'static {
         scope: &mut v8::PinScope<'s, '_>,
         bits: u64,
     ) -> Option<v8::Local<'s, v8::Value>>;
+
+    /// Returns the realm (host context) a constructor downcasts to reach the
+    /// document and event slab. See [`Realm`].
+    fn realm(&self) -> Realm;
+
+    /// Takes ownership of `host` for a `wrapper` object V8 allocated for a
+    /// `new` call: writes the host pointer into the wrapper's internal field,
+    /// registers the GC finalizer, and records the wrapper's identity — the
+    /// constructor counterpart of [`WrapperWorld::wrapper`]. `interface` is the
+    /// WebIDL name of the constructed type.
+    fn adopt(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        interface: &'static str,
+        wrapper: v8::Local<v8::Object>,
+        host: Box<dyn std::any::Any>,
+    ) -> Result<(), JsError>;
 }
 
 #[cfg(feature = "v8")]
@@ -870,6 +900,11 @@ pub fn value_from_v8(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<v8::Value>,
 ) -> Result<u64, JsError> {
+    // The JavaScript `null` maps to the sentinel bits, never into the value
+    // table, so a null `any` never allocates or holds a reference.
+    if value.is_null() {
+        return Ok(AnyValue::NULL.0);
+    }
     let world = scope
         .remove_slot::<WrapperWorldSlot>()
         .ok_or_else(|| JsError::type_error("no wrapper world is installed for this isolate"))?;
@@ -884,12 +919,43 @@ pub fn value_to_v8<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     bits: u64,
 ) -> Result<v8::Local<'s, v8::Value>, JsError> {
+    // The null sentinel maps straight back to `null` without a table lookup.
+    if bits == AnyValue::NULL.0 {
+        return Ok(v8::null(scope).into());
+    }
     let world = scope
         .remove_slot::<WrapperWorldSlot>()
         .ok_or_else(|| JsError::type_error("no wrapper world is installed for this isolate"))?;
     let value = world.0.load_value(scope, bits);
     scope.set_slot(world);
     value.ok_or_else(|| JsError::type_error("the value is no longer live"))
+}
+
+/// Returns the current isolate's realm for a constructor callback.
+#[cfg(feature = "v8")]
+pub fn world_realm(scope: &mut v8::PinScope<'_, '_>) -> Result<Realm, JsError> {
+    let world = scope
+        .get_slot::<WrapperWorldSlot>()
+        .ok_or_else(|| JsError::type_error("no wrapper world is installed for this isolate"))?;
+    Ok(world.0.realm())
+}
+
+/// Adopts a constructor's `this` object into the world. The world needs
+/// `&mut scope` for the finalizer, so the slot is removed for the call and
+/// restored after, exactly as in [`handle_to_v8`].
+#[cfg(feature = "v8")]
+pub fn adopt_host<T: std::any::Any>(
+    scope: &mut v8::PinScope<'_, '_>,
+    interface: &'static str,
+    this: v8::Local<v8::Object>,
+    host: T,
+) -> Result<(), JsError> {
+    let world = scope
+        .remove_slot::<WrapperWorldSlot>()
+        .ok_or_else(|| JsError::type_error("no wrapper world is installed for this isolate"))?;
+    let result = world.0.adopt(scope, interface, this, Box::new(host));
+    scope.set_slot(world);
+    result
 }
 
 /// Converts a JavaScript array to a sequence.
@@ -1006,6 +1072,10 @@ pub trait QuickJsWrapperWorld: 'static {
 
     /// Returns the value `bits` stands for.
     fn load_value<'js>(&self, ctx: &rquickjs::Ctx<'js>, bits: u64) -> Option<rquickjs::Value<'js>>;
+
+    /// Returns the realm (host context) a constructor downcasts to reach the
+    /// document and event slab. See [`Realm`].
+    fn realm(&self) -> Realm;
 }
 
 /// The userdata slot that carries the wrapper world of a context.
@@ -1080,6 +1150,9 @@ pub fn handle_from_quickjs<T: InterfaceMarker>(
 /// Stores an arbitrary JavaScript value in the context's value table.
 #[cfg(feature = "quickjs")]
 pub fn value_from_quickjs(ctx: &rquickjs::Ctx<'_>, value: rquickjs::Value<'_>) -> rquickjs::Result<u64> {
+    if value.is_null() {
+        return Ok(AnyValue::NULL.0);
+    }
     let world = ctx
         .userdata::<QuickJsWorldSlot>()
         .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "no wrapper world for this context"))?;
@@ -1089,6 +1162,9 @@ pub fn value_from_quickjs(ctx: &rquickjs::Ctx<'_>, value: rquickjs::Value<'_>) -
 /// Reads an arbitrary JavaScript value back out of the value table.
 #[cfg(feature = "quickjs")]
 pub fn value_to_quickjs<'js>(ctx: &rquickjs::Ctx<'js>, bits: u64) -> rquickjs::Result<rquickjs::Value<'js>> {
+    if bits == AnyValue::NULL.0 {
+        return Ok(rquickjs::Value::new_null(ctx.clone()));
+    }
     let world = ctx
         .userdata::<QuickJsWorldSlot>()
         .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "no wrapper world for this context"))?;
@@ -1096,6 +1172,15 @@ pub fn value_to_quickjs<'js>(ctx: &rquickjs::Ctx<'js>, bits: u64) -> rquickjs::R
         .0
         .load_value(ctx, bits)
         .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "the value is no longer live"))
+}
+
+/// Returns the current context's realm for a constructor.
+#[cfg(feature = "quickjs")]
+pub fn world_realm_quickjs(ctx: &rquickjs::Ctx<'_>) -> rquickjs::Result<Realm> {
+    let world = ctx
+        .userdata::<QuickJsWorldSlot>()
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "no wrapper world for this context"))?;
+    Ok(world.0.realm())
 }
 
 #[cfg(feature = "quickjs")]

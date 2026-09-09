@@ -51,7 +51,8 @@ impl<'js, T: EventTargetOps + EventTargetConstructor + 'static> rquickjs::class:
         let constructor = rquickjs::function::Constructor::new_class::<Self, _, _>(
             ctx.clone(),
             |ctx: rquickjs::Ctx<'js>| -> rquickjs::Result<rquickjs::Value<'js>> {
-                let host = T::construct().map_err(|error| throw_quickjs_error(&ctx, &error))?;
+                let realm = world_realm_quickjs(&ctx)?;
+                let host = T::construct(&realm).map_err(|error| throw_quickjs_error(&ctx, &error))?;
                 let instance = rquickjs::Class::instance(ctx.clone(), EventTargetClass(host))?;
                 Ok(instance.into_value())
             },

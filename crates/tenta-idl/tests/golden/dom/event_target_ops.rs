@@ -29,5 +29,5 @@ pub trait EventTargetOps {
 /// derived interface does not inherit a constructor its IDL does not declare.
 pub trait EventTargetConstructor: EventTargetOps + Sized {
     /// `constructor();`
-    fn construct() -> Result<Self, JsError>;
+    fn construct(realm: &Realm) -> Result<Self, JsError>;
 }

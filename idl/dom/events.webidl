@@ -1,11 +1,10 @@
 // DOM events WebIDL for P2 binding Phase 3a (`docs/spec/05-javascript.md`).
 //
-// This is the first slice that calls back into script: an `EventListener` is a
-// JS callback that `dispatchEvent` (and later `element.click()`) invokes. It
-// carries the smallest surface that exercises the callback boundary end to end
-// via `document.createEvent` + `initEvent` — no constructors yet (JS-constructed
-// events are Phase 3c / generator G8), and no `srcElement`/`composedPath`/
-// `cancelBubble`/`returnValue` (Phase 3b).
+// This is the first surface that calls back into script: an `EventListener` is
+// a JS callback that `dispatchEvent` (and later `element.click()`) invokes.
+// Phase 3c adds the `Event`/`CustomEvent` constructors (JS-constructed events
+// via generator gap G8: the `new`-allocated object is adopted into the wrapper
+// world so it gets a slab-backed host, a finalizer and stable identity).
 
 callback interface EventListener {
   undefined handleEvent(Event event);
@@ -26,6 +25,12 @@ dictionary EventInit {
   boolean composed = false;
 };
 
+// `detail` has no default: `any x = null` does not lower cleanly, so an
+// absent member is `None` and the host treats it as the JS `null`.
+dictionary CustomEventInit : EventInit {
+  any detail;
+};
+
 typedef double DOMHighResTimeStamp;
 
 [Exposed=Window]
@@ -37,6 +42,8 @@ interface EventTarget {
 
 [Exposed=Window]
 interface Event {
+  constructor(DOMString type, optional EventInit eventInitDict = {});
+
   readonly attribute DOMString type;
   readonly attribute EventTarget? target;
   readonly attribute EventTarget? currentTarget;
@@ -64,4 +71,11 @@ interface Event {
   readonly attribute DOMHighResTimeStamp timeStamp;
 
   undefined initEvent(DOMString type, optional boolean bubbles = false, optional boolean cancelable = false);
+};
+
+[Exposed=Window]
+interface CustomEvent : Event {
+  constructor(DOMString type, optional CustomEventInit eventInitDict = {});
+  readonly attribute any detail;
+  undefined initCustomEvent(DOMString type, optional boolean bubbles = false, optional boolean cancelable = false, optional any detail = null);
 };

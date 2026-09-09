@@ -460,17 +460,29 @@ fn constructor_callback(interface: &Interface, bound: &str, out: &mut String) {
             "    if args.length() < {required} {{\n        throw_type_error(\n            scope,\n            \"Failed to construct '{name}': {required} argument(s) required\",\n        );\n        return;\n    }}\n"
         );
     }
+    // The constructor receives the realm (host context) as its first argument
+    // and adopts the `new`-allocated `this` into the world so the host gets a
+    // finalizer and cached identity — the `this` object is kept (not replaced by
+    // a fresh template instance) so `class Sub extends Interface` sees its own
+    // prototype.
+    let call_args = if passes.is_empty() {
+        "&realm".to_owned()
+    } else {
+        format!("&realm, {}", passes.join(", "))
+    };
     let _ = write!(
         out,
-        "    match T::{}({}) {{\n        \
+        "    let realm = match world_realm(scope) {{\n        \
+         Ok(realm) => realm,\n        \
+         Err(error) => {{\n            throw_js_error(scope, &error);\n            return;\n        }}\n    }};\n    \
+         match T::{}({}) {{\n        \
          Ok(host) => {{\n            \
          let this = args.this();\n            \
-         attach_host(&this, host);\n            \
+         if let Err(error) = adopt_host(scope, \"{}\", this, host) {{\n                throw_js_error(scope, &error);\n                return;\n            }}\n            \
          rv.set(this.into());\n        \
          }}\n        \
          Err(error) => throw_js_error(scope, &error),\n    }}\n}}\n",
-        constructor.rust_name,
-        passes.join(", ")
+        constructor.rust_name, call_args, name,
     );
 }
 

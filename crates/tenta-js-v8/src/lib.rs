@@ -300,6 +300,13 @@ impl Engine {
             // its install order relative to the node types is free.
             tenta_js::bindings::install_event::<HostObject>(scope, global_template, &mut registry)
                 .expect("install the Event interface");
+            // CustomEvent's prototype chain roots at Event, so it installs after.
+            tenta_js::bindings::install_custom_event::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the CustomEvent interface");
         }
 
         let local = v8::Context::new(
@@ -343,6 +350,35 @@ impl Engine {
     /// (`docs/spec/02-architecture.md` §8).
     pub fn evaluate(&mut self, source: &str) -> Result<String, JsError> {
         self.run(source, None)
+    }
+
+    /// Forces a full garbage collection (test/diagnostic only). The low-memory
+    /// notification runs a full GC synchronously and is safe for a browser
+    /// build, unlike exposing `gc()` to web content.
+    pub fn low_memory_gc(&mut self) {
+        self.isolate.low_memory_notification();
+    }
+
+    /// Drains event wrappers a finalizer has collected, releasing their slab
+    /// records and any interned `CustomEvent` detail (test-only; the same sweep
+    /// runs lazily at the head of `wrapper`). Call after [`Engine::low_memory_gc`]
+    /// to make reclamation observable without waiting for the next wrapper.
+    pub fn reclaim_dead_events(&mut self) {
+        if let Some(dom) = &self.dom {
+            let dead = dom.state.borrow_mut().take_dead_events();
+            let mut state = dom.state.borrow_mut();
+            world::reclaim_dead_events(&mut state, &dom.ctx.events, dead);
+        }
+    }
+
+    /// The number of live stored values in the wrapper world (test-only): a
+    /// leaked `CustomEvent` detail keeps its slot occupied after the event is
+    /// reclaimed.
+    pub fn stored_value_count(&self) -> usize {
+        self.dom
+            .as_ref()
+            .map(|dom| dom.state.borrow().value_count())
+            .unwrap_or(0)
     }
 
     /// Like [`Engine::evaluate`], but a watchdog thread requests termination if
@@ -577,9 +613,9 @@ impl Drop for Engine {
             // held by the context's event slab. `clear` below drops the
             // `dead_events` list, so this final sweep must run before it.
             let dead_event_bits = dom.state.borrow_mut().take_dead_events();
-            for bits in dead_event_bits {
-                let event_key = tenta_js::bindings::host::decode(bits).event_key();
-                dom.ctx.events.borrow_mut().remove(event_key);
+            {
+                let mut state = dom.state.borrow_mut();
+                world::reclaim_dead_events(&mut state, &dom.ctx.events, dead_event_bits);
             }
 
             // Clear `HAS_WRAPPER` for every node still wrapped — the ids a

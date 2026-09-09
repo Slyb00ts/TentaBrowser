@@ -106,18 +106,26 @@ pub fn interface_quickjs(model: &Model, interface: &Interface) -> String {
             .collect::<Vec<_>>();
         let mut signature = vec!["ctx: rquickjs::Ctx<'js>".to_string()];
         signature.extend(parameters);
+        // Thread the realm (host context) in as the constructor's first argument,
+        // mirroring the V8 path.
+        let call_args = if passes.is_empty() {
+            "&realm".to_owned()
+        } else {
+            format!("&realm, {}", passes.join(", "))
+        };
         let _ = write!(
             out,
             "        let constructor = rquickjs::function::Constructor::new_class::<Self, _, _>(\n            \
              ctx.clone(),\n            \
              |{}| -> rquickjs::Result<rquickjs::Value<'js>> {{\n                \
+             let realm = world_realm_quickjs(&ctx)?;\n                \
              let host = T::{}({}).map_err(|error| throw_quickjs_error(&ctx, &error))?;\n                \
              let instance = rquickjs::Class::instance(ctx.clone(), {class}(host))?;\n                \
              Ok(instance.into_value())\n            }},\n        )?;\n        \
              Ok(Some(constructor))\n    }}\n}}\n",
             signature.join(", "),
             constructor.rust_name,
-            passes.join(", "),
+            call_args,
         );
     }
 

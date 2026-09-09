@@ -65,5 +65,5 @@ pub trait CounterOps {
 /// derived interface does not inherit a constructor its IDL does not declare.
 pub trait CounterConstructor: CounterOps + Sized {
     /// `constructor(CounterOptions options);`
-    fn construct(options: CounterOptions) -> Result<Self, JsError>;
+    fn construct(realm: &Realm, options: CounterOptions) -> Result<Self, JsError>;
 }

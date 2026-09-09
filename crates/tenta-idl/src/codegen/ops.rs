@@ -294,9 +294,17 @@ fn constructor_trait(interface: &Interface, out: &mut String) {
             .map(argument_declaration)
             .collect::<Vec<_>>()
             .join(", ");
+        // The realm (host context) is threaded in as the first parameter so a
+        // constructor can reach the document and event slab; the generated V8
+        // callback pulls it from the isolate's wrapper world.
+        let parameters = if arguments.is_empty() {
+            "realm: &Realm".to_owned()
+        } else {
+            format!("realm: &Realm, {arguments}")
+        };
         let _ = write!(
             out,
-            "    /// `constructor({idl_arguments});`\n    fn {}({arguments}) -> Result<Self, JsError>;\n",
+            "    /// `constructor({idl_arguments});`\n    fn {}({parameters}) -> Result<Self, JsError>;\n",
             constructor.rust_name
         );
     }

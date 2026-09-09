@@ -27,12 +27,17 @@
 // uniformity with the fallible-conversion path, which clippy reads as a
 // redundant map on the `Ok` constructor.
 #![allow(clippy::unnecessary_map_on_constructor)]
+// A dictionary's `from_v8` reads each member with `self.member.clone()` for
+// uniformity across member types; for a `Copy` member (a `boolean` or an `any`)
+// clippy reads the clone as redundant.
+#![allow(clippy::clone_on_copy)]
 
 include!(concat!(env!("OUT_DIR"), "/prelude.rs"));
 include!(concat!(env!("OUT_DIR"), "/types.rs"));
 
 include!(concat!(env!("OUT_DIR"), "/character_data_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/custom_event_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_target_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/comment_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/document_ops.rs"));
@@ -44,6 +49,7 @@ include!(concat!(env!("OUT_DIR"), "/text_ops.rs"));
 
 include!(concat!(env!("OUT_DIR"), "/character_data_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/custom_event_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_target_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/comment_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/document_register.rs"));
@@ -57,6 +63,8 @@ include!(concat!(env!("OUT_DIR"), "/text_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/character_data_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/event_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/custom_event_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/event_target_v8.rs"));
 #[cfg(feature = "v8")]
