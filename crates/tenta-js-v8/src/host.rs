@@ -1,6 +1,11 @@
-//! Host functions that bridge JavaScript to the engine-independent event loop
+//! Host functions and globals that bridge JavaScript to the engine.
+//!
+//! Most of this file wires the engine-independent event loop
 //! (`docs/spec/05-javascript.md` §5): `setTimeout`, `clearTimeout`,
-//! `queueMicrotask`, `requestAnimationFrame` and `cancelAnimationFrame`.
+//! `queueMicrotask`, `requestAnimationFrame` and `cancelAnimationFrame`. It also
+//! installs the browsing-context globals a page expects to find already present:
+//! the `window`/`self`/`frames`/`top`/`parent` self-aliases and the `navigator`
+//! and `performance` objects.
 //!
 //! The event loop's timer and animation-frame callbacks are `FnOnce` closures
 //! with no access to the isolate, but invoking a JS function needs one. The
@@ -69,8 +74,9 @@ impl HostState {
     }
 }
 
-/// Installs the timer, microtask and animation-frame host functions as own
-/// properties of `context`'s global object. Call once per context, inside a
+/// Installs the timer/microtask/animation-frame host functions, the
+/// window/global self-aliases, and the `navigator` and `performance` globals as
+/// own properties of `context`'s global object. Call once per context, inside a
 /// context scope.
 pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>) {
     let global = context.global(scope);
@@ -98,6 +104,139 @@ pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>) {
         let key = v8::String::new(scope, name).expect("global alias name fits the V8 string limit");
         global.set(scope, key.into(), global.into());
     }
+
+    install_performance(scope, global);
+    install_navigator(scope, global);
+}
+
+/// Sets a string-valued own data property on `target`.
+fn set_string(scope: &mut v8::PinScope, target: v8::Local<v8::Object>, name: &str, value: &str) {
+    let key = v8::String::new(scope, name).expect("property name fits the V8 string limit");
+    let value = v8::String::new(scope, value).expect("property value fits the V8 string limit");
+    target.set(scope, key.into(), value.into());
+}
+
+/// Sets a number-valued own data property on `target`.
+fn set_number(scope: &mut v8::PinScope, target: v8::Local<v8::Object>, name: &str, value: f64) {
+    let key = v8::String::new(scope, name).expect("property name fits the V8 string limit");
+    let value = v8::Number::new(scope, value);
+    target.set(scope, key.into(), value.into());
+}
+
+/// Sets a boolean-valued own data property on `target`.
+fn set_bool(scope: &mut v8::PinScope, target: v8::Local<v8::Object>, name: &str, value: bool) {
+    let key = v8::String::new(scope, name).expect("property name fits the V8 string limit");
+    let value = v8::Boolean::new(scope, value);
+    target.set(scope, key.into(), value.into());
+}
+
+/// Installs `performance` with `now()` and `timeOrigin`, both reading the event
+/// loop's clock so time advances with the virtual scheduler under tests and with
+/// the monotonic clock in production.
+fn install_performance(scope: &mut v8::PinScope, global: v8::Local<v8::Object>) {
+    let performance = v8::Object::new(scope);
+    define(scope, performance, "now", performance_now);
+    // The virtual clock's origin is `MonoTime::ZERO`, so `now()` is milliseconds
+    // since origin and `timeOrigin` is 0. When a wall clock lands this becomes
+    // the Unix-epoch millisecond the loop started.
+    set_number(scope, performance, "timeOrigin", 0.0);
+
+    let key = v8::String::new(scope, "performance").expect("`performance` fits the string limit");
+    global.set(scope, key.into(), performance.into());
+}
+
+/// `performance.now()`: milliseconds since the loop origin, from the scheduler's
+/// clock (`MonoTime::as_millis_f64`).
+fn performance_now(
+    scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let state = host_state(scope);
+    // A missing slot would mean `performance.now()` ran in a context `install`
+    // never set up. It cannot happen in the current single-context engine; the
+    // `unwrap_or` keeps release builds safe, but a return to 0 after a larger
+    // reading would violate the monotonic-non-decreasing contract, so a future
+    // multi-context change must not reach this path silently.
+    debug_assert!(
+        state.is_some(),
+        "performance.now() requires the host state slot to be installed"
+    );
+    let now = state
+        .map(|state| state.scheduler.now().as_millis_f64())
+        .unwrap_or(0.0);
+    retval.set_double(now);
+}
+
+/// A Chrome-compatible user-agent string minus its leading `Mozilla/` token,
+/// which is what `navigator.appVersion` reports.
+const APP_VERSION: &str = "5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+     (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+/// A deterministic reported core count. The engine reports a fixed value rather
+/// than the real host's `available_parallelism` so the profile stays a stable,
+/// reproducible fingerprint and script content cannot read the machine's core
+/// count. Eight is a common mid-range value that sizes web worker pools sensibly.
+const HARDWARE_CONCURRENCY: f64 = 8.0;
+
+/// Installs a minimal `navigator`. The values are static, Chrome-compatible
+/// placeholders for now; a profile-driven user agent and locale land with the
+/// snapshot work (`docs/spec/05-javascript.md` §5). The strings mimic Chrome
+/// because much of the web (and the eventual Teams target) branches on them, and
+/// the shape mirrors Chrome's so unguarded probes like `navigator.plugins.length`
+/// or `navigator.webdriver` read a present value instead of throwing.
+fn install_navigator(scope: &mut v8::PinScope, global: v8::Local<v8::Object>) {
+    let navigator = v8::Object::new(scope);
+    set_string(
+        scope,
+        navigator,
+        "userAgent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+         (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    );
+    set_string(scope, navigator, "appCodeName", "Mozilla");
+    set_string(scope, navigator, "appName", "Netscape");
+    set_string(scope, navigator, "appVersion", APP_VERSION);
+    set_string(scope, navigator, "product", "Gecko");
+    set_string(scope, navigator, "productSub", "20030107");
+    set_string(scope, navigator, "vendor", "Google Inc.");
+    set_string(scope, navigator, "vendorSub", "");
+    set_string(scope, navigator, "platform", "MacIntel");
+    set_string(scope, navigator, "language", "en-US");
+
+    let languages = v8::Array::new(scope, 2);
+    for (index, tag) in ["en-US", "en"].into_iter().enumerate() {
+        let value = v8::String::new(scope, tag).expect("a language tag fits the string limit");
+        languages.set_index(scope, index as u32, value.into());
+    }
+    let key = v8::String::new(scope, "languages").expect("`languages` fits the string limit");
+    navigator.set(scope, key.into(), languages.into());
+
+    set_number(
+        scope,
+        navigator,
+        "hardwareConcurrency",
+        HARDWARE_CONCURRENCY,
+    );
+    set_number(scope, navigator, "maxTouchPoints", 0.0);
+    set_bool(scope, navigator, "onLine", true);
+    set_bool(scope, navigator, "cookieEnabled", true);
+    // Real Chrome reports `false` here; an undefined `webdriver` is itself an
+    // automation-detection signal, so the Chrome-compat profile reports `false`.
+    set_bool(scope, navigator, "webdriver", false);
+
+    // `plugins` and `mimeTypes` are empty-but-present on modern Chrome. Empty
+    // arrays satisfy the common `navigator.plugins.length` / iteration probes
+    // without pretending specific plugins exist.
+    let plugins = v8::Array::new(scope, 0);
+    let key = v8::String::new(scope, "plugins").expect("`plugins` fits the string limit");
+    navigator.set(scope, key.into(), plugins.into());
+    let mime_types = v8::Array::new(scope, 0);
+    let key = v8::String::new(scope, "mimeTypes").expect("`mimeTypes` fits the string limit");
+    navigator.set(scope, key.into(), mime_types.into());
+
+    let key = v8::String::new(scope, "navigator").expect("`navigator` fits the string limit");
+    global.set(scope, key.into(), navigator.into());
 }
 
 /// Defines one own property on `target` whose value is a native function.
