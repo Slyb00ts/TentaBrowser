@@ -13,12 +13,24 @@
 [Exposed=Window]
 interface Node : EventTarget {
   const unsigned short ELEMENT_NODE = 1;
+  const unsigned short ATTRIBUTE_NODE = 2;
   const unsigned short TEXT_NODE = 3;
+  const unsigned short CDATA_SECTION_NODE = 4;
+  const unsigned short ENTITY_REFERENCE_NODE = 5;
+  const unsigned short ENTITY_NODE = 6;
+  const unsigned short PROCESSING_INSTRUCTION_NODE = 7;
   const unsigned short COMMENT_NODE = 8;
   const unsigned short DOCUMENT_NODE = 9;
+  const unsigned short DOCUMENT_TYPE_NODE = 10;
+  const unsigned short DOCUMENT_FRAGMENT_NODE = 11;
+  const unsigned short NOTATION_NODE = 12;
 
   readonly attribute unsigned short nodeType;
   readonly attribute DOMString nodeName;
+
+  // Phase 4a: document association and connectivity.
+  readonly attribute Document? ownerDocument;
+  readonly attribute boolean isConnected;
 
   readonly attribute Node? parentNode;
   readonly attribute Element? parentElement;
@@ -32,6 +44,9 @@ interface Node : EventTarget {
   attribute DOMString? nodeValue;
 
   [SameObject] readonly attribute NodeList childNodes;
+
+  boolean hasChildNodes();
+  boolean contains(Node? other);
 
   // Phase 2a: mutation operations
   Node appendChild(Node node);
@@ -103,6 +118,13 @@ interface Element : Node {
 [Exposed=Window]
 interface Document : Node {
   readonly attribute Element? documentElement;
+
+  // Phase 4a: document conveniences the frameworks read on load.
+  readonly attribute HTMLElement? body;
+  readonly attribute HTMLElement? head;
+  readonly attribute DOMString readyState;
+  readonly attribute Element? activeElement;
+
   readonly attribute Element? firstElementChild;
   readonly attribute Element? lastElementChild;
   readonly attribute unsigned long childElementCount;

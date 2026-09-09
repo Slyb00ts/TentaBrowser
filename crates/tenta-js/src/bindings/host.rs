@@ -22,9 +22,9 @@ use super::{
     AddEventListenerOptionsOrBoolean, AnyValue, CharacterDataOps, Comment, CommentOps,
     CustomEventConstructor, CustomEventInit, CustomEventOps, DocumentOps, Element, ElementOps,
     Event, EventConstructor, EventInit, EventListener, EventListenerOptionsOrBoolean, EventOps,
-    EventTarget, EventTargetOps, HTMLCollection, HTMLCollectionOps, HTMLElementOps, Handle,
-    JsError, MouseEventConstructor, MouseEventInit, MouseEventOps, Node, NodeList, NodeListOps,
-    NodeOps, Realm, Text, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
+    EventTarget, EventTargetOps, HTMLCollection, HTMLCollectionOps, HTMLElement, HTMLElementOps,
+    Handle, JsError, MouseEventConstructor, MouseEventInit, MouseEventOps, Node, NodeList,
+    NodeListOps, NodeOps, Realm, Text, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
 };
 use crate::dom::events::{
     CallbackRef, EventKey, EventKind, EventRecord, EventSlab, ListenerTable, ScriptHost, dispatch,
@@ -372,6 +372,46 @@ impl NodeOps for HostObject {
             NodeKind::DocType => 10,
             NodeKind::Fragment | NodeKind::ShadowRoot => 11,
         }
+    }
+
+    fn owner_document(&self) -> Result<Option<Handle<super::Document>>, JsError> {
+        // The Document node's `ownerDocument` is null; every other node in this
+        // world belongs to the one document the host is anchored in. `Document`
+        // is qualified because `tenta_dom::Document` shadows the binding marker.
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        let document_node = doc.document_node();
+        Ok((id != document_node)
+            .then(|| Handle::from_bits(encode_node(doc.node_ref(document_node)))))
+    }
+
+    fn is_connected(&self) -> bool {
+        let (doc, id) = self.anchor();
+        doc.borrow().is_connected(id)
+    }
+
+    fn has_child_nodes(&self) -> bool {
+        let (doc, id) = self.anchor();
+        doc.borrow().first_child(id).is_some()
+    }
+
+    fn contains(&self, other: Option<Handle<Node>>) -> Result<bool, JsError> {
+        // `node.contains(other)` is true when `other` is an inclusive descendant
+        // of `node`. `ancestors` excludes the node itself, so the identity case
+        // is checked separately. A null argument is not contained. A swept
+        // `other` is not live, so `ancestors` yields nothing and the answer is
+        // false; slot reuse within the 16-bit generation window is the
+        // handle-wide staleness limitation shared with every node-handle op
+        // (the `pack` TODO), not specific to this method.
+        let Some(other) = other else {
+            return Ok(false);
+        };
+        let decoded = decode(other.bits());
+        debug_assert_eq!(decoded.tag, TAG_NODE, "contains requires a Node handle");
+        let other_id = decoded.node_id;
+        let (doc, self_id) = self.anchor();
+        let doc = doc.borrow();
+        Ok(other_id == self_id || doc.ancestors(other_id).any(|ancestor| ancestor == self_id))
     }
 
     fn parent_element(&self) -> Result<Option<Handle<Element>>, JsError> {
@@ -962,6 +1002,43 @@ impl DocumentOps for HostObject {
         Ok(doc
             .document_element()
             .map(|id| Handle::from_bits(encode_node(doc.node_ref(id)))))
+    }
+
+    fn body(&self) -> Result<Option<Handle<HTMLElement>>, JsError> {
+        // Only an HTML-namespace body/frameset is `document.body`, so the
+        // `HTMLElement` handle is always backed by an HTML element (the wrapper
+        // interface is picked by namespace at wrap time).
+        let (doc, _) = self.anchor();
+        let doc = doc.borrow();
+        Ok(doc
+            .body()
+            .filter(|id| doc.namespace(*id) == Some(atoms::NS_HTML))
+            .map(|id| Handle::from_bits(encode_node(doc.node_ref(id)))))
+    }
+
+    fn head(&self) -> Result<Option<Handle<HTMLElement>>, JsError> {
+        let (doc, _) = self.anchor();
+        let doc = doc.borrow();
+        Ok(doc
+            .head()
+            .filter(|id| doc.namespace(*id) == Some(atoms::NS_HTML))
+            .map(|id| Handle::from_bits(encode_node(doc.node_ref(id)))))
+    }
+
+    fn ready_state(&self) -> Result<String, JsError> {
+        // No incremental load/parse model yet: a document handed to the engine is
+        // already fully built, so it reports "complete" (the settle machine that
+        // drives "loading"/"interactive" arrives with the page pipeline).
+        Ok("complete".to_owned())
+    }
+
+    fn active_element(&self) -> Result<Option<Handle<Element>>, JsError> {
+        // No focus model yet: per the spec the fallback active element is the
+        // body (or the document element when there is no body).
+        let (doc, _) = self.anchor();
+        let doc = doc.borrow();
+        let active = doc.body().or_else(|| doc.document_element());
+        Ok(active.map(|id| Handle::from_bits(encode_node(doc.node_ref(id)))))
     }
 
     fn first_element_child(&self) -> Result<Option<Handle<Element>>, JsError> {
