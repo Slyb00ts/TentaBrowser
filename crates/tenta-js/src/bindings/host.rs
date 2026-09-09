@@ -322,6 +322,19 @@ impl HostObject {
         }
     }
 
+    /// Sets a reflected attribute (`id`, `class`, …) to `value` on the anchored
+    /// element, ignoring any mutation error the way a fast-API reflected setter
+    /// must. `name` is an already-lowercase attribute local name.
+    fn reflect_attribute(&self, name: &str, value: &str) {
+        let (doc, id) = self.anchor();
+        let qname = QualName::new(atoms::EMPTY, Atom::new(name));
+        let _ = doc.borrow_mut().mutate(Mutation::SetAttribute {
+            element: id,
+            name: qname,
+            value: value.to_owned(),
+        });
+    }
+
     /// Applies a navigation step to the anchored node and wraps the result as a
     /// freshly read `Node` handle (never stale), or `None` at the tree edge.
     fn navigate(&self, step: impl Fn(&Document, NodeId) -> NodeId) -> Option<Handle<Node>> {
@@ -740,6 +753,48 @@ impl ElementOps for HostObject {
         Ok(doc.borrow().element_id(id).unwrap_or("").to_owned())
     }
 
+    fn set_id(&self, value: &str) {
+        // A plain reflected setter: writing `id` sets the `id` attribute. Fast-API
+        // eligible, so it returns void and cannot throw (any parse the attribute
+        // needs is infallible).
+        self.reflect_attribute("id", value);
+    }
+
+    fn class_name(&self) -> Result<String, JsError> {
+        // `className` reflects the `class` attribute value verbatim (whitespace
+        // and duplicates preserved), or "" when the element has no class
+        // attribute. The DOM keeps the raw attribute string and the parsed class
+        // index in lockstep, so the raw string is authoritative.
+        let (doc, id) = self.anchor();
+        Ok(doc
+            .borrow()
+            .attribute_str(id, "class")
+            .unwrap_or("")
+            .to_owned())
+    }
+
+    fn set_class_name(&self, value: &str) {
+        self.reflect_attribute("class", value);
+    }
+
+    fn local_name(&self) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        Ok(doc
+            .borrow()
+            .tag(id)
+            .map(|local| local.as_str().to_owned())
+            .unwrap_or_default())
+    }
+
+    fn namespace_uri(&self) -> Result<Option<String>, JsError> {
+        let (doc, id) = self.anchor();
+        Ok(doc
+            .borrow()
+            .namespace(id)
+            .map(|ns| ns.as_str().to_owned())
+            .filter(|uri| !uri.is_empty()))
+    }
+
     fn last_element_child(&self) -> Result<Option<Handle<Element>>, JsError> {
         let (doc, id) = self.anchor();
         let doc = doc.borrow();
@@ -803,23 +858,7 @@ impl ElementOps for HostObject {
     }
 
     fn set_attribute(&self, name: &str, value: &str) -> Result<(), JsError> {
-        // Validate the attribute name: non-empty and valid XML name start
-        if name.is_empty() {
-            return Err(JsError::dom_exception(
-                "InvalidCharacterError",
-                "Attribute name must not be empty",
-            ));
-        }
-        if let Some(first_char) = name.chars().next()
-            && !first_char.is_ascii_alphabetic()
-            && first_char != '_'
-            && first_char != ':'
-        {
-            return Err(JsError::dom_exception(
-                "InvalidCharacterError",
-                "Attribute name must start with a letter, underscore, or colon",
-            ));
-        }
+        validate_attribute_name(name)?;
 
         let (doc, id) = self.anchor();
         let lower_name = name.to_ascii_lowercase();
@@ -863,6 +902,41 @@ impl ElementOps for HostObject {
         let lower_name = name.to_ascii_lowercase();
         // Check if the attribute exists
         doc.borrow().attribute_str(id, &lower_name).is_some()
+    }
+
+    fn has_attributes(&self) -> bool {
+        let (doc, id) = self.anchor();
+        doc.borrow().attributes(id).next().is_some()
+    }
+
+    fn toggle_attribute(&self, name: &str, force: Option<bool>) -> Result<bool, JsError> {
+        validate_attribute_name(name)?;
+        let (doc, id) = self.anchor();
+        let lower_name = name.to_ascii_lowercase();
+        let present = doc.borrow().attribute_str(id, &lower_name).is_some();
+        let qname = QualName::new(atoms::EMPTY, Atom::new(&lower_name));
+        let mut doc = doc.borrow_mut();
+
+        // `force` absent toggles; present forces on; absent forces off. Adding an
+        // attribute with `toggleAttribute` gives it the empty-string value.
+        let add = match force {
+            Some(force) => force,
+            None => !present,
+        };
+        if add && !present {
+            doc.mutate(Mutation::SetAttribute {
+                element: id,
+                name: qname,
+                value: String::new(),
+            })
+            .map_err(|e| mutation_error(&e))?;
+        } else if !add && present {
+            let _ = doc.mutate(Mutation::RemoveAttribute {
+                element: id,
+                name: qname,
+            });
+        }
+        Ok(add)
     }
 
     fn get_attribute_names(&self) -> Result<Vec<String>, JsError> {
@@ -1987,6 +2061,29 @@ fn qualified_attr_name(name: &QualName) -> String {
         Some(prefix) => format!("{}:{}", prefix.as_str(), name.local.as_str()),
         None => name.local.as_str().to_owned(),
     }
+}
+
+/// Validates an attribute name at the DOM boundary: non-empty and starting with
+/// a letter, underscore or colon. Returns an `InvalidCharacterError` otherwise,
+/// as `setAttribute`/`toggleAttribute` require.
+fn validate_attribute_name(name: &str) -> Result<(), JsError> {
+    if name.is_empty() {
+        return Err(JsError::dom_exception(
+            "InvalidCharacterError",
+            "Attribute name must not be empty",
+        ));
+    }
+    if let Some(first_char) = name.chars().next()
+        && !first_char.is_ascii_alphabetic()
+        && first_char != '_'
+        && first_char != ':'
+    {
+        return Err(JsError::dom_exception(
+            "InvalidCharacterError",
+            "Attribute name must start with a letter, underscore, or colon",
+        ));
+    }
+    Ok(())
 }
 
 fn element_tag_name(doc: &Document, id: NodeId) -> String {

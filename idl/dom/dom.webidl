@@ -81,7 +81,11 @@ interface Comment : CharacterData {};
 [Exposed=Window]
 interface Element : Node {
   readonly attribute DOMString tagName;
-  readonly attribute DOMString id;
+  // Phase 4b-1: reflected name/namespace and a writable id/className.
+  readonly attribute DOMString? namespaceURI;
+  readonly attribute DOMString localName;
+  attribute DOMString id;
+  attribute DOMString className;
   readonly attribute Element? firstElementChild;
   readonly attribute Element? lastElementChild;
   readonly attribute unsigned long childElementCount;
@@ -102,6 +106,10 @@ interface Element : Node {
   DOMString? getAttribute(DOMString name);
   undefined removeAttribute(DOMString name);
   boolean hasAttribute(DOMString name);
+
+  // Phase 4b-1: attribute presence and toggling.
+  boolean hasAttributes();
+  [Throws] boolean toggleAttribute(DOMString name, optional boolean force);
 
   // Phase 2b-3: attribute-name enumeration (sequence return).
   sequence<DOMString> getAttributeNames();
