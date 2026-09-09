@@ -110,8 +110,31 @@ impl TimerQueue {
         id
     }
 
-    /// Cancels a timer (`clearTimeout`). Firing it later becomes a no-op. Its
-    /// heap slot is reclaimed lazily when it reaches the top.
+    /// Re-arms an existing `id` for another `delay_ms` after `now`, applying the
+    /// same nesting clamp as [`TimerQueue::schedule`]. Used to repeat a
+    /// `setInterval` timer under its original id so the handle script holds stays
+    /// valid across firings; the caller passes the id [`TimerQueue::take_expired`]
+    /// just returned, whose previous heap slot is already gone.
+    pub fn reschedule(&mut self, id: TimerId, now: MonoTime, delay_ms: u64, nesting_level: u32) {
+        let effective_ms = if nesting_level > CLAMP_NESTING_LEVEL {
+            delay_ms.max(CLAMP_MIN_MS)
+        } else {
+            delay_ms
+        };
+        let deadline = now.saturating_add(std::time::Duration::from_millis(effective_ms));
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.heap.push(Entry { deadline, seq, id });
+        self.live.insert(id);
+    }
+
+    /// Whether `id` names a live (scheduled, not cancelled) timer.
+    pub fn is_live(&self, id: TimerId) -> bool {
+        self.live.contains(&id)
+    }
+
+    /// Cancels a timer (`clearTimeout`/`clearInterval`). Firing it later becomes
+    /// a no-op. Its heap slot is reclaimed lazily when it reaches the top.
     pub fn cancel(&mut self, id: TimerId) {
         self.live.remove(&id);
     }

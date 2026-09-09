@@ -82,6 +82,8 @@ pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>) {
     let global = context.global(scope);
     define(scope, global, "setTimeout", set_timeout);
     define(scope, global, "clearTimeout", clear_timeout);
+    define(scope, global, "setInterval", set_interval);
+    define(scope, global, "clearInterval", clear_interval);
     define(scope, global, "queueMicrotask", queue_microtask);
     define(
         scope,
@@ -299,6 +301,51 @@ fn clear_timeout(
         && id >= 0
     {
         state.scheduler.clear_timeout(TimerId::from_u64(id as u64));
+    }
+}
+
+/// `setInterval(handler, delay)`: schedules `handler` to run every `delay` ms
+/// and returns the interval id. The callback is re-armed by the loop under a
+/// stable id; each firing pushes the handler onto the ready queue for the engine
+/// to invoke, exactly like `setTimeout`.
+fn set_interval(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let Some(state) = host_state(scope) else {
+        return;
+    };
+    let Ok(handler) = v8::Local::<v8::Function>::try_from(args.get(0)) else {
+        return;
+    };
+    let delay = args.get(1).integer_value(scope).unwrap_or(0).max(0) as u64;
+
+    let handler = v8::Global::new(scope, handler);
+    let ready = state.ready.clone();
+    let id = state.scheduler.set_interval(
+        delay,
+        Box::new(move || {
+            ready.borrow_mut().push_back(handler.clone());
+        }),
+    );
+    retval.set_double(id.as_u64() as f64);
+}
+
+/// `clearInterval(id)`: cancels a repeating timer so it is not re-armed and its
+/// handler never reaches the ready queue again.
+fn clear_interval(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    _retval: v8::ReturnValue,
+) {
+    let Some(state) = host_state(scope) else {
+        return;
+    };
+    if let Some(id) = args.get(0).integer_value(scope)
+        && id >= 0
+    {
+        state.scheduler.clear_interval(TimerId::from_u64(id as u64));
     }
 }
 

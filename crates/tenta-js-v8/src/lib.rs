@@ -522,7 +522,7 @@ impl Engine {
         let mut run = 0;
         while run < max_tasks {
             let progressed = self.event_loop.advance_to_next_timer();
-            let fired: Vec<v8::Global<v8::Function>> =
+            let mut fired: std::collections::VecDeque<v8::Global<v8::Function>> =
                 self.host.ready.borrow_mut().drain(..).collect();
             if fired.is_empty() {
                 if progressed {
@@ -532,12 +532,21 @@ impl Engine {
                 }
                 break;
             }
-            for handler in fired {
+            while let Some(handler) = fired.pop_front() {
                 self.invoke_callback(&handler);
                 self.isolate.perform_microtask_checkpoint();
                 run += 1;
                 if run >= max_tasks {
                     break;
+                }
+            }
+            // Handlers already fired this batch but not yet invoked when the task
+            // bound was hit go back to the front of the ready queue, ahead of any
+            // later work, so a subsequent drive runs them rather than losing them.
+            if !fired.is_empty() {
+                let mut ready = self.host.ready.borrow_mut();
+                while let Some(handler) = fired.pop_back() {
+                    ready.push_front(handler);
                 }
             }
         }
@@ -628,6 +637,18 @@ impl Default for Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        // Release every script-handle a pending timer or animation-frame
+        // callback still holds while the isolate is alive. These callbacks own
+        // `v8::Global<Function>` handles (a live `setInterval` keeps one
+        // indefinitely, so this is the common case, not an edge one); dropping
+        // them here — rather than through field drop order, where `isolate` goes
+        // first — keeps teardown sound regardless of that order, matching how the
+        // heap guard and wrapper world are handled below. `ready`/`ready_frames`
+        // hold handles for callbacks already fired but not yet invoked.
+        self.event_loop.clear_pending_callbacks();
+        self.host.ready.borrow_mut().clear();
+        self.host.ready_frames.borrow_mut().clear();
+
         // Drain the wrapper world while the isolate is still alive: this
         // reclaims every host box and drops every still-armed `Weak`, which
         // disarms its finalizer so no later collection can run against a

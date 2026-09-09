@@ -42,11 +42,22 @@ impl AnimationFrameId {
     }
 }
 
-/// A timer's callback plus the nesting level to install while it runs, so a
-/// timer it schedules is clamped one level deeper.
-struct TimerCallback {
-    nesting: u32,
-    run: Box<dyn FnOnce()>,
+/// A scheduled timer's callback and the nesting level to install while it runs,
+/// so a timer it schedules is clamped one level deeper.
+enum TimerCallback {
+    /// A `setTimeout` callback: runs once, then its slot is dropped.
+    OneShot {
+        nesting: u32,
+        run: Box<dyn FnOnce()>,
+    },
+    /// A `setInterval` callback: runs every `period_ms`, re-armed under the same
+    /// id after each firing until cancelled. Callable more than once, so it is
+    /// an `FnMut` moved back into the timer map between firings.
+    Interval {
+        nesting: u32,
+        period_ms: u64,
+        run: Box<dyn FnMut()>,
+    },
 }
 
 /// A pending animation-frame callback. It receives the frame timestamp in
@@ -93,7 +104,7 @@ impl Scheduler {
         let id = shared.timers.schedule(now, delay_ms, nesting);
         shared.timer_callbacks.insert(
             id,
-            TimerCallback {
+            TimerCallback::OneShot {
                 nesting,
                 run: callback,
             },
@@ -106,6 +117,34 @@ impl Scheduler {
         let mut shared = self.shared.borrow_mut();
         shared.timers.cancel(id);
         shared.timer_callbacks.remove(&id);
+    }
+
+    /// Schedules `callback` to run every `delay_ms` (`setInterval`) and returns
+    /// the id that names the repeating timer. The first firing is one `delay_ms`
+    /// away; each firing re-arms the same id one nesting level deeper, so a
+    /// `setInterval(f, 0)` is clamped like a nested `setTimeout` rather than
+    /// busy-looping. The loop re-arms the timer, never script.
+    pub fn set_interval(&self, delay_ms: u64, callback: Box<dyn FnMut()>) -> TimerId {
+        let mut shared = self.shared.borrow_mut();
+        let nesting = shared.current_nesting + 1;
+        let now = shared.clock.now();
+        let id = shared.timers.schedule(now, delay_ms, nesting);
+        shared.timer_callbacks.insert(
+            id,
+            TimerCallback::Interval {
+                nesting,
+                period_ms: delay_ms,
+                run: callback,
+            },
+        );
+        id
+    }
+
+    /// Cancels a repeating timer (`clearInterval`) so it is not re-armed and its
+    /// callback is dropped. The same mechanism as [`Self::clear_timeout`]; a
+    /// distinct name mirrors the script-facing API.
+    pub fn clear_interval(&self, id: TimerId) {
+        self.clear_timeout(id);
     }
 
     /// Registers a callback for the next rendering opportunity
@@ -194,10 +233,28 @@ impl EventLoop {
         self.shared.borrow_mut().timers.next_deadline()
     }
 
+    /// Drops every pending timer and animation-frame callback without running
+    /// them. A callback may own a handle into an engine's script isolate (a V8
+    /// `Global`); this lets the owner release those handles while the isolate is
+    /// still alive, so teardown does not depend on struct field drop order. The
+    /// clock and task queues are left untouched.
+    pub fn clear_pending_callbacks(&self) {
+        let mut shared = self.shared.borrow_mut();
+        shared.timer_callbacks.clear();
+        shared.frame_callbacks.clear();
+    }
+
     /// Fires every timer due at the current clock time, running each callback as
     /// a task followed by a microtask checkpoint, in deadline-then-insertion
     /// order. Timers scheduled by these callbacks do not fire until the clock
     /// advances again.
+    ///
+    /// Not re-entrant: an interval re-arms its id in the timer queue here but
+    /// only re-inserts its callback while the queued task runs in
+    /// [`TaskRunner::run_until_idle`] below, so between those points the re-armed
+    /// id has no callback. Every caller lets this method (with its internal
+    /// `run_until_idle`) return before the next `take_expired`, which closes that
+    /// window; a future re-entrant caller would reopen it.
     pub fn fire_due_timers(&self) {
         let due = {
             let mut shared = self.shared.borrow_mut();
@@ -207,14 +264,54 @@ impl EventLoop {
         for id in due {
             let callback = self.shared.borrow_mut().timer_callbacks.remove(&id);
             let Some(callback) = callback else { continue };
-            let shared = self.shared.clone();
-            self.scheduler.sink.queue_task(move || {
-                // Install this timer's nesting level so a timer it schedules is
-                // clamped one level deeper, then restore the top level.
-                shared.borrow_mut().current_nesting = callback.nesting;
-                (callback.run)();
-                shared.borrow_mut().current_nesting = 0;
-            });
+            match callback {
+                TimerCallback::OneShot { nesting, run } => {
+                    let shared = self.shared.clone();
+                    self.scheduler.sink.queue_task(move || {
+                        // Install this timer's nesting level so a timer it
+                        // schedules is clamped one level deeper, then restore the
+                        // top level.
+                        shared.borrow_mut().current_nesting = nesting;
+                        run();
+                        shared.borrow_mut().current_nesting = 0;
+                    });
+                }
+                TimerCallback::Interval {
+                    nesting,
+                    period_ms,
+                    mut run,
+                } => {
+                    // Re-arm the same id for the next period before running, one
+                    // nesting level deeper, so the handle script holds stays
+                    // valid and a zero-delay interval clamps rather than spins.
+                    let next_nesting = nesting.saturating_add(1);
+                    {
+                        let mut shared = self.shared.borrow_mut();
+                        let now = shared.clock.now();
+                        shared.timers.reschedule(id, now, period_ms, next_nesting);
+                    }
+                    let shared = self.shared.clone();
+                    self.scheduler.sink.queue_task(move || {
+                        shared.borrow_mut().current_nesting = next_nesting;
+                        run();
+                        let mut shared = shared.borrow_mut();
+                        shared.current_nesting = 0;
+                        // Put the callback back under its id for the re-armed
+                        // firing — unless `clearInterval` cancelled it meanwhile,
+                        // in which case the re-armed heap slot is already dead.
+                        if shared.timers.is_live(id) {
+                            shared.timer_callbacks.insert(
+                                id,
+                                TimerCallback::Interval {
+                                    nesting: next_nesting,
+                                    period_ms,
+                                    run,
+                                },
+                            );
+                        }
+                    });
+                }
+            }
         }
         self.runner.run_until_idle();
     }
@@ -514,5 +611,97 @@ mod tests {
         // advance_to_next_timer only drives a virtual clock.
         assert!(!loop_.advance_to_next_timer());
         assert!(loop_.has_pending_timers());
+    }
+
+    #[test]
+    fn an_interval_fires_once_per_period_until_cleared() {
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let sched = loop_.scheduler();
+        let count = Rc::new(RefCell::new(0u32));
+
+        let id = {
+            let count = count.clone();
+            sched.set_interval(
+                10,
+                Box::new(move || {
+                    *count.borrow_mut() += 1;
+                }),
+            )
+        };
+
+        // Five periods, one firing each — the id is re-armed by the loop.
+        for _ in 0..5 {
+            loop_.advance_to_next_timer();
+        }
+        assert_eq!(*count.borrow(), 5);
+
+        // Cancelling under the same id stops re-arming, and no timer remains.
+        sched.clear_interval(id);
+        assert!(!loop_.has_pending_timers());
+        for _ in 0..5 {
+            loop_.advance_to_next_timer();
+        }
+        assert_eq!(*count.borrow(), 5);
+    }
+
+    #[test]
+    fn a_zero_delay_interval_is_clamped_and_does_not_freeze_time() {
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let sched = loop_.scheduler();
+        let count = Rc::new(RefCell::new(0u32));
+        {
+            let count = count.clone();
+            sched.set_interval(
+                0,
+                Box::new(move || {
+                    *count.borrow_mut() += 1;
+                }),
+            );
+        }
+
+        // A zero-delay interval must not spin: the nesting clamp raises its
+        // period to 4 ms once deeply nested, and the step guard bounds the run.
+        loop_.run_timers_until_idle(20);
+        assert_eq!(*count.borrow(), 20);
+        assert!(
+            loop_.now() > MonoTime::ZERO,
+            "the clamp should have advanced the clock past the origin"
+        );
+    }
+
+    #[test]
+    fn clearing_one_interval_leaves_another_running() {
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let sched = loop_.scheduler();
+        let kept = Rc::new(RefCell::new(0u32));
+        let dropped = Rc::new(RefCell::new(0u32));
+
+        {
+            let kept = kept.clone();
+            sched.set_interval(
+                10,
+                Box::new(move || {
+                    *kept.borrow_mut() += 1;
+                }),
+            );
+        }
+        let dropped_id = {
+            let dropped = dropped.clone();
+            sched.set_interval(
+                10,
+                Box::new(move || {
+                    *dropped.borrow_mut() += 1;
+                }),
+            )
+        };
+
+        loop_.advance_to_next_timer();
+        assert_eq!((*kept.borrow(), *dropped.borrow()), (1, 1));
+
+        sched.clear_interval(dropped_id);
+        for _ in 0..3 {
+            loop_.advance_to_next_timer();
+        }
+        assert_eq!((*kept.borrow(), *dropped.borrow()), (4, 1));
     }
 }
