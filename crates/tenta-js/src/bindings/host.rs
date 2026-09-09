@@ -335,6 +335,14 @@ impl HostObject {
         });
     }
 
+    /// Detaches the anchored node from its parent (`ChildNode.remove()`). A node
+    /// with no parent is a no-op; the node stays alive as long as script holds a
+    /// reference to its wrapper.
+    fn remove_from_parent(&self) {
+        let (doc, id) = self.anchor();
+        let _ = doc.borrow_mut().mutate(Mutation::Remove { child: id });
+    }
+
     /// Applies a navigation step to the anchored node and wraps the result as a
     /// freshly read `Node` handle (never stale), or `None` at the tree edge.
     fn navigate(&self, step: impl Fn(&Document, NodeId) -> NodeId) -> Option<Handle<Node>> {
@@ -638,6 +646,10 @@ impl NodeOps for HostObject {
 }
 
 impl ElementOps for HostObject {
+    fn remove(&self) {
+        self.remove_from_parent();
+    }
+
     fn child_element_count(&self) -> u32 {
         let (doc, id) = self.anchor();
         doc.borrow().element_children(id).count() as u32
@@ -1299,6 +1311,10 @@ impl NodeListOps for HostObject {
 }
 
 impl CharacterDataOps for HostObject {
+    fn remove(&self) {
+        self.remove_from_parent();
+    }
+
     fn data(&self) -> Result<String, JsError> {
         let (doc, id) = self.anchor();
         Ok(doc.borrow().text_data(id).unwrap_or("").to_owned())

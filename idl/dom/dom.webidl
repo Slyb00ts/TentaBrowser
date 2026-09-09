@@ -185,3 +185,13 @@ interface HTMLIFrameElement : HTMLElement {};
 
 [Exposed=Window]
 interface SVGElement : Element {};
+
+// Phase 4b-2: the ChildNode mixin (the first `includes` in idl/dom). Frameworks
+// call `node.remove()` to detach a node from its parent; it is shared by Element
+// and CharacterData (Text/Comment).
+interface mixin ChildNode {
+  undefined remove();
+};
+
+Element includes ChildNode;
+CharacterData includes ChildNode;
