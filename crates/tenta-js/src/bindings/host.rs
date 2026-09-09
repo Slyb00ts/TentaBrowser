@@ -19,14 +19,14 @@ use tenta_dom::{Document, Mutation, NodeKind};
 use tenta_html::{ElementFlags, QualName};
 
 use super::{
-    AddEventListenerOptionsOrBoolean, AnyValue, CharacterDataOps, Comment, CommentOps,
-    CustomEventConstructor, CustomEventInit, CustomEventOps, DOMTokenList, DOMTokenListOps,
-    DocumentFragment, DocumentFragmentOps, DocumentOps, Element, ElementOps, Event,
-    EventConstructor, EventInit, EventListener, EventListenerOptionsOrBoolean, EventOps,
-    EventTarget, EventTargetOps, HTMLCollection, HTMLCollectionOps, HTMLElement, HTMLElementOps,
-    HTMLIFrameElementOps, HTMLTemplateElementOps, Handle, JsError, MouseEventConstructor,
-    MouseEventInit, MouseEventOps, Node, NodeList, NodeListOps, NodeOps, Realm, SVGElementOps,
-    Text, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
+    AddEventListenerOptionsOrBoolean, AnyValue, CSSStyleDeclaration, CSSStyleDeclarationOps,
+    CharacterDataOps, Comment, CommentOps, CustomEventConstructor, CustomEventInit, CustomEventOps,
+    DOMTokenList, DOMTokenListOps, DocumentFragment, DocumentFragmentOps, DocumentOps, Element,
+    ElementOps, Event, EventConstructor, EventInit, EventListener, EventListenerOptionsOrBoolean,
+    EventOps, EventTarget, EventTargetOps, HTMLCollection, HTMLCollectionOps, HTMLElement,
+    HTMLElementOps, HTMLIFrameElementOps, HTMLTemplateElementOps, Handle, JsError,
+    MouseEventConstructor, MouseEventInit, MouseEventOps, Node, NodeList, NodeListOps, NodeOps,
+    Realm, SVGElementOps, Text, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
 };
 use crate::dom::events::{
     CallbackRef, EventKey, EventKind, EventRecord, EventSlab, ListenerTable, ScriptHost, dispatch,
@@ -227,6 +227,13 @@ pub enum HostObject {
         /// A generational reference to the element whose `class` the list reflects.
         owner: NodeRef,
     },
+    /// A wrapper for the inline `CSSStyleDeclaration` (`style`) of `owner`.
+    Style {
+        /// The context the style declaration's owner lives in.
+        ctx: SharedContext,
+        /// A generational reference to the element whose `style` the block reflects.
+        owner: NodeRef,
+    },
 }
 
 impl HostObject {
@@ -248,6 +255,11 @@ impl HostObject {
     /// Builds a `DOMTokenList` host for the `classList` of `owner` in `ctx`.
     pub fn token_list(ctx: SharedContext, owner: NodeRef) -> Self {
         Self::TokenList { ctx, owner }
+    }
+
+    /// Builds a `CSSStyleDeclaration` host for the `style` of `owner` in `ctx`.
+    pub fn style(ctx: SharedContext, owner: NodeRef) -> Self {
+        Self::Style { ctx, owner }
     }
 
     /// Builds a `NodeList` host for a static snapshot.
@@ -274,7 +286,8 @@ impl HostObject {
             | HostObject::StaticNodeList { ctx, .. }
             | HostObject::StaticHtmlCollection { ctx, .. }
             | HostObject::Event { ctx, .. }
-            | HostObject::TokenList { ctx, .. } => ctx,
+            | HostObject::TokenList { ctx, .. }
+            | HostObject::Style { ctx, .. } => ctx,
         }
     }
 
@@ -318,6 +331,7 @@ impl HostObject {
             }
             HostObject::Event { key, .. } => encode_event(*key),
             HostObject::TokenList { owner, .. } => encode_token_list(*owner),
+            HostObject::Style { owner, .. } => encode_style(*owner),
         }
     }
 
@@ -332,6 +346,7 @@ impl HostObject {
             HostObject::NodeList { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::HtmlCollection { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::TokenList { ctx, owner } => (&ctx.doc, owner.id),
+            HostObject::Style { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::StaticNodeList { ctx, .. } => (&ctx.doc, NodeId::NONE),
             HostObject::StaticHtmlCollection { ctx, .. } => (&ctx.doc, NodeId::NONE),
             HostObject::Event { ctx, .. } => (&ctx.doc, NodeId::NONE),
@@ -379,6 +394,51 @@ impl HostObject {
     /// Serialises an ordered set back into the `class` attribute (space-joined).
     fn set_class_tokens(&self, tokens: &[String]) {
         self.reflect_attribute("class", &tokens.join(" "));
+    }
+
+    /// A `CSSStyleDeclaration` handle for the anchored element's inline `style`.
+    fn style_handle(&self) -> Result<Handle<CSSStyleDeclaration>, JsError> {
+        let (doc, id) = self.anchor();
+        let owner = doc.borrow().node_ref(id);
+        Ok(Handle::from_bits(encode_style(owner)))
+    }
+
+    /// The anchored element's `style` attribute parsed into its declaration
+    /// block: an ordered list of `(name, value, important)`, property names
+    /// lowercased, later declarations of a property replacing earlier ones.
+    fn style_declarations(&self) -> Vec<StyleDeclaration> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        let mut declarations: Vec<StyleDeclaration> = Vec::new();
+        let Some(text) = doc.attribute_str(id, "style") else {
+            return declarations;
+        };
+        for chunk in text.split(';') {
+            let Some((name, value)) = chunk.split_once(':') else {
+                continue;
+            };
+            let name = name.trim().to_ascii_lowercase();
+            if name.is_empty() {
+                continue;
+            }
+            let (value, important) = split_important(value.trim());
+            let value = value.trim();
+            if value.is_empty() {
+                continue;
+            }
+            declarations.retain(|declaration| declaration.name != name);
+            declarations.push(StyleDeclaration {
+                name,
+                value: value.to_owned(),
+                important,
+            });
+        }
+        declarations
+    }
+
+    /// Serialises a declaration block back into the `style` attribute.
+    fn set_style_declarations(&self, declarations: &[StyleDeclaration]) {
+        self.reflect_attribute("style", &serialize_declarations(declarations));
     }
 
     /// Applies a navigation step to the anchored node and wraps the result as a
@@ -2060,14 +2120,23 @@ impl HTMLElementOps for HostObject {
         self.context().click_in_progress.borrow_mut().remove(&id);
         result
     }
+
+    fn style(&self) -> Result<Handle<CSSStyleDeclaration>, JsError> {
+        self.style_handle()
+    }
 }
 
-// `HTMLIFrameElement` and `SVGElement` are interface shells for now: they add no
-// members of their own, so their `Ops` traits are empty and the host satisfies
-// them through its `HTMLElementOps`/`ElementOps` impls. They exist so the global
-// constructors and `instanceof` behave; behaviour arrives in a later phase.
+// `HTMLIFrameElement` is an interface shell for now: it adds no members of its
+// own, so its `Ops` trait is empty and the host satisfies it through its
+// `HTMLElementOps`/`ElementOps` impls. `SVGElement` carries `style` via the
+// `ElementCSSInlineStyle` mixin.
 impl HTMLIFrameElementOps for HostObject {}
-impl SVGElementOps for HostObject {}
+
+impl SVGElementOps for HostObject {
+    fn style(&self) -> Result<Handle<CSSStyleDeclaration>, JsError> {
+        self.style_handle()
+    }
+}
 impl DocumentFragmentOps for HostObject {}
 
 impl HTMLTemplateElementOps for HostObject {
@@ -2191,6 +2260,106 @@ impl DOMTokenListOps for HostObject {
     }
 }
 
+impl CSSStyleDeclarationOps for HostObject {
+    fn css_text(&self) -> Result<String, JsError> {
+        Ok(serialize_declarations(&self.style_declarations()))
+    }
+
+    fn set_css_text(&self, value: &str) {
+        // Re-parse and re-serialise so the stored attribute is normalised.
+        self.reflect_attribute("style", value);
+        let declarations = self.style_declarations();
+        self.set_style_declarations(&declarations);
+    }
+
+    fn length(&self) -> u32 {
+        self.style_declarations().len() as u32
+    }
+
+    fn item(&self, index: u32) -> Result<String, JsError> {
+        Ok(self
+            .style_declarations()
+            .into_iter()
+            .nth(index as usize)
+            .map(|declaration| declaration.name)
+            .unwrap_or_default())
+    }
+
+    fn get_property_value(&self, property: &str) -> Result<String, JsError> {
+        let name = property.trim().to_ascii_lowercase();
+        Ok(self
+            .style_declarations()
+            .into_iter()
+            .find(|declaration| declaration.name == name)
+            .map(|declaration| declaration.value)
+            .unwrap_or_default())
+    }
+
+    fn get_property_priority(&self, property: &str) -> Result<String, JsError> {
+        let name = property.trim().to_ascii_lowercase();
+        let important = self
+            .style_declarations()
+            .into_iter()
+            .find(|declaration| declaration.name == name)
+            .is_some_and(|declaration| declaration.important);
+        Ok(if important { "important" } else { "" }.to_owned())
+    }
+
+    fn set_property(
+        &self,
+        property: &str,
+        value: &str,
+        priority: Option<&str>,
+    ) -> Result<(), JsError> {
+        let name = property.trim().to_ascii_lowercase();
+        if name.is_empty() {
+            return Ok(());
+        }
+        // A non-empty priority that is not "important" is invalid: no-op.
+        let important = match priority.map(str::trim) {
+            None | Some("") => false,
+            Some(priority) if priority.eq_ignore_ascii_case("important") => true,
+            Some(_) => return Ok(()),
+        };
+        let mut declarations = self.style_declarations();
+        // An empty value removes the property.
+        if value.trim().is_empty() {
+            declarations.retain(|declaration| declaration.name != name);
+            self.set_style_declarations(&declarations);
+            return Ok(());
+        }
+        let value = value.trim().to_owned();
+        if let Some(declaration) = declarations
+            .iter_mut()
+            .find(|declaration| declaration.name == name)
+        {
+            declaration.value = value;
+            declaration.important = important;
+        } else {
+            declarations.push(StyleDeclaration {
+                name,
+                value,
+                important,
+            });
+        }
+        self.set_style_declarations(&declarations);
+        Ok(())
+    }
+
+    fn remove_property(&self, property: &str) -> Result<String, JsError> {
+        let name = property.trim().to_ascii_lowercase();
+        let mut declarations = self.style_declarations();
+        let removed = declarations
+            .iter()
+            .find(|declaration| declaration.name == name)
+            .map(|declaration| declaration.value.clone())
+            .unwrap_or_default();
+        declarations.retain(|declaration| declaration.name != name);
+        self.set_style_declarations(&declarations);
+        Ok(removed)
+    }
+}
+
 impl HostObject {
     /// Builds and dispatches the synthetic, untrusted `click` `MouseEvent` for
     /// [`HTMLElementOps::click`]. The event bubbles, is cancelable and composed,
@@ -2305,6 +2474,43 @@ fn validate_attribute_name(name: &str) -> Result<(), JsError> {
         ));
     }
     Ok(())
+}
+
+/// One parsed declaration of an inline `style` block (`CSSStyleDeclaration`).
+struct StyleDeclaration {
+    name: String,
+    value: String,
+    important: bool,
+}
+
+/// Splits a trailing `!important` (ASCII case-insensitive) off a declaration
+/// value, returning the remaining value and whether the flag was present.
+fn split_important(value: &str) -> (&str, bool) {
+    const IMPORTANT: &str = "!important";
+    let trimmed = value.trim_end();
+    if trimmed.len() >= IMPORTANT.len() {
+        let (head, tail) = trimmed.split_at(trimmed.len() - IMPORTANT.len());
+        if tail.eq_ignore_ascii_case(IMPORTANT) {
+            return (head, true);
+        }
+    }
+    (value, false)
+}
+
+/// Serialises a declaration block into the `style` attribute form
+/// (`name: value;` declarations joined by a space).
+fn serialize_declarations(declarations: &[StyleDeclaration]) -> String {
+    declarations
+        .iter()
+        .map(|declaration| {
+            if declaration.important {
+                format!("{}: {} !important;", declaration.name, declaration.value)
+            } else {
+                format!("{}: {};", declaration.name, declaration.value)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Validates a `DOMTokenList` token (`add`/`remove`/`toggle`/`replace`): an
@@ -2425,6 +2631,9 @@ pub const TAG_EVENT: u8 = 5;
 /// Handle tag for an element's `DOMTokenList` (`classList`); like a live
 /// collection, it anchors to the owning element's node.
 pub const TAG_TOKEN_LIST: u8 = 6;
+/// Handle tag for an element's inline `CSSStyleDeclaration` (`style`); it
+/// anchors to the owning element's node like a live collection.
+pub const TAG_STYLE: u8 = 7;
 
 /// A handle decoded back into its parts.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2443,7 +2652,9 @@ impl DecodedHandle {
     /// when sweeping dead wrappers.
     pub fn node_anchor(&self) -> Option<NodeId> {
         match self.tag {
-            TAG_NODE | TAG_NODE_LIST | TAG_HTML_COLLECTION | TAG_TOKEN_LIST => Some(self.node_id),
+            TAG_NODE | TAG_NODE_LIST | TAG_HTML_COLLECTION | TAG_TOKEN_LIST | TAG_STYLE => {
+                Some(self.node_id)
+            }
             _ => None, // Snapshot tags 3 and 4, and TAG_EVENT
         }
     }
@@ -2498,6 +2709,11 @@ pub fn encode_html_collection(owner: NodeRef) -> u64 {
 /// Packs a token-list owner's reference into a [`TAG_TOKEN_LIST`] handle.
 pub fn encode_token_list(owner: NodeRef) -> u64 {
     pack(TAG_TOKEN_LIST, owner)
+}
+
+/// Packs a style declaration owner's reference into a [`TAG_STYLE`] handle.
+pub fn encode_style(owner: NodeRef) -> u64 {
+    pack(TAG_STYLE, owner)
 }
 
 /// Packs a snapshot tag and key into handle bits.

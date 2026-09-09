@@ -235,3 +235,27 @@ interface mixin ChildNode {
 
 Element includes ChildNode;
 CharacterData includes ChildNode;
+
+// Phase 4c-2: inline style. CSSStyleDeclaration exposes the `style` attribute's
+// declaration block as a CSSOM object. Camel-case named access (`style.color`)
+// needs a named-property handler the generator does not install yet, so only
+// the object model (cssText, item, getPropertyValue, setProperty, ...) is wired;
+// frameworks that set individual properties through `setProperty`/`cssText`
+// work, `style.color = ...` does not.
+[Exposed=Window]
+interface CSSStyleDeclaration {
+  attribute DOMString cssText;
+  readonly attribute unsigned long length;
+  DOMString item(unsigned long index);
+  DOMString getPropertyValue(DOMString property);
+  DOMString getPropertyPriority(DOMString property);
+  undefined setProperty(DOMString property, DOMString value, optional DOMString priority = "");
+  DOMString removeProperty(DOMString property);
+};
+
+interface mixin ElementCSSInlineStyle {
+  [SameObject] readonly attribute CSSStyleDeclaration style;
+};
+
+HTMLElement includes ElementCSSInlineStyle;
+SVGElement includes ElementCSSInlineStyle;
