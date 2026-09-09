@@ -32,6 +32,8 @@ include!(concat!(env!("OUT_DIR"), "/prelude.rs"));
 include!(concat!(env!("OUT_DIR"), "/types.rs"));
 
 include!(concat!(env!("OUT_DIR"), "/character_data_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/event_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/event_target_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/comment_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/document_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/element_ops.rs"));
@@ -41,6 +43,8 @@ include!(concat!(env!("OUT_DIR"), "/node_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_ops.rs"));
 
 include!(concat!(env!("OUT_DIR"), "/character_data_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/event_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/event_target_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/comment_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/document_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/element_register.rs"));
@@ -51,6 +55,10 @@ include!(concat!(env!("OUT_DIR"), "/text_register.rs"));
 
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/character_data_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/event_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/event_target_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/comment_v8.rs"));
 #[cfg(feature = "v8")]

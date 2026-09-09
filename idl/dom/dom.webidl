@@ -11,7 +11,7 @@
 // querySelector[All]/create[Element/TextNode] variants are deliberately later phases.
 
 [Exposed=Window]
-interface Node {
+interface Node : EventTarget {
   const unsigned short ELEMENT_NODE = 1;
   const unsigned short TEXT_NODE = 3;
   const unsigned short COMMENT_NODE = 8;
@@ -120,6 +120,9 @@ interface Document : Node {
   [NewObject] Element createElement(DOMString localName);
   [NewObject] Text createTextNode(DOMString data);
   [NewObject] Comment createComment(DOMString data);
+
+  // Phase 3a: event factory (createEvent + initEvent path, no constructors yet).
+  [Throws, NewObject] Event createEvent(DOMString interface);
 };
 
 [Exposed=Window]

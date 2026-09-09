@@ -23,23 +23,38 @@ use std::rc::Rc;
 use tenta_core::NodeId;
 use tenta_dom::NodeKind;
 use tenta_js::bindings::host::{
-    HostObject, SharedContext, TAG_HTML_COLLECTION, TAG_NODE_LIST, decode,
+    HostObject, SharedContext, TAG_EVENT, TAG_HTML_COLLECTION, TAG_NODE_LIST, decode,
 };
 use tenta_js::bindings::{
     InterfaceDescriptor, InterfaceRegistry, WRAPPER_HOST_FIELD, WRAPPER_TAG, WrapperWorld,
     cached_template, unwrap_this,
 };
 
+/// One entry in the value slab: a stored JS value with a reference count and,
+/// for objects, the identity hash it was interned under (so it can leave the
+/// identity index when its last reference is released).
+struct ValueSlot {
+    global: v8::Global<v8::Value>,
+    refs: u32,
+    hash: Option<i32>,
+}
+
 /// The split state of one wrapper world.
 ///
 /// `hosts` is the sole owner of the host allocations and thus the single
 /// reclaim point; `wrappers` holds weak handles for identity; `values` is a
-/// slab that backs `any`/`object`/`symbol`/`Promise`/callback bits.
+/// reference-counted, object-interned slab that backs `any`/`object`/`symbol`/
+/// `Promise`/callback bits. Interning gives every distinct object (a listener
+/// callback, a `CustomEvent` detail) a single stable bit pattern, so callback
+/// identity — which `removeEventListener` needs — is `u64` equality, and a
+/// value stored many times is held once.
 #[derive(Default)]
 pub struct WorldState {
     hosts: HashMap<u64, Box<HostObject>>,
     wrappers: HashMap<u64, v8::Weak<v8::Object>>,
-    values: Vec<v8::Global<v8::Value>>,
+    values: Vec<Option<ValueSlot>>,
+    free_values: Vec<u64>,
+    by_identity: HashMap<i32, Vec<u64>>,
     /// Nodes whose wrapper a finalizer has just collected, awaiting a
     /// `set_has_wrapper(false)` on the document. A finalizer must not borrow
     /// the document (it runs during GC, where a running op may hold a document
@@ -50,6 +65,9 @@ pub struct WorldState {
     /// Snapshot wrapper handles (tagged with TAG_STATIC_NODE_LIST or TAG_STATIC_HTML_COLLECTION)
     /// that a finalizer has collected, awaiting cleanup of their slab entries.
     dead_snapshots: Vec<u64>,
+    /// Event wrapper handles (tagged with TAG_EVENT) that a finalizer has
+    /// collected, awaiting removal of their event-slab records.
+    dead_events: Vec<u64>,
 }
 
 impl WorldState {
@@ -63,8 +81,41 @@ impl WorldState {
         self.hosts.clear();
         self.wrappers.clear();
         self.values.clear();
+        self.free_values.clear();
+        self.by_identity.clear();
         self.dead.clear();
         self.dead_snapshots.clear();
+        self.dead_events.clear();
+    }
+
+    /// Releases one reference to the stored value at `bits`, freeing the slot and
+    /// its identity-index entry when the last reference goes. Called by the
+    /// script host when a listener is removed or fires once.
+    pub fn release_value(&mut self, bits: u64) {
+        let Some(Some(slot)) = self.values.get_mut(bits as usize) else {
+            return;
+        };
+        slot.refs = slot.refs.saturating_sub(1);
+        if slot.refs > 0 {
+            return;
+        }
+        let hash = slot.hash;
+        self.values[bits as usize] = None;
+        self.free_values.push(bits);
+        if let Some(hash) = hash
+            && let Some(bucket) = self.by_identity.get_mut(&hash)
+        {
+            bucket.retain(|&idx| idx != bits);
+            if bucket.is_empty() {
+                self.by_identity.remove(&hash);
+            }
+        }
+    }
+
+    /// Takes the event handle bits of wrappers collected since the last call, so
+    /// the caller can remove their records from the event slab.
+    pub fn take_dead_events(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.dead_events)
     }
 
     /// Takes the ids of wrappers collected since the last call, so the caller
@@ -165,6 +216,15 @@ impl WrapperWorld for V8World {
             // Also remove the tombstone Weak so it doesn't accumulate.
             state_mut.wrappers.remove(&bits);
         }
+
+        // Clean up dead event wrappers: remove their event-slab records and
+        // disarm tombstone Weaks.
+        let dead_event_bits = state_mut.take_dead_events();
+        for bits in dead_event_bits {
+            let event_key = decode(bits).event_key();
+            self.ctx.events.borrow_mut().remove(event_key);
+            state_mut.wrappers.remove(&bits);
+        }
         drop(state_mut);
 
         // Fast path: a live wrapper for this handle is revived and reused, so a
@@ -189,6 +249,10 @@ impl WrapperWorld for V8World {
         let interface_name: &str;
         let host: Box<HostObject>;
         let is_snapshot: bool;
+        // An event wrapper, like a snapshot wrapper, does not anchor to a node,
+        // so it skips the node liveness/`set_has_wrapper` path; its slab record
+        // is reclaimed on finalize via `dead_events`.
+        let is_event: bool;
 
         if decoded.tag == 3 {
             // TAG_STATIC_NODE_LIST
@@ -197,6 +261,7 @@ impl WrapperWorld for V8World {
             let _ = self.ctx.snapshots.borrow().get(key)?; // Snapshot was reclaimed or never existed
             host = Box::new(HostObject::static_node_list(self.ctx.clone(), key));
             is_snapshot = true;
+            is_event = false;
         } else if decoded.tag == 4 {
             // TAG_STATIC_HTML_COLLECTION
             interface_name = "HTMLCollection";
@@ -204,9 +269,26 @@ impl WrapperWorld for V8World {
             let _ = self.ctx.snapshots.borrow().get(key)?;
             host = Box::new(HostObject::static_html_collection(self.ctx.clone(), key));
             is_snapshot = true;
+            is_event = false;
+        } else if decoded.tag == TAG_EVENT {
+            let key = decoded.event_key();
+            // Validate the record still exists and mark it wrapped. A missing
+            // record (reclaimed) yields `None`, which the prelude turns into a
+            // thrown TypeError — an event wrapper is created right after
+            // `createEvent`, while the record is alive, so this holds.
+            interface_name = {
+                let mut events = self.ctx.events.borrow_mut();
+                let record = events.get_mut(key)?;
+                record.has_wrapper = true;
+                record.kind.interface_name()
+            };
+            host = Box::new(HostObject::event(self.ctx.clone(), key));
+            is_snapshot = false;
+            is_event = true;
         } else {
             // Live node handle
             is_snapshot = false;
+            is_event = false;
             let node_id = decoded.node_id;
             let node = {
                 let doc = self.ctx.doc.borrow();
@@ -250,9 +332,9 @@ impl WrapperWorld for V8World {
         let raw = host.as_ref() as *const HostObject as *const c_void;
         instance.set_aligned_pointer_in_internal_field(WRAPPER_HOST_FIELD, raw, WRAPPER_TAG);
 
-        // For live node hosts, mark the node as having a wrapper. Snapshot hosts
-        // don't touch the document.
-        if !is_snapshot {
+        // For live node hosts, mark the node as having a wrapper. Snapshot and
+        // event hosts don't anchor to a node, so they don't touch the document.
+        if !is_snapshot && !is_event {
             let node_id = decoded.node_id;
             self.ctx.doc.borrow_mut().set_has_wrapper(node_id, true);
         }
@@ -272,7 +354,9 @@ impl WrapperWorld for V8World {
                 // the host, this is a no-op.
                 let mut state = state.borrow_mut();
                 if state.hosts.remove(&handle).is_some() {
-                    if is_snapshot {
+                    if is_event {
+                        state.dead_events.push(handle);
+                    } else if is_snapshot {
                         state.dead_snapshots.push(handle);
                     } else {
                         state.dead.push(decoded.node_id);
@@ -297,10 +381,66 @@ impl WrapperWorld for V8World {
     }
 
     fn store_value(&self, scope: &mut v8::PinScope<'_, '_>, value: v8::Local<v8::Value>) -> u64 {
+        // Intern objects by identity so a value stored more than once (the same
+        // listener callback, say) gets a single stable bit pattern and a single
+        // stored `Global`. Primitives are not interned.
+        let object_hash: Option<i32> = if value.is_object() {
+            v8::Local::<v8::Object>::try_from(value)
+                .ok()
+                .map(|object| object.get_identity_hash().get())
+        } else {
+            None
+        };
+
+        if let Some(hash) = object_hash {
+            // Look for an existing slot holding a strictly-equal object.
+            let matched = {
+                let state = self.state.borrow();
+                state.by_identity.get(&hash).and_then(|bucket| {
+                    bucket.iter().copied().find(|&idx| {
+                        state
+                            .values
+                            .get(idx as usize)
+                            .and_then(|slot| slot.as_ref())
+                            .is_some_and(|slot| {
+                                let candidate = v8::Local::new(scope, &slot.global);
+                                value.strict_equals(candidate)
+                            })
+                    })
+                })
+            };
+            if let Some(idx) = matched {
+                if let Some(Some(slot)) = self.state.borrow_mut().values.get_mut(idx as usize) {
+                    slot.refs += 1;
+                }
+                return idx;
+            }
+        }
+
         let global = v8::Global::new(scope.as_ref(), value);
         let mut state = self.state.borrow_mut();
-        let bits = state.values.len() as u64;
-        state.values.push(global);
+        let bits = match state.free_values.pop() {
+            Some(free) => {
+                state.values[free as usize] = Some(ValueSlot {
+                    global,
+                    refs: 1,
+                    hash: object_hash,
+                });
+                free
+            }
+            None => {
+                let bits = state.values.len() as u64;
+                state.values.push(Some(ValueSlot {
+                    global,
+                    refs: 1,
+                    hash: object_hash,
+                }));
+                bits
+            }
+        };
+        if let Some(hash) = object_hash {
+            state.by_identity.entry(hash).or_default().push(bits);
+        }
         bits
     }
 
@@ -310,8 +450,8 @@ impl WrapperWorld for V8World {
         bits: u64,
     ) -> Option<v8::Local<'s, v8::Value>> {
         let state = self.state.borrow();
-        let global = state.values.get(bits as usize)?;
-        Some(v8::Local::new(scope, global))
+        let slot = state.values.get(bits as usize)?.as_ref()?;
+        Some(v8::Local::new(scope, &slot.global))
     }
 }
 

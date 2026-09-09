@@ -18,8 +18,13 @@ use tenta_dom::{Document, Mutation, NodeKind};
 use tenta_html::QualName;
 
 use super::{
-    CharacterDataOps, Comment, CommentOps, DocumentOps, Element, ElementOps, HTMLCollection,
-    HTMLCollectionOps, Handle, JsError, Node, NodeList, NodeListOps, NodeOps, Text, TextOps,
+    AddEventListenerOptionsOrBoolean, CharacterDataOps, Comment, CommentOps, DocumentOps, Element,
+    ElementOps, Event, EventListener, EventListenerOptionsOrBoolean, EventOps, EventTarget,
+    EventTargetOps, HTMLCollection, HTMLCollectionOps, Handle, JsError, Node, NodeList,
+    NodeListOps, NodeOps, Text, TextOps,
+};
+use crate::dom::events::{
+    CallbackRef, EventKey, EventKind, EventRecord, EventSlab, ListenerTable, ScriptHost, dispatch,
 };
 
 /// A document shared between the host objects of one world and the engine that
@@ -116,12 +121,42 @@ impl Default for SnapshotSlab {
     }
 }
 
-/// The shared host context: document and snapshots for one wrapper world.
+/// The shared host context: document, snapshots, event state and the script
+/// callback boundary for one wrapper world.
 pub struct HostContext {
     /// The document all hosts point to.
     pub doc: SharedDocument,
     /// The snapshot slab for static collections.
     pub snapshots: RefCell<SnapshotSlab>,
+    /// The event listeners registered on this world's nodes.
+    pub listeners: RefCell<ListenerTable>,
+    /// The live event records for this world.
+    pub events: RefCell<EventSlab>,
+    /// The engine's callback boundary, installed at `Engine::build` and cleared
+    /// at teardown. `None` before installation and after teardown.
+    pub script: RefCell<Option<Rc<dyn ScriptHost>>>,
+    /// The instant this world was created, for `Event.timeStamp`.
+    pub origin: std::time::Instant,
+}
+
+impl HostContext {
+    /// Builds a fresh context over `doc` with empty event state and no script
+    /// host yet.
+    pub fn new(doc: SharedDocument) -> Self {
+        Self {
+            doc,
+            snapshots: RefCell::new(SnapshotSlab::new()),
+            listeners: RefCell::new(ListenerTable::new()),
+            events: RefCell::new(EventSlab::new()),
+            script: RefCell::new(None),
+            origin: std::time::Instant::now(),
+        }
+    }
+
+    /// Milliseconds elapsed since this world's origin, for `Event.timeStamp`.
+    pub fn time_stamp(&self) -> f64 {
+        self.origin.elapsed().as_secs_f64() * 1000.0
+    }
 }
 
 /// A context shared between the host objects of one world and the engine.
@@ -168,6 +203,13 @@ pub enum HostObject {
         /// The key to the snapshot in the slab.
         key: SnapshotKey,
     },
+    /// A wrapper for an `Event` (or a subclass), keyed into the event slab.
+    Event {
+        /// The context holding the event slab.
+        ctx: SharedContext,
+        /// The key to the event record in the slab.
+        key: EventKey,
+    },
 }
 
 impl HostObject {
@@ -196,6 +238,50 @@ impl HostObject {
         Self::StaticHtmlCollection { ctx, key }
     }
 
+    /// Builds an `Event` host for the event record at `key`.
+    pub fn event(ctx: SharedContext, key: EventKey) -> Self {
+        Self::Event { ctx, key }
+    }
+
+    /// The shared context this host belongs to.
+    pub fn context(&self) -> &SharedContext {
+        match self {
+            HostObject::Node { ctx, .. }
+            | HostObject::NodeList { ctx, .. }
+            | HostObject::HtmlCollection { ctx, .. }
+            | HostObject::StaticNodeList { ctx, .. }
+            | HostObject::StaticHtmlCollection { ctx, .. }
+            | HostObject::Event { ctx, .. } => ctx,
+        }
+    }
+
+    /// Reads the event record this host stands for, or returns `default` when
+    /// the host is not an `Event` or the record has been reclaimed.
+    fn with_event<R>(&self, default: R, f: impl FnOnce(&EventRecord) -> R) -> R {
+        if let HostObject::Event { ctx, key } = self
+            && let Some(record) = ctx.events.borrow().get(*key)
+        {
+            return f(record);
+        }
+        default
+    }
+
+    /// Mutates the event record this host stands for, if it is a live `Event`.
+    fn with_event_mut(&self, f: impl FnOnce(&mut EventRecord)) {
+        if let HostObject::Event { ctx, key } = self
+            && let Some(record) = ctx.events.borrow_mut().get_mut(*key)
+        {
+            f(record);
+        }
+    }
+
+    /// Releases one stored value through the installed script host, if any.
+    fn release_stored(&self, bits: u64) {
+        if let Some(script) = self.context().script.borrow().as_ref() {
+            script.release_value(bits);
+        }
+    }
+
     /// The opaque handle bits this host stands for, tagged by variant so a node
     /// and its `NodeList` (and a recycled slot) never share a key.
     pub fn handle_bits(&self) -> u64 {
@@ -207,6 +293,7 @@ impl HostObject {
             HostObject::StaticHtmlCollection { key, .. } => {
                 encode_snapshot(TAG_STATIC_HTML_COLLECTION, *key)
             }
+            HostObject::Event { key, .. } => encode_event(*key),
         }
     }
 
@@ -222,6 +309,7 @@ impl HostObject {
             HostObject::HtmlCollection { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::StaticNodeList { ctx, .. } => (&ctx.doc, NodeId::NONE),
             HostObject::StaticHtmlCollection { ctx, .. } => (&ctx.doc, NodeId::NONE),
+            HostObject::Event { ctx, .. } => (&ctx.doc, NodeId::NONE),
         }
     }
 
@@ -544,13 +632,7 @@ impl ElementOps for HostObject {
         drop(doc_ref);
 
         // Insert snapshot and return wrapped handle
-        let ctx = match self {
-            HostObject::Node { ctx, .. }
-            | HostObject::NodeList { ctx, .. }
-            | HostObject::HtmlCollection { ctx, .. }
-            | HostObject::StaticNodeList { ctx, .. }
-            | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
-        };
+        let ctx = self.context();
         let key = ctx.snapshots.borrow_mut().insert(descendants);
         Ok(Handle::from_bits(encode_snapshot(
             TAG_STATIC_HTML_COLLECTION,
@@ -579,13 +661,7 @@ impl ElementOps for HostObject {
                 Some(atom) => atom,
                 None => {
                     drop(doc_ref);
-                    let ctx = match self {
-                        HostObject::Node { ctx, .. }
-                        | HostObject::NodeList { ctx, .. }
-                        | HostObject::HtmlCollection { ctx, .. }
-                        | HostObject::StaticNodeList { ctx, .. }
-                        | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
-                    };
+                    let ctx = self.context();
                     let key = ctx.snapshots.borrow_mut().insert(vec![]);
                     return Ok(Handle::from_bits(encode_snapshot(
                         TAG_STATIC_HTML_COLLECTION,
@@ -602,13 +678,7 @@ impl ElementOps for HostObject {
         };
         drop(doc_ref);
 
-        let ctx = match self {
-            HostObject::Node { ctx, .. }
-            | HostObject::NodeList { ctx, .. }
-            | HostObject::HtmlCollection { ctx, .. }
-            | HostObject::StaticNodeList { ctx, .. }
-            | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
-        };
+        let ctx = self.context();
         let key = ctx.snapshots.borrow_mut().insert(descendants);
         Ok(Handle::from_bits(encode_snapshot(
             TAG_STATIC_HTML_COLLECTION,
@@ -667,13 +737,7 @@ impl ElementOps for HostObject {
                     .collect();
                 drop(doc_ref);
 
-                let ctx = match self {
-                    HostObject::Node { ctx, .. }
-                    | HostObject::NodeList { ctx, .. }
-                    | HostObject::HtmlCollection { ctx, .. }
-                    | HostObject::StaticNodeList { ctx, .. }
-                    | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
-                };
+                let ctx = self.context();
                 let key = ctx.snapshots.borrow_mut().insert(refs);
                 Ok(Handle::from_bits(encode_snapshot(
                     TAG_STATIC_NODE_LIST,
@@ -818,6 +882,25 @@ impl DocumentOps for HostObject {
         Ok(Handle::from_bits(encode_node(doc.node_ref(id))))
     }
 
+    fn create_event(&self, interface: &str) -> Result<Handle<Event>, JsError> {
+        // Legacy `createEvent` interface aliases (https://dom.spec.whatwg.org/#dom-document-createevent).
+        // Phase 3a supports the plain `Event` family; the UIEvent/MouseEvent/
+        // CustomEvent families arrive with their wrapper prototypes in 3c/3d.
+        let kind = match interface.to_ascii_lowercase().as_str() {
+            "event" | "events" | "htmlevents" => EventKind::Plain,
+            _ => {
+                return Err(JsError::dom_exception(
+                    "NotSupportedError",
+                    "createEvent does not support this interface yet",
+                ));
+            }
+        };
+        let ctx = self.context();
+        let record = EventRecord::new(String::new(), kind, ctx.time_stamp());
+        let key = ctx.events.borrow_mut().insert(record);
+        Ok(Handle::from_bits(encode_event(key)))
+    }
+
     fn create_element(&self, local_name: &str) -> Result<Handle<Element>, JsError> {
         // Validate the name: non-empty and starts with ASCII letter
         if local_name.is_empty() {
@@ -897,13 +980,7 @@ impl DocumentOps for HostObject {
             .collect();
         drop(doc_ref);
 
-        let ctx = match self {
-            HostObject::Node { ctx, .. }
-            | HostObject::NodeList { ctx, .. }
-            | HostObject::HtmlCollection { ctx, .. }
-            | HostObject::StaticNodeList { ctx, .. }
-            | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
-        };
+        let ctx = self.context();
         let key = ctx.snapshots.borrow_mut().insert(descendants);
         Ok(Handle::from_bits(encode_snapshot(
             TAG_STATIC_HTML_COLLECTION,
@@ -931,13 +1008,7 @@ impl DocumentOps for HostObject {
                 Some(atom) => atom,
                 None => {
                     drop(doc_ref);
-                    let ctx = match self {
-                        HostObject::Node { ctx, .. }
-                        | HostObject::NodeList { ctx, .. }
-                        | HostObject::HtmlCollection { ctx, .. }
-                        | HostObject::StaticNodeList { ctx, .. }
-                        | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
-                    };
+                    let ctx = self.context();
                     let key = ctx.snapshots.borrow_mut().insert(vec![]);
                     return Ok(Handle::from_bits(encode_snapshot(
                         TAG_STATIC_HTML_COLLECTION,
@@ -954,13 +1025,7 @@ impl DocumentOps for HostObject {
         };
         drop(doc_ref);
 
-        let ctx = match self {
-            HostObject::Node { ctx, .. }
-            | HostObject::NodeList { ctx, .. }
-            | HostObject::HtmlCollection { ctx, .. }
-            | HostObject::StaticNodeList { ctx, .. }
-            | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
-        };
+        let ctx = self.context();
         let key = ctx.snapshots.borrow_mut().insert(descendants);
         Ok(Handle::from_bits(encode_snapshot(
             TAG_STATIC_HTML_COLLECTION,
@@ -1001,13 +1066,7 @@ impl DocumentOps for HostObject {
                     .collect();
                 drop(doc_ref);
 
-                let ctx = match self {
-                    HostObject::Node { ctx, .. }
-                    | HostObject::NodeList { ctx, .. }
-                    | HostObject::HtmlCollection { ctx, .. }
-                    | HostObject::StaticNodeList { ctx, .. }
-                    | HostObject::StaticHtmlCollection { ctx, .. } => ctx,
-                };
+                let ctx = self.context();
                 let key = ctx.snapshots.borrow_mut().insert(refs);
                 Ok(Handle::from_bits(encode_snapshot(
                     TAG_STATIC_NODE_LIST,
@@ -1211,6 +1270,170 @@ impl HTMLCollectionOps for HostObject {
     }
 }
 
+impl EventTargetOps for HostObject {
+    fn add_event_listener(
+        &self,
+        r#type: &str,
+        callback: Option<EventListener>,
+        options: Option<AddEventListenerOptionsOrBoolean>,
+    ) -> Result<(), JsError> {
+        let Some(callback) = callback else {
+            return Ok(());
+        };
+        let (capture, once, passive) = match options {
+            None => (false, false, false),
+            Some(AddEventListenerOptionsOrBoolean::Boolean(capture)) => (capture, false, false),
+            Some(AddEventListenerOptionsOrBoolean::AddEventListenerOptions(o)) => {
+                (o.capture, o.once, o.passive.unwrap_or(false))
+            }
+        };
+        let (_, id) = self.anchor();
+        let cb = CallbackRef(callback.bits());
+        let added = self.context().listeners.borrow_mut().add(
+            id,
+            r#type.to_owned(),
+            cb,
+            capture,
+            once,
+            passive,
+        );
+        // The host owns the callback's stored reference: it keeps that reference
+        // when the listener is added, and releases it when the entry is a
+        // duplicate (the DOM "add an event listener" no-op).
+        if added.is_none() {
+            self.release_stored(cb.0);
+        }
+        Ok(())
+    }
+
+    fn remove_event_listener(
+        &self,
+        r#type: &str,
+        callback: Option<EventListener>,
+        options: Option<EventListenerOptionsOrBoolean>,
+    ) -> Result<(), JsError> {
+        let Some(callback) = callback else {
+            return Ok(());
+        };
+        let capture = match options {
+            None => false,
+            Some(EventListenerOptionsOrBoolean::Boolean(capture)) => capture,
+            Some(EventListenerOptionsOrBoolean::EventListenerOptions(o)) => o.capture,
+        };
+        let (_, id) = self.anchor();
+        let cb = CallbackRef(callback.bits());
+        let removed = self
+            .context()
+            .listeners
+            .borrow_mut()
+            .remove(id, r#type, cb, capture);
+        // Release the argument's stored reference, plus the removed listener's.
+        self.release_stored(cb.0);
+        if let Some(removed) = removed {
+            self.release_stored(removed.0);
+        }
+        Ok(())
+    }
+
+    fn dispatch_event(&self, event: Handle<Event>) -> Result<bool, JsError> {
+        let decoded = decode(event.bits());
+        if decoded.tag != TAG_EVENT {
+            return Err(JsError::type_error("dispatchEvent requires an Event"));
+        }
+        let key = decoded.event_key();
+        let target = {
+            let (doc, id) = self.anchor();
+            doc.borrow().node_ref(id)
+        };
+        dispatch(self.context(), target, key, false)
+    }
+}
+
+impl EventOps for HostObject {
+    fn r#type(&self) -> Result<String, JsError> {
+        Ok(self.with_event(String::new(), |r| r.type_.clone()))
+    }
+
+    fn target(&self) -> Result<Option<Handle<EventTarget>>, JsError> {
+        Ok(self.with_event(None, |r| r.target.map(Handle::from_bits)))
+    }
+
+    fn current_target(&self) -> Result<Option<Handle<EventTarget>>, JsError> {
+        Ok(self.with_event(None, |r| r.current_target.map(Handle::from_bits)))
+    }
+
+    fn event_phase(&self) -> u16 {
+        self.with_event(0, |r| r.phase)
+    }
+
+    fn stop_propagation(&self) {
+        self.with_event_mut(|r| r.flags.stop_propagation = true);
+    }
+
+    fn stop_immediate_propagation(&self) {
+        self.with_event_mut(|r| {
+            r.flags.stop_propagation = true;
+            r.flags.stop_immediate = true;
+        });
+    }
+
+    fn bubbles(&self) -> bool {
+        self.with_event(false, |r| r.bubbles)
+    }
+
+    fn cancelable(&self) -> bool {
+        self.with_event(false, |r| r.cancelable)
+    }
+
+    fn prevent_default(&self) {
+        self.with_event_mut(|r| {
+            if r.cancelable && !r.flags.in_passive_listener {
+                r.flags.canceled = true;
+            }
+        });
+    }
+
+    fn default_prevented(&self) -> bool {
+        self.with_event(false, |r| r.flags.canceled)
+    }
+
+    fn composed(&self) -> bool {
+        self.with_event(false, |r| r.composed)
+    }
+
+    fn is_trusted(&self) -> bool {
+        self.with_event(false, |r| r.is_trusted)
+    }
+
+    fn time_stamp(&self) -> f64 {
+        self.with_event(0.0, |r| r.time_stamp)
+    }
+
+    fn init_event(
+        &self,
+        r#type: &str,
+        bubbles: Option<bool>,
+        cancelable: Option<bool>,
+    ) -> Result<(), JsError> {
+        self.with_event_mut(|r| {
+            // Ignored while the event is being dispatched.
+            if r.flags.dispatch {
+                return;
+            }
+            r.flags.initialized = true;
+            r.flags.stop_propagation = false;
+            r.flags.stop_immediate = false;
+            r.flags.canceled = false;
+            r.is_trusted = false;
+            r.target = None;
+            r.type_ = r#type.to_owned();
+            r.bubbles = bubbles.unwrap_or(false);
+            r.cancelable = cancelable.unwrap_or(false);
+        });
+        Ok(())
+    }
+}
+
 /// Maps a `tenta_core::Error` from a mutation to a `JsError`. A DOM error
 /// carries its exception name in `code` and the human-readable text in
 /// `message`; the name is passed separately so the throw path can build a real
@@ -1282,6 +1505,8 @@ pub const TAG_HTML_COLLECTION: u8 = 2;
 pub const TAG_STATIC_NODE_LIST: u8 = 3;
 /// Handle tag for a static snapshot `HTMLCollection` (getElementsByTagName, etc.).
 pub const TAG_STATIC_HTML_COLLECTION: u8 = 4;
+/// Handle tag for an `Event` (and its subclasses), keyed into the event slab.
+pub const TAG_EVENT: u8 = 5;
 
 /// A handle decoded back into its parts.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1309,6 +1534,15 @@ impl DecodedHandle {
     /// Only valid when tag is a snapshot tag.
     pub fn snapshot_key(&self) -> SnapshotKey {
         SnapshotKey {
+            index: self.node_id.raw(),
+            generation: self.generation,
+        }
+    }
+
+    /// Reconstructs an [`EventKey`] from decoded event handle parts. Only valid
+    /// when `tag` is [`TAG_EVENT`].
+    pub fn event_key(&self) -> EventKey {
+        EventKey {
             index: self.node_id.raw(),
             generation: self.generation,
         }
@@ -1346,6 +1580,14 @@ pub fn encode_html_collection(owner: NodeRef) -> u64 {
 /// Packs a snapshot tag and key into handle bits.
 pub fn encode_snapshot(tag: u8, key: SnapshotKey) -> u64 {
     ((tag as u64) << TAG_SHIFT)
+        | (0u64 << DOC_SLOT_SHIFT)
+        | ((key.index as u64) << NODE_ID_SHIFT)
+        | (key.generation as u64)
+}
+
+/// Packs an [`EventKey`] into [`TAG_EVENT`] handle bits.
+pub fn encode_event(key: EventKey) -> u64 {
+    ((TAG_EVENT as u64) << TAG_SHIFT)
         | (0u64 << DOC_SLOT_SHIFT)
         | ((key.index as u64) << NODE_ID_SHIFT)
         | (key.generation as u64)

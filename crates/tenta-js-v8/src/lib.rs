@@ -12,6 +12,7 @@
 use tenta_core as _;
 
 mod host;
+mod script_host;
 mod world;
 
 use std::cell::RefCell;
@@ -19,12 +20,12 @@ use std::rc::Rc;
 use std::sync::Once;
 
 use tenta_js::bindings::WrapperWorld;
-use tenta_js::bindings::host::{
-    HostContext, HostObject, SharedContext, SharedDocument, SnapshotSlab,
-};
+use tenta_js::bindings::host::{HostContext, HostObject, SharedContext, SharedDocument};
+use tenta_js::dom::events::ScriptHost;
 use tenta_js::event_loop::{Clock, EventLoop, MonoTime};
 
 use host::HostState;
+use script_host::V8ScriptHost;
 
 static PLATFORM_INIT: Once = Once::new();
 
@@ -182,14 +183,40 @@ impl Engine {
                 Some(doc) => Self::install_dom(handle_scope, &host, doc),
             }
         };
-        Engine {
+        let mut engine = Engine {
             isolate,
             context,
             heap_guard,
             event_loop,
             host,
             dom,
-        }
+        };
+        engine.install_script_host();
+        engine
+    }
+
+    /// Wires the DOM event dispatcher's callback boundary to this engine's
+    /// isolate. The dispatcher ([`tenta_js::dom::events`]) invokes listeners only
+    /// through [`ScriptHost`]; a [`V8ScriptHost`] over this isolate turns handle
+    /// bits back into V8 objects and calls the stored functions. Stored in the
+    /// `HostContext` the bindings already share, and dropped in `Drop` before the
+    /// wrapper world is cleared. A no-op for a DOM-less engine.
+    fn install_script_host(&mut self) {
+        let Some(dom) = &self.dom else {
+            return;
+        };
+        // SAFETY: the pointer is only dereferenced by `invoke_listener`, which
+        // runs synchronously inside a DOM binding call on this engine's thread,
+        // while the engine (and thus the isolate) is alive. `Drop` clears the
+        // stored host before the isolate is disposed.
+        let isolate: *mut v8::Isolate = &mut *self.isolate;
+        let script: Rc<dyn ScriptHost> = Rc::new(V8ScriptHost::new(
+            isolate,
+            self.context.clone(),
+            dom.state.clone(),
+            self.host.clone(),
+        ));
+        *dom.ctx.script.borrow_mut() = Some(script);
     }
 
     /// Creates the DOM-enabled context: installs `Node`, `Element` and
@@ -203,10 +230,7 @@ impl Engine {
         doc: SharedDocument,
     ) -> (v8::Global<v8::Context>, Option<DomWorld>) {
         let state = Rc::new(RefCell::new(world::WorldState::default()));
-        let ctx = Rc::new(HostContext {
-            doc: doc.clone(),
-            snapshots: RefCell::new(SnapshotSlab::new()),
-        });
+        let ctx = Rc::new(HostContext::new(doc.clone()));
         let document_ref = {
             let doc = doc.borrow();
             doc.node_ref(doc.document_node())
@@ -224,7 +248,14 @@ impl Engine {
         let global_template = v8::ObjectTemplate::new(scope);
         {
             let mut registry = world::SkeletonRegistry::default();
-            // Install interfaces parent-first: Node comes before its subtypes.
+            // Install interfaces parent-first: EventTarget is the root (Node
+            // inherits it), so it must precede Node.
+            tenta_js::bindings::install_event_target::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the EventTarget interface");
             tenta_js::bindings::install_node::<HostObject>(scope, global_template, &mut registry)
                 .expect("install the Node interface");
             tenta_js::bindings::install_character_data::<HostObject>(
@@ -265,6 +296,10 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the HTMLCollection interface");
+            // Event has no DOM parent (its prototype chain roots at Object), so
+            // its install order relative to the node types is free.
+            tenta_js::bindings::install_event::<HostObject>(scope, global_template, &mut registry)
+                .expect("install the Event interface");
         }
 
         let local = v8::Context::new(
@@ -343,6 +378,9 @@ impl Engine {
             (cancel_tx, join)
         });
 
+        // Mark a script activation so a DOM event dispatched from within this
+        // run does not run a microtask checkpoint between listeners.
+        self.host.enter_script();
         let (outcome, terminated) = {
             v8::scope!(let handle_scope, &mut self.isolate);
             let context = v8::Local::new(handle_scope, &self.context);
@@ -354,6 +392,7 @@ impl Engine {
             let outcome = compile_and_run(tc, source);
             (outcome, tc.has_terminated())
         };
+        self.host.exit_script();
 
         if let Some((cancel_tx, join)) = watchdog {
             let _ = cancel_tx.send(());
@@ -481,22 +520,28 @@ impl Engine {
     /// runs. Surfacing the exception to the error console lands with the
     /// reporting work package.
     fn invoke_handler(&mut self, handler: &v8::Global<v8::Function>, timestamp: Option<f64>) {
-        v8::scope!(let handle_scope, &mut self.isolate);
-        let context = v8::Local::new(handle_scope, &self.context);
-        let mut context_scope = v8::ContextScope::new(handle_scope, context);
-        v8::scope!(let scope, &mut context_scope);
-        v8::tc_scope!(let tc, scope);
-        let function = v8::Local::new(tc, handler);
-        let recv: v8::Local<v8::Value> = v8::undefined(tc).into();
-        match timestamp {
-            Some(ms) => {
-                let arg: v8::Local<v8::Value> = v8::Number::new(tc, ms).into();
-                let _ = function.call(tc, recv, &[arg]);
-            }
-            None => {
-                let _ = function.call(tc, recv, &[]);
+        // A timer or animation-frame callback is a script activation too: an
+        // event it dispatches must not checkpoint microtasks between listeners.
+        self.host.enter_script();
+        {
+            v8::scope!(let handle_scope, &mut self.isolate);
+            let context = v8::Local::new(handle_scope, &self.context);
+            let mut context_scope = v8::ContextScope::new(handle_scope, context);
+            v8::scope!(let scope, &mut context_scope);
+            v8::tc_scope!(let tc, scope);
+            let function = v8::Local::new(tc, handler);
+            let recv: v8::Local<v8::Value> = v8::undefined(tc).into();
+            match timestamp {
+                Some(ms) => {
+                    let arg: v8::Local<v8::Value> = v8::Number::new(tc, ms).into();
+                    let _ = function.call(tc, recv, &[arg]);
+                }
+                None => {
+                    let _ = function.call(tc, recv, &[]);
+                }
             }
         }
+        self.host.exit_script();
     }
 }
 
@@ -514,12 +559,27 @@ impl Drop for Engine {
         // reclaimed host. The world is the sole owner of the host boxes, so
         // this drain is the no-leak guarantee (`tests/wrapper_gc.rs`).
         if let Some(dom) = &self.dom {
+            // Drop the script host first: it holds a raw isolate pointer and
+            // clones of the world state, so it must go before the isolate is
+            // disposed and before the world is drained below.
+            dom.ctx.script.borrow_mut().take();
+
             // Clean up any live snapshot wrappers first: their slab entries are
             // held by the context and must be reclaimed.
             let dead_snapshot_bits = dom.state.borrow_mut().take_dead_snapshots();
             for bits in dead_snapshot_bits {
                 let snapshot_key = tenta_js::bindings::host::decode(bits).snapshot_key();
                 dom.ctx.snapshots.borrow_mut().remove(snapshot_key);
+            }
+
+            // Symmetrically reclaim event records for wrappers a finalizer
+            // recorded but that no later `wrapper` call swept: their records are
+            // held by the context's event slab. `clear` below drops the
+            // `dead_events` list, so this final sweep must run before it.
+            let dead_event_bits = dom.state.borrow_mut().take_dead_events();
+            for bits in dead_event_bits {
+                let event_key = tenta_js::bindings::host::decode(bits).event_key();
+                dom.ctx.events.borrow_mut().remove(event_key);
             }
 
             // Clear `HAS_WRAPPER` for every node still wrapped — the ids a

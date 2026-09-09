@@ -14,4 +14,5 @@ use tenta_dom as _;
 use tenta_net as _;
 
 pub mod bindings;
+pub mod dom;
 pub mod event_loop;

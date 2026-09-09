@@ -38,6 +38,12 @@ pub struct HostState {
     pub ready: ReadyQueue,
     /// Animation-frame callbacks whose frame has come and await invocation.
     pub ready_frames: ReadyFrameQueue,
+    /// How many script activations are on the stack. A DOM event dispatched from
+    /// within running script (`el.dispatchEvent(...)`) must not run a microtask
+    /// checkpoint between listeners; one dispatched from native code (a future
+    /// `element.click()` outside script) may. The event dispatcher checks this
+    /// to decide (`docs/spec/05-javascript.md` §5).
+    pub script_depth: std::cell::Cell<u32>,
 }
 
 impl HostState {
@@ -47,7 +53,19 @@ impl HostState {
             scheduler,
             ready: Rc::new(RefCell::new(VecDeque::new())),
             ready_frames: Rc::new(RefCell::new(VecDeque::new())),
+            script_depth: std::cell::Cell::new(0),
         })
+    }
+
+    /// Marks the start of a script activation; pair with [`Self::exit_script`].
+    pub fn enter_script(&self) {
+        self.script_depth.set(self.script_depth.get() + 1);
+    }
+
+    /// Marks the end of a script activation.
+    pub fn exit_script(&self) {
+        self.script_depth
+            .set(self.script_depth.get().saturating_sub(1));
     }
 }
 

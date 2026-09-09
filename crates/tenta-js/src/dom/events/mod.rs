@@ -1,0 +1,654 @@
+//! DOM events: the listener table, event records and the dispatch algorithm.
+//!
+//! This module is engine-independent. It knows nothing about V8 or QuickJS: a
+//! stored JS callback is an opaque [`CallbackRef`] (the `u64` a wrapper world's
+//! `store_value` handed back), and the only way to run one is through the
+//! [`ScriptHost`] the engine installs on the [`HostContext`].
+//!
+//! # Borrow discipline (invariant A5)
+//!
+//! No `RefCell` borrow of the document, the listener table or the event slab is
+//! ever held across a call into script. [`dispatch`] snapshots the propagation
+//! path and each node's listener list, drops every borrow, and only then
+//! invokes a listener. Every operation a listener can re-enter (`stopPropagation`,
+//! `addEventListener`, a nested `dispatchEvent`, a DOM mutation) takes its own
+//! short borrow, so re-entrancy can never alias a live borrow.
+
+use std::collections::HashMap;
+
+use tenta_core::{NodeId, NodeRef};
+
+use crate::bindings::JsError;
+use crate::bindings::host::{HostContext, encode_event, encode_node};
+
+#[cfg(test)]
+mod tests;
+
+// ---------------------------------------------------------------------------
+// Script host boundary
+// ---------------------------------------------------------------------------
+
+/// An opaque reference to a JS value held by the wrapper world: the `u64` bits
+/// that `WrapperWorld::store_value` returned. One stored reference is owned per
+/// [`CallbackRef`]; dropping it means calling [`ScriptHost::release_value`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct CallbackRef(pub u64);
+
+/// The engine's callback boundary. The event dispatcher calls into script only
+/// through this trait, so the dispatch algorithm stays engine-independent and
+/// unit-testable with a recording mock.
+pub trait ScriptHost {
+    /// Invokes the stored callback with `this` set to the wrapper of
+    /// `current_target` and one argument, the wrapper of `event` (both are
+    /// handle bits). A callable value is called directly; a non-callable object
+    /// has its `handleEvent` method invoked with `this` set to the object; any
+    /// other value is ignored. Exceptions are reported and swallowed. A
+    /// microtask checkpoint runs afterwards only when no script is already on
+    /// the stack.
+    ///
+    /// # Preconditions
+    ///
+    /// The caller holds no `RefCell` borrow of the document, listener table or
+    /// event slab (invariant A5).
+    fn invoke_listener(&self, callback: CallbackRef, current_target: u64, event: u64);
+
+    /// Drops one owned reference to a stored value (a callback, or a
+    /// `CustomEvent` detail).
+    fn release_value(&self, bits: u64);
+}
+
+// ---------------------------------------------------------------------------
+// Generational slab
+// ---------------------------------------------------------------------------
+
+/// A key into a [`GenSlab`]: a slot index plus the generation the slot had when
+/// the key was minted. A key whose generation no longer matches its slot is
+/// stale and resolves to `None`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GenKey {
+    /// Index of the slot.
+    pub index: u32,
+    /// Generation the slot held when this key was created.
+    pub generation: u16,
+}
+
+struct GenSlot<T> {
+    generation: u16,
+    value: Option<T>,
+}
+
+/// A slab with free-list slot reuse and per-slot generation counters, so a key
+/// to a freed slot cannot alias the next occupant (until the 16-bit generation
+/// wraps, which matches the node-handle TODO and is accepted for this phase).
+pub struct GenSlab<T> {
+    slots: Vec<GenSlot<T>>,
+    free: Vec<u32>,
+}
+
+impl<T> GenSlab<T> {
+    /// A new empty slab.
+    pub fn new() -> Self {
+        Self {
+            slots: Vec::new(),
+            free: Vec::new(),
+        }
+    }
+
+    /// Inserts a value, reusing a free slot when available, and returns its key.
+    pub fn insert(&mut self, value: T) -> GenKey {
+        if let Some(index) = self.free.pop() {
+            let slot = &mut self.slots[index as usize];
+            slot.value = Some(value);
+            GenKey {
+                index,
+                generation: slot.generation,
+            }
+        } else {
+            let index = self.slots.len() as u32;
+            self.slots.push(GenSlot {
+                generation: 0,
+                value: Some(value),
+            });
+            GenKey {
+                index,
+                generation: 0,
+            }
+        }
+    }
+
+    /// Borrows the value for `key`, or `None` when the key is stale/out of range.
+    pub fn get(&self, key: GenKey) -> Option<&T> {
+        let slot = self.slots.get(key.index as usize)?;
+        if slot.generation != key.generation {
+            return None;
+        }
+        slot.value.as_ref()
+    }
+
+    /// Mutably borrows the value for `key`, or `None` when stale/out of range.
+    pub fn get_mut(&mut self, key: GenKey) -> Option<&mut T> {
+        let slot = self.slots.get_mut(key.index as usize)?;
+        if slot.generation != key.generation {
+            return None;
+        }
+        slot.value.as_mut()
+    }
+
+    /// Frees the slot for `key` (bumping its generation) and returns the value,
+    /// or `None` when the key is already stale.
+    pub fn remove(&mut self, key: GenKey) -> Option<T> {
+        let slot = self.slots.get_mut(key.index as usize)?;
+        if slot.generation != key.generation {
+            return None;
+        }
+        slot.generation = slot.generation.wrapping_add(1);
+        let value = slot.value.take();
+        self.free.push(key.index);
+        value
+    }
+
+    /// The number of live values (test/measurement hook).
+    pub fn len(&self) -> usize {
+        self.slots.len() - self.free.len()
+    }
+
+    /// Whether the slab holds no live values.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl<T> Default for GenSlab<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Event records
+// ---------------------------------------------------------------------------
+
+/// `Event.eventPhase` value: not being dispatched.
+pub const PHASE_NONE: u16 = 0;
+/// `Event.eventPhase` value: capturing phase.
+pub const PHASE_CAPTURING: u16 = 1;
+/// `Event.eventPhase` value: at the target.
+pub const PHASE_AT_TARGET: u16 = 2;
+/// `Event.eventPhase` value: bubbling phase.
+pub const PHASE_BUBBLING: u16 = 3;
+
+/// A key into the per-world [`EventSlab`].
+pub type EventKey = GenKey;
+
+/// The generational slab of live event records for one world.
+pub type EventSlab = GenSlab<EventRecord>;
+
+/// The mutable dispatch flags of an [`EventRecord`], per the DOM standard.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EventFlags {
+    /// The "initialized" flag: set by a constructor or `initEvent`.
+    pub initialized: bool,
+    /// The "dispatch" flag: set while the event is being dispatched.
+    pub dispatch: bool,
+    /// The "stop propagation" flag.
+    pub stop_propagation: bool,
+    /// The "stop immediate propagation" flag.
+    pub stop_immediate: bool,
+    /// The "canceled" flag (set by `preventDefault`).
+    pub canceled: bool,
+    /// The "in passive listener" flag (suppresses `preventDefault`).
+    pub in_passive_listener: bool,
+}
+
+/// The interface-specific payload of an event.
+#[derive(Clone, Debug)]
+pub enum EventKind {
+    /// A plain `Event`.
+    Plain,
+    /// A `CustomEvent`; `detail` is interned value bits (released on reclaim).
+    Custom {
+        /// The `detail` value's handle bits, if any.
+        detail: Option<u64>,
+    },
+    /// A `UIEvent`.
+    Ui {
+        /// The `detail` field.
+        detail: i32,
+    },
+    /// A `MouseEvent`.
+    Mouse {
+        /// `UIEvent.detail`.
+        detail: i32,
+        /// Screen coordinates.
+        screen_x: i32,
+        /// Screen coordinates.
+        screen_y: i32,
+        /// Client coordinates.
+        client_x: i32,
+        /// Client coordinates.
+        client_y: i32,
+        /// Modifier: control.
+        ctrl: bool,
+        /// Modifier: shift.
+        shift: bool,
+        /// Modifier: alt.
+        alt: bool,
+        /// Modifier: meta.
+        meta: bool,
+        /// The button that changed state.
+        button: i16,
+        /// The buttons held down.
+        buttons: u16,
+        /// The related target handle bits, if any.
+        related_target: Option<u64>,
+    },
+}
+
+impl EventKind {
+    /// The most-derived interface name for this event, used to pick the wrapper
+    /// prototype.
+    pub fn interface_name(&self) -> &'static str {
+        match self {
+            EventKind::Plain => "Event",
+            EventKind::Custom { .. } => "CustomEvent",
+            EventKind::Ui { .. } => "UIEvent",
+            EventKind::Mouse { .. } => "MouseEvent",
+        }
+    }
+}
+
+/// One live event object's state. Fields the dispatcher mutates (target,
+/// currentTarget, phase, path, flags) are updated only under a short borrow of
+/// the event slab, never while script runs.
+#[derive(Clone, Debug)]
+pub struct EventRecord {
+    /// The event type (`Event.type`).
+    pub type_: String,
+    /// Whether the event bubbles.
+    pub bubbles: bool,
+    /// Whether the event is cancelable.
+    pub cancelable: bool,
+    /// Whether the event is composed.
+    pub composed: bool,
+    /// Whether the event is trusted (dispatched by the engine, not script).
+    pub is_trusted: bool,
+    /// `Event.timeStamp` (ms since the world's origin).
+    pub time_stamp: f64,
+    /// The target's handle bits, once dispatch begins.
+    pub target: Option<u64>,
+    /// The current target's handle bits during dispatch.
+    pub current_target: Option<u64>,
+    /// The current `eventPhase`.
+    pub phase: u16,
+    /// The propagation path (handle bits), for `composedPath()`.
+    pub path: Vec<u64>,
+    /// The mutable dispatch flags.
+    pub flags: EventFlags,
+    /// Whether a JS wrapper has been created for this record.
+    pub has_wrapper: bool,
+    /// The interface-specific payload.
+    pub kind: EventKind,
+}
+
+impl EventRecord {
+    /// A freshly-created, uninitialized record of the given kind and type.
+    pub fn new(type_: String, kind: EventKind, time_stamp: f64) -> Self {
+        Self {
+            type_,
+            bubbles: false,
+            cancelable: false,
+            composed: false,
+            is_trusted: false,
+            time_stamp,
+            target: None,
+            current_target: None,
+            phase: PHASE_NONE,
+            path: Vec::new(),
+            flags: EventFlags::default(),
+            has_wrapper: false,
+            kind,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Listener table
+// ---------------------------------------------------------------------------
+
+/// A stable identity for one registered listener, so a listener removed while a
+/// snapshot of it is mid-flight is skipped rather than invoked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListenerId(pub u64);
+
+/// One registered event listener.
+#[derive(Clone, Debug)]
+pub struct Listener {
+    /// This listener's stable id.
+    pub id: ListenerId,
+    /// The event type it listens for.
+    pub type_: String,
+    /// The stored JS callback.
+    pub callback: CallbackRef,
+    /// Whether it fires in the capture phase.
+    pub capture: bool,
+    /// Whether it is removed after firing once.
+    pub once: bool,
+    /// Whether it is passive (its `preventDefault` is ignored).
+    pub passive: bool,
+}
+
+#[derive(Default)]
+struct TargetListeners {
+    listeners: Vec<Listener>,
+}
+
+/// The per-target listener lists for one world, keyed by node id.
+#[derive(Default)]
+pub struct ListenerTable {
+    targets: HashMap<NodeId, TargetListeners>,
+    next_id: u64,
+}
+
+impl ListenerTable {
+    /// A new empty table.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds a listener for `target`. Returns the new listener's id, or `None`
+    /// when an identical `(type, callback, capture)` entry already exists (the
+    /// DOM "add an event listener" duplicate rule) — in that case the caller
+    /// must release `callback`.
+    pub fn add(
+        &mut self,
+        target: NodeId,
+        type_: String,
+        callback: CallbackRef,
+        capture: bool,
+        once: bool,
+        passive: bool,
+    ) -> Option<ListenerId> {
+        let entry = self.targets.entry(target).or_default();
+        if entry
+            .listeners
+            .iter()
+            .any(|l| l.type_ == type_ && l.callback == callback && l.capture == capture)
+        {
+            return None;
+        }
+        let id = ListenerId(self.next_id);
+        self.next_id += 1;
+        entry.listeners.push(Listener {
+            id,
+            type_,
+            callback,
+            capture,
+            once,
+            passive,
+        });
+        Some(id)
+    }
+
+    /// Removes the listener matching `(type, callback, capture)` for `target`
+    /// and returns its callback so the caller can release it.
+    pub fn remove(
+        &mut self,
+        target: NodeId,
+        type_: &str,
+        callback: CallbackRef,
+        capture: bool,
+    ) -> Option<CallbackRef> {
+        let entry = self.targets.get_mut(&target)?;
+        let pos = entry
+            .listeners
+            .iter()
+            .position(|l| l.type_ == type_ && l.callback == callback && l.capture == capture)?;
+        let removed = entry.listeners.remove(pos);
+        Some(removed.callback)
+    }
+
+    /// Removes the listener with `id` for `target`, returning its callback.
+    pub fn remove_by_id(&mut self, target: NodeId, id: ListenerId) -> Option<CallbackRef> {
+        let entry = self.targets.get_mut(&target)?;
+        let pos = entry.listeners.iter().position(|l| l.id == id)?;
+        Some(entry.listeners.remove(pos).callback)
+    }
+
+    /// Whether a listener with `id` is still registered for `target`.
+    pub fn contains(&self, target: NodeId, id: ListenerId) -> bool {
+        self.targets
+            .get(&target)
+            .is_some_and(|e| e.listeners.iter().any(|l| l.id == id))
+    }
+
+    /// A snapshot of the `(id, callback, once, passive)` of every listener for
+    /// `target` matching `type_` and `capture`, in registration order.
+    pub fn snapshot(
+        &self,
+        target: NodeId,
+        type_: &str,
+        capture: bool,
+    ) -> Vec<(ListenerId, CallbackRef, bool, bool)> {
+        self.targets
+            .get(&target)
+            .map(|e| {
+                e.listeners
+                    .iter()
+                    .filter(|l| l.type_ == type_ && l.capture == capture)
+                    .map(|l| (l.id, l.callback, l.once, l.passive))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The total number of registered listeners across all targets
+    /// (test/measurement hook).
+    pub fn len(&self) -> usize {
+        self.targets.values().map(|e| e.listeners.len()).sum()
+    }
+
+    /// Whether no listeners are registered.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Removes and returns every callback registered for `target` (used when a
+    /// target is torn down).
+    pub fn drain_target(&mut self, target: NodeId) -> Vec<CallbackRef> {
+        self.targets
+            .remove(&target)
+            .map(|e| e.listeners.into_iter().map(|l| l.callback).collect())
+            .unwrap_or_default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
+
+/// Dispatches the event stored under `key` at `target`, per the DOM standard's
+/// dispatch algorithm (capture, at-target, bubble). `trusted` sets the event's
+/// `isTrusted` flag. Returns `Ok(!canceled)` — i.e. `false` when a listener
+/// called `preventDefault` on a cancelable event.
+///
+/// Throws `InvalidStateError` when the event is uninitialized or already being
+/// dispatched (a nested dispatch of the same event).
+pub fn dispatch(
+    ctx: &HostContext,
+    target: NodeRef,
+    key: EventKey,
+    trusted: bool,
+) -> Result<bool, JsError> {
+    // Step 1: validate + set up, under a short borrow of the event slab.
+    let type_ = {
+        let mut events = ctx.events.borrow_mut();
+        let record = events
+            .get_mut(key)
+            .ok_or_else(|| invalid_state("the event has been reclaimed"))?;
+        if !record.flags.initialized || record.flags.dispatch {
+            return Err(invalid_state(
+                "the event is uninitialized or already being dispatched",
+            ));
+        }
+        record.flags.dispatch = true;
+        record.is_trusted = trusted;
+        record.target = Some(encode_node(target));
+        record.flags.stop_propagation = false;
+        record.flags.stop_immediate = false;
+        record.type_.clone()
+    };
+
+    // Step 2: build the propagation path under a short borrow of the document.
+    let path: Vec<NodeRef> = {
+        let doc = ctx.doc.borrow();
+        let mut path = Vec::new();
+        path.push(target);
+        for ancestor in doc.ancestors(target.id) {
+            path.push(doc.node_ref(ancestor));
+        }
+        path
+    };
+    let bubbles = {
+        let mut events = ctx.events.borrow_mut();
+        if let Some(record) = events.get_mut(key) {
+            record.path = path.iter().map(|n| encode_node(*n)).collect();
+            record.bubbles
+        } else {
+            false
+        }
+    };
+
+    let event_bits = encode_event(key);
+    let script = ctx.script.borrow().clone();
+
+    if let Some(script) = script {
+        // Step 4: capture pass, from the root down to and including the target.
+        for node in path.iter().rev() {
+            let phase = if node.id == target.id {
+                PHASE_AT_TARGET
+            } else {
+                PHASE_CAPTURING
+            };
+            let stop = invoke_listeners(ctx, &*script, *node, &type_, phase, true, key, event_bits);
+            if stop {
+                break;
+            }
+        }
+
+        // Step 5: bubble pass, from the target up to the root (ancestors only
+        // when the event bubbles).
+        if !propagation_stopped(ctx, key) {
+            for (index, node) in path.iter().enumerate() {
+                if index > 0 && !bubbles {
+                    break;
+                }
+                let phase = if node.id == target.id {
+                    PHASE_AT_TARGET
+                } else {
+                    PHASE_BUBBLING
+                };
+                let stop =
+                    invoke_listeners(ctx, &*script, *node, &type_, phase, false, key, event_bits);
+                if stop {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Step 6: clear the transient dispatch state and report the result.
+    let mut events = ctx.events.borrow_mut();
+    if let Some(record) = events.get_mut(key) {
+        record.phase = PHASE_NONE;
+        record.current_target = None;
+        record.flags.dispatch = false;
+        record.flags.stop_propagation = false;
+        record.flags.stop_immediate = false;
+        record.path.clear();
+        Ok(!record.flags.canceled)
+    } else {
+        Ok(true)
+    }
+}
+
+/// Runs the listeners registered on `node` for `(type_, capture)`, in order,
+/// honouring `once`/`passive`/removal-during-dispatch and
+/// `stopImmediatePropagation`. Returns whether the "stop propagation" flag is
+/// set afterwards.
+#[allow(clippy::too_many_arguments)]
+fn invoke_listeners(
+    ctx: &HostContext,
+    script: &dyn ScriptHost,
+    node: NodeRef,
+    type_: &str,
+    phase: u16,
+    capture: bool,
+    key: EventKey,
+    event_bits: u64,
+) -> bool {
+    let snapshot = ctx.listeners.borrow().snapshot(node.id, type_, capture);
+    if snapshot.is_empty() {
+        return propagation_stopped(ctx, key);
+    }
+
+    {
+        let mut events = ctx.events.borrow_mut();
+        if let Some(record) = events.get_mut(key) {
+            record.current_target = Some(encode_node(node));
+            record.phase = phase;
+        }
+    }
+
+    let current_target_bits = encode_node(node);
+    for (id, callback, once, passive) in snapshot {
+        // Skip a listener removed by an earlier listener in this dispatch.
+        if !ctx.listeners.borrow().contains(node.id, id) {
+            continue;
+        }
+        if once {
+            ctx.listeners.borrow_mut().remove_by_id(node.id, id);
+        }
+        if passive {
+            set_passive(ctx, key, true);
+        }
+
+        // No borrow is held across the call into script.
+        script.invoke_listener(callback, current_target_bits, event_bits);
+
+        if passive {
+            set_passive(ctx, key, false);
+        }
+        if once {
+            script.release_value(callback.0);
+        }
+        if immediate_stopped(ctx, key) {
+            break;
+        }
+    }
+
+    propagation_stopped(ctx, key)
+}
+
+fn set_passive(ctx: &HostContext, key: EventKey, value: bool) {
+    if let Some(record) = ctx.events.borrow_mut().get_mut(key) {
+        record.flags.in_passive_listener = value;
+    }
+}
+
+fn propagation_stopped(ctx: &HostContext, key: EventKey) -> bool {
+    ctx.events
+        .borrow()
+        .get(key)
+        .is_some_and(|r| r.flags.stop_propagation)
+}
+
+fn immediate_stopped(ctx: &HostContext, key: EventKey) -> bool {
+    ctx.events
+        .borrow()
+        .get(key)
+        .is_some_and(|r| r.flags.stop_immediate)
+}
+
+fn invalid_state(message: &str) -> JsError {
+    JsError::dom_exception("InvalidStateError", message)
+}
