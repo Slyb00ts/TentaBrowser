@@ -37,7 +37,7 @@
 ///   to_rust_string_lossy, is_null_or_undefined}` (through the prelude)
 /// - `v8::Exception::{type_error, range_error, syntax_error}` and
 ///   `PinScope::throw_exception` (through the prelude)
-pub fn install_node<T: NodeOps + EventTargetOps + 'static>(
+pub fn install_node<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'_, '_>,
     global_template: v8::Local<'_, v8::ObjectTemplate>,
     registry: &mut dyn InterfaceRegistry,
@@ -611,7 +611,7 @@ pub fn install_node<T: NodeOps + EventTargetOps + 'static>(
 
 /// `Node` declares no `constructor`, so calling it throws, as WebIDL
 /// requires for an interface without a constructor operation.
-fn construct_node<'s, T: NodeOps + EventTargetOps + 'static>(
+fn construct_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -620,7 +620,7 @@ fn construct_node<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.nodeType`.
-fn get_node_node_type<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_node_type<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -640,7 +640,7 @@ fn get_node_node_type<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Fast-API getter for `Node.nodeType`.
-extern "C" fn fast_get_node_node_type<T: NodeOps + EventTargetOps + 'static>(
+extern "C" fn fast_get_node_node_type<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
 ) -> u32 {
     // SAFETY: the fast callback is only reachable through a template that
@@ -652,9 +652,9 @@ extern "C" fn fast_get_node_node_type<T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Fast-call table for the `Node.nodeType` getter.
-struct NodeNodeTypeGetter<T: NodeOps + EventTargetOps + 'static>(core::marker::PhantomData<T>);
+struct NodeNodeTypeGetter<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(core::marker::PhantomData<T>);
 
-impl<T: NodeOps + EventTargetOps + 'static> NodeNodeTypeGetter<T> {
+impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeNodeTypeGetter<T> {
     const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
         fast_get_node_node_type::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
@@ -666,7 +666,7 @@ impl<T: NodeOps + EventTargetOps + 'static> NodeNodeTypeGetter<T> {
 }
 
 /// Getter for `Node.nodeName`.
-fn get_node_node_name<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_node_name<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -696,7 +696,7 @@ fn get_node_node_name<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.baseURI`.
-fn get_node_base_uri<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_base_uri<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -726,7 +726,7 @@ fn get_node_base_uri<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.isConnected`.
-fn get_node_is_connected<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_is_connected<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -746,7 +746,7 @@ fn get_node_is_connected<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Fast-API getter for `Node.isConnected`.
-extern "C" fn fast_get_node_is_connected<T: NodeOps + EventTargetOps + 'static>(
+extern "C" fn fast_get_node_is_connected<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
 ) -> bool {
     // SAFETY: the fast callback is only reachable through a template that
@@ -758,9 +758,9 @@ extern "C" fn fast_get_node_is_connected<T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Fast-call table for the `Node.isConnected` getter.
-struct NodeIsConnectedGetter<T: NodeOps + EventTargetOps + 'static>(core::marker::PhantomData<T>);
+struct NodeIsConnectedGetter<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(core::marker::PhantomData<T>);
 
-impl<T: NodeOps + EventTargetOps + 'static> NodeIsConnectedGetter<T> {
+impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeIsConnectedGetter<T> {
     const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
         fast_get_node_is_connected::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
@@ -772,7 +772,7 @@ impl<T: NodeOps + EventTargetOps + 'static> NodeIsConnectedGetter<T> {
 }
 
 /// Getter for `Node.ownerDocument`.
-fn get_node_owner_document<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_owner_document<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -802,7 +802,7 @@ fn get_node_owner_document<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.getRootNode`.
-fn call_node_get_root_node<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_get_root_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -844,7 +844,7 @@ fn call_node_get_root_node<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.parentNode`.
-fn get_node_parent_node<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_parent_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -874,7 +874,7 @@ fn get_node_parent_node<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.parentElement`.
-fn get_node_parent_element<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_parent_element<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -904,7 +904,7 @@ fn get_node_parent_element<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.hasChildNodes`.
-fn call_node_has_child_nodes<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_has_child_nodes<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -924,7 +924,7 @@ fn call_node_has_child_nodes<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Fast-API callback for `Node.hasChildNodes`.
-extern "C" fn fast_call_node_has_child_nodes<T: NodeOps + EventTargetOps + 'static>(
+extern "C" fn fast_call_node_has_child_nodes<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
 ) -> bool {
     // SAFETY: the fast callback is only reachable through a template that
@@ -936,9 +936,9 @@ extern "C" fn fast_call_node_has_child_nodes<T: NodeOps + EventTargetOps + 'stat
 }
 
 /// Fast-call table for `Node.hasChildNodes`.
-struct NodeHasChildNodesMethod<T: NodeOps + EventTargetOps + 'static>(core::marker::PhantomData<T>);
+struct NodeHasChildNodesMethod<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(core::marker::PhantomData<T>);
 
-impl<T: NodeOps + EventTargetOps + 'static> NodeHasChildNodesMethod<T> {
+impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeHasChildNodesMethod<T> {
     const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
         fast_call_node_has_child_nodes::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
@@ -952,7 +952,7 @@ impl<T: NodeOps + EventTargetOps + 'static> NodeHasChildNodesMethod<T> {
 }
 
 /// Getter for `Node.childNodes`.
-fn get_node_child_nodes<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_child_nodes<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -982,7 +982,7 @@ fn get_node_child_nodes<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.firstChild`.
-fn get_node_first_child<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_first_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1012,7 +1012,7 @@ fn get_node_first_child<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.lastChild`.
-fn get_node_last_child<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_last_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1042,7 +1042,7 @@ fn get_node_last_child<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.previousSibling`.
-fn get_node_previous_sibling<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_previous_sibling<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1072,7 +1072,7 @@ fn get_node_previous_sibling<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.nextSibling`.
-fn get_node_next_sibling<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_next_sibling<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1102,7 +1102,7 @@ fn get_node_next_sibling<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.nodeValue`.
-fn get_node_node_value<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_node_value<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1132,7 +1132,7 @@ fn get_node_node_value<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Setter for `Node.nodeValue`.
-fn set_node_node_value<'s, T: NodeOps + EventTargetOps + 'static>(
+fn set_node_node_value<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -1162,7 +1162,7 @@ fn set_node_node_value<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.textContent`.
-fn get_node_text_content<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_text_content<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1192,7 +1192,7 @@ fn get_node_text_content<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Setter for `Node.textContent`.
-fn set_node_text_content<'s, T: NodeOps + EventTargetOps + 'static>(
+fn set_node_text_content<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -1222,7 +1222,7 @@ fn set_node_text_content<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.normalize`.
-fn call_node_normalize<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_normalize<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1243,7 +1243,7 @@ fn call_node_normalize<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Fast-API callback for `Node.normalize`.
-extern "C" fn fast_call_node_normalize<T: NodeOps + EventTargetOps + 'static>(
+extern "C" fn fast_call_node_normalize<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
 ) {
     // SAFETY: the fast callback is only reachable through a template that
@@ -1255,9 +1255,9 @@ extern "C" fn fast_call_node_normalize<T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Fast-call table for `Node.normalize`.
-struct NodeNormalizeMethod<T: NodeOps + EventTargetOps + 'static>(core::marker::PhantomData<T>);
+struct NodeNormalizeMethod<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(core::marker::PhantomData<T>);
 
-impl<T: NodeOps + EventTargetOps + 'static> NodeNormalizeMethod<T> {
+impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeNormalizeMethod<T> {
     const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
         fast_call_node_normalize::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
@@ -1271,7 +1271,7 @@ impl<T: NodeOps + EventTargetOps + 'static> NodeNormalizeMethod<T> {
 }
 
 /// `Node.cloneNode`.
-fn call_node_clone_node<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_clone_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1313,7 +1313,7 @@ fn call_node_clone_node<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.isEqualNode`.
-fn call_node_is_equal_node<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_is_equal_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1360,7 +1360,7 @@ fn call_node_is_equal_node<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.isSameNode`.
-fn call_node_is_same_node<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_is_same_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1407,7 +1407,7 @@ fn call_node_is_same_node<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.compareDocumentPosition`.
-fn call_node_compare_document_position<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_compare_document_position<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1454,7 +1454,7 @@ fn call_node_compare_document_position<'s, T: NodeOps + EventTargetOps + 'static
 }
 
 /// `Node.contains`.
-fn call_node_contains<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_contains<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1501,7 +1501,7 @@ fn call_node_contains<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.lookupPrefix`.
-fn call_node_lookup_prefix<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_lookup_prefix<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1548,7 +1548,7 @@ fn call_node_lookup_prefix<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.lookupNamespaceURI`.
-fn call_node_lookup_namespace_uri<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_lookup_namespace_uri<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1595,7 +1595,7 @@ fn call_node_lookup_namespace_uri<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.isDefaultNamespace`.
-fn call_node_is_default_namespace<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_is_default_namespace<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1642,7 +1642,7 @@ fn call_node_is_default_namespace<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.insertBefore`.
-fn call_node_insert_before<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_insert_before<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1699,7 +1699,7 @@ fn call_node_insert_before<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.appendChild`.
-fn call_node_append_child<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_append_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1746,7 +1746,7 @@ fn call_node_append_child<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.replaceChild`.
-fn call_node_replace_child<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_replace_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1803,7 +1803,7 @@ fn call_node_replace_child<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.removeChild`.
-fn call_node_remove_child<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_remove_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1851,7 +1851,7 @@ fn call_node_remove_child<'s, T: NodeOps + EventTargetOps + 'static>(
 
 /// Overload dispatcher for `Node.scroll`; WebIDL selects an overload by
 /// argument count first.
-fn call_node_scroll<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_scroll<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<v8::Value>,
@@ -1867,7 +1867,7 @@ fn call_node_scroll<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.scroll`.
-fn call_node_scroll_1<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_scroll_1<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1907,7 +1907,7 @@ fn call_node_scroll_1<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.scroll`.
-fn call_node_scroll_2<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_scroll_2<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1955,7 +1955,7 @@ fn call_node_scroll_2<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.scrollTop`.
-fn get_node_scroll_top<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_scroll_top<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1975,7 +1975,7 @@ fn get_node_scroll_top<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Fast-API getter for `Node.scrollTop`.
-extern "C" fn fast_get_node_scroll_top<T: NodeOps + EventTargetOps + 'static>(
+extern "C" fn fast_get_node_scroll_top<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
 ) -> f64 {
     // SAFETY: the fast callback is only reachable through a template that
@@ -1987,9 +1987,9 @@ extern "C" fn fast_get_node_scroll_top<T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Fast-call table for the `Node.scrollTop` getter.
-struct NodeScrollTopGetter<T: NodeOps + EventTargetOps + 'static>(core::marker::PhantomData<T>);
+struct NodeScrollTopGetter<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(core::marker::PhantomData<T>);
 
-impl<T: NodeOps + EventTargetOps + 'static> NodeScrollTopGetter<T> {
+impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeScrollTopGetter<T> {
     const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
         fast_get_node_scroll_top::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
@@ -2001,7 +2001,7 @@ impl<T: NodeOps + EventTargetOps + 'static> NodeScrollTopGetter<T> {
 }
 
 /// Fast-API setter for `Node.scrollTop`.
-extern "C" fn fast_set_node_scroll_top<T: NodeOps + EventTargetOps + 'static>(
+extern "C" fn fast_set_node_scroll_top<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
     value: f64,
 ) {
@@ -2012,9 +2012,9 @@ extern "C" fn fast_set_node_scroll_top<T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Fast-call table for the `Node.scrollTop` setter.
-struct NodeScrollTopSetter<T: NodeOps + EventTargetOps + 'static>(core::marker::PhantomData<T>);
+struct NodeScrollTopSetter<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(core::marker::PhantomData<T>);
 
-impl<T: NodeOps + EventTargetOps + 'static> NodeScrollTopSetter<T> {
+impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeScrollTopSetter<T> {
     const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
         fast_set_node_scroll_top::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
@@ -2029,7 +2029,7 @@ impl<T: NodeOps + EventTargetOps + 'static> NodeScrollTopSetter<T> {
 }
 
 /// Setter for `Node.scrollTop`.
-fn set_node_scroll_top<'s, T: NodeOps + EventTargetOps + 'static>(
+fn set_node_scroll_top<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -2057,7 +2057,7 @@ fn set_node_scroll_top<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.classList`.
-fn get_node_class_list<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_class_list<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2088,7 +2088,7 @@ fn get_node_class_list<'s, T: NodeOps + EventTargetOps + 'static>(
 
 /// `[PutForwards=value]` setter for `Node.classList`: forwards the assignment
 /// to the `value` property of the object the getter returns.
-fn set_node_class_list<'s, T: NodeOps + EventTargetOps + 'static>(
+fn set_node_class_list<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -2123,7 +2123,7 @@ fn set_node_class_list<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.depth`.
-fn get_node_depth<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_depth<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2143,7 +2143,7 @@ fn get_node_depth<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Fast-API getter for `Node.depth`.
-extern "C" fn fast_get_node_depth<T: NodeOps + EventTargetOps + 'static>(
+extern "C" fn fast_get_node_depth<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
 ) -> u32 {
     // SAFETY: the fast callback is only reachable through a template that
@@ -2155,9 +2155,9 @@ extern "C" fn fast_get_node_depth<T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Fast-call table for the `Node.depth` getter.
-struct NodeDepthGetter<T: NodeOps + EventTargetOps + 'static>(core::marker::PhantomData<T>);
+struct NodeDepthGetter<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(core::marker::PhantomData<T>);
 
-impl<T: NodeOps + EventTargetOps + 'static> NodeDepthGetter<T> {
+impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeDepthGetter<T> {
     const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
         fast_get_node_depth::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
@@ -2170,7 +2170,7 @@ impl<T: NodeOps + EventTargetOps + 'static> NodeDepthGetter<T> {
 
 /// `[Replaceable]` setter for `Node.depth`: defines an own data property
 /// on the receiver, shadowing the accessor.
-fn set_node_depth<'s, T: NodeOps + EventTargetOps + 'static>(
+fn set_node_depth<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -2190,7 +2190,7 @@ fn set_node_depth<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.toString`.
-fn call_node_to_string<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_to_string<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2220,7 +2220,7 @@ fn call_node_to_string<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.setOpacity`.
-fn call_node_set_opacity<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_set_opacity<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2258,7 +2258,7 @@ fn call_node_set_opacity<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Fast-API callback for `Node.setOpacity`.
-extern "C" fn fast_call_node_set_opacity<T: NodeOps + EventTargetOps + 'static>(
+extern "C" fn fast_call_node_set_opacity<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
     alpha: u32,
 ) {
@@ -2271,9 +2271,9 @@ extern "C" fn fast_call_node_set_opacity<T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Fast-call table for `Node.setOpacity`.
-struct NodeSetOpacityMethod<T: NodeOps + EventTargetOps + 'static>(core::marker::PhantomData<T>);
+struct NodeSetOpacityMethod<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(core::marker::PhantomData<T>);
 
-impl<T: NodeOps + EventTargetOps + 'static> NodeSetOpacityMethod<T> {
+impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeSetOpacityMethod<T> {
     const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
         fast_call_node_set_opacity::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
@@ -2288,7 +2288,7 @@ impl<T: NodeOps + EventTargetOps + 'static> NodeSetOpacityMethod<T> {
 }
 
 /// `Node.attributeMap`.
-fn call_node_attribute_map<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_attribute_map<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2318,7 +2318,7 @@ fn call_node_attribute_map<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.requestFullscreen`.
-fn call_node_request_fullscreen<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_request_fullscreen<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2348,7 +2348,7 @@ fn call_node_request_fullscreen<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.children`.
-fn get_node_children<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_children<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2378,7 +2378,7 @@ fn get_node_children<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.firstElementChild`.
-fn get_node_first_element_child<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_first_element_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2408,7 +2408,7 @@ fn get_node_first_element_child<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.lastElementChild`.
-fn get_node_last_element_child<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_last_element_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2438,7 +2438,7 @@ fn get_node_last_element_child<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `Node.childElementCount`.
-fn get_node_child_element_count<'s, T: NodeOps + EventTargetOps + 'static>(
+fn get_node_child_element_count<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2458,7 +2458,7 @@ fn get_node_child_element_count<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// Fast-API getter for `Node.childElementCount`.
-extern "C" fn fast_get_node_child_element_count<T: NodeOps + EventTargetOps + 'static>(
+extern "C" fn fast_get_node_child_element_count<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
 ) -> u32 {
     // SAFETY: the fast callback is only reachable through a template that
@@ -2470,9 +2470,9 @@ extern "C" fn fast_get_node_child_element_count<T: NodeOps + EventTargetOps + 's
 }
 
 /// Fast-call table for the `Node.childElementCount` getter.
-struct NodeChildElementCountGetter<T: NodeOps + EventTargetOps + 'static>(core::marker::PhantomData<T>);
+struct NodeChildElementCountGetter<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(core::marker::PhantomData<T>);
 
-impl<T: NodeOps + EventTargetOps + 'static> NodeChildElementCountGetter<T> {
+impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeChildElementCountGetter<T> {
     const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
         fast_get_node_child_element_count::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
@@ -2484,7 +2484,7 @@ impl<T: NodeOps + EventTargetOps + 'static> NodeChildElementCountGetter<T> {
 }
 
 /// `Node.prepend`.
-fn call_node_prepend<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_prepend<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2523,7 +2523,7 @@ fn call_node_prepend<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.append`.
-fn call_node_append<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_append<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2562,7 +2562,7 @@ fn call_node_append<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.replaceChildren`.
-fn call_node_replace_children<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_replace_children<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2601,7 +2601,7 @@ fn call_node_replace_children<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.querySelector`.
-fn call_node_query_selector<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_query_selector<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2648,7 +2648,7 @@ fn call_node_query_selector<'s, T: NodeOps + EventTargetOps + 'static>(
 }
 
 /// `Node.querySelectorAll`.
-fn call_node_query_selector_all<'s, T: NodeOps + EventTargetOps + 'static>(
+fn call_node_query_selector_all<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,

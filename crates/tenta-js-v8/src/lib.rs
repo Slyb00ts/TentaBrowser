@@ -278,6 +278,15 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the Element interface");
+            // HTMLElement's prototype chain roots at Element, so it installs
+            // after Element and before Document (HTML-namespace elements get
+            // the HTMLElement prototype; see world.rs interface selection).
+            tenta_js::bindings::install_html_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLElement interface");
             tenta_js::bindings::install_document::<HostObject>(
                 scope,
                 global_template,
@@ -307,6 +316,19 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the CustomEvent interface");
+            // UIEvent : Event, then MouseEvent : UIEvent (parent-first).
+            tenta_js::bindings::install_ui_event::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the UIEvent interface");
+            tenta_js::bindings::install_mouse_event::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the MouseEvent interface");
         }
 
         let local = v8::Context::new(

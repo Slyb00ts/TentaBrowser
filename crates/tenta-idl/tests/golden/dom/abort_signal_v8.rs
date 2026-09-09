@@ -37,7 +37,7 @@
 ///   to_rust_string_lossy, is_null_or_undefined}` (through the prelude)
 /// - `v8::Exception::{type_error, range_error, syntax_error}` and
 ///   `PinScope::throw_exception` (through the prelude)
-pub fn install_abort_signal<T: AbortSignalOps + EventTargetOps + 'static>(
+pub fn install_abort_signal<T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'_, '_>,
     global_template: v8::Local<'_, v8::ObjectTemplate>,
     registry: &mut dyn InterfaceRegistry,
@@ -130,7 +130,7 @@ pub fn install_abort_signal<T: AbortSignalOps + EventTargetOps + 'static>(
 
 /// `AbortSignal` declares no `constructor`, so calling it throws, as WebIDL
 /// requires for an interface without a constructor operation.
-fn construct_abort_signal<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+fn construct_abort_signal<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -139,7 +139,7 @@ fn construct_abort_signal<'s, T: AbortSignalOps + EventTargetOps + 'static>(
 }
 
 /// `AbortSignal.abort`.
-fn call_abort_signal_abort<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+fn call_abort_signal_abort<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -170,7 +170,7 @@ fn call_abort_signal_abort<'s, T: AbortSignalOps + EventTargetOps + 'static>(
 }
 
 /// `AbortSignal.timeout`.
-fn call_abort_signal_timeout<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+fn call_abort_signal_timeout<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -206,7 +206,7 @@ fn call_abort_signal_timeout<'s, T: AbortSignalOps + EventTargetOps + 'static>(
 }
 
 /// `AbortSignal.any`.
-fn call_abort_signal_any<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+fn call_abort_signal_any<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -242,7 +242,7 @@ fn call_abort_signal_any<'s, T: AbortSignalOps + EventTargetOps + 'static>(
 }
 
 /// Getter for `AbortSignal.aborted`.
-fn get_abort_signal_aborted<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+fn get_abort_signal_aborted<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -262,7 +262,7 @@ fn get_abort_signal_aborted<'s, T: AbortSignalOps + EventTargetOps + 'static>(
 }
 
 /// Fast-API getter for `AbortSignal.aborted`.
-extern "C" fn fast_get_abort_signal_aborted<T: AbortSignalOps + EventTargetOps + 'static>(
+extern "C" fn fast_get_abort_signal_aborted<T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
 ) -> bool {
     // SAFETY: the fast callback is only reachable through a template that
@@ -274,9 +274,9 @@ extern "C" fn fast_get_abort_signal_aborted<T: AbortSignalOps + EventTargetOps +
 }
 
 /// Fast-call table for the `AbortSignal.aborted` getter.
-struct AbortSignalAbortedGetter<T: AbortSignalOps + EventTargetOps + 'static>(core::marker::PhantomData<T>);
+struct AbortSignalAbortedGetter<T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(core::marker::PhantomData<T>);
 
-impl<T: AbortSignalOps + EventTargetOps + 'static> AbortSignalAbortedGetter<T> {
+impl<T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static> AbortSignalAbortedGetter<T> {
     const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
         fast_get_abort_signal_aborted::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
@@ -288,7 +288,7 @@ impl<T: AbortSignalOps + EventTargetOps + 'static> AbortSignalAbortedGetter<T> {
 }
 
 /// Getter for `AbortSignal.reason`.
-fn get_abort_signal_reason<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+fn get_abort_signal_reason<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -318,7 +318,7 @@ fn get_abort_signal_reason<'s, T: AbortSignalOps + EventTargetOps + 'static>(
 }
 
 /// `AbortSignal.throwIfAborted`.
-fn call_abort_signal_throw_if_aborted<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+fn call_abort_signal_throw_if_aborted<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -339,7 +339,7 @@ fn call_abort_signal_throw_if_aborted<'s, T: AbortSignalOps + EventTargetOps + '
 }
 
 /// Fast-API callback for `AbortSignal.throwIfAborted`.
-extern "C" fn fast_call_abort_signal_throw_if_aborted<T: AbortSignalOps + EventTargetOps + 'static>(
+extern "C" fn fast_call_abort_signal_throw_if_aborted<T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
 ) {
     // SAFETY: the fast callback is only reachable through a template that
@@ -351,9 +351,9 @@ extern "C" fn fast_call_abort_signal_throw_if_aborted<T: AbortSignalOps + EventT
 }
 
 /// Fast-call table for `AbortSignal.throwIfAborted`.
-struct AbortSignalThrowIfAbortedMethod<T: AbortSignalOps + EventTargetOps + 'static>(core::marker::PhantomData<T>);
+struct AbortSignalThrowIfAbortedMethod<T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(core::marker::PhantomData<T>);
 
-impl<T: AbortSignalOps + EventTargetOps + 'static> AbortSignalThrowIfAbortedMethod<T> {
+impl<T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static> AbortSignalThrowIfAbortedMethod<T> {
     const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
         fast_call_abort_signal_throw_if_aborted::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
@@ -367,7 +367,7 @@ impl<T: AbortSignalOps + EventTargetOps + 'static> AbortSignalThrowIfAbortedMeth
 }
 
 /// Getter for `AbortSignal.onabort`.
-fn get_abort_signal_onabort<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+fn get_abort_signal_onabort<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -397,7 +397,7 @@ fn get_abort_signal_onabort<'s, T: AbortSignalOps + EventTargetOps + 'static>(
 }
 
 /// Setter for `AbortSignal.onabort`.
-fn set_abort_signal_onabort<'s, T: AbortSignalOps + EventTargetOps + 'static>(
+fn set_abort_signal_onabort<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,

@@ -137,3 +137,11 @@ interface NodeList {
   readonly attribute unsigned long length;
   getter Node? item(unsigned long index);
 };
+
+// Phase 3d: HTMLElement — the interface HTML-namespace element wrappers get.
+// `click()` is [Throws] so it takes the fallible (non-fast-API) path and may
+// reenter JS to dispatch a synthetic, untrusted `click` MouseEvent.
+[Exposed=Window]
+interface HTMLElement : Element {
+  [Throws] undefined click();
+};

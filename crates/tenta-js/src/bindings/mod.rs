@@ -31,6 +31,10 @@
 // uniformity across member types; for a `Copy` member (a `boolean` or an `any`)
 // clippy reads the clone as redundant.
 #![allow(clippy::clone_on_copy)]
+// A nullable member wrapped in an optional (`Option<Option<T>>`: present, then
+// nullable) serializes through a uniform outer/inner `match`; clippy reads the
+// inner `match` as collapsible into the outer one.
+#![allow(clippy::collapsible_match)]
 
 include!(concat!(env!("OUT_DIR"), "/prelude.rs"));
 include!(concat!(env!("OUT_DIR"), "/types.rs"));
@@ -38,6 +42,9 @@ include!(concat!(env!("OUT_DIR"), "/types.rs"));
 include!(concat!(env!("OUT_DIR"), "/character_data_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/custom_event_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/ui_event_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/mouse_event_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_target_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/comment_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/document_ops.rs"));
@@ -50,6 +57,9 @@ include!(concat!(env!("OUT_DIR"), "/text_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/character_data_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/custom_event_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/ui_event_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/mouse_event_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_target_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/comment_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/document_register.rs"));
@@ -65,6 +75,12 @@ include!(concat!(env!("OUT_DIR"), "/character_data_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/custom_event_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/ui_event_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/mouse_event_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_element_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/event_target_v8.rs"));
 #[cfg(feature = "v8")]

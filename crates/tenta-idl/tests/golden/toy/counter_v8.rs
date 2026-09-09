@@ -175,7 +175,7 @@ fn construct_counter<'s, T: CounterOps + CounterConstructor + 'static>(
             return;
         }
     };
-    match T::construct(&realm, options) {
+    match <T as CounterConstructor>::construct(&realm, options) {
         Ok(host) => {
             let this = args.this();
             if let Err(error) = adopt_host(scope, "Counter", this, host) {

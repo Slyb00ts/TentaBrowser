@@ -37,7 +37,7 @@
 ///   to_rust_string_lossy, is_null_or_undefined}` (through the prelude)
 /// - `v8::Exception::{type_error, range_error, syntax_error}` and
 ///   `PinScope::throw_exception` (through the prelude)
-pub fn install_timed_counter<T: TimedCounterOps + CounterOps + 'static>(
+pub fn install_timed_counter<T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'_, '_>,
     global_template: v8::Local<'_, v8::ObjectTemplate>,
     registry: &mut dyn InterfaceRegistry,
@@ -99,7 +99,7 @@ pub fn install_timed_counter<T: TimedCounterOps + CounterOps + 'static>(
 
 /// `TimedCounter` declares no `constructor`, so calling it throws, as WebIDL
 /// requires for an interface without a constructor operation.
-fn construct_timed_counter<'s, T: TimedCounterOps + CounterOps + 'static>(
+fn construct_timed_counter<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -108,7 +108,7 @@ fn construct_timed_counter<'s, T: TimedCounterOps + CounterOps + 'static>(
 }
 
 /// Getter for `TimedCounter.interval`.
-fn get_timed_counter_interval<'s, T: TimedCounterOps + CounterOps + 'static>(
+fn get_timed_counter_interval<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -128,7 +128,7 @@ fn get_timed_counter_interval<'s, T: TimedCounterOps + CounterOps + 'static>(
 }
 
 /// Fast-API getter for `TimedCounter.interval`.
-extern "C" fn fast_get_timed_counter_interval<T: TimedCounterOps + CounterOps + 'static>(
+extern "C" fn fast_get_timed_counter_interval<T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
 ) -> u32 {
     // SAFETY: the fast callback is only reachable through a template that
@@ -140,9 +140,9 @@ extern "C" fn fast_get_timed_counter_interval<T: TimedCounterOps + CounterOps + 
 }
 
 /// Fast-call table for the `TimedCounter.interval` getter.
-struct TimedCounterIntervalGetter<T: TimedCounterOps + CounterOps + 'static>(core::marker::PhantomData<T>);
+struct TimedCounterIntervalGetter<T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(core::marker::PhantomData<T>);
 
-impl<T: TimedCounterOps + CounterOps + 'static> TimedCounterIntervalGetter<T> {
+impl<T: TimedCounterOps + CounterOps + CounterConstructor + 'static> TimedCounterIntervalGetter<T> {
     const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
         fast_get_timed_counter_interval::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
@@ -154,7 +154,7 @@ impl<T: TimedCounterOps + CounterOps + 'static> TimedCounterIntervalGetter<T> {
 }
 
 /// Fast-API setter for `TimedCounter.interval`.
-extern "C" fn fast_set_timed_counter_interval<T: TimedCounterOps + CounterOps + 'static>(
+extern "C" fn fast_set_timed_counter_interval<T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
     value: u32,
 ) {
@@ -165,9 +165,9 @@ extern "C" fn fast_set_timed_counter_interval<T: TimedCounterOps + CounterOps + 
 }
 
 /// Fast-call table for the `TimedCounter.interval` setter.
-struct TimedCounterIntervalSetter<T: TimedCounterOps + CounterOps + 'static>(core::marker::PhantomData<T>);
+struct TimedCounterIntervalSetter<T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(core::marker::PhantomData<T>);
 
-impl<T: TimedCounterOps + CounterOps + 'static> TimedCounterIntervalSetter<T> {
+impl<T: TimedCounterOps + CounterOps + CounterConstructor + 'static> TimedCounterIntervalSetter<T> {
     const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
         fast_set_timed_counter_interval::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
@@ -182,7 +182,7 @@ impl<T: TimedCounterOps + CounterOps + 'static> TimedCounterIntervalSetter<T> {
 }
 
 /// Setter for `TimedCounter.interval`.
-fn set_timed_counter_interval<'s, T: TimedCounterOps + CounterOps + 'static>(
+fn set_timed_counter_interval<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -210,7 +210,7 @@ fn set_timed_counter_interval<'s, T: TimedCounterOps + CounterOps + 'static>(
 }
 
 /// `TimedCounter.startTimer`.
-fn call_timed_counter_start_timer<'s, T: TimedCounterOps + CounterOps + 'static>(
+fn call_timed_counter_start_timer<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -231,7 +231,7 @@ fn call_timed_counter_start_timer<'s, T: TimedCounterOps + CounterOps + 'static>
 }
 
 /// Fast-API callback for `TimedCounter.startTimer`.
-extern "C" fn fast_call_timed_counter_start_timer<T: TimedCounterOps + CounterOps + 'static>(
+extern "C" fn fast_call_timed_counter_start_timer<T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
 ) {
     // SAFETY: the fast callback is only reachable through a template that
@@ -243,9 +243,9 @@ extern "C" fn fast_call_timed_counter_start_timer<T: TimedCounterOps + CounterOp
 }
 
 /// Fast-call table for `TimedCounter.startTimer`.
-struct TimedCounterStartTimerMethod<T: TimedCounterOps + CounterOps + 'static>(core::marker::PhantomData<T>);
+struct TimedCounterStartTimerMethod<T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(core::marker::PhantomData<T>);
 
-impl<T: TimedCounterOps + CounterOps + 'static> TimedCounterStartTimerMethod<T> {
+impl<T: TimedCounterOps + CounterOps + CounterConstructor + 'static> TimedCounterStartTimerMethod<T> {
     const TABLE: [v8::fast_api::CFunction; 1] = [v8::fast_api::CFunction::new(
         fast_call_timed_counter_start_timer::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
@@ -259,7 +259,7 @@ impl<T: TimedCounterOps + CounterOps + 'static> TimedCounterStartTimerMethod<T> 
 }
 
 /// `TimedCounter.describe`.
-fn call_timed_counter_describe<'s, T: TimedCounterOps + CounterOps + 'static>(
+fn call_timed_counter_describe<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,

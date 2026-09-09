@@ -79,3 +79,46 @@ interface CustomEvent : Event {
   readonly attribute any detail;
   undefined initCustomEvent(DOMString type, optional boolean bubbles = false, optional boolean cancelable = false, optional any detail = null);
 };
+
+// Phase 3d: UIEvent / MouseEvent. The record already carries the Ui/Mouse
+// payload (dom/events EventKind); these interfaces expose it and add the
+// constructors. `relatedTarget` has no default so an absent member is `None`.
+dictionary UIEventInit : EventInit {
+  long detail = 0;
+};
+
+[Exposed=Window]
+interface UIEvent : Event {
+  constructor(DOMString type, optional UIEventInit eventInitDict = {});
+  readonly attribute long detail;
+};
+
+dictionary MouseEventInit : UIEventInit {
+  long screenX = 0;
+  long screenY = 0;
+  long clientX = 0;
+  long clientY = 0;
+  boolean ctrlKey = false;
+  boolean shiftKey = false;
+  boolean altKey = false;
+  boolean metaKey = false;
+  short button = 0;
+  unsigned short buttons = 0;
+  EventTarget? relatedTarget;
+};
+
+[Exposed=Window]
+interface MouseEvent : UIEvent {
+  constructor(DOMString type, optional MouseEventInit eventInitDict = {});
+  readonly attribute long screenX;
+  readonly attribute long screenY;
+  readonly attribute long clientX;
+  readonly attribute long clientY;
+  readonly attribute boolean ctrlKey;
+  readonly attribute boolean shiftKey;
+  readonly attribute boolean altKey;
+  readonly attribute boolean metaKey;
+  readonly attribute short button;
+  readonly attribute unsigned short buttons;
+  readonly attribute EventTarget? relatedTarget;
+};

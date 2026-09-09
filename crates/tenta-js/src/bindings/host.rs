@@ -10,6 +10,7 @@
 //! the handle validation instead of aliasing a recycled slot.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use tenta_core::atom::atoms;
@@ -21,8 +22,9 @@ use super::{
     AddEventListenerOptionsOrBoolean, AnyValue, CharacterDataOps, Comment, CommentOps,
     CustomEventConstructor, CustomEventInit, CustomEventOps, DocumentOps, Element, ElementOps,
     Event, EventConstructor, EventInit, EventListener, EventListenerOptionsOrBoolean, EventOps,
-    EventTarget, EventTargetOps, HTMLCollection, HTMLCollectionOps, Handle, JsError, Node,
-    NodeList, NodeListOps, NodeOps, Realm, Text, TextOps,
+    EventTarget, EventTargetOps, HTMLCollection, HTMLCollectionOps, HTMLElementOps, Handle,
+    JsError, MouseEventConstructor, MouseEventInit, MouseEventOps, Node, NodeList, NodeListOps,
+    NodeOps, Realm, Text, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
 };
 use crate::dom::events::{
     CallbackRef, EventKey, EventKind, EventRecord, EventSlab, ListenerTable, ScriptHost, dispatch,
@@ -138,6 +140,10 @@ pub struct HostContext {
     pub script: RefCell<Option<Rc<dyn ScriptHost>>>,
     /// The instant this world was created, for `Event.timeStamp`.
     pub origin: std::time::Instant,
+    /// Elements with a synthetic `click()` in progress, so a nested `click()`
+    /// on the same element during its own dispatch is a no-op (the DOM
+    /// "click in progress" flag).
+    pub click_in_progress: RefCell<HashSet<NodeId>>,
 }
 
 impl HostContext {
@@ -151,6 +157,7 @@ impl HostContext {
             events: RefCell::new(EventSlab::new()),
             script: RefCell::new(None),
             origin: std::time::Instant::now(),
+            click_in_progress: RefCell::new(HashSet::new()),
         }
     }
 
@@ -885,11 +892,26 @@ impl DocumentOps for HostObject {
 
     fn create_event(&self, interface: &str) -> Result<Handle<Event>, JsError> {
         // Legacy `createEvent` interface aliases (https://dom.spec.whatwg.org/#dom-document-createevent).
-        // Phase 3a supports the plain `Event` family; the UIEvent/MouseEvent/
-        // CustomEvent families arrive with their wrapper prototypes in 3c/3d.
+        // The Event/CustomEvent families arrived in 3a/3c; UIEvent/MouseEvent
+        // in 3d. Each returns a record whose `kind` picks the wrapper prototype.
         let kind = match interface.to_ascii_lowercase().as_str() {
             "event" | "events" | "htmlevents" => EventKind::Plain,
             "customevent" => EventKind::Custom { detail: None },
+            "uievent" | "uievents" => EventKind::Ui { detail: 0 },
+            "mouseevent" | "mouseevents" => EventKind::Mouse {
+                detail: 0,
+                screen_x: 0,
+                screen_y: 0,
+                client_x: 0,
+                client_y: 0,
+                ctrl: false,
+                shift: false,
+                alt: false,
+                meta: false,
+                button: 0,
+                buttons: 0,
+                related_target: None,
+            },
             _ => {
                 return Err(JsError::dom_exception(
                     "NotSupportedError",
@@ -1621,6 +1643,221 @@ impl CustomEventOps for HostObject {
             self.release_stored(bits);
         }
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UIEvent / MouseEvent (constructors, getters) and HTMLElement.click()
+// ---------------------------------------------------------------------------
+
+impl UIEventConstructor for HostObject {
+    fn construct(
+        realm: &Realm,
+        r#type: &str,
+        event_init_dict: Option<UIEventInit>,
+    ) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        let init = event_init_dict.unwrap_or_default();
+        Ok(new_event(
+            &ctx,
+            r#type,
+            init.bubbles,
+            init.cancelable,
+            init.composed,
+            EventKind::Ui {
+                detail: init.detail,
+            },
+        ))
+    }
+}
+
+impl UIEventOps for HostObject {
+    fn detail(&self) -> i32 {
+        self.with_event(0, |r| match r.kind {
+            EventKind::Ui { detail } | EventKind::Mouse { detail, .. } => detail,
+            _ => 0,
+        })
+    }
+}
+
+impl MouseEventConstructor for HostObject {
+    fn construct(
+        realm: &Realm,
+        r#type: &str,
+        event_init_dict: Option<MouseEventInit>,
+    ) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        let init = event_init_dict.unwrap_or_default();
+        // `relatedTarget?` is a nullable `EventTarget`: the outer `Option`
+        // reports whether the member was present, the inner whether the value
+        // was a target or `null`. A node handle needs no value-store reference
+        // (it is not an interned JS value), so its bits are stored directly.
+        let related_target = init.related_target.flatten().map(|handle| handle.bits());
+        Ok(new_event(
+            &ctx,
+            r#type,
+            init.bubbles,
+            init.cancelable,
+            init.composed,
+            EventKind::Mouse {
+                detail: init.detail,
+                screen_x: init.screen_x,
+                screen_y: init.screen_y,
+                client_x: init.client_x,
+                client_y: init.client_y,
+                ctrl: init.ctrl_key,
+                shift: init.shift_key,
+                alt: init.alt_key,
+                meta: init.meta_key,
+                button: init.button,
+                buttons: init.buttons,
+                related_target,
+            },
+        ))
+    }
+}
+
+impl MouseEventOps for HostObject {
+    fn screen_x(&self) -> i32 {
+        self.with_event(0, |r| match r.kind {
+            EventKind::Mouse { screen_x, .. } => screen_x,
+            _ => 0,
+        })
+    }
+
+    fn screen_y(&self) -> i32 {
+        self.with_event(0, |r| match r.kind {
+            EventKind::Mouse { screen_y, .. } => screen_y,
+            _ => 0,
+        })
+    }
+
+    fn client_x(&self) -> i32 {
+        self.with_event(0, |r| match r.kind {
+            EventKind::Mouse { client_x, .. } => client_x,
+            _ => 0,
+        })
+    }
+
+    fn client_y(&self) -> i32 {
+        self.with_event(0, |r| match r.kind {
+            EventKind::Mouse { client_y, .. } => client_y,
+            _ => 0,
+        })
+    }
+
+    fn ctrl_key(&self) -> bool {
+        self.with_event(false, |r| match r.kind {
+            EventKind::Mouse { ctrl, .. } => ctrl,
+            _ => false,
+        })
+    }
+
+    fn shift_key(&self) -> bool {
+        self.with_event(false, |r| match r.kind {
+            EventKind::Mouse { shift, .. } => shift,
+            _ => false,
+        })
+    }
+
+    fn alt_key(&self) -> bool {
+        self.with_event(false, |r| match r.kind {
+            EventKind::Mouse { alt, .. } => alt,
+            _ => false,
+        })
+    }
+
+    fn meta_key(&self) -> bool {
+        self.with_event(false, |r| match r.kind {
+            EventKind::Mouse { meta, .. } => meta,
+            _ => false,
+        })
+    }
+
+    fn button(&self) -> i16 {
+        self.with_event(0, |r| match r.kind {
+            EventKind::Mouse { button, .. } => button,
+            _ => 0,
+        })
+    }
+
+    fn buttons(&self) -> u16 {
+        self.with_event(0, |r| match r.kind {
+            EventKind::Mouse { buttons, .. } => buttons,
+            _ => 0,
+        })
+    }
+
+    fn related_target(&self) -> Result<Option<Handle<EventTarget>>, JsError> {
+        Ok(self.with_event(None, |r| match r.kind {
+            EventKind::Mouse { related_target, .. } => related_target.map(Handle::from_bits),
+            _ => None,
+        }))
+    }
+}
+
+impl HTMLElementOps for HostObject {
+    fn click(&self) -> Result<(), JsError> {
+        let (doc, id) = self.anchor();
+        // The DOM "click in progress" flag: a nested `click()` on the same
+        // element during its own dispatch is a no-op, so a handler that calls
+        // `click()` again cannot recurse.
+        if !self.context().click_in_progress.borrow_mut().insert(id) {
+            return Ok(());
+        }
+        let result = self.dispatch_synthetic_click(doc, id);
+        self.context().click_in_progress.borrow_mut().remove(&id);
+        result
+    }
+}
+
+impl HostObject {
+    /// Builds and dispatches the synthetic, untrusted `click` `MouseEvent` for
+    /// [`HTMLElementOps::click`]. The event bubbles, is cancelable and composed,
+    /// carries `detail` 1 and `button` 0 with every coordinate and modifier at
+    /// its default, and no related target. If no listener created a wrapper for
+    /// it, its slab record is removed here so a transient click leaks nothing;
+    /// when a wrapper exists, the world's dead-event sweep reclaims the record.
+    fn dispatch_synthetic_click(&self, doc: &SharedDocument, id: NodeId) -> Result<(), JsError> {
+        let ctx = self.context();
+        let mut record = EventRecord::new(
+            "click".to_owned(),
+            EventKind::Mouse {
+                detail: 1,
+                screen_x: 0,
+                screen_y: 0,
+                client_x: 0,
+                client_y: 0,
+                ctrl: false,
+                shift: false,
+                alt: false,
+                meta: false,
+                button: 0,
+                buttons: 0,
+                related_target: None,
+            },
+            ctx.time_stamp(),
+        );
+        record.bubbles = true;
+        record.cancelable = true;
+        record.composed = true;
+        record.flags.initialized = true;
+        let key = ctx.events.borrow_mut().insert(record);
+
+        let target = doc.borrow().node_ref(id);
+        let dispatch_result = dispatch(ctx, target, key, false);
+
+        // Remove the transient record unless a listener made a wrapper for it
+        // (in which case the finalizer-driven sweep owns its removal).
+        let orphaned = ctx
+            .events
+            .borrow()
+            .get(key)
+            .is_some_and(|record| !record.has_wrapper);
+        if orphaned {
+            ctx.events.borrow_mut().remove(key);
+        }
+        dispatch_result.map(|_| ())
     }
 }
 

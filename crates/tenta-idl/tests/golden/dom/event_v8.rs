@@ -293,7 +293,7 @@ fn construct_event<'s, T: EventOps + EventConstructor + 'static>(
             return;
         }
     };
-    match T::construct(&realm, &r#type, event_init_dict) {
+    match <T as EventConstructor>::construct(&realm, &r#type, event_init_dict) {
         Ok(host) => {
             let this = args.this();
             if let Err(error) = adopt_host(scope, "Event", this, host) {

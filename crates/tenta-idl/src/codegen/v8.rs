@@ -153,17 +153,26 @@ pub fn namespace_v8(_model: &Model, namespace: &Namespace) -> String {
 
 fn trait_bound(model: &Model, interface: &Interface) -> String {
     let mut bounds = vec![format!("{}Ops", interface.name)];
+    // An interface's install re-installs its ancestors' `[LegacyUnforgeable]`
+    // members on its own instance template (see `install_function`); those
+    // getters are generic over the ancestor's `Constructor` bound, so the host
+    // type must satisfy every ancestor constructor too, not just its own.
+    let mut constructors = Vec::new();
+    if !interface.constructors.is_empty() {
+        constructors.push(format!("{}Constructor", interface.name));
+    }
     let mut parent = interface.parent.clone();
     while let Some(name) = parent {
         let Some(ancestor) = model.interface(&name) else {
             break;
         };
         bounds.push(format!("{name}Ops"));
+        if !ancestor.constructors.is_empty() {
+            constructors.push(format!("{name}Constructor"));
+        }
         parent = ancestor.parent.clone();
     }
-    if !interface.constructors.is_empty() {
-        bounds.push(format!("{}Constructor", interface.name));
-    }
+    bounds.extend(constructors);
     bounds.join(" + ")
 }
 
@@ -238,6 +247,35 @@ fn install_function(model: &Model, interface: &Interface, bound: &str, out: &mut
                 }
             }
         }
+    }
+
+    // `[LegacyUnforgeable]` members are own, non-configurable accessors on each
+    // instance. V8 does not inherit instance-template accessors through the
+    // prototype chain (unlike prototype methods), so a derived interface must
+    // re-install every ancestor's unforgeable members on its own instance
+    // template — otherwise e.g. `isTrusted` is present on `Event` but missing on
+    // `MouseEvent`. The derived signature keeps each getter bound to instances
+    // of this interface.
+    let mut ancestor = interface.parent.clone();
+    while let Some(ancestor_name) = ancestor {
+        let Some(ancestor_interface) = model.interface(&ancestor_name) else {
+            break;
+        };
+        for member in &ancestor_interface.members {
+            if let Member::Attribute(attribute) = member
+                && !attribute.is_static
+                && attribute.legacy_unforgeable()
+            {
+                accessor_install(
+                    &ancestor_interface.name,
+                    attribute,
+                    "instance",
+                    Some("signature"),
+                    out,
+                );
+            }
+        }
+        ancestor = ancestor_interface.parent.clone();
     }
 
     if !unscopables.is_empty() {
@@ -475,14 +513,14 @@ fn constructor_callback(interface: &Interface, bound: &str, out: &mut String) {
         "    let realm = match world_realm(scope) {{\n        \
          Ok(realm) => realm,\n        \
          Err(error) => {{\n            throw_js_error(scope, &error);\n            return;\n        }}\n    }};\n    \
-         match T::{}({}) {{\n        \
+         match <T as {}Constructor>::{}({}) {{\n        \
          Ok(host) => {{\n            \
          let this = args.this();\n            \
          if let Err(error) = adopt_host(scope, \"{}\", this, host) {{\n                throw_js_error(scope, &error);\n                return;\n            }}\n            \
          rv.set(this.into());\n        \
          }}\n        \
          Err(error) => throw_js_error(scope, &error),\n    }}\n}}\n",
-        constructor.rust_name, call_args, name,
+        name, constructor.rust_name, call_args, name,
     );
 }
 

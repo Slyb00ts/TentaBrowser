@@ -110,7 +110,7 @@ fn construct_event_target<'s, T: EventTargetOps + EventTargetConstructor + 'stat
             return;
         }
     };
-    match T::construct(&realm) {
+    match <T as EventTargetConstructor>::construct(&realm) {
         Ok(host) => {
             let this = args.this();
             if let Err(error) = adopt_host(scope, "EventTarget", this, host) {

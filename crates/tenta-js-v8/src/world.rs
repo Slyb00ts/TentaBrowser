@@ -21,6 +21,7 @@ use std::ffi::c_void;
 use std::rc::Rc;
 
 use tenta_core::NodeId;
+use tenta_core::atom::atoms;
 use tenta_dom::NodeKind;
 use tenta_js::bindings::host::{
     HostObject, SharedContext, TAG_EVENT, TAG_HTML_COLLECTION, TAG_NODE_LIST, decode,
@@ -333,8 +334,17 @@ impl WrapperWorld for V8World {
             } else if decoded.tag == TAG_HTML_COLLECTION {
                 "HTMLCollection"
             } else {
-                match self.ctx.doc.borrow().kind(node_id) {
-                    NodeKind::Element => "Element",
+                let doc = self.ctx.doc.borrow();
+                match doc.kind(node_id) {
+                    // HTML-namespace elements get the `HTMLElement` prototype
+                    // (which carries `click()`); other elements stay `Element`.
+                    NodeKind::Element => {
+                        if doc.namespace(node_id) == Some(atoms::NS_HTML) {
+                            "HTMLElement"
+                        } else {
+                            "Element"
+                        }
+                    }
                     NodeKind::Document => "Document",
                     NodeKind::Text => "Text",
                     NodeKind::Comment => "Comment",
