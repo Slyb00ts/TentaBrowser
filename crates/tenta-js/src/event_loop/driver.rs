@@ -338,9 +338,31 @@ impl EventLoop {
     /// still alive, so teardown does not depend on struct field drop order. The
     /// clock and task queues are left untouched.
     pub fn clear_pending_callbacks(&self) {
-        let mut shared = self.shared.borrow_mut();
-        shared.timer_callbacks.clear();
-        shared.frame_callbacks.clear();
+        let discarded: Vec<Origin> = {
+            let mut shared = self.shared.borrow_mut();
+            // A tracked one-shot has been counted as pending since it was
+            // scheduled, so discarding it has to balance that count. The
+            // observer may outlive this loop - a settle tracker survives the
+            // engine across a navigation - and a `queued` with no `finished`
+            // would leave the next document unable to settle, forever.
+            let discarded = shared
+                .timer_callbacks
+                .values()
+                .filter_map(|callback| match callback {
+                    TimerCallback::OneShot {
+                        origin: Origin::Tracked,
+                        ..
+                    } => Some(Origin::Tracked),
+                    _ => None,
+                })
+                .collect();
+            shared.timer_callbacks.clear();
+            shared.frame_callbacks.clear();
+            discarded
+        };
+        for origin in discarded {
+            self.scheduler.sink.note_finished(origin);
+        }
     }
 
     /// Fires every timer due at the current clock time, running each callback as
@@ -580,6 +602,39 @@ mod tests {
             *log.events.borrow(),
             vec![("queued", Origin::Tracked), ("finished", Origin::Tracked)],
             "a cancelled deferral must not hold the settle open forever"
+        );
+    }
+
+    #[test]
+    fn discarding_pending_callbacks_balances_a_tracked_timer() {
+        // `Engine::drop` clears the callback table to release the script
+        // handles it holds. The settle tracker can outlive that (it survives a
+        // navigation), so a deferral counted at schedule time must be released
+        // here or the next document never settles.
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let scheduler = loop_.scheduler();
+        let log = Rc::new(EventLog::default());
+        scheduler.sink.set_provenance_sink(log.clone());
+
+        scheduler.with_origin(Origin::Tracked, || {
+            scheduler.set_timeout(5, Box::new(|| {}));
+            scheduler.set_timeout(5, Box::new(|| {}));
+        });
+        // A background timer and an interval were never counted as pending, so
+        // discarding them must not report a finish either.
+        scheduler.set_timeout(5, Box::new(|| {}));
+        scheduler.set_interval(5, Box::new(|| {}));
+
+        loop_.clear_pending_callbacks();
+
+        assert_eq!(
+            *log.events.borrow(),
+            vec![
+                ("queued", Origin::Tracked),
+                ("queued", Origin::Tracked),
+                ("finished", Origin::Tracked),
+                ("finished", Origin::Tracked),
+            ]
         );
     }
 
