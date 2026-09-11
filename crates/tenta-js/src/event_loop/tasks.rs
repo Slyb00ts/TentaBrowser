@@ -7,48 +7,150 @@
 //! shared [`TaskSink`] handle (single-threaded `Rc`/`RefCell`, matching the
 //! `!Send` page-thread model) that a callback can clone and hold.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 
+use tenta_core::Origin;
+
 /// A unit of work run by the loop.
 type Task = Box<dyn FnOnce()>;
+
+/// Told about every tagged task as it is queued and as it finishes.
+///
+/// This is how the settle machine in `tenta-page` learns what the engine is
+/// doing without `tenta-js` depending on it: the page installs an
+/// implementation that forwards to `SettleTracker::note_task_queued` and
+/// `note_task_finished` (`docs/spec/02-architecture.md` §5.1).
+pub trait ProvenanceSink {
+    fn task_queued(&self, origin: Origin);
+    fn task_finished(&self, origin: Origin);
+}
 
 #[derive(Default)]
 struct Queues {
     /// Task sources are collapsed into one FIFO for now; per-source selection
     /// (`docs/spec/05` §5) is layered on when the sources exist.
-    macrotasks: VecDeque<Task>,
-    microtasks: VecDeque<Task>,
+    macrotasks: VecDeque<(Origin, Task)>,
+    microtasks: VecDeque<(Origin, Task)>,
+}
+
+struct Shared {
+    queues: RefCell<Queues>,
+    /// The provenance work queued right now inherits. The runner sets it to
+    /// the tag of the task it is running, so a task and every microtask it
+    /// queues carry that task's provenance onward; at the top level it is
+    /// `Background`, because anything a live page starts on its own is
+    /// background until something tracked claims it.
+    current: Cell<Origin>,
+    observer: RefCell<Option<Rc<dyn ProvenanceSink>>>,
+}
+
+impl Default for Shared {
+    fn default() -> Self {
+        Self {
+            queues: RefCell::new(Queues::default()),
+            current: Cell::new(Origin::Background),
+            observer: RefCell::new(None),
+        }
+    }
 }
 
 /// A cloneable handle for enqueuing tasks and microtasks, including from inside
 /// a running callback.
 #[derive(Clone, Default)]
-pub struct TaskSink(Rc<RefCell<Queues>>);
+pub struct TaskSink(Rc<Shared>);
 
 impl TaskSink {
-    /// Appends a task to the macrotask queue.
+    /// Appends a task to the macrotask queue, inheriting the provenance of
+    /// whatever is running.
     pub fn queue_task(&self, task: impl FnOnce() + 'static) {
-        self.0.borrow_mut().macrotasks.push_back(Box::new(task));
+        self.queue_task_from(self.current_origin().inherit(), task);
+    }
+
+    /// Appends a task with an explicit provenance. The page uses this for the
+    /// work it starts itself - parser-driven script execution is `Tracked`,
+    /// a socket message is `Background`.
+    pub fn queue_task_from(&self, origin: Origin, task: impl FnOnce() + 'static) {
+        self.0
+            .queues
+            .borrow_mut()
+            .macrotasks
+            .push_back((origin, Box::new(task)));
+        self.notify_queued(origin);
     }
 
     /// Appends a microtask, run before the loop takes its next task
     /// (`queueMicrotask`, promise reactions).
     pub fn queue_microtask(&self, task: impl FnOnce() + 'static) {
-        self.0.borrow_mut().microtasks.push_back(Box::new(task));
+        self.queue_microtask_from(self.current_origin().inherit(), task);
     }
 
-    fn pop_macrotask(&self) -> Option<Task> {
-        self.0.borrow_mut().macrotasks.pop_front()
+    /// Appends a microtask with an explicit provenance.
+    pub fn queue_microtask_from(&self, origin: Origin, task: impl FnOnce() + 'static) {
+        self.0
+            .queues
+            .borrow_mut()
+            .microtasks
+            .push_back((origin, Box::new(task)));
+        self.notify_queued(origin);
     }
 
-    fn pop_microtask(&self) -> Option<Task> {
-        self.0.borrow_mut().microtasks.pop_front()
+    /// The provenance newly queued work inherits.
+    pub fn current_origin(&self) -> Origin {
+        self.0.current.get()
+    }
+
+    /// Runs `body` with `origin` as the inherited provenance, restoring the
+    /// previous one afterwards even if `body` queued work of its own.
+    pub fn with_origin<R>(&self, origin: Origin, body: impl FnOnce() -> R) -> R {
+        let previous = self.0.current.replace(origin);
+        let result = body();
+        self.0.current.set(previous);
+        result
+    }
+
+    /// Installs the observer that learns about every queued and finished task.
+    pub fn set_provenance_sink(&self, sink: Rc<dyn ProvenanceSink>) {
+        *self.0.observer.borrow_mut() = Some(sink);
+    }
+
+    /// The observer is read out before it is called so that an implementation
+    /// re-entering the sink cannot find the `RefCell` still borrowed.
+    fn observer(&self) -> Option<Rc<dyn ProvenanceSink>> {
+        self.0.observer.borrow().clone()
+    }
+
+    fn notify_queued(&self, origin: Origin) {
+        if let Some(observer) = self.observer() {
+            observer.task_queued(origin);
+        }
+    }
+
+    fn notify_finished(&self, origin: Origin) {
+        if let Some(observer) = self.observer() {
+            observer.task_finished(origin);
+        }
+    }
+
+    fn pop_macrotask(&self) -> Option<(Origin, Task)> {
+        self.0.queues.borrow_mut().macrotasks.pop_front()
+    }
+
+    fn pop_microtask(&self) -> Option<(Origin, Task)> {
+        self.0.queues.borrow_mut().microtasks.pop_front()
+    }
+
+    /// Runs one dequeued unit of work with its own provenance current, then
+    /// reports it finished. The previous provenance is restored first so that
+    /// the observer never sees the loop mid-task.
+    fn run_tagged(&self, origin: Origin, task: Task) {
+        self.with_origin(origin, task);
+        self.notify_finished(origin);
     }
 
     fn has_work(&self) -> bool {
-        let queues = self.0.borrow();
+        let queues = self.0.queues.borrow();
         !queues.macrotasks.is_empty() || !queues.microtasks.is_empty()
     }
 }
@@ -76,8 +178,8 @@ impl TaskRunner {
     pub fn run_microtask_checkpoint(&self) {
         // The borrow is dropped before each task runs, so a task may re-enter
         // the sink to enqueue more work.
-        while let Some(task) = self.sink.pop_microtask() {
-            task();
+        while let Some((origin, task)) = self.sink.pop_microtask() {
+            self.sink.run_tagged(origin, task);
         }
     }
 
@@ -85,8 +187,8 @@ impl TaskRunner {
     /// Returns whether a macrotask ran.
     pub fn run_next_task(&self) -> bool {
         match self.sink.pop_macrotask() {
-            Some(task) => {
-                task();
+            Some((origin, task)) => {
+                self.sink.run_tagged(origin, task);
                 self.run_microtask_checkpoint();
                 true
             }
@@ -173,6 +275,130 @@ mod tests {
         runner.run_next_task();
         // Both microtasks run in the one checkpoint, in order.
         assert_eq!(*log.borrow(), vec!["task", "micro-1", "micro-2"]);
+    }
+
+    /// Records every queued/finished pair so a test can assert the counts the
+    /// settle machine would see.
+    #[derive(Default)]
+    struct RecordingSink {
+        events: RefCell<Vec<(&'static str, Origin)>>,
+    }
+
+    impl ProvenanceSink for RecordingSink {
+        fn task_queued(&self, origin: Origin) {
+            self.events.borrow_mut().push(("queued", origin));
+        }
+        fn task_finished(&self, origin: Origin) {
+            self.events.borrow_mut().push(("finished", origin));
+        }
+    }
+
+    #[test]
+    fn work_queued_inside_a_task_inherits_its_provenance() {
+        let runner = TaskRunner::new();
+        let sink = runner.sink();
+        let seen: Rc<RefCell<Vec<Origin>>> = Rc::new(RefCell::new(Vec::new()));
+
+        let inner = sink.clone();
+        let log = seen.clone();
+        sink.queue_task_from(Origin::Tracked, move || {
+            log.borrow_mut().push(inner.current_origin());
+            let micro_sink = inner.clone();
+            let micro_log = log.clone();
+            inner.queue_microtask(move || {
+                micro_log.borrow_mut().push(micro_sink.current_origin());
+            });
+            let task_sink = inner.clone();
+            let task_log = log.clone();
+            inner.queue_task(move || {
+                task_log.borrow_mut().push(task_sink.current_origin());
+            });
+        });
+
+        runner.run_until_idle();
+
+        // The task, its microtask and the task it queued all read `Tracked`;
+        // provenance is inherited, never promoted or reset.
+        assert_eq!(
+            *seen.borrow(),
+            vec![Origin::Tracked, Origin::Tracked, Origin::Tracked]
+        );
+    }
+
+    #[test]
+    fn provenance_returns_to_background_after_a_tracked_task() {
+        let runner = TaskRunner::new();
+        let sink = runner.sink();
+        assert_eq!(sink.current_origin(), Origin::Background);
+
+        sink.queue_task_from(Origin::Tracked, || {});
+        runner.run_until_idle();
+
+        assert_eq!(
+            sink.current_origin(),
+            Origin::Background,
+            "the runner restores the provenance it found"
+        );
+    }
+
+    #[test]
+    fn with_origin_scopes_the_tag_and_restores_it() {
+        let runner = TaskRunner::new();
+        let sink = runner.sink();
+        let inside = sink.with_origin(Origin::Tracked, || sink.current_origin());
+        assert_eq!(inside, Origin::Tracked);
+        assert_eq!(sink.current_origin(), Origin::Background);
+    }
+
+    #[test]
+    fn the_observer_sees_one_queued_and_one_finished_per_unit_of_work() {
+        let runner = TaskRunner::new();
+        let sink = runner.sink();
+        let observer = Rc::new(RecordingSink::default());
+        sink.set_provenance_sink(observer.clone());
+
+        let inner = sink.clone();
+        sink.queue_task_from(Origin::Tracked, move || {
+            inner.queue_microtask(|| {});
+        });
+        sink.queue_task_from(Origin::Background, || {});
+        runner.run_until_idle();
+
+        assert_eq!(
+            *observer.events.borrow(),
+            vec![
+                ("queued", Origin::Tracked),
+                ("queued", Origin::Background),
+                // The microtask is queued from inside the tracked task, so it
+                // is tracked too and its `queued` lands before that task's
+                // `finished`.
+                ("queued", Origin::Tracked),
+                ("finished", Origin::Tracked),
+                ("finished", Origin::Tracked),
+                ("finished", Origin::Background),
+            ]
+        );
+
+        // The ordering above is what keeps the settle machine honest: replayed
+        // as a running count, the tracked total never returns to zero between
+        // the task and the microtask it queued, so a settle cannot slip
+        // through the gap.
+        let events = observer.events.borrow();
+        let tracked_events: Vec<&str> = events
+            .iter()
+            .filter(|(_, origin)| *origin == Origin::Tracked)
+            .map(|(kind, _)| *kind)
+            .collect();
+        let mut tracked = 0i32;
+        let last = tracked_events.len() - 1;
+        for (index, kind) in tracked_events.iter().enumerate() {
+            tracked += if *kind == "queued" { 1 } else { -1 };
+            assert!(
+                tracked > 0 || index == last,
+                "tracked work hit zero at step {index} with more still to come"
+            );
+        }
+        assert_eq!(tracked, 0, "every tracked task is accounted for");
     }
 
     #[test]

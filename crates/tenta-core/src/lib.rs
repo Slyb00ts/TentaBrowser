@@ -13,6 +13,7 @@ pub mod embedder;
 pub mod error;
 pub mod fs_policy;
 pub mod ids;
+pub mod provenance;
 pub mod tier;
 pub mod trace;
 
@@ -22,4 +23,5 @@ pub use budgets::{BudgetKind, Budgets};
 pub use error::{Error, Result};
 pub use fs_policy::{DownloadPolicy, FsPolicy};
 pub use ids::{ContextId, FrameId, NodeId, NodeRef, PageId, RequestId, WorldId};
+pub use provenance::{Origin, RequestClass};
 pub use tier::Tier;

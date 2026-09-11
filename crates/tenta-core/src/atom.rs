@@ -473,9 +473,14 @@ mod tests {
 
     #[test]
     fn get_does_not_intern() {
-        let before = Atom::count();
+        // The table is process-global and sibling tests intern in parallel, so
+        // "did not intern" is asserted through a second lookup of the same key
+        // rather than through `Atom::count()`, which any other test can move.
         assert!(Atom::get("definitely-not-interned-yet-xyz").is_none());
-        assert_eq!(Atom::count(), before);
+        assert!(
+            Atom::get("definitely-not-interned-yet-xyz").is_none(),
+            "the first `get` must not have interned the key"
+        );
         let atom = Atom::new("definitely-not-interned-yet-xyz");
         assert_eq!(Atom::get("definitely-not-interned-yet-xyz"), Some(atom));
     }
