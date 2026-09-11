@@ -27,9 +27,12 @@ use crate::world::WorldState;
 
 /// The V8 side of the script-callback boundary.
 pub struct V8ScriptHost {
-    /// The isolate this world runs on. Valid for as long as the owning `Engine`
-    /// (and thus this host, held through the `HostContext`) is alive.
-    isolate: *mut v8::Isolate,
+    /// The address of the isolate this world runs on, captured by value so it
+    /// survives the `Engine` being moved after construction (a raw
+    /// `*mut v8::Isolate` would dangle, pointing into the moved isolate handle).
+    /// Valid for as long as the owning `Engine` (and thus this host, held
+    /// through the `HostContext`) is alive.
+    isolate: v8::UnsafeRawIsolatePtr,
     /// The context listeners run in.
     context: v8::Global<v8::Context>,
     /// The world's value slab, for releasing stored callbacks.
@@ -41,7 +44,7 @@ pub struct V8ScriptHost {
 impl V8ScriptHost {
     /// Builds a script host over the engine's isolate, context and world state.
     pub fn new(
-        isolate: *mut v8::Isolate,
+        isolate: v8::UnsafeRawIsolatePtr,
         context: v8::Global<v8::Context>,
         state: Rc<RefCell<WorldState>>,
         host: Rc<HostState>,
@@ -59,8 +62,12 @@ impl ScriptHost for V8ScriptHost {
     fn invoke_listener(&self, callback: CallbackRef, current_target: u64, event: u64) {
         // Bootstrap a scope from the isolate we are re-entering. SAFETY: this is
         // only reached from inside a DOM binding call on this isolate's thread,
-        // the sole valid use of `CallbackScope` (see the module docs).
-        let isolate: &mut v8::Isolate = unsafe { &mut *self.isolate };
+        // the sole valid use of `CallbackScope` (see the module docs). The
+        // isolate address was captured by value at install time, so it is stable
+        // and non-null for the engine's lifetime.
+        let mut raw = self.isolate;
+        let isolate: &mut v8::Isolate =
+            unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut raw) };
         let mut storage = unsafe { v8::CallbackScope::new(isolate) };
         let mut callback_scope = {
             let pinned = unsafe { std::pin::Pin::new_unchecked(&mut storage) };

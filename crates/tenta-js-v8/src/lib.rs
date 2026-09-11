@@ -205,11 +205,18 @@ impl Engine {
         let Some(dom) = &self.dom else {
             return;
         };
-        // SAFETY: the pointer is only dereferenced by `invoke_listener`, which
-        // runs synchronously inside a DOM binding call on this engine's thread,
-        // while the engine (and thus the isolate) is alive. `Drop` clears the
-        // stored host before the isolate is disposed.
-        let isolate: *mut v8::Isolate = &mut *self.isolate;
+        // The stable address of the underlying V8 isolate, captured by value.
+        // A raw `*mut v8::Isolate` would point into `self.isolate`'s
+        // `NonNull<RealIsolate>` field, which moves with the `Engine` when
+        // `build` returns it by value, leaving `V8ScriptHost` with a dangling
+        // pointer; the raw isolate address itself never moves.
+        //
+        // SAFETY: `as_raw_isolate_ptr` reads the live isolate's address, only
+        // ever reconstructed by `invoke_listener`, which runs synchronously
+        // inside a DOM binding call on this engine's thread while the engine
+        // (and thus the isolate) is alive. `Drop` clears the stored host before
+        // the isolate is disposed.
+        let isolate = unsafe { self.isolate.as_raw_isolate_ptr() };
         let script: Rc<dyn ScriptHost> = Rc::new(V8ScriptHost::new(
             isolate,
             self.context.clone(),
