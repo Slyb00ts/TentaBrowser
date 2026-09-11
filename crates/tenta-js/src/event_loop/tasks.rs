@@ -56,6 +56,34 @@ impl Default for Shared {
     }
 }
 
+/// Restores the previous provenance when it goes out of scope, *including on
+/// unwind*. A page thread catches panics and keeps running
+/// (`tenta_page::catch_unwind_task`), so a tag leaked by a panicking task
+/// would mislabel every task that followed it.
+struct OriginGuard<'a> {
+    shared: &'a Shared,
+    previous: Origin,
+}
+
+impl Drop for OriginGuard<'_> {
+    fn drop(&mut self) {
+        self.shared.current.set(self.previous);
+    }
+}
+
+/// Reports a unit of work finished when it goes out of scope, so a panicking
+/// task cannot leave the settle machine counting work that will never end.
+struct FinishGuard<'a> {
+    sink: &'a TaskSink,
+    origin: Origin,
+}
+
+impl Drop for FinishGuard<'_> {
+    fn drop(&mut self) {
+        self.sink.note_finished(self.origin);
+    }
+}
+
 /// A cloneable handle for enqueuing tasks and microtasks, including from inside
 /// a running callback.
 #[derive(Clone, Default)]
@@ -72,12 +100,20 @@ impl TaskSink {
     /// work it starts itself - parser-driven script execution is `Tracked`,
     /// a socket message is `Background`.
     pub fn queue_task_from(&self, origin: Origin, task: impl FnOnce() + 'static) {
+        self.queue_task_prearmed(origin, task);
+        self.note_queued(origin);
+    }
+
+    /// Appends a task whose pending state was already reported through
+    /// [`Self::note_queued`] - a timer that has been counted since it was
+    /// scheduled. Running it still reports one `task_finished`, so the pair
+    /// spans the whole wait rather than only the run.
+    pub fn queue_task_prearmed(&self, origin: Origin, task: impl FnOnce() + 'static) {
         self.0
             .queues
             .borrow_mut()
             .macrotasks
             .push_back((origin, Box::new(task)));
-        self.notify_queued(origin);
     }
 
     /// Appends a microtask, run before the loop takes its next task
@@ -93,7 +129,7 @@ impl TaskSink {
             .borrow_mut()
             .microtasks
             .push_back((origin, Box::new(task)));
-        self.notify_queued(origin);
+        self.note_queued(origin);
     }
 
     /// The provenance newly queued work inherits.
@@ -104,10 +140,11 @@ impl TaskSink {
     /// Runs `body` with `origin` as the inherited provenance, restoring the
     /// previous one afterwards even if `body` queued work of its own.
     pub fn with_origin<R>(&self, origin: Origin, body: impl FnOnce() -> R) -> R {
-        let previous = self.0.current.replace(origin);
-        let result = body();
-        self.0.current.set(previous);
-        result
+        let _guard = OriginGuard {
+            shared: &self.0,
+            previous: self.0.current.replace(origin),
+        };
+        body()
     }
 
     /// Installs the observer that learns about every queued and finished task.
@@ -121,13 +158,23 @@ impl TaskSink {
         self.0.observer.borrow().clone()
     }
 
-    fn notify_queued(&self, origin: Origin) {
+    /// Reports a unit of work pending without queuing anything.
+    ///
+    /// A timer is pending from the moment it is *scheduled*, not from the
+    /// moment it fires: it waits in the timer heap, not in these queues. A
+    /// tracked one-shot timer is a deferral of the load chain
+    /// (`docs/spec/02-architecture.md` §5.1), so if it did not count while it
+    /// waited, a settle poll in the gap would see zero tracked work and
+    /// declare the page done with the continuation still to come.
+    pub fn note_queued(&self, origin: Origin) {
         if let Some(observer) = self.observer() {
             observer.task_queued(origin);
         }
     }
 
-    fn notify_finished(&self, origin: Origin) {
+    /// Balances a [`Self::note_queued`] for work that will never run - a
+    /// cancelled timer.
+    pub fn note_finished(&self, origin: Origin) {
         if let Some(observer) = self.observer() {
             observer.task_finished(origin);
         }
@@ -145,8 +192,10 @@ impl TaskSink {
     /// reports it finished. The previous provenance is restored first so that
     /// the observer never sees the loop mid-task.
     fn run_tagged(&self, origin: Origin, task: Task) {
+        // Declared first so it drops last: the provenance is restored before
+        // the observer is told, and both happen even if `task` panics.
+        let _finished = FinishGuard { sink: self, origin };
         self.with_origin(origin, task);
-        self.notify_finished(origin);
     }
 
     fn has_work(&self) -> bool {
@@ -399,6 +448,34 @@ mod tests {
             );
         }
         assert_eq!(tracked, 0, "every tracked task is accounted for");
+    }
+
+    #[test]
+    fn a_panicking_task_still_restores_provenance_and_reports_finished() {
+        // A page thread catches panics and keeps running, so the loop must not
+        // be left mislabelling every later task as tracked, nor leave the
+        // settle machine counting work that will never end.
+        let runner = TaskRunner::new();
+        let sink = runner.sink();
+        let observer = Rc::new(RecordingSink::default());
+        sink.set_provenance_sink(observer.clone());
+
+        sink.queue_task_from(Origin::Tracked, || panic!("callback blew up"));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runner.run_until_idle();
+        }));
+        assert!(outcome.is_err(), "the panic propagated to the caller");
+
+        assert_eq!(
+            sink.current_origin(),
+            Origin::Background,
+            "the provenance was restored on unwind"
+        );
+        assert_eq!(
+            *observer.events.borrow(),
+            vec![("queued", Origin::Tracked), ("finished", Origin::Tracked)],
+            "the unit of work was still reported finished"
+        );
     }
 
     #[test]

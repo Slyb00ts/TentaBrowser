@@ -74,6 +74,30 @@ struct FrameCallback {
     run: Option<Box<dyn FnOnce(f64)>>,
 }
 
+/// Restores the previous timer nesting depth on scope exit, *including on
+/// unwind*: a page thread survives a panicking callback, and a leaked depth
+/// would clamp unrelated timers that were never nested at all.
+struct NestingGuard {
+    shared: Rc<RefCell<Shared>>,
+    previous: u32,
+}
+
+impl Drop for NestingGuard {
+    fn drop(&mut self) {
+        self.shared.borrow_mut().current_nesting = self.previous;
+    }
+}
+
+/// Runs `body` with `nesting` installed as the current timer depth.
+fn with_nesting_on<R>(shared: &Rc<RefCell<Shared>>, nesting: u32, body: impl FnOnce() -> R) -> R {
+    let previous = std::mem::replace(&mut shared.borrow_mut().current_nesting, nesting);
+    let _guard = NestingGuard {
+        shared: shared.clone(),
+        previous,
+    };
+    body()
+}
+
 /// The mutable state shared between the scheduler handle and the driver.
 struct Shared {
     clock: Clock,
@@ -118,6 +142,15 @@ impl Scheduler {
                 run: callback,
             },
         );
+        drop(shared);
+        if origin == Origin::Tracked {
+            // A tracked one-shot timer is a deferral of the load chain, so it
+            // is pending from now, not from when it fires. Counting it only at
+            // firing time would leave a window - the whole delay - in which a
+            // settle poll sees no tracked work and declares the page done with
+            // the continuation still in the heap.
+            self.sink.note_queued(origin);
+        }
         id
     }
 
@@ -145,13 +178,7 @@ impl Scheduler {
     /// `setTimeout` made from inside a timer handler is clamped one level
     /// deeper even when the handler runs outside the queued task.
     pub fn with_nesting<R>(&self, nesting: u32, body: impl FnOnce() -> R) -> R {
-        let previous = {
-            let mut shared = self.shared.borrow_mut();
-            std::mem::replace(&mut shared.current_nesting, nesting)
-        };
-        let result = body();
-        self.shared.borrow_mut().current_nesting = previous;
-        result
+        with_nesting_on(&self.shared, nesting, body)
     }
 
     /// The provenance work queued right now inherits.
@@ -171,9 +198,21 @@ impl Scheduler {
 
     /// Cancels a scheduled timer (`clearTimeout`).
     pub fn clear_timeout(&self, id: TimerId) {
-        let mut shared = self.shared.borrow_mut();
-        shared.timers.cancel(id);
-        shared.timer_callbacks.remove(&id);
+        let cancelled = {
+            let mut shared = self.shared.borrow_mut();
+            shared.timers.cancel(id);
+            shared.timer_callbacks.remove(&id)
+        };
+        // Balance the pending count of a tracked one-shot that will now never
+        // run. A timer already taken out of the map by `fire_due_timers` is
+        // not here, and its queued task reports the finish itself.
+        if let Some(TimerCallback::OneShot {
+            origin: Origin::Tracked,
+            ..
+        }) = cancelled
+        {
+            self.sink.note_finished(Origin::Tracked);
+        }
     }
 
     /// Schedules `callback` to run every `delay_ms` (`setInterval`) and returns
@@ -331,14 +370,16 @@ impl EventLoop {
                     run,
                 } => {
                     let shared = self.shared.clone();
-                    self.scheduler.sink.queue_task_from(origin, move || {
-                        // Install this timer's nesting level so a timer it
-                        // schedules is clamped one level deeper, then restore the
-                        // top level.
-                        shared.borrow_mut().current_nesting = nesting;
-                        run();
-                        shared.borrow_mut().current_nesting = 0;
-                    });
+                    // Install this timer's nesting level so a timer it
+                    // schedules is clamped one level deeper; the guard restores
+                    // the top level even if the callback panics.
+                    let task = move || with_nesting_on(&shared, nesting, run);
+                    if origin == Origin::Tracked {
+                        // Already counted when it was scheduled.
+                        self.scheduler.sink.queue_task_prearmed(origin, task);
+                    } else {
+                        self.scheduler.sink.queue_task_from(origin, task);
+                    }
                 }
                 TimerCallback::Interval {
                     nesting,
@@ -357,10 +398,8 @@ impl EventLoop {
                     }
                     let shared = self.shared.clone();
                     self.scheduler.sink.queue_task_from(origin, move || {
-                        shared.borrow_mut().current_nesting = next_nesting;
-                        run();
+                        with_nesting_on(&shared, next_nesting, &mut run);
                         let mut shared = shared.borrow_mut();
-                        shared.current_nesting = 0;
                         // Put the callback back under its id for the re-armed
                         // firing — unless `clearInterval` cancelled it meanwhile,
                         // in which case the re-armed heap slot is already dead.
@@ -461,6 +500,22 @@ mod tests {
         }
     }
 
+    /// Collects both halves of the pending count, in order, so a test can see
+    /// exactly when a timer starts and stops holding a settle open.
+    #[derive(Default)]
+    struct EventLog {
+        events: RefCell<Vec<(&'static str, Origin)>>,
+    }
+
+    impl super::super::tasks::ProvenanceSink for EventLog {
+        fn task_queued(&self, origin: Origin) {
+            self.events.borrow_mut().push(("queued", origin));
+        }
+        fn task_finished(&self, origin: Origin) {
+            self.events.borrow_mut().push(("finished", origin));
+        }
+    }
+
     /// Schedules one timer from a `Tracked` task and reports the provenance
     /// the firing ran under.
     fn timer_origin_for(repeating: bool, delay_ms: u64) -> Origin {
@@ -480,6 +535,90 @@ mod tests {
 
         let finished = log.finished.borrow();
         *finished.first().expect("the timer fired")
+    }
+
+    #[test]
+    fn a_tracked_timer_counts_from_the_moment_it_is_scheduled() {
+        // The gap the count has to cover is the delay itself: while the timer
+        // waits in the heap it is in neither task queue, and a settle poll in
+        // that window must not see the page as done.
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let scheduler = loop_.scheduler();
+        let log = Rc::new(EventLog::default());
+        scheduler.sink.set_provenance_sink(log.clone());
+
+        scheduler.with_origin(Origin::Tracked, || {
+            scheduler.set_timeout(5, Box::new(|| {}));
+        });
+        assert_eq!(
+            *log.events.borrow(),
+            vec![("queued", Origin::Tracked)],
+            "pending as soon as it is scheduled, before the clock moves"
+        );
+
+        loop_.advance_to_next_timer();
+        assert_eq!(
+            *log.events.borrow(),
+            vec![("queued", Origin::Tracked), ("finished", Origin::Tracked)],
+            "firing must not queue a second pending unit"
+        );
+    }
+
+    #[test]
+    fn cancelling_a_tracked_timer_balances_its_pending_count() {
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let scheduler = loop_.scheduler();
+        let log = Rc::new(EventLog::default());
+        scheduler.sink.set_provenance_sink(log.clone());
+
+        let id = scheduler.with_origin(Origin::Tracked, || {
+            scheduler.set_timeout(5, Box::new(|| {}))
+        });
+        scheduler.clear_timeout(id);
+
+        assert_eq!(
+            *log.events.borrow(),
+            vec![("queued", Origin::Tracked), ("finished", Origin::Tracked)],
+            "a cancelled deferral must not hold the settle open forever"
+        );
+    }
+
+    #[test]
+    fn a_background_timer_is_only_pending_once_it_fires() {
+        // Background work cannot hold a settle open, so counting it early
+        // would buy nothing and would misreport `background_tasks`.
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let scheduler = loop_.scheduler();
+        let log = Rc::new(EventLog::default());
+        scheduler.sink.set_provenance_sink(log.clone());
+
+        scheduler.set_timeout(5, Box::new(|| {}));
+        assert!(log.events.borrow().is_empty(), "nothing pending yet");
+
+        loop_.advance_to_next_timer();
+        assert_eq!(
+            *log.events.borrow(),
+            vec![
+                ("queued", Origin::Background),
+                ("finished", Origin::Background)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_panicking_timer_callback_does_not_leak_its_nesting_depth() {
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let scheduler = loop_.scheduler();
+        scheduler.set_timeout(0, Box::new(|| panic!("handler blew up")));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            loop_.advance_to_next_timer();
+        }));
+        assert!(outcome.is_err(), "the panic propagated");
+        assert_eq!(
+            scheduler.current_nesting(),
+            0,
+            "a later timer must not inherit the panicking one's depth"
+        );
     }
 
     #[test]
