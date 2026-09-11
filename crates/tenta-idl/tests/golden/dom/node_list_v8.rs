@@ -216,7 +216,10 @@ fn indexed_get_node_list<'s, T: NodeListOps + 'static>(
             return v8::Intercepted::kYes;
         }
     };
-    match match value { Some(inner) => handle_to_v8::<Node>(scope, inner), None => Ok(v8::null(scope).into()) } {
+    let Some(value) = value else {
+        return v8::Intercepted::kNo;
+    };
+    match handle_to_v8::<Node>(scope, value) {
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }

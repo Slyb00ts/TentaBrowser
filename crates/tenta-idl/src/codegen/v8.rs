@@ -839,11 +839,24 @@ fn indexed_getter_callback(interface: &str, operation: &Operation, bound: &str, 
             "    rv.{setter}({call}{cast});\n    v8::Intercepted::kYes\n}}\n"
         );
     } else {
-        let conversion = convert::to_v8(&operation.return_type, "scope", "value");
         let _ = write!(
             out,
-            "    let value: {owned} = match {call} {{\n        Ok(value) => value,\n        Err(error) => {{\n            throw_js_error(scope, &error);\n            return v8::Intercepted::kYes;\n        }}\n    }};\n    \
-             match {conversion} {{\n        Ok(value) => rv.set(value),\n        Err(error) => throw_js_error(scope, &error),\n    }}\n    v8::Intercepted::kYes\n}}\n"
+            "    let value: {owned} = match {call} {{\n        Ok(value) => value,\n        Err(error) => {{\n            throw_js_error(scope, &error);\n            return v8::Intercepted::kYes;\n        }}\n    }};\n"
+        );
+        // An index the object does not support is not a property that holds
+        // `null`: WebIDL leaves it absent, so the handler declines and the
+        // ordinary lookup produces `undefined` (`list[99] === undefined`).
+        let conversion = if let Type::Nullable(inner) = &operation.return_type {
+            out.push_str(
+                "    let Some(value) = value else {\n        return v8::Intercepted::kNo;\n    };\n",
+            );
+            convert::to_v8(inner, "scope", "value")
+        } else {
+            convert::to_v8(&operation.return_type, "scope", "value")
+        };
+        let _ = write!(
+            out,
+            "    match {conversion} {{\n        Ok(value) => rv.set(value),\n        Err(error) => throw_js_error(scope, &error),\n    }}\n    v8::Intercepted::kYes\n}}\n"
         );
     }
 }

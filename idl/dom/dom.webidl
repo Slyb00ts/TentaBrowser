@@ -165,27 +165,35 @@ interface Document : Node {
   [Throws, NewObject] Event createEvent(DOMString interface);
 };
 
+// Phase 4d-3: `iterable<>` makes the collection usable with `for...of` and
+// spread. Both are array-like (a `length` and an indexed getter), so the
+// generated `@@iterator` is `%Array.prototype.values%`; application code -
+// and every framework - iterates query results far more often than it indexes
+// them.
 [Exposed=Window]
 interface HTMLCollection {
   readonly attribute unsigned long length;
   getter Element? item(unsigned long index);
   Element? namedItem(DOMString name);
+  iterable<Element>;
 };
 
 [Exposed=Window]
 interface NodeList {
   readonly attribute unsigned long length;
   getter Node? item(unsigned long index);
+  iterable<Node>;
 };
 
 // Phase 4c-1: DOMTokenList backs Element.classList. Backed by the `class`
 // attribute as an ordered set of tokens (whitespace-split, de-duplicated).
-// `item` is a plain operation (not an indexed getter) and iteration is
-// deferred; frameworks reach for contains/add/remove/toggle, not `list[i]`.
+// Phase 4d-3 makes `item` an indexed getter and the list iterable, so
+// `list[0]` and `for (const c of el.classList)` behave as the spec requires.
 [Exposed=Window]
 interface DOMTokenList {
   readonly attribute unsigned long length;
-  DOMString? item(unsigned long index);
+  getter DOMString? item(unsigned long index);
+  iterable<DOMString>;
   boolean contains(DOMString token);
   [Throws] undefined add(DOMString... tokens);
   [Throws] undefined remove(DOMString... tokens);
