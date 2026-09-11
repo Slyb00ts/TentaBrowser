@@ -158,6 +158,15 @@ pub struct Document {
     /// it. Those fragments have no parent but are not independent detached
     /// roots: their lifetime is their host's (`docs/spec/04-dom-and-css.md` §1.1).
     hosts: HashMap<NodeId, NodeId>,
+    /// The dirty value of a form control whose value has been set by script or
+    /// by the user (`docs/spec/05-javascript.md` §9a). Presence *is* the
+    /// standard's "dirty value flag": once set, the `value` content attribute
+    /// no longer feeds the IDL `value`. Sparse — only controls that were
+    /// actually written to appear, so an ordinary document pays nothing.
+    dirty_values: HashMap<NodeId, String>,
+    /// The dirty checkedness of a checkbox or radio, keyed the same way:
+    /// presence is the "dirty checkedness flag", the value is the checkedness.
+    dirty_checkedness: HashMap<NodeId, bool>,
     mutation_generation: u64,
     /// Bumped only by changes to the shape of the tree, which is what
     /// invalidates document order and the sorted index buckets. Attribute and
@@ -218,6 +227,8 @@ impl Document {
             order: RefCell::new(OrderIndex::default()),
             detached_roots: HashSet::new(),
             hosts: HashMap::new(),
+            dirty_values: HashMap::new(),
+            dirty_checkedness: HashMap::new(),
             mutation_generation: 0,
             structure_generation: 1,
             mutations_since_sweep: 0,
@@ -954,6 +965,30 @@ impl Document {
         }
         let slot = self.arena.elements.shadow[self.arena.nodes.data[self.index(id)].get()];
         slot.is_some().then_some(slot)
+    }
+
+    /// The dirty value of a form control, or `None` while its dirty value flag
+    /// is unset (`docs/spec/05-javascript.md` §9a). `None` means the IDL value
+    /// still follows the `value` content attribute.
+    pub fn dirty_value(&self, id: NodeId) -> Option<&str> {
+        self.dirty_values.get(&id).map(String::as_str)
+    }
+
+    /// Sets a form control's dirty value, raising its dirty value flag. From
+    /// then on the `value` content attribute no longer feeds the IDL value.
+    pub fn set_dirty_value(&mut self, id: NodeId, value: String) {
+        self.dirty_values.insert(id, value);
+    }
+
+    /// The dirty checkedness of a checkbox or radio, or `None` while its dirty
+    /// checkedness flag is unset (the `checked` content attribute still rules).
+    pub fn dirty_checkedness(&self, id: NodeId) -> Option<bool> {
+        self.dirty_checkedness.get(&id).copied()
+    }
+
+    /// Sets a control's checkedness, raising its dirty checkedness flag.
+    pub fn set_dirty_checkedness(&mut self, id: NodeId, checked: bool) {
+        self.dirty_checkedness.insert(id, checked);
     }
 
     /// Attributes of an element in source order.
@@ -1800,6 +1835,10 @@ impl Document {
                 self.release_owned_text(*node);
                 self.hosts.remove(node);
                 self.element_prefixes.remove(node);
+                // A freed slot is reused under a fresh generation, so stale
+                // form state must not survive to alias the next element there.
+                self.dirty_values.remove(node);
+                self.dirty_checkedness.remove(node);
                 self.detached_roots.remove(node);
                 self.arena.free(*node);
                 stats.nodes_freed += 1;
@@ -2831,6 +2870,13 @@ impl Document {
                     + self.detached_roots.capacity() * size_of::<NodeId>()
                     + self.element_prefixes.capacity()
                         * (size_of::<NodeId>() + size_of::<Atom>() + 1)
+                    + self.dirty_values.capacity() * (size_of::<NodeId>() + size_of::<String>() + 1)
+                    + self
+                        .dirty_values
+                        .values()
+                        .map(|value| value.capacity())
+                        .sum::<usize>()
+                    + self.dirty_checkedness.capacity() * (size_of::<NodeId>() + 1 + 1)
             },
         }
     }

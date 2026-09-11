@@ -5,8 +5,8 @@
 //! HTMLXxxElement -> HTMLElement -> Element -> Node -> EventTarget. Only the
 //! safe reflected attributes are wired: `name`, `placeholder` (DOMString) and
 //! `disabled` (boolean); `HTMLLabelElement.htmlFor` reflects the `for`
-//! attribute. The dirty value model (`value`/`checked`/`selected`) and the
-//! enumerated/URL attributes are intentionally absent.
+//! attribute. The enumerated and URL-valued attributes are intentionally
+//! absent; the dirty value model lives in `dom_form_value.rs`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -20,14 +20,24 @@ fn document() -> Rc<RefCell<Document>> {
     let mut d = Document::new();
     let html = d.create_html_element(atoms::HTML);
     let body = d.create_html_element(atoms::BODY);
-    d.mutate(Mutation::Append { parent: d.document_node(), child: html }).unwrap();
-    d.mutate(Mutation::Append { parent: html, child: body }).unwrap();
+    d.mutate(Mutation::Append {
+        parent: d.document_node(),
+        child: html,
+    })
+    .unwrap();
+    d.mutate(Mutation::Append {
+        parent: html,
+        child: body,
+    })
+    .unwrap();
     Rc::new(RefCell::new(d))
 }
 
 fn eval(source: &str) -> String {
     let mut engine = Engine::with_document(document());
-    engine.evaluate(source).expect("script should evaluate without throwing")
+    engine
+        .evaluate(source)
+        .expect("script should evaluate without throwing")
 }
 
 #[test]

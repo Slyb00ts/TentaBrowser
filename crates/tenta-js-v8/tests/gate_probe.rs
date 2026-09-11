@@ -98,7 +98,11 @@ fn react_18_renders_and_handles_a_click() {
     );
     assert_eq!(mounted, "Hello", "React should have mounted the button");
 
-    step(&mut engine, "click", "document.getElementById('btn').click();");
+    step(
+        &mut engine,
+        "click",
+        "document.getElementById('btn').click();",
+    );
     engine.run_event_loop(1000);
 
     let clicks = step(&mut engine, "read clicks", "String(globalThis.__clicks);");
@@ -142,7 +146,11 @@ fn vue_3_mounts_and_handles_a_click() {
     );
     assert_eq!(mounted, "Hello", "Vue should have mounted the button");
 
-    step(&mut engine, "click", "document.getElementById('btn').click();");
+    step(
+        &mut engine,
+        "click",
+        "document.getElementById('btn').click();",
+    );
     engine.run_event_loop(1000);
 
     let clicks = step(&mut engine, "read clicks", "String(globalThis.__clicks);");

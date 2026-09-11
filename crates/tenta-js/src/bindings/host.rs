@@ -374,13 +374,44 @@ impl HostObject {
     /// already-lowercase local name.
     fn reflect_string(&self, name: &str) -> String {
         let (doc, id) = self.anchor();
-        doc.borrow().attribute_str(id, name).unwrap_or("").to_owned()
+        doc.borrow()
+            .attribute_str(id, name)
+            .unwrap_or("")
+            .to_owned()
     }
 
     /// Reads a reflected boolean attribute: present (any value) is `true`.
     fn reflect_bool(&self, name: &str) -> bool {
         let (doc, id) = self.anchor();
         doc.borrow().attribute_str(id, name).is_some()
+    }
+
+    /// Reads a form control's IDL `value` under the dirty value model
+    /// (`docs/spec/05-javascript.md` §9a): the dirty value once one has been
+    /// set, and the `attribute` content attribute until then. A control whose
+    /// default comes from somewhere other than an attribute (a textarea's child
+    /// text) reads the dirty value with [`Self::dirty_value`] instead.
+    fn control_value(&self, attribute: &str) -> String {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        match doc.dirty_value(id) {
+            Some(dirty) => dirty.to_owned(),
+            None => doc.attribute_str(id, attribute).unwrap_or("").to_owned(),
+        }
+    }
+
+    /// The dirty value alone, for a control whose default is not an attribute.
+    fn dirty_value(&self) -> Option<String> {
+        let (doc, id) = self.anchor();
+        doc.borrow().dirty_value(id).map(str::to_owned)
+    }
+
+    /// Assigning to a control's `value` always stores the dirty value and
+    /// raises the dirty value flag; the content attribute is left untouched,
+    /// so `getAttribute("value")` keeps reporting the default.
+    fn set_control_value(&self, value: &str) {
+        let (doc, id) = self.anchor();
+        doc.borrow_mut().set_dirty_value(id, value.to_owned());
     }
 
     /// Writes a reflected boolean attribute: `true` adds it with the empty-string
@@ -2217,6 +2248,24 @@ impl HTMLInputElementOps for HostObject {
     fn set_disabled(&self, value: bool) {
         self.set_reflect_bool("disabled", value);
     }
+    fn value(&self) -> Result<String, JsError> {
+        Ok(self.control_value("value"))
+    }
+    fn set_value(&self, value: &str) {
+        self.set_control_value(value);
+    }
+    fn checked(&self) -> bool {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        match doc.dirty_checkedness(id) {
+            Some(checked) => checked,
+            None => doc.attribute_str(id, "checked").is_some(),
+        }
+    }
+    fn set_checked(&self, value: bool) {
+        let (doc, id) = self.anchor();
+        doc.borrow_mut().set_dirty_checkedness(id, value);
+    }
 }
 
 impl HTMLButtonElementOps for HostObject {
@@ -2267,6 +2316,17 @@ impl HTMLTextAreaElementOps for HostObject {
     }
     fn set_disabled(&self, value: bool) {
         self.set_reflect_bool("disabled", value);
+    }
+    fn value(&self) -> Result<String, JsError> {
+        // A textarea's default is its raw value - the child text - rather than
+        // an attribute, so fall back to `textContent` when nothing is dirty.
+        match self.dirty_value() {
+            Some(dirty) => Ok(dirty),
+            None => Ok(self.text_content()?.unwrap_or_default()),
+        }
+    }
+    fn set_value(&self, value: &str) {
+        self.set_control_value(value);
     }
 }
 

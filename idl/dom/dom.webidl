@@ -265,6 +265,12 @@ interface HTMLInputElement : HTMLElement {
   attribute DOMString name;
   attribute DOMString placeholder;
   attribute boolean disabled;
+  // The dirty value model (05 §9a): `value` reads the dirty value once one has
+  // been set and the `value` content attribute until then; assigning always
+  // raises the dirty value flag. `checked` works the same way over the
+  // `checked` content attribute.
+  attribute DOMString value;
+  attribute boolean checked;
 };
 
 [Exposed=Window]
@@ -284,6 +290,9 @@ interface HTMLTextAreaElement : HTMLElement {
   attribute DOMString name;
   attribute DOMString placeholder;
   attribute boolean disabled;
+  // A textarea's raw value is its child text, so `value` falls back to the
+  // text content rather than to an attribute until the dirty flag is raised.
+  attribute DOMString value;
 };
 
 [Exposed=Window]

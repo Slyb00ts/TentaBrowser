@@ -271,3 +271,21 @@ fn cloned_handles_are_counted_independently() {
     assert_eq!(document.handle_count(element), 0);
     assert_eq!(document.sweep_detached().nodes_freed, 1);
 }
+
+#[test]
+fn dirty_form_state_does_not_survive_the_slot_being_reused() {
+    // A freed slot comes back under a fresh generation for the next element;
+    // if the dirty value map still held the old key, the new control would
+    // report the previous one's typed text (05 §9a).
+    let mut document = Document::new();
+    let input = document.create_html_element(atoms::INPUT);
+    document.set_dirty_value(input, "typed".to_owned());
+    document.set_dirty_checkedness(input, true);
+    assert_eq!(document.dirty_value(input), Some("typed"));
+
+    assert_eq!(document.sweep_detached().nodes_freed, 1);
+
+    let reused = document.create_html_element(atoms::INPUT);
+    assert_eq!(document.dirty_value(reused), None);
+    assert_eq!(document.dirty_checkedness(reused), None);
+}

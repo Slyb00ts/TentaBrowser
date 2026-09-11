@@ -98,7 +98,10 @@ include!(concat!(
 ));
 include!(concat!(env!("OUT_DIR"), "/html_div_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_span_element_register.rs"));
-include!(concat!(env!("OUT_DIR"), "/html_paragraph_element_register.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_paragraph_element_register.rs"
+));
 include!(concat!(env!("OUT_DIR"), "/html_anchor_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_image_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_label_element_register.rs"));
@@ -106,7 +109,10 @@ include!(concat!(env!("OUT_DIR"), "/html_form_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_input_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_button_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_select_element_register.rs"));
-include!(concat!(env!("OUT_DIR"), "/html_text_area_element_register.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_text_area_element_register.rs"
+));
 include!(concat!(env!("OUT_DIR"), "/html_option_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_register.rs"));
