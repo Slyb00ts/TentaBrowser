@@ -57,6 +57,18 @@ include!(concat!(env!("OUT_DIR"), "/html_collection_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_list_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/dom_token_list_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_style_declaration_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_div_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_span_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_paragraph_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_anchor_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_image_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_label_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_form_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_input_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_button_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_select_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_text_area_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_option_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_ops.rs"));
 
@@ -84,6 +96,18 @@ include!(concat!(
     env!("OUT_DIR"),
     "/css_style_declaration_register.rs"
 ));
+include!(concat!(env!("OUT_DIR"), "/html_div_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_span_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_paragraph_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_anchor_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_image_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_label_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_form_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_input_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_button_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_select_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_text_area_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_option_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_register.rs"));
 
@@ -123,6 +147,30 @@ include!(concat!(env!("OUT_DIR"), "/node_list_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/dom_token_list_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/css_style_declaration_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_div_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_span_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_paragraph_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_anchor_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_image_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_label_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_form_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_input_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_button_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_select_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_text_area_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_option_element_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/node_v8.rs"));
 #[cfg(feature = "v8")]

@@ -226,6 +226,71 @@ interface HTMLTemplateElement : HTMLElement {
   [SameObject] readonly attribute DocumentFragment content;
 };
 
+// Phase 4d: per-tag HTML element interfaces so `instanceof HTMLInputElement`
+// (and friends) works and each has a global constructor. Frameworks branch on
+// these — React's controlled-input logic, event delegation and focus handling
+// test `el instanceof HTMLInputElement`/`HTMLSelectElement`/`HTMLTextAreaElement`,
+// and layout/query code checks the common block/inline interfaces. Only the
+// unambiguously-safe reflected attributes are wired here: `name`, `placeholder`
+// (verbatim string reflections) and `disabled` (boolean). The dirty-value model
+// (`value`/`checked`/`selected`), the enumerated `type`/`method` attributes and
+// the URL-valued `href`/`src`/`action` are deliberately deferred.
+[Exposed=Window]
+interface HTMLDivElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLSpanElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLParagraphElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLAnchorElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLImageElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLLabelElement : HTMLElement {
+  attribute DOMString htmlFor;
+};
+
+[Exposed=Window]
+interface HTMLFormElement : HTMLElement {
+  attribute DOMString name;
+};
+
+[Exposed=Window]
+interface HTMLInputElement : HTMLElement {
+  attribute DOMString name;
+  attribute DOMString placeholder;
+  attribute boolean disabled;
+};
+
+[Exposed=Window]
+interface HTMLButtonElement : HTMLElement {
+  attribute DOMString name;
+  attribute boolean disabled;
+};
+
+[Exposed=Window]
+interface HTMLSelectElement : HTMLElement {
+  attribute DOMString name;
+  attribute boolean disabled;
+};
+
+[Exposed=Window]
+interface HTMLTextAreaElement : HTMLElement {
+  attribute DOMString name;
+  attribute DOMString placeholder;
+  attribute boolean disabled;
+};
+
+[Exposed=Window]
+interface HTMLOptionElement : HTMLElement {
+  attribute boolean disabled;
+};
+
 // Phase 4b-2: the ChildNode mixin (the first `includes` in idl/dom). Frameworks
 // call `node.remove()` to detach a node from its parent; it is shared by Element
 // and CharacterData (Text/Comment).

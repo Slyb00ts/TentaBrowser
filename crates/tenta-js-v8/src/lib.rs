@@ -319,6 +319,81 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the HTMLTemplateElement interface");
+            // Phase 4d per-tag interfaces, all `: HTMLElement`, so they install
+            // after it. Each gives its tag's wrappers a distinct prototype and a
+            // global constructor for `instanceof` (see world.rs tag selection).
+            tenta_js::bindings::install_html_div_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLDivElement interface");
+            tenta_js::bindings::install_html_span_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLSpanElement interface");
+            tenta_js::bindings::install_html_paragraph_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLParagraphElement interface");
+            tenta_js::bindings::install_html_anchor_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLAnchorElement interface");
+            tenta_js::bindings::install_html_image_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLImageElement interface");
+            tenta_js::bindings::install_html_label_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLLabelElement interface");
+            tenta_js::bindings::install_html_form_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLFormElement interface");
+            tenta_js::bindings::install_html_input_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLInputElement interface");
+            tenta_js::bindings::install_html_button_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLButtonElement interface");
+            tenta_js::bindings::install_html_select_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLSelectElement interface");
+            tenta_js::bindings::install_html_text_area_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLTextAreaElement interface");
+            tenta_js::bindings::install_html_option_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLOptionElement interface");
             tenta_js::bindings::install_document_fragment::<HostObject>(
                 scope,
                 global_template,

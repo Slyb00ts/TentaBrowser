@@ -23,8 +23,11 @@ use super::{
     CharacterDataOps, Comment, CommentOps, CustomEventConstructor, CustomEventInit, CustomEventOps,
     DOMTokenList, DOMTokenListOps, DocumentFragment, DocumentFragmentOps, DocumentOps, Element,
     ElementOps, Event, EventConstructor, EventInit, EventListener, EventListenerOptionsOrBoolean,
-    EventOps, EventTarget, EventTargetOps, HTMLCollection, HTMLCollectionOps, HTMLElement,
-    HTMLElementOps, HTMLIFrameElementOps, HTMLTemplateElementOps, Handle, JsError,
+    EventOps, EventTarget, EventTargetOps, HTMLAnchorElementOps, HTMLButtonElementOps,
+    HTMLCollection, HTMLCollectionOps, HTMLDivElementOps, HTMLElement, HTMLElementOps,
+    HTMLFormElementOps, HTMLIFrameElementOps, HTMLImageElementOps, HTMLInputElementOps,
+    HTMLLabelElementOps, HTMLOptionElementOps, HTMLParagraphElementOps, HTMLSelectElementOps,
+    HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps, Handle, JsError,
     MouseEventConstructor, MouseEventInit, MouseEventOps, Node, NodeList, NodeListOps, NodeOps,
     Realm, SVGElementOps, Text, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
 };
@@ -364,6 +367,41 @@ impl HostObject {
             name: qname,
             value: value.to_owned(),
         });
+    }
+
+    /// Reads a reflected DOMString attribute, returning "" when it is absent —
+    /// the WHATWG default for a string-reflecting IDL getter. `name` is an
+    /// already-lowercase local name.
+    fn reflect_string(&self, name: &str) -> String {
+        let (doc, id) = self.anchor();
+        doc.borrow().attribute_str(id, name).unwrap_or("").to_owned()
+    }
+
+    /// Reads a reflected boolean attribute: present (any value) is `true`.
+    fn reflect_bool(&self, name: &str) -> bool {
+        let (doc, id) = self.anchor();
+        doc.borrow().attribute_str(id, name).is_some()
+    }
+
+    /// Writes a reflected boolean attribute: `true` adds it with the empty-string
+    /// value, `false` removes it. Mirrors `toggleAttribute` with an explicit
+    /// force and, like the other reflected setters, ignores a mutation error.
+    fn set_reflect_bool(&self, name: &str, value: bool) {
+        let (doc, id) = self.anchor();
+        let qname = QualName::new(atoms::EMPTY, Atom::new(name));
+        let mut doc = doc.borrow_mut();
+        if value {
+            let _ = doc.mutate(Mutation::SetAttribute {
+                element: id,
+                name: qname,
+                value: String::new(),
+            });
+        } else {
+            let _ = doc.mutate(Mutation::RemoveAttribute {
+                element: id,
+                name: qname,
+            });
+        }
     }
 
     /// Detaches the anchored node from its parent (`ChildNode.remove()`). A node
@@ -2131,6 +2169,115 @@ impl HTMLElementOps for HostObject {
 // `HTMLElementOps`/`ElementOps` impls. `SVGElement` carries `style` via the
 // `ElementCSSInlineStyle` mixin.
 impl HTMLIFrameElementOps for HostObject {}
+
+// Phase 4d per-tag interface shells. The block/inline elements carry no members
+// of their own; the form controls reflect only the safe attributes (`name`,
+// `placeholder`, `disabled`, `htmlFor`). The dirty value model, enumerated and
+// URL-valued attributes are deferred.
+impl HTMLDivElementOps for HostObject {}
+impl HTMLSpanElementOps for HostObject {}
+impl HTMLParagraphElementOps for HostObject {}
+impl HTMLAnchorElementOps for HostObject {}
+impl HTMLImageElementOps for HostObject {}
+
+impl HTMLLabelElementOps for HostObject {
+    fn html_for(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("for"))
+    }
+    fn set_html_for(&self, value: &str) {
+        self.reflect_attribute("for", value);
+    }
+}
+
+impl HTMLFormElementOps for HostObject {
+    fn name(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("name"))
+    }
+    fn set_name(&self, value: &str) {
+        self.reflect_attribute("name", value);
+    }
+}
+
+impl HTMLInputElementOps for HostObject {
+    fn name(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("name"))
+    }
+    fn set_name(&self, value: &str) {
+        self.reflect_attribute("name", value);
+    }
+    fn placeholder(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("placeholder"))
+    }
+    fn set_placeholder(&self, value: &str) {
+        self.reflect_attribute("placeholder", value);
+    }
+    fn disabled(&self) -> bool {
+        self.reflect_bool("disabled")
+    }
+    fn set_disabled(&self, value: bool) {
+        self.set_reflect_bool("disabled", value);
+    }
+}
+
+impl HTMLButtonElementOps for HostObject {
+    fn name(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("name"))
+    }
+    fn set_name(&self, value: &str) {
+        self.reflect_attribute("name", value);
+    }
+    fn disabled(&self) -> bool {
+        self.reflect_bool("disabled")
+    }
+    fn set_disabled(&self, value: bool) {
+        self.set_reflect_bool("disabled", value);
+    }
+}
+
+impl HTMLSelectElementOps for HostObject {
+    fn name(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("name"))
+    }
+    fn set_name(&self, value: &str) {
+        self.reflect_attribute("name", value);
+    }
+    fn disabled(&self) -> bool {
+        self.reflect_bool("disabled")
+    }
+    fn set_disabled(&self, value: bool) {
+        self.set_reflect_bool("disabled", value);
+    }
+}
+
+impl HTMLTextAreaElementOps for HostObject {
+    fn name(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("name"))
+    }
+    fn set_name(&self, value: &str) {
+        self.reflect_attribute("name", value);
+    }
+    fn placeholder(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("placeholder"))
+    }
+    fn set_placeholder(&self, value: &str) {
+        self.reflect_attribute("placeholder", value);
+    }
+    fn disabled(&self) -> bool {
+        self.reflect_bool("disabled")
+    }
+    fn set_disabled(&self, value: bool) {
+        self.set_reflect_bool("disabled", value);
+    }
+}
+
+impl HTMLOptionElementOps for HostObject {
+    fn disabled(&self) -> bool {
+        self.reflect_bool("disabled")
+    }
+    fn set_disabled(&self, value: bool) {
+        self.set_reflect_bool("disabled", value);
+    }
+}
 
 impl SVGElementOps for HostObject {
     fn style(&self) -> Result<Handle<CSSStyleDeclaration>, JsError> {
