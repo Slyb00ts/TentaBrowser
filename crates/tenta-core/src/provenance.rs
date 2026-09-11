@@ -71,3 +71,52 @@ impl RequestClass {
         !matches!(self, RequestClass::WebSocket | RequestClass::EventSource)
     }
 }
+
+/// When a timer is a *deferral* of tracked work rather than page activity
+/// (`docs/spec/02-architecture.md` §5.1).
+///
+/// The rule belongs to settle, but it is applied by the event loop in
+/// `tenta-js` at the moment a timer is scheduled, so it lives down here with
+/// the tags it produces. `tenta-page` builds one from its `SettleConfig`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimerRule {
+    /// The longest one-shot delay that still counts as a deferral.
+    pub max_delay: core::time::Duration,
+    /// How deep a chain of timers may go before it is activity, not deferral.
+    pub max_depth: u32,
+}
+
+impl Default for TimerRule {
+    fn default() -> Self {
+        Self {
+            max_delay: core::time::Duration::from_millis(32),
+            max_depth: 8,
+        }
+    }
+}
+
+impl TimerRule {
+    /// The provenance a timer scheduled from a `parent` task inherits.
+    ///
+    /// A timer is tracked only if its parent was tracked and it is one-shot,
+    /// short and not too deep in a chain of timers. Everything else - an
+    /// interval, a long delay, a deep chain - is what a live page does on its
+    /// own, and must never hold a settle open.
+    pub fn origin_for(
+        self,
+        parent: Origin,
+        repeating: bool,
+        delay: core::time::Duration,
+        depth: u32,
+    ) -> Origin {
+        if parent == Origin::Tracked
+            && !repeating
+            && delay <= self.max_delay
+            && depth <= self.max_depth
+        {
+            Origin::Tracked
+        } else {
+            Origin::Background
+        }
+    }
+}

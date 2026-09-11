@@ -23,11 +23,26 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
+use tenta_core::Origin;
 use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId};
 
 /// Timer functions whose deadline has passed, in fire order, waiting for the
 /// engine to invoke them with the isolate in hand.
-pub type ReadyQueue = Rc<RefCell<VecDeque<v8::Global<v8::Function>>>>;
+/// A fired timer handler waiting to be invoked, carrying the loop state to
+/// install around the call.
+///
+/// The JS call happens *outside* the task that dequeued the timer - the task
+/// only moves the handle onto this queue - so the nesting depth and the
+/// provenance have to travel with the handler. Without them a `setTimeout`
+/// made from inside a handler would be scheduled at depth 1 from a top-level
+/// task, which silently defeats both the nesting clamp and the settle rule.
+pub struct ReadyHandler {
+    pub handler: v8::Global<v8::Function>,
+    pub nesting: u32,
+    pub origin: Origin,
+}
+
+pub type ReadyQueue = Rc<RefCell<VecDeque<ReadyHandler>>>;
 
 /// Animation-frame callbacks for the current rendering opportunity, each paired
 /// with the frame timestamp to pass it, waiting for the engine to invoke them.
@@ -278,10 +293,15 @@ fn set_timeout(
 
     let handler = v8::Global::new(scope, handler);
     let ready = state.ready.clone();
+    let scheduler = state.scheduler.clone();
     let id = state.scheduler.set_timeout(
         delay,
         Box::new(move || {
-            ready.borrow_mut().push_back(handler);
+            ready.borrow_mut().push_back(ReadyHandler {
+                handler,
+                nesting: scheduler.current_nesting(),
+                origin: scheduler.current_origin(),
+            });
         }),
     );
     retval.set_double(id.as_u64() as f64);
@@ -323,10 +343,15 @@ fn set_interval(
 
     let handler = v8::Global::new(scope, handler);
     let ready = state.ready.clone();
+    let scheduler = state.scheduler.clone();
     let id = state.scheduler.set_interval(
         delay,
         Box::new(move || {
-            ready.borrow_mut().push_back(handler.clone());
+            ready.borrow_mut().push_back(ReadyHandler {
+                handler: handler.clone(),
+                nesting: scheduler.current_nesting(),
+                origin: scheduler.current_origin(),
+            });
         }),
     );
     retval.set_double(id.as_u64() as f64);

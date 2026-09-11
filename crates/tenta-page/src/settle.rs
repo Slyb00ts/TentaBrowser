@@ -29,7 +29,7 @@ use crate::clock::Clock;
 // classifying the requests it issues - can name them without depending on
 // `tenta-page`. They are re-exported here because the settle machine is what
 // gives them meaning.
-pub use tenta_core::provenance::{Origin, RequestClass};
+pub use tenta_core::provenance::{Origin, RequestClass, TimerRule};
 
 /// The tunables of the machine. The library and MCP differ only in patience.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +60,16 @@ impl Default for SettleConfig {
 }
 
 impl SettleConfig {
+    /// The timer tunables on their own, in the form the event loop applies
+    /// them at schedule time. `tenta-js` cannot see `SettleConfig`, so the page
+    /// hands it this instead.
+    pub const fn timer_rule(&self) -> TimerRule {
+        TimerRule {
+            max_delay: self.tracked_timer_max,
+            max_depth: self.tracked_timer_depth,
+        }
+    }
+
     /// The library defaults (`docs/spec/02-architecture.md` §5.1).
     pub const fn library() -> Self {
         Self {
@@ -184,15 +194,9 @@ pub fn timer_origin(
     depth: u32,
     config: &SettleConfig,
 ) -> Origin {
-    if parent == Origin::Tracked
-        && !repeating
-        && delay <= config.tracked_timer_max
-        && depth <= config.tracked_timer_depth
-    {
-        Origin::Tracked
-    } else {
-        Origin::Background
-    }
+    config
+        .timer_rule()
+        .origin_for(parent, repeating, delay, depth)
 }
 
 #[derive(Clone, Copy, Debug)]

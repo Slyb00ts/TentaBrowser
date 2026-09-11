@@ -24,7 +24,7 @@ use tenta_js::bindings::host::{HostContext, HostObject, SharedContext, SharedDoc
 use tenta_js::dom::events::ScriptHost;
 use tenta_js::event_loop::{Clock, EventLoop, MonoTime};
 
-use host::HostState;
+use host::{HostState, ReadyHandler};
 use script_host::V8ScriptHost;
 
 static PLATFORM_INIT: Once = Once::new();
@@ -630,7 +630,7 @@ impl Engine {
         let mut run = 0;
         while run < max_tasks {
             let progressed = self.event_loop.advance_to_next_timer();
-            let mut fired: std::collections::VecDeque<v8::Global<v8::Function>> =
+            let mut fired: std::collections::VecDeque<ReadyHandler> =
                 self.host.ready.borrow_mut().drain(..).collect();
             if fired.is_empty() {
                 if progressed {
@@ -640,8 +640,8 @@ impl Engine {
                 }
                 break;
             }
-            while let Some(handler) = fired.pop_front() {
-                self.invoke_callback(&handler);
+            while let Some(ready) = fired.pop_front() {
+                self.invoke_timer(&ready);
                 self.isolate.perform_microtask_checkpoint();
                 run += 1;
                 if run >= max_tasks {
@@ -680,9 +680,9 @@ impl Engine {
     pub fn tick_frame(&mut self) {
         self.event_loop.tick_frame();
         // Timers that came due this frame run as tasks, each with a checkpoint.
-        let fired: Vec<v8::Global<v8::Function>> = self.host.ready.borrow_mut().drain(..).collect();
-        for handler in fired {
-            self.invoke_handler(&handler, None);
+        let fired: Vec<ReadyHandler> = self.host.ready.borrow_mut().drain(..).collect();
+        for ready in fired {
+            self.invoke_timer(&ready);
             self.isolate.perform_microtask_checkpoint();
         }
         self.drain_ready_frames();
@@ -699,9 +699,22 @@ impl Engine {
         }
     }
 
-    /// Calls one timer handler with no arguments.
-    fn invoke_callback(&mut self, handler: &v8::Global<v8::Function>) {
-        self.invoke_handler(handler, None);
+    /// Calls one fired timer handler with the loop state it was queued under.
+    ///
+    /// The nesting depth and provenance are reinstalled here, around the JS
+    /// call itself, because the task that dequeued the timer only moved the
+    /// handle onto the ready queue and has already restored them. Without this
+    /// a `setTimeout(f, 0)` chain would be scheduled from depth 1 every time
+    /// and never reach the clamp, and every timer-scheduled task would look
+    /// like top-level work to the settle machine.
+    fn invoke_timer(&mut self, ready: &ReadyHandler) {
+        let scheduler = self.host.scheduler.clone();
+        let origin = ready.origin;
+        let nesting = ready.nesting;
+        let handler = &ready.handler;
+        scheduler.with_nesting(nesting, || {
+            scheduler.with_origin(origin, || self.invoke_handler(handler, None));
+        });
     }
 
     /// Calls one handler in this engine's context, passing `timestamp` as the

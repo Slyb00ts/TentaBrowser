@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
+use tenta_core::{Origin, TimerRule};
+
 use super::tasks::{TaskRunner, TaskSink};
 use super::time::{Clock, MonoTime};
 use super::timers::{TimerId, TimerQueue};
@@ -42,12 +44,14 @@ impl AnimationFrameId {
     }
 }
 
-/// A scheduled timer's callback and the nesting level to install while it runs,
-/// so a timer it schedules is clamped one level deeper.
+/// A scheduled timer's callback, the nesting level to install while it runs so
+/// a timer it schedules is clamped one level deeper, and the provenance the
+/// firing carries (decided once, at schedule time, by [`TimerRule`]).
 enum TimerCallback {
     /// A `setTimeout` callback: runs once, then its slot is dropped.
     OneShot {
         nesting: u32,
+        origin: Origin,
         run: Box<dyn FnOnce()>,
     },
     /// A `setInterval` callback: runs every `period_ms`, re-armed under the same
@@ -55,6 +59,7 @@ enum TimerCallback {
     /// an `FnMut` moved back into the timer map between firings.
     Interval {
         nesting: u32,
+        origin: Origin,
         period_ms: u64,
         run: Box<dyn FnMut()>,
     },
@@ -76,6 +81,8 @@ struct Shared {
     timer_callbacks: HashMap<TimerId, TimerCallback>,
     /// Nesting level of the timer callback currently running; 0 at top level.
     current_nesting: u32,
+    /// When a timer defers tracked work rather than being page activity.
+    timer_rule: TimerRule,
     next_frame_id: u64,
     /// Callbacks registered for the next rendering opportunity.
     frame_callbacks: Vec<FrameCallback>,
@@ -98,6 +105,7 @@ impl Scheduler {
     /// Schedules `callback` to run after `delay_ms` (`setTimeout`). The Chromium
     /// nesting clamp is applied relative to the timer currently running.
     pub fn set_timeout(&self, delay_ms: u64, callback: Box<dyn FnOnce()>) -> TimerId {
+        let origin = self.timer_origin(false, delay_ms);
         let mut shared = self.shared.borrow_mut();
         let nesting = shared.current_nesting + 1;
         let now = shared.clock.now();
@@ -106,10 +114,59 @@ impl Scheduler {
             id,
             TimerCallback::OneShot {
                 nesting,
+                origin,
                 run: callback,
             },
         );
         id
+    }
+
+    /// The provenance a timer scheduled right now would carry. Decided once,
+    /// here, because the rule is about the *scheduling* task: by the time the
+    /// timer fires that task is long gone.
+    fn timer_origin(&self, repeating: bool, delay_ms: u64) -> Origin {
+        let shared = self.shared.borrow();
+        shared.timer_rule.origin_for(
+            self.sink.current_origin(),
+            repeating,
+            Duration::from_millis(delay_ms),
+            shared.current_nesting + 1,
+        )
+    }
+
+    /// The nesting level a timer scheduled right now would get. The engine
+    /// reads this when it defers the actual callback invocation past the task
+    /// that dequeued the timer.
+    pub fn current_nesting(&self) -> u32 {
+        self.shared.borrow().current_nesting
+    }
+
+    /// Runs `body` with `nesting` installed as the current timer depth, so a
+    /// `setTimeout` made from inside a timer handler is clamped one level
+    /// deeper even when the handler runs outside the queued task.
+    pub fn with_nesting<R>(&self, nesting: u32, body: impl FnOnce() -> R) -> R {
+        let previous = {
+            let mut shared = self.shared.borrow_mut();
+            std::mem::replace(&mut shared.current_nesting, nesting)
+        };
+        let result = body();
+        self.shared.borrow_mut().current_nesting = previous;
+        result
+    }
+
+    /// The provenance work queued right now inherits.
+    pub fn current_origin(&self) -> Origin {
+        self.sink.current_origin()
+    }
+
+    /// Runs `body` with `origin` as the inherited provenance.
+    pub fn with_origin<R>(&self, origin: Origin, body: impl FnOnce() -> R) -> R {
+        self.sink.with_origin(origin, body)
+    }
+
+    /// Replaces the timer rule, which the page derives from its `SettleConfig`.
+    pub fn set_timer_rule(&self, rule: TimerRule) {
+        self.shared.borrow_mut().timer_rule = rule;
     }
 
     /// Cancels a scheduled timer (`clearTimeout`).
@@ -125,6 +182,7 @@ impl Scheduler {
     /// `setInterval(f, 0)` is clamped like a nested `setTimeout` rather than
     /// busy-looping. The loop re-arms the timer, never script.
     pub fn set_interval(&self, delay_ms: u64, callback: Box<dyn FnMut()>) -> TimerId {
+        let origin = self.timer_origin(true, delay_ms);
         let mut shared = self.shared.borrow_mut();
         let nesting = shared.current_nesting + 1;
         let now = shared.clock.now();
@@ -133,6 +191,7 @@ impl Scheduler {
             id,
             TimerCallback::Interval {
                 nesting,
+                origin,
                 period_ms: delay_ms,
                 run: callback,
             },
@@ -198,6 +257,7 @@ impl EventLoop {
             timers: TimerQueue::new(),
             timer_callbacks: HashMap::new(),
             current_nesting: 0,
+            timer_rule: TimerRule::default(),
             next_frame_id: 0,
             frame_callbacks: Vec::new(),
         }));
@@ -265,9 +325,13 @@ impl EventLoop {
             let callback = self.shared.borrow_mut().timer_callbacks.remove(&id);
             let Some(callback) = callback else { continue };
             match callback {
-                TimerCallback::OneShot { nesting, run } => {
+                TimerCallback::OneShot {
+                    nesting,
+                    origin,
+                    run,
+                } => {
                     let shared = self.shared.clone();
-                    self.scheduler.sink.queue_task(move || {
+                    self.scheduler.sink.queue_task_from(origin, move || {
                         // Install this timer's nesting level so a timer it
                         // schedules is clamped one level deeper, then restore the
                         // top level.
@@ -278,6 +342,7 @@ impl EventLoop {
                 }
                 TimerCallback::Interval {
                     nesting,
+                    origin,
                     period_ms,
                     mut run,
                 } => {
@@ -291,7 +356,7 @@ impl EventLoop {
                         shared.timers.reschedule(id, now, period_ms, next_nesting);
                     }
                     let shared = self.shared.clone();
-                    self.scheduler.sink.queue_task(move || {
+                    self.scheduler.sink.queue_task_from(origin, move || {
                         shared.borrow_mut().current_nesting = next_nesting;
                         run();
                         let mut shared = shared.borrow_mut();
@@ -304,6 +369,7 @@ impl EventLoop {
                                 id,
                                 TimerCallback::Interval {
                                     nesting: next_nesting,
+                                    origin,
                                     period_ms,
                                     run,
                                 },
@@ -381,6 +447,107 @@ impl EventLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Collects the provenance every task ran under, in order.
+    #[derive(Default)]
+    struct OriginLog {
+        finished: RefCell<Vec<Origin>>,
+    }
+
+    impl super::super::tasks::ProvenanceSink for OriginLog {
+        fn task_queued(&self, _origin: Origin) {}
+        fn task_finished(&self, origin: Origin) {
+            self.finished.borrow_mut().push(origin);
+        }
+    }
+
+    /// Schedules one timer from a `Tracked` task and reports the provenance
+    /// the firing ran under.
+    fn timer_origin_for(repeating: bool, delay_ms: u64) -> Origin {
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let scheduler = loop_.scheduler();
+        let log = Rc::new(OriginLog::default());
+        scheduler.sink.set_provenance_sink(log.clone());
+
+        scheduler.with_origin(Origin::Tracked, || {
+            if repeating {
+                scheduler.set_interval(delay_ms, Box::new(|| {}));
+            } else {
+                scheduler.set_timeout(delay_ms, Box::new(|| {}));
+            }
+        });
+        loop_.advance_to_next_timer();
+
+        let finished = log.finished.borrow();
+        *finished.first().expect("the timer fired")
+    }
+
+    #[test]
+    fn a_short_one_shot_timer_from_tracked_work_stays_tracked() {
+        assert_eq!(timer_origin_for(false, 0), Origin::Tracked);
+        assert_eq!(timer_origin_for(false, 32), Origin::Tracked);
+    }
+
+    #[test]
+    fn a_long_timer_or_an_interval_is_page_activity() {
+        // Past `tracked_timer_max` a one-shot timer is no longer a deferral of
+        // the load chain, and a repeating timer never is: both must be unable
+        // to hold a settle open.
+        assert_eq!(timer_origin_for(false, 33), Origin::Background);
+        assert_eq!(timer_origin_for(true, 0), Origin::Background);
+    }
+
+    #[test]
+    fn a_timer_scheduled_from_background_work_cannot_become_tracked() {
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let scheduler = loop_.scheduler();
+        let log = Rc::new(OriginLog::default());
+        scheduler.sink.set_provenance_sink(log.clone());
+
+        // No `with_origin`: the top level is background.
+        scheduler.set_timeout(0, Box::new(|| {}));
+        loop_.advance_to_next_timer();
+
+        assert_eq!(*log.finished.borrow(), vec![Origin::Background]);
+    }
+
+    #[test]
+    fn a_chain_of_timers_falls_out_of_tracked_once_it_is_deep_enough() {
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let scheduler = loop_.scheduler();
+        let log = Rc::new(OriginLog::default());
+        scheduler.sink.set_provenance_sink(log.clone());
+
+        // Each firing schedules the next, so the chain deepens by one level a
+        // hop; the default rule allows depth 8.
+        fn hop(scheduler: Scheduler, left: u32) {
+            if left == 0 {
+                return;
+            }
+            let next = scheduler.clone();
+            scheduler.set_timeout(0, Box::new(move || hop(next, left - 1)));
+        }
+        scheduler.with_origin(Origin::Tracked, || hop(scheduler.clone(), 12));
+        while loop_.advance_to_next_timer() {}
+
+        let finished = log.finished.borrow();
+        assert!(
+            finished.len() >= 10,
+            "the chain ran, got {} firings",
+            finished.len()
+        );
+        assert_eq!(finished[0], Origin::Tracked, "the first hop is a deferral");
+        assert_eq!(
+            finished[7],
+            Origin::Tracked,
+            "depth 8 is the last tracked level"
+        );
+        assert_eq!(
+            finished[8],
+            Origin::Background,
+            "past the depth limit the chain is page activity"
+        );
+    }
 
     type Log = Rc<RefCell<Vec<String>>>;
 
