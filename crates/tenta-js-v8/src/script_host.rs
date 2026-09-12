@@ -90,6 +90,13 @@ impl ScriptHost for V8ScriptHost {
             return;
         };
 
+        // A listener is script, so it can queue a promise reaction. Today every
+        // dispatch originates inside running script, whose own entry already
+        // recorded the debt — but a real-clock page parks on `next_wakeup`, and
+        // the moment the native-dispatch branch below is implemented an unpaid
+        // checkpoint would strand the reaction until an unrelated timer fired.
+        self.host.microtasks_pending.set(true);
+
         v8::tc_scope!(let tc, scope);
         // A callable listener is invoked directly; a non-callable object has its
         // `handleEvent` method invoked with `this` set to the object. Any thrown

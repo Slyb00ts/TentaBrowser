@@ -34,6 +34,7 @@ use super::{
 use crate::dom::events::{
     CallbackRef, EventKey, EventKind, EventRecord, EventSlab, ListenerTable, ScriptHost, dispatch,
 };
+use crate::event_loop::SharedClock;
 
 /// A document shared between the host objects of one world and the engine that
 /// drives it. Every `HostObject` for the document holds one of these clones, so
@@ -143,8 +144,11 @@ pub struct HostContext {
     /// The engine's callback boundary, installed at `Engine::build` and cleared
     /// at teardown. `None` before installation and after teardown.
     pub script: RefCell<Option<Rc<dyn ScriptHost>>>,
-    /// The instant this world was created, for `Event.timeStamp`.
-    pub origin: std::time::Instant,
+    /// The event loop's clock, which `Event.timeStamp` reads. It is the loop's
+    /// clock and not a private origin so that a timestamp is directly
+    /// comparable with `performance.now()`, as script assumes — and so that a
+    /// virtual clock moves both together.
+    pub clock: SharedClock,
     /// Elements with a synthetic `click()` in progress, so a nested `click()`
     /// on the same element during its own dispatch is a no-op (the DOM
     /// "click in progress" flag).
@@ -152,23 +156,24 @@ pub struct HostContext {
 }
 
 impl HostContext {
-    /// Builds a fresh context over `doc` with empty event state and no script
-    /// host yet.
-    pub fn new(doc: SharedDocument) -> Self {
+    /// Builds a fresh context over `doc`, timestamping events against `clock`,
+    /// with empty event state and no script host yet.
+    pub fn new(doc: SharedDocument, clock: SharedClock) -> Self {
         Self {
             doc,
             snapshots: RefCell::new(SnapshotSlab::new()),
             listeners: RefCell::new(ListenerTable::new()),
             events: RefCell::new(EventSlab::new()),
             script: RefCell::new(None),
-            origin: std::time::Instant::now(),
+            clock,
             click_in_progress: RefCell::new(HashSet::new()),
         }
     }
 
-    /// Milliseconds elapsed since this world's origin, for `Event.timeStamp`.
+    /// Milliseconds since the loop origin, for `Event.timeStamp` — the same
+    /// reading `performance.now()` returns.
     pub fn time_stamp(&self) -> f64 {
-        self.origin.elapsed().as_secs_f64() * 1000.0
+        self.clock.now().as_millis_f64()
     }
 }
 

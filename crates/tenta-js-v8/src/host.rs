@@ -40,6 +40,12 @@ pub struct ReadyHandler {
     pub handler: v8::Global<v8::Function>,
     pub nesting: u32,
     pub origin: Origin,
+    /// The timer this handler came from. The push is what *defers* the call,
+    /// so it is recorded as such on the loop; the id is handed back before the
+    /// call so a `clearTimeout` landing in between can abort it. `None` only if
+    /// a handler were ever queued from outside a timer firing, which nothing
+    /// does today - and which is then simply never abortable.
+    pub timer: Option<TimerId>,
 }
 
 pub type ReadyQueue = Rc<RefCell<VecDeque<ReadyHandler>>>;
@@ -64,6 +70,14 @@ pub struct HostState {
     /// `element.click()` outside script) may. The event dispatcher checks this
     /// to decide (`docs/spec/05-javascript.md` §5).
     pub script_depth: std::cell::Cell<u32>,
+    /// Set whenever script is entered, cleared by a microtask checkpoint.
+    ///
+    /// V8's microtask queue is not introspectable, so this is how the driver
+    /// knows a promise reaction may still be waiting. A real-clock page parks
+    /// on `next_wakeup`, and the timer heap knows nothing about microtasks: a
+    /// `.then` after a script entry would sit unrun for as long as the page
+    /// happened to have no timer scheduled.
+    pub microtasks_pending: std::cell::Cell<bool>,
 }
 
 impl HostState {
@@ -74,12 +88,18 @@ impl HostState {
             ready: Rc::new(RefCell::new(VecDeque::new())),
             ready_frames: Rc::new(RefCell::new(VecDeque::new())),
             script_depth: std::cell::Cell::new(0),
+            microtasks_pending: std::cell::Cell::new(false),
         })
     }
 
     /// Marks the start of a script activation; pair with [`Self::exit_script`].
+    /// Entering script can queue a microtask, so this is where the driver
+    /// learns a checkpoint is owed. It is not the only such place: a dispatched
+    /// listener records the debt itself, since it re-enters the isolate without
+    /// going through here.
     pub fn enter_script(&self) {
         self.script_depth.set(self.script_depth.get() + 1);
+        self.microtasks_pending.set(true);
     }
 
     /// Marks the end of a script activation.
@@ -92,8 +112,10 @@ impl HostState {
 /// Installs the timer/microtask/animation-frame host functions, the
 /// window/global self-aliases, and the `navigator` and `performance` globals as
 /// own properties of `context`'s global object. Call once per context, inside a
-/// context scope.
-pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>) {
+/// context scope. `time_origin_ms` is the loop clock's wall-clock origin, which
+/// `performance.timeOrigin` reports; it is passed in because the host state
+/// slot this context reads is only set after `install` returns.
+pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>, time_origin_ms: f64) {
     let global = context.global(scope);
     define(scope, global, "setTimeout", set_timeout);
     define(scope, global, "clearTimeout", clear_timeout);
@@ -122,7 +144,7 @@ pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>) {
         global.set(scope, key.into(), global.into());
     }
 
-    install_performance(scope, global);
+    install_performance(scope, global, time_origin_ms);
     install_navigator(scope, global);
 }
 
@@ -147,16 +169,23 @@ fn set_bool(scope: &mut v8::PinScope, target: v8::Local<v8::Object>, name: &str,
     target.set(scope, key.into(), value.into());
 }
 
-/// Installs `performance` with `now()` and `timeOrigin`, both reading the event
-/// loop's clock so time advances with the virtual scheduler under tests and with
-/// the monotonic clock in production.
-fn install_performance(scope: &mut v8::PinScope, global: v8::Local<v8::Object>) {
+/// Installs `performance` with `now()` and `timeOrigin`, both taken from the
+/// event loop's clock: `now()` advances with the virtual scheduler under tests
+/// and with the monotonic clock in production, and `timeOrigin` is that clock's
+/// wall-clock anchor.
+fn install_performance(
+    scope: &mut v8::PinScope,
+    global: v8::Local<v8::Object>,
+    time_origin_ms: f64,
+) {
     let performance = v8::Object::new(scope);
     define(scope, performance, "now", performance_now);
-    // The virtual clock's origin is `MonoTime::ZERO`, so `now()` is milliseconds
-    // since origin and `timeOrigin` is 0. When a wall clock lands this becomes
-    // the Unix-epoch millisecond the loop started.
-    set_number(scope, performance, "timeOrigin", 0.0);
+    // Fixed for the life of the loop, so a data property rather than a getter.
+    // A virtual clock reports 0 (no wall-clock anchor, which is what keeps a
+    // headless trace reproducible); a real one reports the Unix-epoch
+    // millisecond the loop started, making `timeOrigin + performance.now()` a
+    // wall-clock reading.
+    set_number(scope, performance, "timeOrigin", time_origin_ms);
 
     let key = v8::String::new(scope, "performance").expect("`performance` fits the string limit");
     global.set(scope, key.into(), performance.into());
@@ -301,6 +330,7 @@ fn set_timeout(
                 handler,
                 nesting: scheduler.current_nesting(),
                 origin: scheduler.current_origin(),
+                timer: scheduler.defer_firing(),
             });
         }),
     );
@@ -351,6 +381,7 @@ fn set_interval(
                 handler: handler.clone(),
                 nesting: scheduler.current_nesting(),
                 origin: scheduler.current_origin(),
+                timer: scheduler.defer_firing(),
             });
         }),
     );

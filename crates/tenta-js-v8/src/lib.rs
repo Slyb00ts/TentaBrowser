@@ -120,14 +120,18 @@ unsafe extern "C" fn on_near_heap_limit(
 impl Engine {
     /// Builds an isolate with one fresh context and no heap cap.
     pub fn new() -> Self {
-        Self::build(None, None)
+        Self::build(None, None, Clock::virtual_at(MonoTime::ZERO))
     }
 
     /// Builds an isolate whose heap is capped at `max_heap_bytes`; a script that
     /// exceeds it is terminated and reported as a [`JsError`] rather than
     /// crashing the process (`docs/spec/05-javascript.md` §11).
     pub fn with_heap_limit(max_heap_bytes: usize) -> Self {
-        Self::build(Some(max_heap_bytes), None)
+        Self::build(
+            Some(max_heap_bytes),
+            None,
+            Clock::virtual_at(MonoTime::ZERO),
+        )
     }
 
     /// Builds an isolate whose global object exposes the read-only DOM of
@@ -136,10 +140,33 @@ impl Engine {
     /// This is the Phase 0c vertical slice that proves the generated V8 glue
     /// end to end; it grows into the full binding surface in phase 1.
     pub fn with_document(doc: SharedDocument) -> Self {
-        Self::build(None, Some(doc))
+        Self::build(None, Some(doc), Clock::virtual_at(MonoTime::ZERO))
     }
 
-    fn build(max_heap_bytes: Option<usize>, doc: Option<SharedDocument>) -> Self {
+    /// Builds a DOM engine over `doc` driven by `clock`. A live page passes
+    /// [`Clock::real`] so timers fire in wall time and `performance.now()`
+    /// advances without anyone stepping it; headless work keeps the virtual
+    /// clock the other constructors install, which makes timer ordering
+    /// reproducible (`docs/spec/05-javascript.md` §5).
+    ///
+    /// A real-clock engine is driven by [`Self::next_wakeup`] and
+    /// [`Self::pump_due_timers`] rather than [`Self::run_event_loop`], which
+    /// drives the clock itself and so only moves a virtual one.
+    ///
+    /// `max_heap_bytes` caps the isolate's heap as [`Self::with_heap_limit`]
+    /// does. It is a parameter rather than an afterthought because this is the
+    /// constructor that runs *untrusted* page script: without a cap, script
+    /// that allocates without bound aborts the process instead of producing a
+    /// contained [`JsError`].
+    pub fn with_document_on_clock(
+        doc: SharedDocument,
+        clock: Clock,
+        max_heap_bytes: Option<usize>,
+    ) -> Self {
+        Self::build(max_heap_bytes, Some(doc), clock)
+    }
+
+    fn build(max_heap_bytes: Option<usize>, doc: Option<SharedDocument>, clock: Clock) -> Self {
         ensure_platform();
         let mut params = v8::CreateParams::default();
         if let Some(max) = max_heap_bytes {
@@ -161,9 +188,7 @@ impl Engine {
             guard
         });
 
-        // A virtual clock keeps headless timer ordering deterministic
-        // (`docs/spec/05-javascript.md` §5); a live page swaps in a real clock.
-        let event_loop = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let event_loop = EventLoop::new(clock);
         let host = HostState::new(event_loop.scheduler());
 
         let (context, dom) = {
@@ -174,7 +199,7 @@ impl Engine {
                     {
                         let mut context_scope = v8::ContextScope::new(handle_scope, local);
                         v8::scope!(let scope, &mut context_scope);
-                        host::install(scope, local);
+                        host::install(scope, local, host.scheduler.clock().time_origin_ms());
                     }
                     // The host callbacks reach this state through the context slot.
                     local.set_slot::<HostState>(host.clone());
@@ -237,7 +262,9 @@ impl Engine {
         doc: SharedDocument,
     ) -> (v8::Global<v8::Context>, Option<DomWorld>) {
         let state = Rc::new(RefCell::new(world::WorldState::default()));
-        let ctx = Rc::new(HostContext::new(doc.clone()));
+        // Events timestamp against the loop clock, so `evt.timeStamp` and
+        // `performance.now()` are readings of the same clock.
+        let ctx = Rc::new(HostContext::new(doc.clone(), host.scheduler.clock()));
         let document_ref = {
             let doc = doc.borrow();
             doc.node_ref(doc.document_node())
@@ -466,7 +493,7 @@ impl Engine {
         {
             let mut context_scope = v8::ContextScope::new(scope, local);
             v8::scope!(let inner, &mut context_scope);
-            host::install(inner, local);
+            host::install(inner, local, host.scheduler.clock().time_origin_ms());
             install_dom_exception(inner);
 
             // Materialise the `document` wrapper, expose it as a global, then
@@ -625,14 +652,12 @@ impl Engine {
     /// number actually run (`docs/spec/05-javascript.md` §5, §11).
     pub fn run_event_loop(&mut self, max_tasks: usize) -> usize {
         // Microtasks queued by the preceding top-level script run first.
-        self.isolate.perform_microtask_checkpoint();
+        self.checkpoint();
 
         let mut run = 0;
         while run < max_tasks {
             let progressed = self.event_loop.advance_to_next_timer();
-            let mut fired: std::collections::VecDeque<ReadyHandler> =
-                self.host.ready.borrow_mut().drain(..).collect();
-            if fired.is_empty() {
+            if self.host.ready.borrow().is_empty() {
                 if progressed {
                     // The clock moved but every due timer was cancelled; keep
                     // draining later deadlines.
@@ -640,25 +665,113 @@ impl Engine {
                 }
                 break;
             }
-            while let Some(ready) = fired.pop_front() {
-                self.invoke_timer(&ready);
-                self.isolate.perform_microtask_checkpoint();
+            // The ready queue stays authoritative: a handler is taken from it
+            // one at a time rather than moved into a local batch. A panic in a
+            // binding unwinds through here (the page thread survives it), and a
+            // local batch would be dropped on the way out, silently losing every
+            // handler that had not run yet.
+            run += self.invoke_ready(max_tasks - run);
+        }
+        run
+    }
+
+    /// Whether a rendering opportunity is owed, so a woken driver knows to call
+    /// [`Self::run_animation_frame`]. See [`Self::next_wakeup`]'s contract.
+    pub fn frame_due(&self) -> bool {
+        !self.host.ready_frames.borrow().is_empty() || self.event_loop.frame_due()
+    }
+
+    /// Runs a microtask checkpoint: every pending promise reaction and
+    /// `queueMicrotask` callback, including those the checkpoint itself queues,
+    /// until the queue is empty.
+    ///
+    /// The drive methods run one after each callback. A driver that entered
+    /// script by some other route — [`Self::evaluate`], a dispatched DOM event
+    /// — owes one too, and until it is paid [`Self::next_wakeup`] reports zero.
+    pub fn run_microtasks(&mut self) {
+        self.checkpoint();
+    }
+
+    /// Drains V8's microtask queue and records that the debt is paid.
+    ///
+    /// Every checkpoint goes through here so the "a checkpoint is owed" flag
+    /// cannot drift from reality. It is cleared *after* the drain: V8 runs
+    /// microtasks queued by microtasks in the same pass, so once this returns
+    /// the queue is genuinely empty, and any script entered afterwards sets the
+    /// flag again on its own.
+    fn checkpoint(&mut self) {
+        self.isolate.perform_microtask_checkpoint();
+        self.host.microtasks_pending.set(false);
+    }
+
+    /// Invokes up to `budget` handlers from the ready queue, each followed by a
+    /// microtask checkpoint, and returns how many ran. Handlers past the budget
+    /// stay queued in order for the next drive.
+    fn invoke_ready(&mut self, budget: usize) -> usize {
+        let mut run = 0;
+        let mut taken = 0;
+        while taken < budget {
+            let next = self.host.ready.borrow_mut().pop_front();
+            let Some(ready) = next else { break };
+            // A handler cancelled in the deferral window still costs budget: a
+            // flood of cancelled timers must not let one drive run unbounded.
+            // It runs no script, so it is owed no checkpoint and is not counted.
+            taken += 1;
+            if self.invoke_timer(&ready) {
+                self.checkpoint();
                 run += 1;
-                if run >= max_tasks {
-                    break;
-                }
-            }
-            // Handlers already fired this batch but not yet invoked when the task
-            // bound was hit go back to the front of the ready queue, ahead of any
-            // later work, so a subsequent drive runs them rather than losing them.
-            if !fired.is_empty() {
-                let mut ready = self.host.ready.borrow_mut();
-                while let Some(handler) = fired.pop_back() {
-                    ready.push_front(handler);
-                }
             }
         }
         run
+    }
+
+    /// How long until this engine next has work, or `None` when it has none —
+    /// the interval a real-clock page thread parks for. `Duration::ZERO` means
+    /// work is due already and the thread must not park at all.
+    ///
+    /// **Contract.** A woken driver must run what it was woken for, or it will
+    /// be told "now" again and spin: [`Self::pump_due_timers`] for timers and
+    /// owed microtasks, and [`Self::run_animation_frame`] when
+    /// [`Self::frame_due`] says a rendering opportunity is owed — that call is
+    /// the only thing that advances the frame clock.
+    pub fn next_wakeup(&self) -> Option<std::time::Duration> {
+        // Handlers a bounded pump held back are due work the timer heap no
+        // longer knows about: it handed them over when they fired. A microtask
+        // checkpoint owed since the last script entry is work no queue here
+        // knows about at all — V8's microtask queue is not introspectable.
+        // Parking on the timer heap alone would leave either unrun until some
+        // unrelated timer happened to come due.
+        if !self.host.ready.borrow().is_empty()
+            || !self.host.ready_frames.borrow().is_empty()
+            || self.host.microtasks_pending.get()
+        {
+            return Some(std::time::Duration::ZERO);
+        }
+        self.event_loop.next_wakeup()
+    }
+
+    /// Runs the timers that are due *now*, without moving the clock, and
+    /// returns how many callbacks ran. `max_tasks` bounds one pump so a timer
+    /// that reschedules itself at zero delay cannot starve the rest of the
+    /// thread; anything still due is picked up by the next pump.
+    ///
+    /// This is the real-clock counterpart of [`Self::run_event_loop`]: wall
+    /// time supplies the advance, so the engine only ever fires what has
+    /// already come due (`docs/spec/05-javascript.md` §5).
+    pub fn pump_due_timers(&mut self, max_tasks: usize) -> usize {
+        self.checkpoint();
+
+        // Exactly one sweep of the timer heap per pump. A zero-delay timer a
+        // handler schedules is due the moment it is scheduled, so re-reading
+        // the heap here would let a `setTimeout(f, 0)` chain spin inside one
+        // pump and starve everything else on the thread. It waits for the next
+        // pump instead, which the caller enters immediately because
+        // `next_wakeup` reports zero.
+        self.event_loop.fire_due_timers();
+        // Handlers past `max_tasks` stay queued, in order, for the next pump —
+        // which the caller enters immediately, because `next_wakeup` reports
+        // zero while the ready queue is non-empty.
+        self.invoke_ready(max_tasks)
     }
 
     /// Runs one rendering opportunity at the current virtual time: every
@@ -680,11 +793,9 @@ impl Engine {
     pub fn tick_frame(&mut self) {
         self.event_loop.tick_frame();
         // Timers that came due this frame run as tasks, each with a checkpoint.
-        let fired: Vec<ReadyHandler> = self.host.ready.borrow_mut().drain(..).collect();
-        for ready in fired {
-            self.invoke_timer(&ready);
-            self.isolate.perform_microtask_checkpoint();
-        }
+        // Through `invoke_ready` like every other drive path, so a panicking
+        // handler cannot take the rest of the queue down with it.
+        self.invoke_ready(usize::MAX);
         self.drain_ready_frames();
     }
 
@@ -695,7 +806,7 @@ impl Engine {
             self.host.ready_frames.borrow_mut().drain(..).collect();
         for (handler, timestamp) in frames {
             self.invoke_handler(&handler, Some(timestamp));
-            self.isolate.perform_microtask_checkpoint();
+            self.checkpoint();
         }
     }
 
@@ -707,14 +818,24 @@ impl Engine {
     /// a `setTimeout(f, 0)` chain would be scheduled from depth 1 every time
     /// and never reach the clamp, and every timer-scheduled task would look
     /// like top-level work to the settle machine.
-    fn invoke_timer(&mut self, ready: &ReadyHandler) {
+    fn invoke_timer(&mut self, ready: &ReadyHandler) -> bool {
         let scheduler = self.host.scheduler.clone();
+        if let Some(id) = ready.timer
+            && !scheduler.claim_fired(id)
+        {
+            // `clearTimeout` landed after this timer fired but before the call.
+            // HTML aborts such a timer, and script relies on it: the debounce
+            // idiom cancels a pending callback from another callback that came
+            // due in the same sweep.
+            return false;
+        }
         let origin = ready.origin;
         let nesting = ready.nesting;
         let handler = &ready.handler;
         scheduler.with_nesting(nesting, || {
             scheduler.with_origin(origin, || self.invoke_handler(handler, None));
         });
+        true
     }
 
     /// Calls one handler in this engine's context, passing `timestamp` as the

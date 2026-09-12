@@ -11,6 +11,7 @@ use tenta_dom::{Document, Mutation};
 
 use super::*;
 use crate::bindings::host::{HostContext, decode};
+use crate::event_loop::{Clock, MonoTime, SharedClock};
 
 /// What a mock listener does when invoked, to exercise re-entrant paths.
 #[derive(Clone)]
@@ -158,7 +159,8 @@ fn fixture() -> Fixture {
     let body = document.node_ref(body);
     let div = document.node_ref(div);
 
-    let ctx = Rc::new(HostContext::new(Rc::new(RefCell::new(document))));
+    let clock = SharedClock::new(Clock::virtual_at(MonoTime::ZERO));
+    let ctx = Rc::new(HostContext::new(Rc::new(RefCell::new(document)), clock));
     let mock = MockHost::new();
     *mock.ctx.borrow_mut() = Rc::downgrade(&ctx);
     *ctx.script.borrow_mut() = Some(mock.clone() as Rc<dyn ScriptHost>);

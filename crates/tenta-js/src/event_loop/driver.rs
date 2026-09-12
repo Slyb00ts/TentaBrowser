@@ -17,7 +17,7 @@ use std::time::Duration;
 use tenta_core::{Origin, TimerRule};
 
 use super::tasks::{TaskRunner, TaskSink};
-use super::time::{Clock, MonoTime};
+use super::time::{Clock, MonoTime, SharedClock};
 use super::timers::{TimerId, TimerQueue};
 
 /// One rendering opportunity at 60 Hz, the cadence a virtual clock steps for
@@ -74,42 +74,88 @@ struct FrameCallback {
     run: Option<Box<dyn FnOnce(f64)>>,
 }
 
-/// Restores the previous timer nesting depth on scope exit, *including on
-/// unwind*: a page thread survives a panicking callback, and a leaked depth
-/// would clamp unrelated timers that were never nested at all.
+/// Restores the previous timer nesting depth and firing id on scope exit,
+/// *including on unwind*: a page thread survives a panicking callback, and a
+/// leaked depth would clamp unrelated timers that were never nested at all.
 struct NestingGuard {
     shared: Rc<RefCell<Shared>>,
     previous: u32,
+    previous_firing: Option<TimerId>,
 }
 
 impl Drop for NestingGuard {
     fn drop(&mut self) {
-        self.shared.borrow_mut().current_nesting = self.previous;
+        let mut shared = self.shared.borrow_mut();
+        shared.current_nesting = self.previous;
+        shared.current_firing = self.previous_firing;
     }
 }
 
 /// Runs `body` with `nesting` installed as the current timer depth.
 fn with_nesting_on<R>(shared: &Rc<RefCell<Shared>>, nesting: u32, body: impl FnOnce() -> R) -> R {
-    let previous = std::mem::replace(&mut shared.borrow_mut().current_nesting, nesting);
+    with_firing_timer(shared, None, nesting, body)
+}
+
+/// Runs `body` with `nesting` as the current timer depth and `firing` as the
+/// timer whose callback is running. A backend that defers the actual JS call
+/// past this callback reads both here and reinstalls them around the call.
+fn with_firing_timer<R>(
+    shared: &Rc<RefCell<Shared>>,
+    firing: Option<TimerId>,
+    nesting: u32,
+    body: impl FnOnce() -> R,
+) -> R {
+    let (previous, previous_firing) = {
+        let mut shared = shared.borrow_mut();
+        (
+            std::mem::replace(&mut shared.current_nesting, nesting),
+            std::mem::replace(&mut shared.current_firing, firing),
+        )
+    };
     let _guard = NestingGuard {
         shared: shared.clone(),
         previous,
+        previous_firing,
     };
     body()
 }
 
 /// The mutable state shared between the scheduler handle and the driver.
 struct Shared {
-    clock: Clock,
+    clock: SharedClock,
     timers: TimerQueue,
     timer_callbacks: HashMap<TimerId, TimerCallback>,
     /// Nesting level of the timer callback currently running; 0 at top level.
     current_nesting: u32,
+    /// The timer whose callback is running, if any.
+    current_firing: Option<TimerId>,
+    /// Firings a backend has deferred: it took the callback but has not called
+    /// it yet. Counted, not merely flagged, because an interval re-arms under
+    /// the same id and can have more than one firing outstanding.
+    ///
+    /// A backend may defer the actual call past the task that dequeued the
+    /// timer — the V8 binding pushes a handle onto a ready queue and the engine
+    /// calls it later. HTML checks the map of active timers when the timer's
+    /// *task runs*, so a `clearTimeout` that lands inside that deferral window
+    /// must still abort the call. (It does not abort a timer whose task already
+    /// ran: in `setTimeout(B, 1); setTimeout(() => clearTimeout(b), 1)` the two
+    /// come due together, `B` is queued first and runs — as it does in every
+    /// browser. The window only bites when the cancel genuinely gets there
+    /// first.)
+    ///
+    /// Only a backend that defers records here, via [`Scheduler::defer_firing`];
+    /// a driver that calls its callbacks inline never enters the window and so
+    /// cannot accumulate entries it would never claim.
+    fired_pending: HashMap<TimerId, u32>,
     /// When a timer defers tracked work rather than being page activity.
     timer_rule: TimerRule,
     next_frame_id: u64,
     /// Callbacks registered for the next rendering opportunity.
     frame_callbacks: Vec<FrameCallback>,
+    /// When the last rendering opportunity ran, so a parked real-clock page
+    /// knows when the next one is owed. A virtual clock steps frames itself
+    /// and ignores this.
+    last_frame_at: MonoTime,
 }
 
 /// The script-facing scheduling surface. Cloneable, single-threaded, and safe
@@ -124,6 +170,12 @@ impl Scheduler {
     /// The current time on the loop's clock.
     pub fn now(&self) -> MonoTime {
         self.shared.borrow().clock.now()
+    }
+
+    /// A handle to the loop's clock, for anything that has to timestamp on the
+    /// same time base as `performance.now()` — `Event.timeStamp` above all.
+    pub fn clock(&self) -> SharedClock {
+        self.shared.borrow().clock.clone()
     }
 
     /// Schedules `callback` to run after `delay_ms` (`setTimeout`). The Chromium
@@ -174,6 +226,39 @@ impl Scheduler {
         self.shared.borrow().current_nesting
     }
 
+    /// Declares that the firing currently running will be called later rather
+    /// than now, and returns the timer's id to record alongside the deferred
+    /// handle. The id must be handed back to [`Self::claim_fired`] before the
+    /// call, which is what lets a `clearTimeout` in between abort it.
+    ///
+    /// Returns `None` outside a timer firing, where there is nothing to defer.
+    /// A driver that calls its callbacks inline never calls this at all.
+    pub fn defer_firing(&self) -> Option<TimerId> {
+        let mut shared = self.shared.borrow_mut();
+        let id = shared.current_firing?;
+        *shared.fired_pending.entry(id).or_insert(0) += 1;
+        Some(id)
+    }
+
+    /// Claims the right to run a deferred firing, returning whether it is still
+    /// wanted. `false` means `clearTimeout` cancelled the timer after it fired
+    /// but before the call — HTML aborts such a timer, so the caller must drop
+    /// the handler rather than invoke it.
+    ///
+    /// Claiming consumes one firing: an interval with two firings outstanding
+    /// answers `true` twice, and a third claim answers `false`.
+    pub fn claim_fired(&self, id: TimerId) -> bool {
+        let mut shared = self.shared.borrow_mut();
+        let Some(outstanding) = shared.fired_pending.get_mut(&id) else {
+            return false;
+        };
+        *outstanding -= 1;
+        if *outstanding == 0 {
+            shared.fired_pending.remove(&id);
+        }
+        true
+    }
+
     /// Runs `body` with `nesting` installed as the current timer depth, so a
     /// `setTimeout` made from inside a timer handler is clamped one level
     /// deeper even when the handler runs outside the queued task.
@@ -201,6 +286,10 @@ impl Scheduler {
         let cancelled = {
             let mut shared = self.shared.borrow_mut();
             shared.timers.cancel(id);
+            // A timer that has fired but whose deferred call has not happened
+            // yet is aborted here too: HTML drops a timer whose id has left the
+            // map of active timers, wherever in its life the cancel lands.
+            shared.fired_pending.remove(&id);
             shared.timer_callbacks.remove(&id)
         };
         // Balance the pending count of a tracked one-shot that will now never
@@ -292,13 +381,16 @@ impl EventLoop {
     /// determinism).
     pub fn new(clock: Clock) -> Self {
         let shared = Rc::new(RefCell::new(Shared {
-            clock,
+            clock: SharedClock::new(clock),
             timers: TimerQueue::new(),
             timer_callbacks: HashMap::new(),
             current_nesting: 0,
+            current_firing: None,
+            fired_pending: HashMap::new(),
             timer_rule: TimerRule::default(),
             next_frame_id: 0,
             frame_callbacks: Vec::new(),
+            last_frame_at: MonoTime::ZERO,
         }));
         let runner = TaskRunner::new();
         let scheduler = Scheduler {
@@ -320,6 +412,60 @@ impl EventLoop {
     /// The current clock time.
     pub fn now(&self) -> MonoTime {
         self.shared.borrow().clock.now()
+    }
+
+    /// A handle to this loop's clock, shared with everything that timestamps on
+    /// the same time base (see [`SharedClock`]).
+    pub fn clock(&self) -> SharedClock {
+        self.shared.borrow().clock.clone()
+    }
+
+    /// How long until this loop next has work to do, or `None` when it has
+    /// none pending. `Duration::ZERO` means work is due already.
+    ///
+    /// This is the park interval for a real-clock page: the thread sleeps for
+    /// it (or until a wake-up arrives from elsewhere) and then runs what came
+    /// due. A virtual clock does not park — it jumps, through
+    /// [`Self::advance_to_next_timer`] — but reports the same interval, so one
+    /// driver serves both modes.
+    ///
+    /// Two sources contribute: the timer heap, and a pending rendering
+    /// opportunity. A registered `requestAnimationFrame` callback has no
+    /// deadline of its own, so it is paced at [`FRAME_INTERVAL`] from the last
+    /// frame; without that a real-clock page with only animation callbacks
+    /// would park forever (a real clock ignores the `advance` in
+    /// [`Self::tick_frame`], so nothing else produces a frame cadence).
+    ///
+    /// **Contract.** A woken caller must run what it was woken *for*. Only
+    /// [`Self::run_animation_frame`] advances the frame clock, so a driver that
+    /// wakes and fires timers but never runs the rendering opportunity keeps
+    /// being told "now" and spins at full CPU. Ask [`Self::frame_due`] which
+    /// half came due.
+    pub fn next_wakeup(&self) -> Option<Duration> {
+        let mut shared = self.shared.borrow_mut();
+        let now = shared.clock.now();
+        let until = |deadline: MonoTime| {
+            Duration::from_nanos(deadline.as_nanos().saturating_sub(now.as_nanos()))
+        };
+        let timer = shared.timers.next_deadline().map(until);
+        let frame = (!shared.frame_callbacks.is_empty())
+            .then(|| until(shared.last_frame_at.saturating_add(FRAME_INTERVAL)));
+        match (timer, frame) {
+            (Some(timer), Some(frame)) => Some(timer.min(frame)),
+            (only @ Some(_), None) | (None, only @ Some(_)) => only,
+            (None, None) => None,
+        }
+    }
+
+    /// Whether a rendering opportunity is owed: animation-frame callbacks are
+    /// registered and a frame interval has passed since the last one. The other
+    /// half of [`Self::next_wakeup`]'s contract — a driver that wakes on a
+    /// frame deadline runs [`Self::run_animation_frame`], which is the only
+    /// thing that advances the frame clock.
+    pub fn frame_due(&self) -> bool {
+        let shared = self.shared.borrow();
+        !shared.frame_callbacks.is_empty()
+            && shared.clock.now() >= shared.last_frame_at.saturating_add(FRAME_INTERVAL)
     }
 
     /// Whether any timer is still scheduled.
@@ -358,6 +504,9 @@ impl EventLoop {
                 .collect();
             shared.timer_callbacks.clear();
             shared.frame_callbacks.clear();
+            // Whatever the backend still holds from an earlier firing is going
+            // away with it; nothing may claim the right to run afterwards.
+            shared.fired_pending.clear();
             discarded
         };
         for origin in discarded {
@@ -395,9 +544,22 @@ impl EventLoop {
                     // Install this timer's nesting level so a timer it
                     // schedules is clamped one level deeper; the guard restores
                     // the top level even if the callback panics.
-                    let task = move || with_nesting_on(&shared, nesting, run);
+                    let task = move || with_firing_timer(&shared, Some(id), nesting, run);
                     if origin == Origin::Tracked {
                         // Already counted when it was scheduled.
+                        //
+                        // KNOWN GAP (closes with the page runtime, which is the
+                        // first thing to attach a settle tracker to an engine):
+                        // the count is released when this *task* ends, but a
+                        // backend that defers the JS call past the task still
+                        // has the handler in hand at that point. A settle poll
+                        // landing in that window sees no tracked work with
+                        // tracked script still to run - the very race that
+                        // counting from schedule time was introduced to close,
+                        // reopened at the other end of the timer's life. The fix
+                        // is to let the count follow the timer's whole life
+                        // (released by the call, the cancel, or teardown), which
+                        // needs the deferred handler to own it.
                         self.scheduler.sink.queue_task_prearmed(origin, task);
                     } else {
                         self.scheduler.sink.queue_task_from(origin, task);
@@ -420,7 +582,7 @@ impl EventLoop {
                     }
                     let shared = self.shared.clone();
                     self.scheduler.sink.queue_task_from(origin, move || {
-                        with_nesting_on(&shared, next_nesting, &mut run);
+                        with_firing_timer(&shared, Some(id), next_nesting, &mut run);
                         let mut shared = shared.borrow_mut();
                         // Put the callback back under its id for the re-armed
                         // firing — unless `clearInterval` cancelled it meanwhile,
@@ -477,7 +639,12 @@ impl EventLoop {
     /// microtask checkpoint after each. Callbacks registered during the frame
     /// wait for the next one; cancelled callbacks are skipped.
     pub fn run_animation_frame(&self) {
-        let timestamp = self.shared.borrow().clock.now().as_millis_f64();
+        let now = self.shared.borrow().clock.now();
+        // Stamp the frame before running it, so a callback that re-registers is
+        // paced from this opportunity rather than from however long its own
+        // work took.
+        self.shared.borrow_mut().last_frame_at = now;
+        let timestamp = now.as_millis_f64();
         // The callbacks registered before now form this frame's batch; any a
         // callback registers during the frame append past this boundary and run
         // next frame. Iterating by index (not a snapshot) lets a running
@@ -496,10 +663,7 @@ impl EventLoop {
     /// due within it, then runs the rendering opportunity. The building block of
     /// a deterministic headless render loop.
     pub fn tick_frame(&self) {
-        {
-            let mut shared = self.shared.borrow_mut();
-            shared.clock.advance(FRAME_INTERVAL);
-        }
+        self.clock().advance(FRAME_INTERVAL);
         self.fire_due_timers();
         self.run_animation_frame();
     }
@@ -972,6 +1136,108 @@ mod tests {
         // advance_to_next_timer only drives a virtual clock.
         assert!(!loop_.advance_to_next_timer());
         assert!(loop_.has_pending_timers());
+    }
+
+    #[test]
+    fn next_wakeup_is_the_park_interval_of_a_real_clock_page() {
+        let loop_ = EventLoop::new(Clock::real());
+        let sched = loop_.scheduler();
+        // Nothing scheduled: the thread has no timer reason to wake at all.
+        assert_eq!(loop_.next_wakeup(), None);
+
+        sched.set_timeout(50, Box::new(|| {}));
+        let far = sched.set_timeout(3_600_000, Box::new(|| {}));
+        // The earliest deadline decides, and it has not passed yet.
+        let wakeup = loop_.next_wakeup().expect("a timer is pending");
+        assert!(
+            wakeup > Duration::ZERO && wakeup <= Duration::from_millis(50),
+            "unexpected park interval {wakeup:?}"
+        );
+
+        sched.clear_timeout(far);
+        assert!(loop_.next_wakeup().expect("the near timer remains") <= Duration::from_millis(50));
+    }
+
+    #[test]
+    fn a_pending_animation_frame_is_paced_at_the_frame_interval() {
+        // A `requestAnimationFrame` callback carries no deadline of its own, so
+        // it is paced from the last rendering opportunity. Without that a
+        // real-clock page with only animation callbacks parks forever: a real
+        // clock ignores `tick_frame`'s advance, so nothing else makes a frame
+        // cadence.
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let sched = loop_.scheduler();
+        assert_eq!(loop_.next_wakeup(), None);
+        assert!(!loop_.frame_due());
+
+        sched.request_animation_frame(Box::new(|_| {}));
+        // Paced from the loop origin, so the first opportunity is one frame
+        // away - not due at once, which would be a spin.
+        assert_eq!(loop_.next_wakeup(), Some(FRAME_INTERVAL));
+        assert!(!loop_.frame_due());
+
+        loop_.clock().advance(FRAME_INTERVAL);
+        assert!(loop_.frame_due());
+        assert_eq!(loop_.next_wakeup(), Some(Duration::ZERO));
+
+        loop_.run_animation_frame();
+        // Nothing re-registered, so there is no cadence left to keep.
+        assert!(!loop_.frame_due());
+        assert_eq!(loop_.next_wakeup(), None);
+    }
+
+    #[test]
+    fn running_a_frame_stamps_the_clock_so_a_re_registering_callback_cannot_spin() {
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let count = Rc::new(RefCell::new(0u32));
+
+        fn arm(sched: Scheduler, count: Rc<RefCell<u32>>) {
+            let again = sched.clone();
+            sched.request_animation_frame(Box::new(move |_| {
+                *count.borrow_mut() += 1;
+                arm(again, count.clone());
+            }));
+        }
+        arm(loop_.scheduler(), count.clone());
+
+        loop_.clock().advance(FRAME_INTERVAL);
+        loop_.run_animation_frame();
+        assert_eq!(*count.borrow(), 1);
+
+        // The callback re-registered at the same instant the frame ran. The
+        // stamp is what keeps the next opportunity one interval away; without it
+        // the wakeup would be zero for ever and the driver would spin at full
+        // CPU rather than pace at 60 Hz.
+        assert!(!loop_.frame_due());
+        assert_eq!(loop_.next_wakeup(), Some(FRAME_INTERVAL));
+
+        loop_.clock().advance(FRAME_INTERVAL);
+        assert!(loop_.frame_due());
+        loop_.run_animation_frame();
+        assert_eq!(*count.borrow(), 2);
+    }
+
+    #[test]
+    fn an_animation_frame_does_not_delay_a_timer_that_is_due_sooner() {
+        // Both sources feed one wakeup; the earlier of the two decides.
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let sched = loop_.scheduler();
+        sched.request_animation_frame(Box::new(|_| {}));
+        sched.set_timeout(5, Box::new(|| {}));
+        assert_eq!(loop_.next_wakeup(), Some(Duration::from_millis(5)));
+    }
+
+    #[test]
+    fn next_wakeup_is_zero_once_a_timer_is_due() {
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let sched = loop_.scheduler();
+        sched.set_timeout(10, Box::new(|| {}));
+        assert_eq!(loop_.next_wakeup(), Some(Duration::from_millis(10)));
+
+        loop_.clock().advance(Duration::from_millis(25));
+        // Past the deadline the interval saturates at zero rather than wrapping
+        // into a park of nearly six hundred years.
+        assert_eq!(loop_.next_wakeup(), Some(Duration::ZERO));
     }
 
     #[test]
