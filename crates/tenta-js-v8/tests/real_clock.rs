@@ -231,9 +231,14 @@ fn clear_timeout_aborts_a_timer_that_fired_but_has_not_been_called() {
 }
 
 #[test]
-fn an_equal_delay_cancel_does_not_reach_back_and_abort_an_earlier_task() {
-    // The other side of the window, and the behaviour browsers actually have:
-    // `b` was queued first, so it runs before the cancel ever happens.
+fn a_cancel_cannot_reach_back_and_abort_a_task_that_already_ran() {
+    // The other side of the window, and the behaviour browsers actually have.
+    // The two timers ask for the same delay, but they are registered microseconds
+    // apart on a real clock, so `b`'s deadline is the strictly earlier one and it
+    // runs before the cancel happens — the ordering here is by deadline, not by
+    // an equal-deadline tie-break. This case reaches no abort logic at all (the
+    // handler is called before `clearTimeout` runs); it is here to pin that the
+    // abort in the test above stays confined to its window.
     let mut engine = real_engine();
     eval(
         &mut engine,

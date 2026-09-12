@@ -138,7 +138,7 @@ struct Shared {
     /// calls it later. HTML checks the map of active timers when the timer's
     /// *task runs*, so a `clearTimeout` that lands inside that deferral window
     /// must still abort the call. (It does not abort a timer whose task already
-    /// ran: in `setTimeout(B, 1); setTimeout(() => clearTimeout(b), 1)` the two
+    /// ran: in `const b = setTimeout(B, 1); setTimeout(() => clearTimeout(b), 1)` the two
     /// come due together, `B` is queued first and runs — as it does in every
     /// browser. The window only bites when the cancel genuinely gets there
     /// first.)
@@ -252,9 +252,15 @@ impl Scheduler {
         let Some(outstanding) = shared.fired_pending.get_mut(&id) else {
             return false;
         };
-        *outstanding -= 1;
-        if *outstanding == 0 {
-            shared.fired_pending.remove(&id);
+        // An entry is created at one and removed at zero, so this cannot
+        // underflow today. `checked_sub` keeps it that way: a future edit that
+        // decremented somewhere else would otherwise wrap to `u32::MAX` in
+        // release and hand out claims for ever.
+        match outstanding.checked_sub(1) {
+            Some(0) | None => {
+                shared.fired_pending.remove(&id);
+            }
+            Some(left) => *outstanding = left,
         }
         true
     }
@@ -462,6 +468,11 @@ impl EventLoop {
     /// half of [`Self::next_wakeup`]'s contract — a driver that wakes on a
     /// frame deadline runs [`Self::run_animation_frame`], which is the only
     /// thing that advances the frame clock.
+    ///
+    /// The frame clock starts at the loop origin, so on a real clock an engine
+    /// already older than one interval owes its first opportunity the moment
+    /// script registers a callback, rather than an interval later. That matches
+    /// a browser, which fires the first frame at the next vsync.
     pub fn frame_due(&self) -> bool {
         let shared = self.shared.borrow();
         !shared.frame_callbacks.is_empty()
@@ -642,8 +653,13 @@ impl EventLoop {
         let now = self.shared.borrow().clock.now();
         // Stamp the frame before running it, so a callback that re-registers is
         // paced from this opportunity rather than from however long its own
-        // work took.
-        self.shared.borrow_mut().last_frame_at = now;
+        // work took — but only when there was an opportunity to run. A driver
+        // that calls this every time round its loop would otherwise reset the
+        // cadence on each pass, quietly delaying a callback registered later by
+        // up to a full interval. That has no symptom: it is not a spin.
+        if !self.shared.borrow().frame_callbacks.is_empty() {
+            self.shared.borrow_mut().last_frame_at = now;
+        }
         let timestamp = now.as_millis_f64();
         // The callbacks registered before now form this frame's batch; any a
         // callback registers during the frame append past this boundary and run
@@ -1126,6 +1142,72 @@ mod tests {
         // Third callback did not re-arm, so a fourth frame is idle.
         loop_.tick_frame();
         assert_eq!(*count.borrow(), 3);
+    }
+
+    #[test]
+    fn a_deferred_firing_is_claimed_once_and_only_once() {
+        // The claim is what lets `clearTimeout` abort a timer that has already
+        // fired: a driver that queues the handler must ask before calling it,
+        // and a second ask for the same firing has to be refused.
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let scheduler = loop_.scheduler();
+        let deferred: Rc<RefCell<Vec<TimerId>>> = Rc::new(RefCell::new(Vec::new()));
+
+        let recorder = {
+            let scheduler = scheduler.clone();
+            let deferred = deferred.clone();
+            move || {
+                if let Some(id) = scheduler.defer_firing() {
+                    deferred.borrow_mut().push(id);
+                }
+            }
+        };
+        let id = scheduler.set_interval(5, Box::new(recorder));
+
+        loop_.advance_to_next_timer();
+        loop_.advance_to_next_timer();
+        assert_eq!(*deferred.borrow(), vec![id, id], "two firings deferred");
+
+        assert!(scheduler.claim_fired(id), "first queued firing is wanted");
+        assert!(scheduler.claim_fired(id), "second queued firing is wanted");
+        assert!(
+            !scheduler.claim_fired(id),
+            "a third claim has no firing behind it"
+        );
+    }
+
+    #[test]
+    fn clearing_a_timer_refuses_the_claim_of_a_firing_it_already_queued() {
+        // The abort window: the task ran, the handler is queued, and script
+        // cancels before the driver gets to call it. HTML aborts it.
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let scheduler = loop_.scheduler();
+        let deferred: Rc<RefCell<Option<TimerId>>> = Rc::new(RefCell::new(None));
+
+        let recorder = {
+            let scheduler = scheduler.clone();
+            let deferred = deferred.clone();
+            move || *deferred.borrow_mut() = scheduler.defer_firing()
+        };
+        let id = scheduler.set_timeout(5, Box::new(recorder));
+
+        loop_.advance_to_next_timer();
+        assert_eq!(*deferred.borrow(), Some(id));
+
+        scheduler.clear_timeout(id);
+        assert!(
+            !scheduler.claim_fired(id),
+            "a cancelled timer must not be called even though it fired"
+        );
+    }
+
+    #[test]
+    fn there_is_nothing_to_defer_outside_a_timer_firing() {
+        // Provenance travels with the handler only for timers; a driver asking
+        // from top-level script gets `None` and queues an unclaimable handler.
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let scheduler = loop_.scheduler();
+        assert_eq!(scheduler.defer_firing(), None);
     }
 
     #[test]

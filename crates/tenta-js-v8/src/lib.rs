@@ -666,10 +666,12 @@ impl Engine {
                 break;
             }
             // The ready queue stays authoritative: a handler is taken from it
-            // one at a time rather than moved into a local batch. A panic in a
-            // binding unwinds through here (the page thread survives it), and a
-            // local batch would be dropped on the way out, silently losing every
-            // handler that had not run yet.
+            // one at a time rather than moved into a local batch. A panic raised
+            // on the Rust side of the drain unwinds through here, and a local
+            // batch would be dropped on the way out, silently losing every
+            // handler that had not run yet. (A panic *inside* a binding does not
+            // reach this frame at all: it crosses an `extern "C"` boundary and
+            // aborts the process.)
             run += self.invoke_ready(max_tasks - run);
         }
         run
@@ -753,7 +755,10 @@ impl Engine {
     /// Runs the timers that are due *now*, without moving the clock, and
     /// returns how many callbacks ran. `max_tasks` bounds one pump so a timer
     /// that reschedules itself at zero delay cannot starve the rest of the
-    /// thread; anything still due is picked up by the next pump.
+    /// thread; anything still due is picked up by the next pump. A budget of
+    /// zero still fires the due timers — their tasks queue the handlers — but
+    /// invokes none of them, which is how a caller observes the queue between
+    /// the firing and the call.
     ///
     /// This is the real-clock counterpart of [`Self::run_event_loop`]: wall
     /// time supplies the advance, so the engine only ever fires what has
@@ -802,9 +807,16 @@ impl Engine {
     /// Invokes every animation-frame callback whose frame has come, each with
     /// its timestamp, followed by a microtask checkpoint.
     fn drain_ready_frames(&mut self) {
-        let frames: Vec<(v8::Global<v8::Function>, f64)> =
-            self.host.ready_frames.borrow_mut().drain(..).collect();
-        for (handler, timestamp) in frames {
+        // Popped one at a time for the same reason as the timer ready queue: a
+        // local batch would be dropped by an unwind, losing every callback that
+        // had not run yet, and `clear_pending_callbacks` (a navigation commit)
+        // cannot reach a batch that has already been detached from the queue, so
+        // the discarded callbacks would keep running against the old document.
+        loop {
+            let next = self.host.ready_frames.borrow_mut().pop_front();
+            let Some((handler, timestamp)) = next else {
+                break;
+            };
             self.invoke_handler(&handler, Some(timestamp));
             self.checkpoint();
         }

@@ -90,18 +90,24 @@ impl ScriptHost for V8ScriptHost {
             return;
         };
 
-        // A listener is script, so it can queue a promise reaction. Today every
-        // dispatch originates inside running script, whose own entry already
-        // recorded the debt — but a real-clock page parks on `next_wakeup`, and
-        // the moment the native-dispatch branch below is implemented an unpaid
-        // checkpoint would strand the reaction until an unrelated timer fired.
-        self.host.microtasks_pending.set(true);
+        // Whether this dispatch originated outside running script has to be read
+        // *before* the listener is entered, because entering it makes the depth
+        // non-zero either way.
+        let native = self.host.script_depth.get() == 0;
 
         v8::tc_scope!(let tc, scope);
         // A callable listener is invoked directly; a non-callable object has its
         // `handleEvent` method invoked with `this` set to the object. Any thrown
         // exception is caught and swallowed here (the DOM standard reports it and
         // continues to the next listener) when the `TryCatch` drops.
+        //
+        // The call is bracketed by a script activation: a listener is script, so
+        // it can queue a promise reaction, and `enter_script` records that debt.
+        // Today every dispatch originates inside running script, whose own entry
+        // already recorded it — but a real-clock page parks on `next_wakeup`, and
+        // the moment the native-dispatch branch below is implemented an unpaid
+        // checkpoint would strand the reaction until an unrelated timer fired.
+        self.host.enter_script();
         if let Ok(function) = v8::Local::<v8::Function>::try_from(callee) {
             let _ = function.call(tc, this, &[event_value]);
         } else if let Ok(object) = v8::Local::<v8::Object>::try_from(callee)
@@ -111,13 +117,14 @@ impl ScriptHost for V8ScriptHost {
         {
             let _ = function.call(tc, object.into(), &[event_value]);
         }
+        self.host.exit_script();
 
         // A microtask checkpoint runs only for a dispatch that did not originate
         // in running script (a native `element.click()`). Every dispatch in this
         // phase comes from `el.dispatchEvent(...)` inside script, so the script's
         // own checkpoint drains the queue; the native-dispatch checkpoint lands
         // with that path in a later sub-phase.
-        if self.host.script_depth.get() == 0 {
+        if native {
             // Deferred: native-initiated dispatch checkpoint.
         }
     }
