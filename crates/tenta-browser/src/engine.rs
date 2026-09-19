@@ -180,6 +180,10 @@ impl EngineBuilder {
 
     pub fn build(self) -> Result<Engine> {
         let options = self.options;
+        // Tier 2 needs a compiled-in backend. Without one the ceiling stays at
+        // Tier 1 and a higher `max_tier` is refused rather than silently
+        // ignored; the `v8` feature is what raises it.
+        #[cfg(not(feature = "v8"))]
         if options.max_tier > Tier::Dom {
             return Err(Error::unsupported(format!(
                 "max_tier {} needs a JavaScript engine; P1 implements up to {}",
@@ -187,9 +191,27 @@ impl EngineBuilder {
                 Tier::Dom
             )));
         }
+        #[cfg(feature = "v8")]
+        if options.max_tier > Tier::Js {
+            return Err(Error::unsupported(format!(
+                "max_tier {} needs a JavaScript engine; this build implements up to {}",
+                options.max_tier,
+                Tier::Js
+            )));
+        }
+        // A selector naming a backend this build did not compile in is refused,
+        // and so is one naming a backend no build implements yet — the two are
+        // different facts and the message has to say which one it is.
+        #[cfg(not(feature = "v8"))]
         if matches!(options.js, JsEngine::V8 | JsEngine::QuickJs) {
             return Err(Error::unsupported(
-                "no JavaScript backend is compiled in; build with the v8 or quickjs feature (P2)",
+                "no JavaScript backend is compiled in; build with the `v8` feature (P2)",
+            ));
+        }
+        #[cfg(feature = "v8")]
+        if matches!(options.js, JsEngine::QuickJs) {
+            return Err(Error::unsupported(
+                "QuickJS is not implemented; this build serves JavaScript with V8 (P2)",
             ));
         }
         let net = NetRuntime::new(options.io_threads).map_err(Error::from)?;
@@ -370,16 +392,56 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tiers_above_dom_are_refused_until_p2() {
+    fn the_tier_ceiling_follows_the_compiled_in_backend() {
+        // Tier 2 is reachable only when a backend can serve it.
+        #[cfg(not(feature = "v8"))]
+        {
+            let error = Engine::builder()
+                .max_tier(Tier::Js)
+                .build()
+                .expect_err("Tier 2 needs a backend");
+            assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
+        }
+        #[cfg(feature = "v8")]
+        {
+            let engine = Engine::builder()
+                .io_threads(1)
+                .page_threads(1)
+                .max_tier(Tier::Js)
+                .build()
+                .expect("the v8 feature serves Tier 2");
+            assert_eq!(engine.max_tier(), Tier::Js);
+            engine.close();
+        }
         let error = Engine::builder()
-            .max_tier(Tier::Js)
+            .max_tier(Tier::Render)
             .build()
-            .expect_err("Tier 2 does not exist yet");
+            .expect_err("Tier 3 does not exist yet");
         assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
+        // A selector naming a backend this build did not compile in is refused;
+        // one naming a backend no build serves yet is refused in every build.
+        #[cfg(not(feature = "v8"))]
+        {
+            let error = Engine::builder()
+                .js(JsEngine::V8)
+                .build()
+                .expect_err("no backend is compiled in");
+            assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
+        }
+        #[cfg(feature = "v8")]
+        {
+            let engine = Engine::builder()
+                .io_threads(1)
+                .page_threads(1)
+                .js(JsEngine::V8)
+                .build()
+                .expect("this build serves the V8 selector");
+            engine.close();
+        }
         let error = Engine::builder()
-            .js(JsEngine::V8)
+            .js(JsEngine::QuickJs)
             .build()
-            .expect_err("no backend is compiled in");
+            .expect_err("QuickJS is not implemented");
         assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
     }
 

@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 use tenta_core::{Budgets, ContextId, Error, PageId, Result, Tier};
+use tenta_js::engine::PageEngineFactory;
 use tenta_net::hooks::{Hooks, Interceptor, Observer};
 use tenta_net::policy::cache::{CacheConfig, HttpCache};
 use tenta_net::policy::cookies::{CookieJar, CookiePolicy, StorageState};
@@ -412,11 +413,6 @@ impl BrowserContext {
     pub async fn new_page(&self, options: PageOptions) -> Result<Page> {
         self.inner.check_open()?;
         let ceiling = self.inner.engine.options.max_tier;
-        if options.javascript {
-            return Err(Error::unsupported(
-                "javascript needs max_tier >= js, which lands in P2; use PageOptions::tier1()",
-            ));
-        }
         if let Some(pinned) = options.max_tier
             && pinned > ceiling
         {
@@ -425,6 +421,17 @@ impl BrowserContext {
                 ceiling,
             });
         }
+        let max_tier = options.max_tier.unwrap_or(ceiling).min(ceiling);
+        // A page that asked for JavaScript gets the backend's factory; a Tier 1
+        // page never enters an engine, so it is not given one to leave unused.
+        let engine = if options.javascript {
+            Some(javascript_engine(max_tier)?)
+        } else {
+            None
+        };
+        // Read before the factory moves into the page: the group records
+        // whether its page got one, which `group_threads` reports.
+        let has_engine = engine.is_some();
         let thread = self.inner.engine.pool.lock().assign();
         let id = PageId(self.inner.next_page.fetch_add(1, Ordering::Relaxed));
         let page = Page::new(PageConfig {
@@ -433,11 +440,9 @@ impl BrowserContext {
             client: self.inner.client.clone(),
             thread: Arc::clone(&thread),
             clock: tenta_page::clock::system_clock(),
-            max_tier: options.max_tier.unwrap_or(ceiling).min(ceiling),
+            max_tier,
             javascript: options.javascript,
-            // The JavaScript backend lands with the P2 page runtime; until a
-            // context can be given a factory, every page it builds is Tier 1.
-            engine: None,
+            engine,
             budgets: self.inner.budgets.clone(),
             settle: self.inner.engine.options.settle,
             locale: self.inner.engine.options.locale.clone(),
@@ -455,14 +460,15 @@ impl BrowserContext {
                 panic_in_parse: options.crash_in_parse_for_test,
             },
         });
-        // Every Tier 1 page is its own group: nothing can script it, so
-        // nothing shares its (absent) engine (`02-architecture.md` §3).
+        // One group per page, because nothing shares an engine across pages
+        // yet; a group therefore carries an engine exactly when its page was
+        // given one (`02-architecture.md` §3).
         let group = GroupId(self.inner.next_group.fetch_add(1, Ordering::Relaxed));
         self.inner.groups.lock().push(GroupRecord {
             id: group,
             thread: thread.index(),
             page: page.clone(),
-            has_engine: false,
+            has_engine,
         });
         Ok(page)
     }
@@ -534,6 +540,33 @@ fn ensure_dir(policy: &tenta_core::FsPolicy, dir: &Path) -> Result<std::path::Pa
 /// error for a bad URL wherever they pass one.
 pub fn parse_url(url: &str) -> Result<Url> {
     Url::parse(url).map_err(|err| Error::invalid(format!("invalid URL {url:?}: {err}")))
+}
+
+/// The engine factory a JavaScript page at `ceiling` runs with, or the reason
+/// it cannot have one.
+///
+/// A build without a compiled-in backend refuses JavaScript outright and names
+/// the feature that supplies one. A build with the V8 backend refuses only a
+/// page whose ceiling is below Tier 2, with the same error a page pinned above
+/// the engine's own ceiling gets.
+fn javascript_engine(ceiling: Tier) -> Result<Arc<dyn PageEngineFactory>> {
+    #[cfg(not(feature = "v8"))]
+    {
+        let _ = ceiling;
+        Err(Error::unsupported(
+            "javascript needs the `v8` feature: rebuild tenta-browser with `--features v8`",
+        ))
+    }
+    #[cfg(feature = "v8")]
+    {
+        if ceiling < Tier::Js {
+            return Err(Error::TierDenied {
+                needed: Tier::Js,
+                ceiling,
+            });
+        }
+        Ok(Arc::new(tenta_js_v8::V8EngineFactory))
+    }
 }
 
 #[cfg(test)]

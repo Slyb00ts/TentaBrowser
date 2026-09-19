@@ -8,10 +8,17 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# Pulls the V8 backend and installs it as the engine factory for JavaScript
+# pages. Without it the default build stays free of V8 and `new_page` reports
+# JavaScript as unsupported rather than pretending to run it.
+v8 = ["dep:tenta-js-v8"]
+
 [dependencies]
 tenta-core = { workspace = true }
 tenta-net = { workspace = true }
 tenta-js = { workspace = true }
+tenta-js-v8 = { workspace = true, optional = true }
 tenta-page = { workspace = true }
 
 bytes = { workspace = true }

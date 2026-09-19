@@ -136,13 +136,16 @@ async fn the_documented_page_example_runs_against_a_real_server() {
     engine.close();
 }
 
-/// What the facade refuses at this release: JavaScript and anything above
-/// Tier 1 (`docs/spec/02-architecture.md` §1).
+/// What the facade refuses at this release: anything above Tier 1, and
+/// JavaScript on an engine that cannot reach it
+/// (`docs/spec/02-architecture.md` §1).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tiers_above_dom_are_refused_through_the_public_api() {
-    // The JavaScript features are off by default, so this test describes the
-    // default build (`docs/spec/11-library-api.md` §1).
-    const _: () = assert!(!cfg!(feature = "v8") && !cfg!(feature = "quickjs"));
+    // Each branch describes the build it is compiled in
+    // (`docs/spec/11-library-api.md` §1). Without a backend Tier 2 is absent
+    // from the build; with one it is beyond the ceiling of the engine these
+    // assertions are made against. QuickJS has no implementation in either.
+    const _: () = assert!(!cfg!(feature = "quickjs"));
 
     let error = Engine::builder()
         .max_tier(Tier::Render)
@@ -159,7 +162,19 @@ async fn tiers_above_dom_are_refused_through_the_public_api() {
         })
         .await
         .expect_err("javascript lands with Tier 2");
+    #[cfg(not(feature = "v8"))]
     assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
+    #[cfg(feature = "v8")]
+    assert!(
+        matches!(
+            error,
+            Error::TierDenied {
+                needed: Tier::Js,
+                ceiling: Tier::Dom
+            }
+        ),
+        "{error:?}"
+    );
     engine.close();
 }
 

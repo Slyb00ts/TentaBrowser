@@ -171,18 +171,30 @@ async fn pages_are_pinned_to_the_thread_they_were_given() {
     engine.close();
 }
 
-/// JavaScript is not available before P2, and a page may not ask for a tier
-/// above the engine's ceiling.
+/// JavaScript needs a ceiling at or above Tier 2, and a page may not ask for a
+/// tier above the engine's ceiling.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_page_that_asks_for_javascript_is_refused() {
     let engine = support::engine(1);
     let context = support::context(&engine);
 
+    // `support::engine` ceilings at Dom, so JavaScript has no tier to run in:
+    // without the backend the whole feature is unavailable, and with it the
+    // ceiling is what denies the page.
     let error = context
         .new_page(PageOptions::default())
         .await
-        .expect_err("javascript needs Tier 2");
+        .expect_err("javascript needs max_tier >= js");
+    #[cfg(not(feature = "v8"))]
     assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
+    #[cfg(feature = "v8")]
+    match error {
+        Error::TierDenied { needed, ceiling } => {
+            assert_eq!(needed, tenta_core::Tier::Js);
+            assert_eq!(ceiling, tenta_core::Tier::Dom);
+        }
+        other => panic!("expected TierDenied, got {other:?}"),
+    }
 
     let error = context
         .new_page(PageOptions {

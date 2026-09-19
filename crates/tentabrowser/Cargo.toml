@@ -17,7 +17,7 @@ publish = false
 default = []
 # Pulls the V8 backend and installs it as the engine factory. Without it the
 # engine reports JavaScript as unsupported rather than pretending to run it.
-v8 = ["dep:tenta-js-v8"]
+v8 = ["tenta-browser/v8"]
 quickjs = []
 render = []
 gpu = []
@@ -34,7 +34,6 @@ tenta-core = { workspace = true }
 tenta-net = { workspace = true }
 tenta-dom = { workspace = true }
 tenta-js = { workspace = true }
-tenta-js-v8 = { workspace = true, optional = true }
 tenta-browser = { workspace = true }
 tenta-page = { workspace = true }
 tenta-search = { workspace = true }
