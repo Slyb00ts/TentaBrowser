@@ -242,7 +242,10 @@ fn an_interval_firing_is_released_per_firing() {
         );
         scheduler.note_firing_finished(firing.origin);
     }
-    assert!(scheduler.claim_fired(id).is_none(), "both firings are spent");
+    assert!(
+        scheduler.claim_fired(id).is_none(),
+        "both firings are spent"
+    );
 
     // Because no firing carried a count, every release above was a no-op: one
     // queued/finished pair per firing, and nothing else.
