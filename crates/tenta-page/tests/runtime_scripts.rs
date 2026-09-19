@@ -136,15 +136,18 @@ async fn javascript_off_never_runs_a_script() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn an_external_script_is_not_run_as_inline() {
-    let harness = Harness::new(&body(
+async fn an_external_script_is_fetched_and_run() {
+    let harness = Harness::builder(&body(
         "<script src=\"x.js\">this must not run</script><p id=tail>after</p>",
-    ));
+    ))
+    .route("x.js", "external")
+    .build();
     harness.settle(Settle::Load).await.expect("navigation");
 
-    assert!(
-        sources(&harness.record).is_empty(),
-        "an external script has no source to run (P2 d-2 fetches it)"
+    assert_eq!(
+        sources(&harness.record),
+        vec!["external".to_owned()],
+        "the fetched resource ran, and the element's own text did not (P2 d-2a)"
     );
     assert!(harness.has("#tail"), "the parse resumed past it");
 }

@@ -31,8 +31,16 @@ fn js_engine(settle: SettleConfig) -> Engine {
 /// The temp directory is returned so it outlives the server, which reads its
 /// files from it.
 async fn serve(page: &str) -> (FixtureServer, TempDir) {
+    serve_all(&[("index.html", page)]).await
+}
+
+/// Serves each `(relative path, contents)` on loopback, so a page can fetch a
+/// script from a path of its own.
+async fn serve_all(files: &[(&str, &str)]) -> (FixtureServer, TempDir) {
     let temp = tenta_testutil::temp_dir("settle-js");
-    temp.write("index.html", page);
+    for (relative, contents) in files {
+        temp.write(relative, contents);
+    }
     let server = FixtureServer::start(FixtureServerConfig::new(temp.path()))
         .await
         .expect("fixture server");
@@ -121,6 +129,121 @@ async fn a_throwing_script_does_not_fail_the_navigation() {
 
     let document = page.take_document().expect("document");
     assert_eq!(text_of(&document, "#marker"), "before");
+    assert!(has(&document, "#tail"), "the parse ran past the script");
+    engine.close();
+}
+
+/// A parser-blocking external classic script is fetched while the parse is
+/// paused on it and run before the parse resumes (`docs/spec/05-javascript.md`
+/// §6, P2 d-2a).
+///
+/// Both halves of that are load-bearing and both are asserted: the two inline
+/// scripts bracket the external one in document order, and the external script
+/// observes that the markup *after* the element is not in the tree yet — which
+/// it could only be if it had run once the parse was past it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_external_script_is_fetched_and_runs_while_the_parse_waits() {
+    let (server, _temp) = serve_all(&[
+        (
+            "index.html",
+            "<!doctype html><html><head><title>external</title></head><body>\
+             <div id=\"order\">start</div>\
+             <div id=\"probe\">unset</div>\
+             <script>document.getElementById('order').textContent = 'first';</script>\
+             <script src=\"middle.js\"></script>\
+             <script>document.getElementById('order').textContent += ',last';</script>\
+             <p id=\"tail\">the rest of the parse</p>\
+             </body></html>",
+        ),
+        (
+            "middle.js",
+            "document.getElementById('order').textContent += ',middle';\
+             document.getElementById('probe').textContent = \
+             String(document.getElementById('tail') === null);",
+        ),
+    ])
+    .await;
+    let engine = js_engine(SettleConfig::library());
+    let context = support::context(&engine);
+    let page = context
+        .new_page(PageOptions::default())
+        .await
+        .expect("a JavaScript page");
+
+    let navigation = page
+        .goto(&server.url("/index.html"), Goto::default())
+        .await
+        .expect("navigation");
+    assert_eq!(navigation.status, 200);
+
+    let document = page.take_document().expect("document");
+    assert_eq!(
+        text_of(&document, "#order"),
+        "first,middle,last",
+        "the fetched script ran between the two inline ones, in document order"
+    );
+    assert_eq!(
+        text_of(&document, "#probe"),
+        "true",
+        "the fetched script ran while the parse was still paused on it"
+    );
+    assert!(has(&document, "#tail"), "the parse resumed past the script");
+    engine.close();
+}
+
+/// A script the origin does not serve is a failed script fetch: the navigation
+/// succeeds, the parse still reaches the end of the document, the error page is
+/// not run as JavaScript, and the failed request does not keep the network
+/// sources non-empty — a settle left waiting on it would run out its deadline
+/// instead of settling.
+///
+/// The request count is what makes this test non-vacuous: a script that was
+/// skipped rather than fetched would leave the server on one request, and the
+/// same page would look identical from the document alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_script_the_origin_does_not_serve_still_lets_the_parse_finish() {
+    let (server, _temp) = serve(
+        "<!doctype html><html><head></head><body>\
+         <div id=\"marker\">before</div>\
+         <script src=\"gone.js\"></script>\
+         <p id=\"tail\">the rest of the parse</p>\
+         </body></html>",
+    )
+    .await;
+    let engine = js_engine(SettleConfig::library());
+    let context = support::context(&engine);
+    let page = context
+        .new_page(PageOptions::default())
+        .await
+        .expect("a JavaScript page");
+
+    let navigation = page
+        .goto(
+            &server.url("/index.html"),
+            Goto::default()
+                .wait_until(Settle::NetworkIdle)
+                .timeout(Duration::from_secs(5)),
+        )
+        .await
+        .expect("a failed script fetch does not fail the navigation");
+    assert_eq!(navigation.status, 200);
+    assert_eq!(
+        navigation.settle,
+        SettleState::Settled { busy: false },
+        "the request the failed fetch left behind is out of the settle machine"
+    );
+    assert_eq!(
+        server.requests_served(),
+        2,
+        "the document and the script, so the script's fetch was really issued"
+    );
+
+    let document = page.take_document().expect("document");
+    assert_eq!(
+        text_of(&document, "#marker"),
+        "before",
+        "the 404 body was not run in place of the script"
+    );
     assert!(has(&document, "#tail"), "the parse ran past the script");
     engine.close();
 }

@@ -15,19 +15,22 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use hashbrown::HashMap;
 use tenta_core::atom::atoms;
-use tenta_core::{Error, Origin, PageId};
+use tenta_core::{Error, Origin, PageId, Result};
 use tenta_dom::{SharedDocument, SharedSink};
-use tenta_html::Parser;
+use tenta_html::{Encoding, Parser};
 use tenta_js::engine::{EngineClock, PageEngine, PageEngineConfig, ScriptKind};
 use tenta_js::event_loop::ProvenanceSink;
+use tenta_net::policy::cookies::Site;
+use tenta_net::{Client, NetError, Request, ResourceType};
 use url::Url;
 
-use crate::page::PageConfig;
-use crate::settle::SettleTracker;
+use crate::page::{PageConfig, next_request_id};
+use crate::settle::{RequestClass, SettleTracker};
 
 thread_local! {
     /// The runtimes of this page thread, by page.
@@ -240,18 +243,24 @@ impl PageRuntime {
     /// stopped, and the three borrow rules of the boundary apply
     /// (`tenta_js::engine`): the document borrow ends before the engine is
     /// called, and nothing may free nodes while the parse is in flight. Every
-    /// skip is a real decision about the HTML, so each one is logged: an
-    /// external script is not fetched yet (P2 d-2), a non-classic type is not
-    /// this driver's to run, `defer`/`async`/`nomodule` change when a script
-    /// runs (P2 d-2), and an empty element has nothing to run.
+    /// skip is a real decision about the HTML, so each one is logged: a
+    /// non-classic type is not this driver's to run, `defer`/`async`/
+    /// `nomodule` change when a script runs (P2 d-2b), and an empty element
+    /// has nothing to run.
+    ///
+    /// A classic script with a `src` is not skipped, but its text is not here
+    /// either: it comes from the network, so the caller fetches what
+    /// [`ScriptStep::Fetch`] names and runs it through
+    /// [`PageRuntime::run_source`]. Splitting the two is what keeps no borrow
+    /// of this runtime alive across the fetch that separates them.
     fn run_pending_script(
         &mut self,
         parser: &mut Parser<'_, SharedSink>,
         base: &Url,
-    ) -> Result<(), Error> {
+    ) -> Result<ScriptStep, Error> {
         let Some(script) = parser.take_pending_script() else {
             tracing::debug!(page = ?self.page, "the parse is not paused on a script");
-            return Ok(());
+            return Ok(ScriptStep::Done);
         };
         debug_assert!(
             self.parse_in_flight,
@@ -273,39 +282,61 @@ impl PageRuntime {
                 || document.has_attribute(script, atoms::NOMODULE);
             (source, kind, src, deferred)
         };
-        if let Some(src) = &src {
-            tracing::debug!(
-                page = ?self.page,
-                src = %src,
-                base = %base,
-                "an external script is not fetched yet (P2 d-2); it does not run"
-            );
-            return Ok(());
-        }
         if deferred {
             tracing::debug!(
                 page = ?self.page,
-                "a deferred, async or nomodule script does not run inline (P2 d-2)"
+                "a deferred, async or nomodule script does not run inline (P2 d-2b)"
             );
-            return Ok(());
+            return Ok(ScriptStep::Done);
         }
+        // Before `src`, because a module's text is not a classic script's:
+        // running one inline would run it in the wrong scope.
         if let Some(kind) = &kind
             && !is_classic_javascript(kind)
         {
             tracing::debug!(
                 page = ?self.page,
                 kind = %kind,
-                "a non-classic script type is not run inline (P2 d-2)"
+                "a non-classic script type is not run inline (P2 d-2c)"
             );
-            return Ok(());
+            return Ok(ScriptStep::Done);
+        }
+        if let Some(src) = &src {
+            // The base is the document's, exactly as a recorded preload hint's
+            // is resolved (`crate::fetch_policy`): the URL a relative `src`
+            // resolves against, not the script's own.
+            return match base.join(src) {
+                Ok(url) => Ok(ScriptStep::Fetch(url)),
+                Err(error) => {
+                    tracing::warn!(
+                        page = ?self.page,
+                        src = %src,
+                        %error,
+                        "a script's src does not resolve against the document; it does not run"
+                    );
+                    Ok(ScriptStep::Done)
+                }
+            };
         }
         if source.trim().is_empty() {
             tracing::debug!(page = ?self.page, "an empty script element runs nothing");
-            return Ok(());
+            return Ok(ScriptStep::Done);
         }
-        // A script error is a page-level fact, not an engine failure: the page
-        // keeps loading, exactly as a browser does.
-        if let Err(error) = self.engine.run_script(&source, ScriptKind::Classic) {
+        self.run_source(&source);
+        Ok(ScriptStep::Done)
+    }
+
+    /// Runs `source` as a classic script against the tree, at the pause.
+    ///
+    /// A script error is a page-level fact, not an engine failure: the page
+    /// keeps loading, exactly as a browser does. The script's own checkpoints
+    /// are owed even when it threw.
+    fn run_source(&mut self, source: &str) {
+        debug_assert!(
+            self.parse_in_flight,
+            "a script ran while no parser was writing into its document"
+        );
+        if let Err(error) = self.engine.run_script(source, ScriptKind::Classic) {
             tracing::warn!(
                 page = ?self.page,
                 kind = ?error.kind,
@@ -313,10 +344,36 @@ impl PageRuntime {
                 "a script did not run to completion"
             );
         }
-        // The script's own checkpoints are owed even when it threw.
         self.engine.run_microtasks();
-        Ok(())
     }
+}
+
+/// What running the script the parse is paused on needs next.
+enum ScriptStep {
+    /// Nothing to fetch: the script ran, or a rule skipped it. The parse may
+    /// resume.
+    Done,
+    /// The script is classic and external, and its `src` resolved to this URL.
+    /// It runs once the caller has fetched and decoded it.
+    Fetch(Url),
+}
+
+/// What the parse knows about its document when it hands a script out
+/// (`docs/spec/05-javascript.md` §6).
+///
+/// The two URLs are different facts and are needed for different reasons: the
+/// base is what a relative `src` resolves against, while the document's own URL
+/// is what the request is first-party to — a script served from a third-party
+/// origin is still a first-party request of this page.
+pub(crate) struct ScriptMeta<'a> {
+    /// The document's base URL: its `<base href>` resolved against its URL, or
+    /// its URL when it declares none.
+    pub base: &'a Url,
+    /// The document's own URL.
+    pub document_url: &'a Url,
+    /// The navigation's deadline. A script may not outlive it: the deadline is
+    /// the whole navigation's, and the parse is part of the navigation.
+    pub deadline: Instant,
 }
 
 /// The engine configuration a page derives from its own
@@ -348,17 +405,13 @@ fn is_classic_javascript(kind: &str) -> bool {
         || kind.eq_ignore_ascii_case("text/ecmascript")
 }
 
-/// The runtime of `page`, if it has one.
-pub(crate) fn with_runtime<R>(page: PageId, f: impl FnOnce(&mut PageRuntime) -> R) -> Option<R> {
-    RUNTIMES.with(|cell| cell.borrow_mut().get_mut(&page).map(f))
-}
-
 /// The runtime of `page`, if it has one *and* it is still bound to `document`.
 ///
-/// Two navigations of one page can be in flight at once — the page thread
-/// interleaves them at awaits — so anything that acts on the runtime of a
-/// navigation must name the tree that navigation parsed, or it would take the
-/// other navigation's engine with it.
+/// Every use of a runtime names the tree its navigation parsed, because two
+/// navigations of one page can be in flight at once — the page thread
+/// interleaves them at awaits, and a script fetch is one of those awaits — so
+/// acting on the runtime of a navigation without naming its tree would take
+/// the other navigation's engine with it.
 pub(crate) fn with_runtime_for<R>(
     page: PageId,
     document: &SharedDocument,
@@ -451,22 +504,208 @@ pub(crate) fn ensure_runtime(
 /// Without a runtime there is nothing to run the script with, but the parse is
 /// still paused on it: it is taken and dropped, because resuming without
 /// taking it would abandon it silently.
-pub(crate) fn run_pending_script(
+///
+/// A classic script with a `src` is fetched here, between the two visits to the
+/// runtime, because it is the fetch that awaits and the runtime is
+/// page-thread-local state another navigation of this page reaches at its own
+/// awaits. Nothing may borrow it across one, so the script is run on the far
+/// side of the fetch and only if the same engine is still bound to the same
+/// tree.
+pub(crate) async fn run_pending_script(
     parser: &mut Parser<'_, SharedSink>,
     document: &SharedDocument,
     config: &PageConfig,
     tracker: &Rc<RefCell<SettleTracker>>,
-    base: &Url,
+    meta: &ScriptMeta<'_>,
 ) -> Result<(), Error> {
     let page = config.id;
     ensure_runtime(page, document.clone(), config, Rc::clone(tracker));
-    if let Some(result) = with_runtime(page, |runtime| runtime.run_pending_script(parser, base)) {
-        return result;
-    }
-    if parser.take_pending_script().is_some() {
-        tracing::debug!(?page, "a script is skipped: no engine can run it");
+    let Some(step) = with_runtime_for(page, document, |runtime| {
+        runtime.run_pending_script(parser, meta.base)
+    }) else {
+        if parser.take_pending_script().is_some() {
+            tracing::debug!(?page, "a script is skipped: no engine can run it");
+        }
+        return Ok(());
+    };
+    let ScriptStep::Fetch(url) = step? else {
+        return Ok(());
+    };
+    let Some(body) = fetch_script(config, meta, &url, tracker).await else {
+        // A script that could not be fetched is a page-level fact, not a failed
+        // navigation: the parse goes on without it, exactly as a browser's does.
+        return Ok(());
+    };
+    let Some(source) = decode_script(&body, parser.encoding()) else {
+        tracing::warn!(
+            ?page,
+            url = %url,
+            "an external script is skipped: the parse has no document encoding to decode it with"
+        );
+        return Ok(());
+    };
+    let ran = with_runtime_for(page, document, |runtime| runtime.run_source(&source));
+    if ran.is_none() {
+        tracing::debug!(
+            ?page,
+            url = %url,
+            "a fetched script did not run: its engine is no longer bound to this tree"
+        );
     }
     Ok(())
+}
+
+/// Issues the fetch of one parser-blocking external script and reads its body.
+///
+/// The request is registered as a *parser* request rather than an ordinary
+/// tracked one: a script the parser inserted is exempt from reclassification,
+/// so a slow origin cannot make this fetch background mid-settle and end a
+/// settle the load chain is still waiting on (`docs/spec/02-architecture.md`
+/// §5.1, and this is `note_parser_request_started`'s first production caller).
+///
+/// `None` means the script has no text: the fetch failed, the origin answered
+/// with a status that is not ok, or the navigation's deadline left no time to
+/// issue the request at all. Either way the caller resumes the parse.
+async fn fetch_script(
+    config: &PageConfig,
+    meta: &ScriptMeta<'_>,
+    url: &Url,
+    tracker: &Rc<RefCell<SettleTracker>>,
+) -> Option<Bytes> {
+    // A fetch that cannot finish inside the navigation's deadline is not issued
+    // at all: the parse would be sitting in it when the deadline expired, and
+    // the body loop is what turns an expired deadline into the navigation's
+    // outcome.
+    let remaining = meta.deadline.saturating_duration_since(config.clock.now());
+    if remaining.is_zero() {
+        tracing::warn!(
+            url = %url,
+            "an external script is skipped: the navigation deadline has passed"
+        );
+        return None;
+    }
+    let request_id = next_request_id();
+    let request = match script_request(config, meta, url, remaining) {
+        Ok(request) => request,
+        Err(error) => {
+            tracing::warn!(
+                page = ?config.id,
+                url = %url,
+                ?error,
+                "an external script is skipped: one of the page's headers cannot go on the wire"
+            );
+            return None;
+        }
+    };
+    tracker
+        .borrow_mut()
+        .note_parser_request_started(request_id, RequestClass::Script);
+    // One place ends the request, whatever the fetch did. A request left in the
+    // settle machine's table would hold the settle open for a fetch that is
+    // over — the failure mode this fetch is most likely to cause.
+    let fetched = read_script_body(&config.client, request).await;
+    tracker.borrow_mut().note_request_done(request_id);
+    match fetched {
+        Ok(Some(body)) => {
+            tracing::debug!(
+                page = ?config.id,
+                url = %url,
+                bytes = body.len(),
+                "an external script was fetched"
+            );
+            Some(body)
+        }
+        // The origin answered, so there is nothing to report beyond the status
+        // the read already logged, and no text to run.
+        Ok(None) => None,
+        Err(error) => {
+            tracing::warn!(
+                page = ?config.id,
+                url = %url,
+                ?error,
+                "an external script could not be fetched; the parse goes on without it"
+            );
+            None
+        }
+    }
+}
+
+/// The request one parser-blocking script fetch issues.
+///
+/// The page's own headers go on it exactly as they go on the document request
+/// (`crate::page::build_request`): a `User-Agent` override that reached the
+/// document but not the scripts it loads would be a strange half of a profile.
+/// One that cannot go on the wire is an error, as it is there.
+fn script_request(
+    config: &PageConfig,
+    meta: &ScriptMeta<'_>,
+    url: &Url,
+    remaining: Duration,
+) -> std::result::Result<Request, NetError> {
+    let mut request = Request::new(http::Method::GET, url.clone())
+        .resource_type(ResourceType::Script)
+        // The initiator decides `Sec-Fetch-Site`, `Origin` and the default
+        // `Referer`, all of which are the document's rather than the script's.
+        .initiator(meta.document_url.clone())
+        // No grace behind a page timer here: this deadline *is* the bound.
+        .timeout(remaining)
+        .max_body_bytes(config.budgets.network_bytes);
+    // What the request is first-party to is the document it is for, not the
+    // script's own origin: a script served from a third-party origin is still
+    // a first-party request of this page.
+    request.first_party = Site::from_url(meta.document_url);
+    for (name, value) in &config.extra_headers {
+        request = request.header(name, value)?;
+    }
+    Ok(request)
+}
+
+/// Sends `request` and reads its body to the end.
+///
+/// `None` means the origin answered but with a status that is not ok, which is
+/// a failed script fetch rather than a script: HTML's "fetch a classic script"
+/// says "if bodyBytes is null or failure, or response's status is not an ok
+/// status, then run onComplete given null" — the body of a 404 is an error
+/// page, not the script the element named, and running it would execute
+/// whatever that page happened to contain.
+async fn read_script_body(
+    client: &Client,
+    request: Request,
+) -> std::result::Result<Option<Bytes>, NetError> {
+    let response = client.send(request).await?;
+    tracing::debug!(
+        status = response.status.as_u16(),
+        "a script response head arrived"
+    );
+    if !response.status.is_success() {
+        tracing::warn!(
+            status = response.status.as_u16(),
+            "an external script was not served; the parse goes on without it"
+        );
+        return Ok(None);
+    }
+    response.body.collect().await.map(Some)
+}
+
+/// Decodes the text of an external classic script.
+///
+/// A classic script has no encoding of its own: it is decoded with the
+/// document's (`docs/spec/03-network.md`). The parser's is that encoding — it
+/// is the one the document's own bytes were decoded with — and it is certain by
+/// the time a script is handed out, since handing one out is what makes it
+/// certain. `None` means the parser has no encoding yet, which cannot happen at
+/// a pause; the script is skipped rather than decoded on a guess.
+///
+/// HTML's "fetch a classic script" decodes with that encoding as the *fallback*
+/// — "The decode algorithm overrides encoding if the file contains a BOM" — so
+/// the BOM-aware entry point is the one that matches it.
+fn decode_script(body: &[u8], encoding: Option<&'static Encoding>) -> Option<String> {
+    let encoding = encoding?;
+    let (text, _, had_errors) = encoding.decode(body);
+    if had_errors {
+        tracing::debug!("an external script had bytes that are invalid in the document's encoding");
+    }
+    Some(text.into_owned())
 }
 
 /// The parse of `page` over `document` has ended: no parser writes into that

@@ -15,6 +15,7 @@
 //! At Tier 1 only the navigation, the document request and the parser feed
 //! it; the other sources exist because Tier 2 (P2) drives the same machine.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -425,12 +426,20 @@ impl SettleTracker {
         self.signal_state_change();
     }
 
-    /// Scripts awaiting fetch or execution whose insertion was tracked.
-    pub fn note_pending_scripts(&mut self, count: u32) {
-        self.pending_scripts = count;
-        if count > 0 {
-            self.quiet_since = None;
-        }
+    /// Counts one more script as awaiting fetch or execution.
+    ///
+    /// [`PendingScripts::hold`] is the only intended caller: the count is
+    /// owned by whoever holds the script across the fetch of its `src`, so it
+    /// is added to and released in pairs, and never set outright.
+    fn hold_pending_script(&mut self) {
+        self.pending_scripts = self.pending_scripts.saturating_add(1);
+        self.quiet_since = None;
+        self.signal_state_change();
+    }
+
+    /// Releases the count one such script held.
+    fn release_pending_script(&mut self) {
+        self.pending_scripts = self.pending_scripts.saturating_sub(1);
         self.signal_state_change();
     }
 
@@ -736,10 +745,40 @@ impl SettleTracker {
     }
 }
 
+/// One script element awaiting fetch or execution, counted for as long as it
+/// is outstanding (`docs/spec/02-architecture.md` §5.1).
+///
+/// `pending_scripts` is a network source, so the count must be live from the
+/// moment the parse is paused on a script until the parse resumes past it —
+/// and a parser-blocking script pauses the parse across the fetch of its own
+/// `src`, so the count spans a deferral. The rule that follows is that the
+/// count is owned by whoever holds the script across it, which is what makes
+/// this a guard rather than a pair of calls: whoever drops the guard has
+/// finished with the script, whether that was a resume, a skipped script, a
+/// fetch that failed, or an error unwound past the pause.
+pub struct PendingScripts<'a> {
+    tracker: &'a RefCell<SettleTracker>,
+}
+
+impl<'a> PendingScripts<'a> {
+    /// Counts one script as awaiting fetch or execution until the guard drops.
+    pub fn hold(tracker: &'a RefCell<SettleTracker>) -> PendingScripts<'a> {
+        tracker.borrow_mut().hold_pending_script();
+        PendingScripts { tracker }
+    }
+}
+
+impl Drop for PendingScripts<'_> {
+    fn drop(&mut self) {
+        self.tracker.borrow_mut().release_pending_script();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::clock::ManualClock;
+    use std::rc::Rc;
 
     fn tracker(wait_until: Settle) -> (SettleTracker, ManualClock) {
         let clock = ManualClock::new();
@@ -1032,6 +1071,48 @@ mod tests {
             tracker.evaluate_now(),
             SettleState::Loading,
             "the new document starts over"
+        );
+    }
+
+    /// The count a parser-blocking script holds spans the fetch of its `src`,
+    /// so it is the guard that releases it — including when the pause is left
+    /// by an early return rather than by a resume. Two scripts held at once is
+    /// what `defer`/`async` will need, and it is also what tells a pair of
+    /// add-and-release calls apart from setting the count outright.
+    #[test]
+    fn a_held_script_counts_until_the_guard_drops() {
+        let (tracker, _clock) = tracker(Settle::NetworkIdle);
+        let tracker = Rc::new(RefCell::new(tracker));
+
+        let outer = PendingScripts::hold(&tracker);
+        assert_eq!(tracker.borrow().pending().pending_scripts, 1);
+
+        let also_held = PendingScripts::hold(&tracker);
+        assert_eq!(
+            tracker.borrow().pending().pending_scripts,
+            2,
+            "a second script adds to the first rather than replacing it"
+        );
+        drop(also_held);
+
+        // What a `?` on the script's fetch does: the pause is left without
+        // anyone reaching a matching release.
+        let abandoned = || -> Result<(), ()> {
+            let _held = PendingScripts::hold(&tracker);
+            Err(())
+        };
+        assert!(abandoned().is_err());
+        assert_eq!(
+            tracker.borrow().pending().pending_scripts,
+            1,
+            "the script still outstanding is still counted"
+        );
+
+        drop(outer);
+        assert_eq!(
+            tracker.borrow().pending().pending_scripts,
+            0,
+            "the last holder released the count"
         );
     }
 

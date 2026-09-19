@@ -27,7 +27,7 @@ use tenta_js::engine::{
 use tenta_js::event_loop::{Clock, EventLoop, ProvenanceSink, Scheduler};
 use tenta_net::hooks::{BoxFuture, FulfilledResponse, Hooks, Interception, Interceptor};
 use tenta_net::policy::private_network::DestinationPolicy;
-use tenta_net::{ClientConfig, NetRuntime};
+use tenta_net::{ClientConfig, ErrorName, NetError, NetRuntime};
 use tenta_page::page::{Goto, Navigation, Page, PageConfig, TestHooks, Viewport};
 use tenta_page::settle::{Settle, SettleConfig};
 use tenta_page::thread::{PageJob, PageTask, PageThread};
@@ -588,6 +588,9 @@ pub struct Harness {
     pub page: Page,
     pub thread: TestThread,
     pub record: Recorder,
+    /// The paths of every request the page issued, in order, which is how a
+    /// test tells a script that was fetched from one that was skipped.
+    requests: Arc<Mutex<Vec<String>>>,
 }
 
 impl Harness {
@@ -605,6 +608,7 @@ impl Harness {
             settle: SettleConfig::library(),
             javascript: true,
             engine: true,
+            routes: Vec::new(),
         }
     }
 
@@ -632,6 +636,13 @@ impl Harness {
     pub fn has(&self, selector: &str) -> bool {
         self.document(|document| has_selector(document, selector))
     }
+
+    /// The path of every request the fixture answered, in order. A fixture
+    /// that serves one body for every path cannot tell "the script was
+    /// fetched" from "the script was skipped"; this can.
+    pub fn requests(&self) -> Vec<String> {
+        self.requests.lock().unwrap().clone()
+    }
 }
 
 pub struct Builder {
@@ -640,6 +651,8 @@ pub struct Builder {
     settle: SettleConfig,
     javascript: bool,
     engine: bool,
+    /// What the fixture answers for paths other than the document's.
+    routes: Vec<(String, Answer)>,
 }
 
 impl Builder {
@@ -665,15 +678,36 @@ impl Builder {
         self
     }
 
+    /// Serves `body` at `path` as a script, for a page whose markup references
+    /// it. The body is bytes rather than text so a test can serve a resource
+    /// that is not valid UTF-8, which is the whole point of an encoding.
+    pub fn route(mut self, path: &str, body: impl Into<Bytes>) -> Builder {
+        self.routes.push((
+            route_path(path),
+            Answer::Body(body.into(), "text/javascript".to_owned()),
+        ));
+        self
+    }
+
+    /// Fails every request to `path` the way a dead origin does, so a page can
+    /// reference a resource that cannot be fetched.
+    pub fn failing_route(mut self, path: &str) -> Builder {
+        self.routes.push((route_path(path), Answer::Fail));
+        self
+    }
+
     pub fn build(self) -> Harness {
         let record: Recorder = Arc::new(Mutex::new(Record::default()));
+        let requests: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let net = NetRuntime::new(1).expect("io runtime");
         let client = net
             .client(ClientConfig {
                 hooks: Hooks {
                     interceptors: vec![Arc::new(Fixture {
-                        body: Bytes::from(self.body),
-                        content_type: self.content_type,
+                        document: Bytes::from(self.body),
+                        document_content_type: self.content_type,
+                        routes: self.routes,
+                        requests: Arc::clone(&requests),
                     })],
                     observers: Vec::new(),
                 },
@@ -708,26 +742,90 @@ impl Builder {
             page,
             thread,
             record,
+            requests,
         }
     }
 }
 
-/// Answers every request with the fixture body, so a test never touches a
-/// socket or a DNS resolver.
+/// A path as the fixture matches it, so a test may name a route the way the
+/// markup's `src` does (`x.js`) and still match the request's path (`/x.js`).
+fn route_path(path: &str) -> String {
+    if path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!("/{path}")
+    }
+}
+
+/// What the fixture does with one path.
+enum Answer {
+    /// A body, with the content type it is served as.
+    Body(Bytes, String),
+    /// A transport failure, as a dead origin gives.
+    Fail,
+}
+
+/// Answers each request with the body registered for its path — a script's
+/// text for a script's path, the fixture body for the document's — so a test
+/// never touches a socket or a DNS resolver.
+///
+/// The routing is what makes a fetched subresource testable: the same fixture
+/// has to be able to serve a document that references `x.js` *and* the text of
+/// `x.js`, and a request for a path it knows nothing about is a 404, which is
+/// what a page would get from a real origin.
 struct Fixture {
-    body: Bytes,
-    content_type: String,
+    document: Bytes,
+    document_content_type: String,
+    routes: Vec<(String, Answer)>,
+    requests: Arc<Mutex<Vec<String>>>,
 }
 
 impl Interceptor for Fixture {
     fn intercept<'a>(
         &'a self,
-        _request: &'a mut tenta_net::request::Request,
+        request: &'a mut tenta_net::request::Request,
     ) -> BoxFuture<'a, Interception> {
-        let response = FulfilledResponse::new(StatusCode::OK, self.body.clone())
-            .header("content-type", &self.content_type);
-        Box::pin(async move { Interception::Fulfill(response) })
+        let path = request.url.path().to_owned();
+        self.requests.lock().unwrap().push(path.clone());
+        if let Some((_, answer)) = self.routes.iter().find(|(route, _)| *route == path) {
+            return match answer {
+                Answer::Fail => Box::pin(async move {
+                    Interception::Fail(NetError::new(
+                        ErrorName::ConnectionRefused,
+                        format!("the fixture refuses {path}"),
+                    ))
+                }),
+                Answer::Body(body, content_type) => {
+                    let body = body.clone();
+                    let content_type = content_type.clone();
+                    Box::pin(async move {
+                        Interception::Fulfill(fulfilled(StatusCode::OK, body, &content_type))
+                    })
+                }
+            };
+        }
+        // The document is whatever the test navigates to; `URL` is its only
+        // address, and its path is `/`.
+        let (status, body, content_type) = if path == "/" {
+            (
+                StatusCode::OK,
+                self.document.clone(),
+                self.document_content_type.clone(),
+            )
+        } else {
+            (
+                StatusCode::NOT_FOUND,
+                Bytes::from_static(b"not found\n"),
+                "text/plain".to_owned(),
+            )
+        };
+        Box::pin(async move { Interception::Fulfill(fulfilled(status, body, &content_type)) })
     }
+}
+
+/// A complete response, which is all the transport needs from an interceptor.
+fn fulfilled(status: StatusCode, body: Bytes, content_type: &str) -> FulfilledResponse {
+    FulfilledResponse::new(status, body).header("content-type", content_type)
 }
 
 // ------------------------------------------------------------------ helpers

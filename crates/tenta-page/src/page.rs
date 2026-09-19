@@ -31,7 +31,9 @@ use crate::error_page::error_document;
 use crate::event::{EVENT_BUFFER, PageEvent, PageEvents};
 use crate::fetch_policy::{FetchPolicy, RecordedHint};
 use crate::runtime;
-use crate::settle::{Origin, RequestClass, Settle, SettleConfig, SettleState, SettleTracker};
+use crate::settle::{
+    Origin, PendingScripts, RequestClass, Settle, SettleConfig, SettleState, SettleTracker,
+};
 use crate::task::{catch_unwind_future, panic_message};
 use crate::thread::PageThread;
 
@@ -48,7 +50,12 @@ pub const RESTART_WINDOW: usize = 64 * 1024;
 /// How much later than the page's deadline the transport's own deadline is.
 const TRANSPORT_DEADLINE_GRACE: Duration = Duration::from_millis(250);
 
-fn next_request_id() -> RequestId {
+/// The next id for a request this page issues.
+///
+/// Shared by the page and its script driver (`crate::runtime`): a request is
+/// identified in the settle machine and in the event stream by this id, so both
+/// issuers must draw from the same sequence.
+pub(crate) fn next_request_id() -> RequestId {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     RequestId(NEXT.fetch_add(1, Ordering::Relaxed))
 }
@@ -1126,29 +1133,39 @@ enum ParseStep {
 /// A `Script` pause is the one place the page enters an engine with its parser
 /// stopped (`docs/spec/05-javascript.md` §6): everything before the script is
 /// in the tree, nothing after it is, and the parse stays where it is until
-/// [`Parser::resume`].
-fn drive_parse(
+/// [`Parser::resume`]. An external classic script is fetched inside the pause,
+/// so this is one of the few places the page thread awaits with a parser
+/// stopped on a node — and the only one that resumes it afterwards.
+async fn drive_parse(
     parser: &mut Parser<'_, SharedSink>,
     status: ParseStatus,
     document: &SharedDocument,
     config: &PageConfig,
     tracker: &Rc<RefCell<SettleTracker>>,
     final_url: &Url,
+    deadline: Instant,
 ) -> Result<ParseStep> {
     let mut status = status;
     while status == ParseStatus::Script {
         // A script the parse is paused on is work in flight: it holds a
-        // `NetworkIdle` settle open, exactly as a subresource would.
-        tracker.borrow_mut().note_pending_scripts(1);
+        // `NetworkIdle` settle open, exactly as a subresource would. The count
+        // spans the fetch of the script's own `src`, so it is owned by the
+        // guard rather than by this loop iteration's two ends.
+        let pending = PendingScripts::hold(tracker);
         let base = {
             let document = document.borrow();
             document.base_url().or(document.url()).cloned()
         }
         .unwrap_or_else(|| final_url.clone());
-        runtime::run_pending_script(parser, document, config, tracker, &base)?;
+        let meta = runtime::ScriptMeta {
+            base: &base,
+            document_url: final_url,
+            deadline,
+        };
+        runtime::run_pending_script(parser, document, config, tracker, &meta).await?;
         // Resuming is the caller's statement that it is done with the pause.
         status = parser.resume();
-        tracker.borrow_mut().note_pending_scripts(0);
+        drop(pending);
     }
     Ok(match status {
         ParseStatus::Continue => ParseStep::Fed,
@@ -1353,7 +1370,17 @@ async fn parse_body(
             panic!("test hook: panic inside the parse task");
         }
         let status = parser.feed(&chunk);
-        match drive_parse(&mut parser, status, &document, config, tracker, final_url)? {
+        match drive_parse(
+            &mut parser,
+            status,
+            &document,
+            config,
+            tracker,
+            final_url,
+            deadline,
+        )
+        .await?
+        {
             ParseStep::Fed => {}
             ParseStep::Stopped => break,
             ParseStep::Restart(encoding) => {
@@ -1378,7 +1405,17 @@ async fn parse_body(
                 restarted = Some(encoding);
                 for buffered_chunk in &buffer {
                     let status = parser.feed(buffered_chunk);
-                    match drive_parse(&mut parser, status, &document, config, tracker, final_url)? {
+                    match drive_parse(
+                        &mut parser,
+                        status,
+                        &document,
+                        config,
+                        tracker,
+                        final_url,
+                        deadline,
+                    )
+                    .await?
+                    {
                         ParseStep::Fed => {}
                         ParseStep::Stopped => break,
                         ParseStep::Restart(next) => {
@@ -1413,7 +1450,17 @@ async fn parse_body(
     // sniff window: the rest of the stream is over, and pausing still
     // applies (`crates/tenta-html/src/parser.rs`).
     let status = parser.feed_last(b"");
-    match drive_parse(&mut parser, status, &document, config, tracker, final_url)? {
+    match drive_parse(
+        &mut parser,
+        status,
+        &document,
+        config,
+        tracker,
+        final_url,
+        deadline,
+    )
+    .await?
+    {
         ParseStep::Fed => {}
         ParseStep::Stopped => {}
         ParseStep::Restart(encoding) => {
