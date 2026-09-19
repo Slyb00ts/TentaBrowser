@@ -853,6 +853,15 @@ async fn navigate(
         mid_body_timeout,
     } = parsed;
 
+    // The tree is taken into a `DeferredDocument` here, not at the install
+    // point below, because `parse_body` disarmed its own cleanup before
+    // returning: from that moment nothing else owns the engine the parse may
+    // have built, and every early return between here and the install point
+    // would strand it in the runtime table with its document. The gap is one
+    // `check_cancelled` wide, and a concurrent `goto`/`close` bumping the
+    // navigation generation is what lands in it.
+    let mut deferred = DeferredDocument::new(inner.config.id, document);
+
     tracker.borrow_mut().note_parser_running(false);
     tracker.borrow_mut().note_request_done(request_id);
     tracker.borrow_mut().note_domcontentloaded();
@@ -861,10 +870,14 @@ async fn navigate(
     tracker.borrow_mut().note_load_fired();
 
     let policy = FetchPolicy::for_tier(Tier::Dom);
-    let base = {
+    // Read through `deferred` rather than the local binding: the tree was moved
+    // into it above and is the only owner from here on. Cloning the local handle
+    // instead would leave the count above one at `take_if_owned`, whose
+    // `Rc::try_unwrap` would then put the tree back and never install it.
+    let base = deferred.shared().and_then(|document| {
         let document = document.borrow();
         document.base_url().or(document.url()).cloned()
-    };
+    });
     let recorded: Vec<RecordedHint> = hints
         .iter()
         .map(|hint| RecordedHint::from_hint(hint, base.as_ref(), &policy))
@@ -883,10 +896,9 @@ async fn navigate(
 
     // The tree becomes the page's at the first install point at which the page
     // owns it alone; a tree an engine is bound to is still shared until the
-    // engine is gone (`DeferredDocument`). The engine is not released here:
-    // the settle call this navigation is about to run pumps it.
-    let mut deferred = DeferredDocument::new(inner.config.id, document);
-
+    // engine is gone (`DeferredDocument`, built once the parse handed the tree
+    // over). The engine is not released here: the settle call this navigation
+    // is about to run pumps it.
     {
         let mut state = inner.state.lock();
         if let Some(document) = deferred.take_if_owned() {
@@ -1522,9 +1534,17 @@ async fn settle_loop(
         // One turn of the page loop: the timer callbacks that came due and the
         // rendering opportunity the engine owes. A script that queued work
         // therefore runs it while this settle call is waiting, and both kinds
-        // of callback can mutate the tree.
-        let engine_wakeup =
-            runtime::with_runtime(page, |runtime| runtime.turn(TIMERS_PER_TURN)).flatten();
+        // of callback can mutate the tree. The runtime is named by the tree
+        // this navigation parsed rather than by the page alone, because a
+        // second navigation of the same page is interleaved at awaits and
+        // acting on whichever runtime is in the table would drive its engine
+        // (`crates/tenta-page/src/runtime.rs`).
+        let engine_wakeup = deferred
+            .shared()
+            .and_then(|document| {
+                runtime::with_runtime_for(page, document, |runtime| runtime.turn(TIMERS_PER_TURN))
+            })
+            .flatten();
         let mutated = with_document(inner, deferred, |document| document.mutation_generation());
         if mutated != mutation_generation {
             mutation_generation = mutated;

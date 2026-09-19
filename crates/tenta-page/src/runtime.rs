@@ -89,8 +89,15 @@ pub(crate) struct PageRuntime {
     engine: Box<dyn PageEngine>,
     document: SharedDocument,
     /// Whether a `tenta_html::Parser` is still writing into `document`. A
-    /// script only ever runs while one is, which is what keeps the engine from
-    /// being entered against a tree the parser is holding arena handles into.
+    /// script only ever runs while one is, so the engine is never entered
+    /// against a tree the parser holds arena handles into.
+    ///
+    /// Today this *records* that fact rather than enforcing it: the only reader
+    /// is the assertion in [`PageRuntime::run_pending_script`], and nothing on
+    /// this path frees nodes or collects a wrapper yet. It becomes
+    /// load-bearing when the automatic detached-node sweep lands, which must
+    /// consult it: reclaiming a detached subtree while a parser is paused
+    /// inside it would invalidate the handles the parser is holding.
     parse_in_flight: bool,
     /// Kept so the bridge can be detached when the settle call ends; the
     /// engine also holds it, for as long as the engine lives.
@@ -269,7 +276,7 @@ pub(crate) fn with_runtime<R>(page: PageId, f: impl FnOnce(&mut PageRuntime) -> 
 /// interleaves them at awaits — so anything that acts on the runtime of a
 /// navigation must name the tree that navigation parsed, or it would take the
 /// other navigation's engine with it.
-fn with_runtime_for<R>(
+pub(crate) fn with_runtime_for<R>(
     page: PageId,
     document: &SharedDocument,
     f: impl FnOnce(&mut PageRuntime) -> R,

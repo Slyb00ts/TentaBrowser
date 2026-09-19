@@ -4,6 +4,13 @@
 //! The engine is a real `tenta_js` event loop, so the timer provenance, the
 //! nesting clamp and the task counting the settle machine reacts to are the
 //! production ones; only the script interpreter is a stub.
+//!
+//! One thing the stub has to do for itself, because it is standing in for a
+//! page's engine: run a handed-out script under `Origin::Tracked`. That is the
+//! attribution every deferral below rests on — a `setTimeout` can only be a
+//! deferral if the script that scheduled it was part of the load chain — and it
+//! is the real backend, not this harness, that owes it
+//! (`crates/tenta-js-v8/tests/page_engine_provenance.rs` pins it there).
 
 mod support;
 

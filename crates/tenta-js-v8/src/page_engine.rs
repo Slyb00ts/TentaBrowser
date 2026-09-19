@@ -10,9 +10,10 @@
 //! one caller.
 //!
 //! Every method here is a mapping onto an inherent [`Engine`] method, and the
-//! two places it is not (`document`, `run_script`) are the two that cash an
-//! invariant of the page layer: a page engine is always built over a document,
-//! and a script failure is classified by where it failed.
+//! places it is not are the ones that cash an invariant of the page layer: a
+//! page engine is always built over a document (`document`), a script failure
+//! is classified by where it failed and a script the page handed out counts as
+//! part of the load chain (`run_script`).
 //!
 //! The borrow and re-entrancy rules in `tenta_js::engine`'s module doc apply to
 //! these calls as much as to any other engine entry point. In particular
@@ -22,7 +23,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use tenta_core::TimerRule;
+use tenta_core::{Origin, TimerRule};
 use tenta_js::bindings::host::SharedDocument;
 use tenta_js::engine::{
     EngineClock, EngineWatchdog, PageEngine, PageEngineConfig, PageEngineFactory, ScriptError,
@@ -61,6 +62,24 @@ impl PageEngine for Engine {
     /// ([`Engine::set_script_timeout`]), reporting *where* it failed rather than
     /// only what V8 said.
     ///
+    /// # A script the page hands out runs as part of the load chain
+    ///
+    /// The script runs under [`Origin::Tracked`], so the work it starts is
+    /// attributed to the page's load rather than to the page's own background
+    /// activity. A page only calls this for a `<script>` its parse is paused on
+    /// (`tenta_page::runtime`), which is by definition part of loading the
+    /// document — and it is what makes a short `setTimeout` an inline script
+    /// schedules a *deferral* the settle call waits for rather than background
+    /// activity it ignores. Without this the timer's parent would be the
+    /// default [`Origin::Background`] and [`TimerRule::origin_for`] could never
+    /// promote it, whatever the page's rule says.
+    ///
+    /// The origin is set on the loop's shared task state for the body of the
+    /// call only, so it reaches exactly the tasks this script queues. An entry
+    /// that is not a script the page handed out — [`Engine::evaluate`] — is
+    /// left as background, which is what it is: work started after the page has
+    /// loaded, on its own initiative.
+    ///
     /// The microtask checkpoint the script's own work owes is the caller's to
     /// perform ([`PageEngine::run_microtasks`]), as it is for
     /// [`Engine::evaluate`]: the drive methods pay one after each callback, and
@@ -87,7 +106,12 @@ impl PageEngine for Engine {
             }
         }
         let timeout = self.script_timeout;
-        self.run_classified(source, timeout)
+        // The scheduler is cloned out because `with_origin` borrows it while
+        // the body borrows the engine mutably (`HostState::scheduler` is the
+        // same handle the timer callbacks schedule through).
+        let scheduler = self.host.scheduler.clone();
+        scheduler
+            .with_origin(Origin::Tracked, || self.run_classified(source, timeout))
             .map_err(|failure| ScriptError {
                 kind: failure.kind,
                 message: failure.message,
