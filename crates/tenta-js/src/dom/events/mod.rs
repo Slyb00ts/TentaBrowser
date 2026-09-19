@@ -6,9 +6,10 @@
 //! [`ScriptHost`] the engine installs on the [`HostContext`].
 //!
 //! A listener is registered on a [`TargetKey`] — a node, or the window. The
-//! window is not a node, so it cannot be keyed by [`NodeId`] like an element;
-//! it is still the outermost entry of every event path, and it is what makes
-//! `window.addEventListener('click', …)` fire for a click on a descendant.
+//! window is not a node, so it cannot be keyed by [`NodeRef`] the way an
+//! element is; it is still the outermost entry of every event path, and it is
+//! what makes `window.addEventListener('click', …)` fire for a click on a
+//! descendant.
 //!
 //! # Borrow discipline (invariant A5)
 //!
@@ -21,7 +22,7 @@
 
 use std::collections::HashMap;
 
-use tenta_core::{NodeId, NodeRef};
+use tenta_core::NodeRef;
 
 use crate::bindings::JsError;
 use crate::bindings::host::{HostContext, encode_event, encode_node, encode_window};
@@ -357,8 +358,9 @@ struct TargetListeners {
 ///
 /// The node key is a full [`NodeRef`], generation included. The arena reuses a
 /// freed slot for a different node under a bumped generation, so keying on the
-/// bare [`NodeId`] would let a dispatch whose path contains the recycled index
-/// match a listener left behind by the node that used to live there.
+/// bare [`tenta_core::NodeId`] would let a dispatch whose path contains the
+/// recycled index match a listener left behind by the node that used to live
+/// there.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum TargetKey {
     Node(NodeRef),
@@ -498,8 +500,11 @@ impl ListenerTable {
     }
 
     /// Removes the listener with `id` for node `target`. See
-    /// [`Self::remove_by_id_at`]. Addressing a node whose slot has already been
-    /// recycled is [`Self::drain_target`]'s job, not this one's.
+    /// [`Self::remove_by_id_at`]. Removing a freed node's entries is not this
+    /// call's job: a live target's key no longer names them, because they were
+    /// keyed under the generation the node lived under. The sweep drainer
+    /// ([`crate::bindings::host::HostContext::drain_swept_listeners`]) reclaims
+    /// them by the reference the document recorded.
     pub fn remove_by_id(&mut self, target: NodeRef, id: ListenerId) -> Option<CallbackRef> {
         self.remove_by_id_at(target.into(), id)
     }
@@ -565,31 +570,17 @@ impl ListenerTable {
         self.len() == 0
     }
 
-    /// Removes and returns every callback registered for node `target`.
+    /// Removes and returns every callback registered for `target`, matched by
+    /// the key taken exactly as given — generation included.
     ///
-    /// Generation is deliberately ignored here. A drain addresses a target that
-    /// is being torn down — a node that may already be freed, whose arena slot
-    /// may even have been recycled — and the callbacks that have to be released
-    /// are exactly the ones registered while it was live, i.e. under an older
-    /// generation than the slot now carries. Matching an exact [`NodeRef`]
-    /// would miss them, so every entry keyed by a node with this id is drained.
-    pub fn drain_target(&mut self, target: NodeId) -> Vec<CallbackRef> {
-        let keys: Vec<TargetKey> = self
-            .targets
-            .keys()
-            .filter(|key| matches!(key, TargetKey::Node(node) if node.id == target))
-            .copied()
-            .collect();
-        keys.into_iter()
-            .filter_map(|key| self.targets.remove(&key))
-            .flat_map(|entry| entry.listeners)
-            .map(|listener| listener.callback)
-            .collect()
-    }
-
-    /// Removes and returns every callback registered for `target` (used when a
-    /// target is torn down). The key is taken as given, generation included;
-    /// a node that may already have been freed needs [`Self::drain_target`].
+    /// Exact matching is what makes this safe for the sweep drainer
+    /// ([`crate::bindings::host::HostContext::drain_swept_listeners`]), its
+    /// caller: it drains a node the document freed and holds the [`NodeRef`]
+    /// recorded before the slot was recycled. That key matches the entries
+    /// registered while the node lived — which the slot's current generation no
+    /// longer reports — and cannot match a listener registered on the node that
+    /// later took the slot. Matching on the bare id would remove that live
+    /// node's listener too, which is why no generation-blind drain exists.
     pub fn drain_target_at(&mut self, target: TargetKey) -> Vec<CallbackRef> {
         self.targets
             .remove(&target)

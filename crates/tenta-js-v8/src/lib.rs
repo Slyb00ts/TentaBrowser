@@ -638,6 +638,17 @@ impl Engine {
             .unwrap_or(0)
     }
 
+    /// The number of listeners registered in this engine's world (test-only).
+    /// A listener registered on a node the document later swept stays in the
+    /// table, and keeps the stored callback it owns alive, until the next
+    /// `PageEngine::trim_memory` drains the swept node's entries.
+    pub fn listener_count(&self) -> usize {
+        self.dom
+            .as_ref()
+            .map(|dom| dom.ctx.listeners.borrow().len())
+            .unwrap_or(0)
+    }
+
     /// Like [`Engine::evaluate`], but a watchdog thread requests termination if
     /// the script runs longer than `timeout` (`docs/spec/05-javascript.md` §11).
     pub fn evaluate_with_timeout(

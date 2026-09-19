@@ -154,6 +154,12 @@ pub struct Document {
     /// Pre-order positions, rebuilt lazily after a structural change.
     order: RefCell<OrderIndex>,
     detached_roots: HashSet<NodeId>,
+    /// Every node the most recent [`Document::sweep_detached`] freed, subtree
+    /// included and not only the freed roots, each carrying the generation it
+    /// had before its slot was recycled. Reused across sweeps (cleared and
+    /// refilled) so a sweep that frees nothing allocates nothing; see
+    /// [`Document::sweep_freed_nodes`] for who reads it and why.
+    sweep_freed: Vec<NodeRef>,
     /// Shadow root or `<template>` contents fragment to the element that owns
     /// it. Those fragments have no parent but are not independent detached
     /// roots: their lifetime is their host's (`docs/spec/04-dom-and-css.md` §1.1).
@@ -226,6 +232,7 @@ impl Document {
             indexes: RefCell::new(Indexes::default()),
             order: RefCell::new(OrderIndex::default()),
             detached_roots: HashSet::new(),
+            sweep_freed: Vec::new(),
             hosts: HashMap::new(),
             dirty_values: HashMap::new(),
             dirty_checkedness: HashMap::new(),
@@ -529,6 +536,31 @@ impl Document {
     #[inline]
     pub fn mutations_since_sweep(&self) -> u64 {
         self.mutations_since_sweep
+    }
+
+    /// Every node the most recent [`Document::sweep_detached`] freed — the
+    /// whole subtree, not only the freed roots, each with the generation it
+    /// carried before its slot was recycled. Reset by the next sweep, so the
+    /// slice is empty before the first one and after a sweep that freed
+    /// nothing.
+    ///
+    /// This exists for the state that is keyed by a node but owned per wrapper
+    /// world rather than by the document: an event listener registered on a
+    /// freed node keeps a JS callback alive (`docs/spec/05-javascript.md` §3),
+    /// and only the engine's world can release it. The page thread cannot reach
+    /// that world, so the document records the references and the engine drains
+    /// them where it has the world to hand.
+    ///
+    /// The generation is part of the record so the drain can match the
+    /// listener's exact key: the table is keyed by a [`NodeRef`], so draining a
+    /// bare id would also remove an entry registered on a node that has since
+    /// taken the freed slot. Releasing a freed node's entries is a memory
+    /// question rather than a correctness one — their key can never match a
+    /// live target again — but the exact key is what keeps a live listener out
+    /// of the reclaim.
+    #[inline]
+    pub fn sweep_freed_nodes(&self) -> &[NodeRef] {
+        &self.sweep_freed
     }
 
     /// Installs the mutation record consumer, returning the previous one.
@@ -1796,6 +1828,9 @@ impl Document {
     pub fn sweep_detached(&mut self) -> SweepStats {
         let mut stats = SweepStats::default();
         self.mutations_since_sweep = 0;
+        // Cleared, not replaced: the buffer is reused so a sweep that frees
+        // nothing allocates nothing (`Document::sweep_freed_nodes`).
+        self.sweep_freed.clear();
         let roots: Vec<NodeId> = self.detached_roots.iter().copied().collect();
         let mut stack: Vec<NodeId> = Vec::new();
         let mut subtree: Vec<NodeId> = Vec::new();
@@ -1831,6 +1866,11 @@ impl Document {
             }
             for node in subtree.iter().rev() {
                 freed.insert(*node);
+                // Recorded with its generation before the slot is recycled: the
+                // generation is part of the listener key the engine later drains
+                // by, so it has to be the one the node lived under.
+                let reference = self.node_ref(*node);
+                self.sweep_freed.push(reference);
                 self.note_deindex(*node, &mut touched);
                 self.release_owned_text(*node);
                 self.hosts.remove(node);
@@ -2868,6 +2908,7 @@ impl Document {
                     + indexes.classes.bytes()
                     + indexes.tags.bytes()
                     + self.detached_roots.capacity() * size_of::<NodeId>()
+                    + self.sweep_freed.capacity() * size_of::<NodeRef>()
                     + self.element_prefixes.capacity()
                         * (size_of::<NodeId>() + size_of::<Atom>() + 1)
                     + self.dirty_values.capacity() * (size_of::<NodeId>() + size_of::<String>() + 1)

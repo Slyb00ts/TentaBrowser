@@ -180,6 +180,51 @@ impl HostContext {
     pub fn time_stamp(&self) -> f64 {
         self.clock.now().as_millis_f64()
     }
+
+    /// Drains the listener entries of every node the document's most recent
+    /// sweep freed, releasing the stored callback reference each entry owned.
+    ///
+    /// The entries are drained by the exact [`NodeRef`] the document recorded,
+    /// generation included — [`ListenerTable::drain_target_at`] — so the key
+    /// matches precisely the registrations made while that node lived. A drain
+    /// on the bare id would also reach a listener registered on a node that
+    /// later took the freed slot; this one cannot. The generation is known here
+    /// because the document recorded it before the slot was recycled.
+    ///
+    /// Releasing a freed node's entries is a memory reclaim, not a correctness
+    /// one: their key can never match a live target again. Without it every
+    /// listener registered on a swept node keeps a V8 value alive for the life
+    /// of the world, because a [`CallbackRef`] is a bare handle with no `Drop`.
+    ///
+    /// A no-op when the last sweep freed nothing. It is also a silent no-op
+    /// when no [`ScriptHost`] is installed, because there is then no
+    /// `release_value` to free a reference through — so a caller must run it at
+    /// a point where the world has one, which for a page engine is any entry
+    /// point after `Engine::build` installed the host.
+    pub fn drain_swept_listeners(&self) {
+        // The references are copied out so the document borrow ends before
+        // anything else is touched, matching the borrow discipline the engine
+        // boundary states for a caller; nothing below re-enters the document.
+        let freed = self.doc.borrow().sweep_freed_nodes().to_vec();
+        if freed.is_empty() {
+            return;
+        }
+        // The entries leave the table first, so no borrow of it is held while a
+        // released value drops (which can touch the wrapper world's own cells).
+        let drained: Vec<CallbackRef> = {
+            let mut listeners = self.listeners.borrow_mut();
+            freed
+                .iter()
+                .flat_map(|node| listeners.drain_target_at(TargetKey::Node(*node)))
+                .collect()
+        };
+        let script = self.script.borrow();
+        if let Some(script) = script.as_ref() {
+            for callback in drained {
+                script.release_value(callback.0);
+            }
+        }
+    }
 }
 
 /// A context shared between the host objects of one world and the engine.

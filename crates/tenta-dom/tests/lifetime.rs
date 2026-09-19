@@ -289,3 +289,124 @@ fn dirty_form_state_does_not_survive_the_slot_being_reused() {
     assert_eq!(document.dirty_value(reused), None);
     assert_eq!(document.dirty_checkedness(reused), None);
 }
+
+/// The sweep records which nodes it freed so the engine can release the
+/// per-world state that was keyed by them (a freed node's event listeners,
+/// 04 §1.1). A listener can be registered on any node of a freed subtree, not
+/// only on the freed root, so the record has to cover the whole subtree; and it
+/// records the reference the node lived under, generation included, because
+/// that is what the listener table is keyed by.
+#[test]
+fn a_sweep_records_every_node_it_freed_subtree_included() {
+    let mut document = Document::new();
+    let root = detached_element(&mut document);
+    let child = detached_element(&mut document);
+    let grandchild = detached_element(&mut document);
+    document
+        .mutate(Mutation::Append {
+            parent: root,
+            child,
+        })
+        .expect("append");
+    document
+        .mutate(Mutation::Append {
+            parent: child,
+            child: grandchild,
+        })
+        .expect("append");
+
+    // Taken while the nodes are live: the recorded generation is the one they
+    // lived under, which the arena will bump past as it frees each slot.
+    let expected: Vec<_> = [root, child, grandchild]
+        .into_iter()
+        .map(|id| document.node_ref(id))
+        .collect();
+
+    assert_eq!(document.sweep_detached().nodes_freed, 3);
+
+    let mut recorded = document.sweep_freed_nodes().to_vec();
+    assert_eq!(
+        recorded.len(),
+        3,
+        "every freed node is recorded, not only the freed root"
+    );
+    recorded.sort_unstable_by_key(|node| node.id);
+    let mut expected = expected;
+    expected.sort_unstable_by_key(|node| node.id);
+    assert_eq!(recorded, expected, "the record is the freed nodes exactly");
+
+    // The sweep freed them, so the recorded reference no longer resolves: the
+    // node is gone even though the id may name a live node again afterwards.
+    for node in &recorded {
+        assert!(
+            document.resolve(*node).is_err(),
+            "{node:?} is recorded but no longer resolves"
+        );
+    }
+
+    // The arena hands a freed slot back under a bumped generation. That
+    // difference is what makes an exact-key drain correct: the freed node's
+    // listener entries stay keyed under the generation it lived under, while a
+    // listener on the node that took the slot is keyed under the new one.
+    let reused = document.create_html_element(atoms::SPAN);
+    let recorded_reused = recorded
+        .iter()
+        .find(|node| node.id == reused)
+        .expect("a freed slot is reused");
+    assert_ne!(
+        document.node_ref(reused).generation,
+        recorded_reused.generation,
+        "the reused slot carries a bumped generation, so the freed node's \
+         recorded key cannot match the node that took its slot"
+    );
+}
+
+/// Most sweeps free nothing, so the record must cost nothing then: it is a
+/// buffer reused across sweeps, not one allocated per sweep (the reported
+/// bookkeeping bytes do not move across a no-op sweep).
+#[test]
+fn a_sweep_that_frees_nothing_records_nothing_and_reuses_its_buffer() {
+    let mut document = Document::new();
+    document.sweep_detached();
+    assert!(
+        document.sweep_freed_nodes().is_empty(),
+        "nothing has been freed yet"
+    );
+    let baseline = document.memory_report().indexes;
+    document.sweep_detached();
+    assert!(document.sweep_freed_nodes().is_empty());
+    assert_eq!(
+        document.memory_report().indexes,
+        baseline,
+        "a sweep that frees nothing must not commit any memory"
+    );
+
+    // Free a subtree: the buffer grows to hold its nodes and stays holding that
+    // capacity for the next sweep.
+    let root = detached_element(&mut document);
+    let child = detached_element(&mut document);
+    document
+        .mutate(Mutation::Append {
+            parent: root,
+            child,
+        })
+        .expect("append");
+    assert_eq!(document.sweep_detached().nodes_freed, 2);
+    assert_eq!(document.sweep_freed_nodes().len(), 2);
+    let committed = document.memory_report().indexes;
+    assert!(
+        committed > baseline,
+        "recording the freed nodes commits memory: {baseline} -> {committed}"
+    );
+
+    // A later sweep that frees nothing empties the accessor without
+    // reallocating: an implementation that built a fresh buffer per sweep would
+    // report zero capacity here and the byte count would drop.
+    assert_eq!(document.sweep_detached().nodes_freed, 0);
+    assert!(document.sweep_freed_nodes().is_empty());
+    assert_eq!(
+        document.memory_report().indexes,
+        committed,
+        "the freed-node buffer is reused, not reallocated"
+    );
+}

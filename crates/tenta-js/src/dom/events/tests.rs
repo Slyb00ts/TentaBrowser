@@ -685,3 +685,121 @@ fn a_dispatch_at_the_window_has_the_window_as_its_whole_path() {
         "the transient dispatch state is cleared"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Draining the listeners of nodes a sweep freed
+// ---------------------------------------------------------------------------
+
+/// A sweep records the nodes it freed on the document; draining them releases
+/// the entries keyed by those references and the stored callback each owned. A
+/// `CallbackRef` has no `Drop`, so a drain that only removed the entries would
+/// leak a V8 reference per listener — the mock host records what was released.
+#[test]
+fn draining_the_sweeps_freed_nodes_removes_and_releases_their_listeners() {
+    let f = fixture();
+    add(&f.ctx, f.div, "x", 1, false);
+    add(&f.ctx, f.div, "y", 2, false);
+    let on_body = add(&f.ctx, f.body, "x", 3, false);
+
+    // Detach the div and sweep it: no wrapper and no handle, so it is freed and
+    // its reference is what the engine has to drain.
+    {
+        let mut doc = f.ctx.doc.borrow_mut();
+        doc.mutate(Mutation::Remove { child: f.div.id })
+            .expect("detach the div");
+        assert_eq!(doc.sweep_detached().nodes_freed, 1);
+        assert_eq!(
+            doc.sweep_freed_nodes(),
+            &[f.div],
+            "the sweep records the freed node for the drain"
+        );
+    }
+    assert_eq!(
+        f.ctx.listeners.borrow().len(),
+        3,
+        "the sweep itself holds no stored reference and releases none"
+    );
+    assert!(f.mock.released.borrow().is_empty());
+
+    f.ctx.drain_swept_listeners();
+
+    assert_eq!(
+        f.ctx.listeners.borrow().len(),
+        1,
+        "both of the freed div's entries are gone"
+    );
+    assert!(
+        f.ctx.listeners.borrow().contains(f.body, on_body),
+        "a live node's listener is not touched by the drain"
+    );
+    let mut released = f.mock.released.borrow().clone();
+    released.sort_unstable();
+    assert_eq!(
+        released,
+        vec![1, 2],
+        "each drained callback's stored reference is released"
+    );
+
+    // The references stay recorded until the next sweep, so a trim that runs
+    // again before then must not release the same references a second time.
+    f.ctx.drain_swept_listeners();
+    assert_eq!(
+        f.mock.released.borrow().as_slice(),
+        &[1, 2],
+        "a second drain over the same references releases nothing"
+    );
+}
+
+/// The drain of a freed node must not remove a listener registered on the node
+/// that reuses its slot. The slot keeps the freed node's id, so a drain that
+/// matched on the id alone would take the live listener with it; the recorded
+/// reference carries the generation the freed node lived under, so it matches
+/// only that node's own entries.
+#[test]
+fn a_reused_slots_listener_survives_a_drain_of_the_freed_nodes_ref() {
+    let f = fixture();
+    add(&f.ctx, f.div, "x", 1, false);
+
+    // Detach and sweep the div: its slot is freed, so the next allocation
+    // takes the id back under a bumped generation.
+    let reused = {
+        let mut doc = f.ctx.doc.borrow_mut();
+        doc.mutate(Mutation::Remove { child: f.div.id })
+            .expect("detach the div");
+        assert_eq!(doc.sweep_detached().nodes_freed, 1);
+        assert_eq!(
+            doc.sweep_freed_nodes(),
+            &[f.div],
+            "the sweep records the reference the div lived under"
+        );
+        let span = doc.create_html_element(atoms::SPAN);
+        let node = doc.node_ref(span);
+        assert_eq!(node.id, f.div.id, "the arena reuses the freed slot");
+        assert_ne!(
+            node.generation, f.div.generation,
+            "the reused slot carries a bumped generation"
+        );
+        node
+    };
+
+    // Script registers a listener on the node that took the slot; the drain
+    // that follows must leave it alone.
+    let on_reused = add(&f.ctx, reused, "x", 2, false);
+
+    f.ctx.drain_swept_listeners();
+
+    assert!(
+        f.ctx.listeners.borrow().contains(reused, on_reused),
+        "the listener on the reused slot survives the drain"
+    );
+    assert_eq!(
+        f.ctx.listeners.borrow().len(),
+        1,
+        "only the freed node's own entry was drained"
+    );
+    assert_eq!(
+        f.mock.released.borrow().as_slice(),
+        &[1],
+        "and only the freed node's callback was released"
+    );
+}

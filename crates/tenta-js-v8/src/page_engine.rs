@@ -160,14 +160,25 @@ impl PageEngine for Engine {
     /// This is the first half of reclaiming detached nodes
     /// (`docs/spec/04-dom-and-css.md` §1.1): a node the engine no longer wraps
     /// still looks reachable to the DOM until the flag is cleared, so a sweep
-    /// that runs before this keeps it. The drain is the same function the lazy
-    /// sweep in `V8World::wrapper` uses, so the two cannot drift.
+    /// that runs before this keeps it. That bookkeeping is the same function the
+    /// lazy sweep in `V8World::wrapper` uses, so the two cannot drift.
+    ///
+    /// It is also where the listeners of the nodes the *last* sweep freed are
+    /// drained, and the reason this has to happen at an engine entry point:
+    /// those entries live in this world's listener table and own a stored V8
+    /// reference each, and the page thread cannot reach either. Draining is
+    /// correct lazily — a freed node's entries can no longer fire — so running
+    /// one sweep behind costs nothing but the entries' lifetime. A
+    /// `ScriptHost` is installed here for every engine a page builds
+    /// (`Engine::install_script_host` in `Engine::build`), which is what makes
+    /// the release real rather than a silent no-op.
     fn trim_memory(&mut self) {
         // V8's embedder memory-pressure entry point, which collects
         // synchronously — the browser's replacement for an exposed `gc()`.
         self.isolate.low_memory_notification();
         if let Some(dom) = &self.dom {
             world::reclaim_dead_bookkeeping(&dom.state, &dom.ctx);
+            dom.ctx.drain_swept_listeners();
         }
     }
 

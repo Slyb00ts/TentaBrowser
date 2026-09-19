@@ -8,7 +8,7 @@
 
 #![allow(dead_code)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::rc::Rc;
@@ -150,6 +150,22 @@ pub struct ScriptRun {
     pub tail_parsed: bool,
 }
 
+/// What the document looked like at the moment the page asked the engine to
+/// trim, which is the only vantage point from which "the engine is trimmed
+/// *before* the sweep" is observable from a page test.
+///
+/// The stub engine can see nothing about the sweep itself — that happens after
+/// `trim_memory` returns — but a trim that saw a nonzero mutation count which
+/// the turn then left at zero is a trim that ran first
+/// (`PageRuntime::reclaim_detached`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrimObservation {
+    /// `Document::mutations_since_sweep` when the trim was called.
+    pub mutations_since_sweep: u64,
+    /// `Document::detached_root_count` when the trim was called.
+    pub detached_roots: usize,
+}
+
 /// What the engine did, for the test to assert on.
 #[derive(Debug, Default)]
 pub struct Record {
@@ -161,6 +177,8 @@ pub struct Record {
     pub hops: u32,
     pub frames_requested: u32,
     pub frames_run: u32,
+    /// Every `Engine::trim_memory` the page called, in order.
+    pub trims: Vec<TrimObservation>,
 }
 
 pub type Recorder = Arc<Mutex<Record>>;
@@ -237,6 +255,9 @@ struct ScriptContext {
     scheduler: RefCell<Option<Scheduler>>,
     document: SharedDocument,
     record: Recorder,
+    /// The engine's collection epoch, which the `gc` command advances and the
+    /// page compares against the value it last saw.
+    gc_epoch: Cell<u64>,
 }
 
 impl ScriptContext {
@@ -282,6 +303,7 @@ impl StubEngine {
             scheduler: RefCell::new(Some(scheduler.clone())),
             document,
             record,
+            gc_epoch: Cell::new(0),
         });
         StubEngine {
             page_loop,
@@ -377,10 +399,25 @@ impl PageEngine for StubEngine {
         // nothing here to drain and nothing is silently dropped.
     }
 
-    fn trim_memory(&mut self) {}
+    /// Records what the document looked like at the moment the page asked for a
+    /// trim, which is what the ordering test asserts on. The stub has no
+    /// collector to force, so it collects nothing and reclaims nothing: only
+    /// the page's *sequence* of trim and sweep is real here.
+    fn trim_memory(&mut self) {
+        let document = self.context.document.borrow();
+        self.context
+            .record
+            .lock()
+            .unwrap()
+            .trims
+            .push(TrimObservation {
+                mutations_since_sweep: document.mutations_since_sweep(),
+                detached_roots: document.detached_root_count(),
+            });
+    }
 
     fn gc_epoch(&self) -> u64 {
-        0
+        self.context.gc_epoch.get()
     }
 
     fn watchdog(&self) -> Option<Box<dyn EngineWatchdog>> {
@@ -422,6 +459,8 @@ impl ProvenanceSink for RecordingSink {
 ///
 /// ```text
 /// mutate <id>
+/// detach <id>
+/// gc
 /// setTimeout <command…> <ms>
 /// setInterval <command…> <ms>
 /// raf <command…>
@@ -450,6 +489,30 @@ fn run_command(command: &str, context: &Rc<ScriptContext>) {
                 if id.is_empty() { "js" } else { &id },
             );
         }
+        // Removes the element with that id, leaving its subtree detached: what
+        // a framework does to a subtree it is finished with, and what the sweep
+        // is for.
+        "detach" => {
+            let id = format!("#{}", rest.join(" "));
+            let node = {
+                let document = context.document.borrow();
+                document
+                    .query_selector(document.document_node(), &id)
+                    .ok()
+                    .flatten()
+            };
+            if let Some(node) = node {
+                context
+                    .document
+                    .borrow_mut()
+                    .mutate(Mutation::Remove { child: node })
+                    .expect("detach the subtree");
+            }
+        }
+        // Advances the engine's collection epoch, which is the page's second
+        // "reclaim now" trigger and the one a test can pull directly. A real
+        // engine advances it from a collector epilogue.
+        "gc" => context.gc_epoch.set(context.gc_epoch.get() + 1),
         "setTimeout" | "setInterval" | "loop-forever" => {
             // The delay of a scheduled command is its last token; everything
             // before it is the command that runs.
