@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 tenta-core = { workspace = true }
 tenta-net = { workspace = true }
+tenta-js = { workspace = true }
 tenta-page = { workspace = true }
 
 bytes = { workspace = true }

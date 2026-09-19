@@ -13,6 +13,7 @@ tenta-core = { workspace = true }
 tenta-net = { workspace = true }
 tenta-html = { workspace = true }
 tenta-dom = { workspace = true }
+tenta-js = { workspace = true }
 
 bytes = { workspace = true }
 hashbrown = { workspace = true }
