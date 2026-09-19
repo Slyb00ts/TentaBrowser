@@ -22,7 +22,7 @@ use std::sync::Once;
 use tenta_js::bindings::WrapperWorld;
 use tenta_js::bindings::host::{HostContext, HostObject, SharedContext, SharedDocument};
 use tenta_js::dom::events::ScriptHost;
-use tenta_js::event_loop::{Clock, EventLoop, MonoTime};
+use tenta_js::event_loop::{Clock, EventLoop, FiringRelease, MonoTime};
 
 use host::{HostState, ReadyHandler};
 use script_host::V8ScriptHost;
@@ -832,15 +832,23 @@ impl Engine {
     /// like top-level work to the settle machine.
     fn invoke_timer(&mut self, ready: &ReadyHandler) -> bool {
         let scheduler = self.host.scheduler.clone();
-        if let Some(id) = ready.timer
-            && !scheduler.claim_fired(id)
-        {
+        // The claim both spends the firing and hands back the count it holds.
+        // The guard releases it when it drops, after the call below - and on
+        // unwind, so a Rust panic inside the handler cannot leave the settle
+        // machine counting work that will never finish.
+        let firing = match ready.timer {
+            Some(id) => scheduler.claim_fired(id),
+            None => None,
+        };
+        if ready.timer.is_some() && firing.is_none() {
             // `clearTimeout` landed after this timer fired but before the call.
             // HTML aborts such a timer, and script relies on it: the debounce
             // idiom cancels a pending callback from another callback that came
-            // due in the same sweep.
+            // due in the same sweep. The cancel already released the firing's
+            // count, so nothing is owed here.
             return false;
         }
+        let _release = firing.map(|firing| FiringRelease::new(&scheduler, firing));
         let origin = ready.origin;
         let nesting = ready.nesting;
         let handler = &ready.handler;

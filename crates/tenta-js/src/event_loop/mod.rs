@@ -11,7 +11,9 @@ pub mod tasks;
 pub mod time;
 pub mod timers;
 
-pub use driver::{AnimationFrameId, EventLoop, FRAME_INTERVAL, Scheduler};
+pub use driver::{
+    AnimationFrameId, EventLoop, FRAME_INTERVAL, FiredFiring, FiringRelease, Scheduler,
+};
 pub use tasks::{ProvenanceSink, TaskRunner, TaskSink};
 pub use time::{Clock, MonoTime, SharedClock};
 pub use timers::{TimerId, TimerQueue};

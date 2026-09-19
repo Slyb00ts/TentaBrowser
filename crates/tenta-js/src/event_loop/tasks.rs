@@ -105,9 +105,14 @@ impl TaskSink {
     }
 
     /// Appends a task whose pending state was already reported through
-    /// [`Self::note_queued`] - a timer that has been counted since it was
-    /// scheduled. Running it still reports one `task_finished`, so the pair
-    /// spans the whole wait rather than only the run.
+    /// [`Self::note_queued`]. Running it still reports one `task_finished`, so
+    /// the caller owns balancing that pair.
+    ///
+    /// A tracked one-shot timer was counted when it was scheduled, so its
+    /// tracking task is queued this way: the task's `finished` is the release
+    /// when the backend ran the callback inline. A backend that deferred the
+    /// call instead re-announces the unit ([`Self::note_queued`]) from inside
+    /// that task, so the release follows the call rather than the task.
     pub fn queue_task_prearmed(&self, origin: Origin, task: impl FnOnce() + 'static) {
         self.0
             .queues

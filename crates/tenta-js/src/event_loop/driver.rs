@@ -9,7 +9,7 @@
 //! rendering opportunity's animation-frame callbacks — none of which hold a
 //! borrow of the shared state while a callback runs.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
@@ -120,6 +120,63 @@ fn with_firing_timer<R>(
     body()
 }
 
+/// One firing a backend took but has not called yet. The count taken at
+/// schedule time is released when this entry's call runs, when the timer is
+/// cancelled, or at teardown - never by the task that only moved the handle.
+#[derive(Clone, Copy, Debug)]
+pub struct FiredFiring {
+    /// The provenance the firing was scheduled under, which is the one whose
+    /// count it holds. A `Background` firing was never counted, so releasing it
+    /// is a no-op (see [`Scheduler::note_firing_finished`]).
+    pub origin: Origin,
+}
+
+/// Releases a claimed firing's count when it goes out of scope. A backend holds
+/// one across the deferred call, so the release happens after the call has run -
+/// and on unwind, so a Rust panic inside the handler cannot leave the settle
+/// machine counting work that will never finish.
+pub struct FiringRelease<'a> {
+    scheduler: &'a Scheduler,
+    origin: Origin,
+}
+
+impl<'a> FiringRelease<'a> {
+    /// A release owed for `firing`, reported when the returned value is dropped.
+    pub fn new(scheduler: &'a Scheduler, firing: FiredFiring) -> Self {
+        Self {
+            scheduler,
+            origin: firing.origin,
+        }
+    }
+}
+
+impl Drop for FiringRelease<'_> {
+    fn drop(&mut self) {
+        self.scheduler.note_firing_finished(self.origin);
+    }
+}
+
+/// Keeps a tracked timer's pending unit held when its task ends, if the backend
+/// took the firing rather than running it inline.
+///
+/// The task is queued prearmed, so its own `finished` is the release of the
+/// count taken at schedule time. When the backend deferred, that release belongs
+/// to the call instead, so this puts an equal `queued` back - before the task's
+/// `finished`, and on unwind too, because it is dropped inside the task.
+struct HoldPendingIfTaken<'a> {
+    shared: &'a Rc<RefCell<Shared>>,
+    sink: &'a TaskSink,
+    origin: Origin,
+}
+
+impl Drop for HoldPendingIfTaken<'_> {
+    fn drop(&mut self) {
+        if self.shared.borrow().firing_taken.get() {
+            self.sink.note_queued(self.origin);
+        }
+    }
+}
+
 /// The mutable state shared between the scheduler handle and the driver.
 struct Shared {
     clock: SharedClock,
@@ -129,9 +186,26 @@ struct Shared {
     current_nesting: u32,
     /// The timer whose callback is running, if any.
     current_firing: Option<TimerId>,
+    /// Set by [`Scheduler::defer_firing`] when the backend hands a firing off,
+    /// and cleared by each tracked timer task before its callback runs. It is
+    /// what tells a deferred firing from one the backend ran inline: a lookup in
+    /// `fired_pending` cannot, because a backend that defers *and* whose call
+    /// lands before the task returns has already removed its entry by the time
+    /// the task looks, so the task would read "inline" and release a count the
+    /// call has released already.
+    firing_taken: Cell<bool>,
     /// Firings a backend has deferred: it took the callback but has not called
-    /// it yet. Counted, not merely flagged, because an interval re-arms under
-    /// the same id and can have more than one firing outstanding.
+    /// it yet. One entry per firing, not merely a flag, because an interval
+    /// re-arms under the same id and can have more than one firing outstanding.
+    ///
+    /// The count a tracked one-shot took when it was scheduled follows the
+    /// timer through this window. It is released by the deferred call
+    /// ([`Scheduler::note_firing_finished`]), by the cancel
+    /// ([`Scheduler::clear_timeout`]) or at teardown
+    /// ([`EventLoop::clear_pending_callbacks`]) - never by the task that only
+    /// moved the handle, which has already ended by the time the call is owed.
+    /// Whichever of those reaches an entry first removes it and is the one that
+    /// releases, so a firing is released exactly once.
     ///
     /// A backend may defer the actual call past the task that dequeued the
     /// timer — the V8 binding pushes a handle onto a ready queue and the engine
@@ -143,10 +217,8 @@ struct Shared {
     /// browser. The window only bites when the cancel genuinely gets there
     /// first.)
     ///
-    /// Only a backend that defers records here, via [`Scheduler::defer_firing`];
-    /// a driver that calls its callbacks inline never enters the window and so
-    /// cannot accumulate entries it would never claim.
-    fired_pending: HashMap<TimerId, u32>,
+    /// Only a backend that defers records here, via [`Scheduler::defer_firing`].
+    fired_pending: HashMap<TimerId, Vec<FiredFiring>>,
     /// When a timer defers tracked work rather than being page activity.
     timer_rule: TimerRule,
     next_frame_id: u64,
@@ -234,35 +306,57 @@ impl Scheduler {
     /// Returns `None` outside a timer firing, where there is nothing to defer.
     /// A driver that calls its callbacks inline never calls this at all.
     pub fn defer_firing(&self) -> Option<TimerId> {
+        // Read the loop state the call will run under *now*, while the task that
+        // dequeued the timer still has it installed: the firing carries the
+        // timer's own provenance, which is what its count is held under.
+        let id = self.shared.borrow().current_firing?;
+        let firing = FiredFiring {
+            origin: self.sink.current_origin(),
+        };
         let mut shared = self.shared.borrow_mut();
-        let id = shared.current_firing?;
-        *shared.fired_pending.entry(id).or_insert(0) += 1;
+        // Record that the backend took the firing, not only where it went: the
+        // task that dequeued the timer reads this to know whether its own
+        // `finished` still owns the release.
+        shared.firing_taken.set(true);
+        shared.fired_pending.entry(id).or_default().push(firing);
         Some(id)
     }
 
-    /// Claims the right to run a deferred firing, returning whether it is still
-    /// wanted. `false` means `clearTimeout` cancelled the timer after it fired
-    /// but before the call — HTML aborts such a timer, so the caller must drop
-    /// the handler rather than invoke it.
+    /// Claims the right to run a deferred firing, returning the firing so the
+    /// caller can release its count once the call has run. `None` means the id
+    /// had no firing behind it: either the timer was cancelled after it fired
+    /// but before the call, or it never deferred one. HTML aborts a timer whose
+    /// id has left the map of active timers, so the caller must drop the
+    /// handler rather than invoke it - and the cancel has already released the
+    /// count.
     ///
     /// Claiming consumes one firing: an interval with two firings outstanding
-    /// answers `true` twice, and a third claim answers `false`.
-    pub fn claim_fired(&self, id: TimerId) -> bool {
+    /// answers `Some` twice, and a third claim answers `None`.
+    pub fn claim_fired(&self, id: TimerId) -> Option<FiredFiring> {
         let mut shared = self.shared.borrow_mut();
-        let Some(outstanding) = shared.fired_pending.get_mut(&id) else {
-            return false;
+        // An entry is created with one firing and removed when its last is
+        // claimed, so a present entry is never empty; `?` is what refuses a
+        // claim for an id with no firing behind it.
+        let (firing, now_empty) = {
+            let firings = shared.fired_pending.get_mut(&id)?;
+            let firing = firings.remove(0);
+            (firing, firings.is_empty())
         };
-        // An entry is created at one and removed at zero, so this cannot
-        // underflow today. `checked_sub` keeps it that way: a future edit that
-        // decremented somewhere else would otherwise wrap to `u32::MAX` in
-        // release and hand out claims for ever.
-        match outstanding.checked_sub(1) {
-            Some(0) | None => {
-                shared.fired_pending.remove(&id);
-            }
-            Some(left) => *outstanding = left,
+        if now_empty {
+            shared.fired_pending.remove(&id);
         }
-        true
+        Some(firing)
+    }
+
+    /// Balances the count a deferred firing took at schedule time, called once
+    /// the call has run (or by whichever of the cancel and teardown removed the
+    /// firing instead). Only a [`Origin::Tracked`] firing was ever counted, so
+    /// only that one reports a finish; releasing a `Background` firing would
+    /// emit a `finished` with no matching `queued` and unbalance the observer.
+    pub fn note_firing_finished(&self, origin: Origin) {
+        if origin == Origin::Tracked {
+            self.sink.note_finished(origin);
+        }
     }
 
     /// Runs `body` with `nesting` installed as the current timer depth, so a
@@ -289,18 +383,22 @@ impl Scheduler {
 
     /// Cancels a scheduled timer (`clearTimeout`).
     pub fn clear_timeout(&self, id: TimerId) {
-        let cancelled = {
+        let (firings, cancelled) = {
             let mut shared = self.shared.borrow_mut();
             shared.timers.cancel(id);
             // A timer that has fired but whose deferred call has not happened
             // yet is aborted here too: HTML drops a timer whose id has left the
-            // map of active timers, wherever in its life the cancel lands.
-            shared.fired_pending.remove(&id);
-            shared.timer_callbacks.remove(&id)
+            // map of active timers, wherever in its life the cancel lands. Its
+            // firing is removed here, so this cancel is what releases it.
+            let firings = shared.fired_pending.remove(&id).unwrap_or_default();
+            (firings, shared.timer_callbacks.remove(&id))
         };
+        for firing in firings {
+            self.note_firing_finished(firing.origin);
+        }
         // Balance the pending count of a tracked one-shot that will now never
         // run. A timer already taken out of the map by `fire_due_timers` is
-        // not here, and its queued task reports the finish itself.
+        // not here; its deferred firing was released just above.
         if let Some(TimerCallback::OneShot {
             origin: Origin::Tracked,
             ..
@@ -392,6 +490,7 @@ impl EventLoop {
             timer_callbacks: HashMap::new(),
             current_nesting: 0,
             current_firing: None,
+            firing_taken: Cell::new(false),
             fired_pending: HashMap::new(),
             timer_rule: TimerRule::default(),
             next_frame_id: 0,
@@ -413,6 +512,14 @@ impl EventLoop {
     /// The scheduling surface to hand to the engine and its callbacks.
     pub fn scheduler(&self) -> Scheduler {
         self.scheduler.clone()
+    }
+
+    /// The loop's task sink, exposed so a test can install a recording
+    /// [`ProvenanceSink`] and observe the queued/finished sequence the settle
+    /// machine is driven by (`docs/spec/02-architecture.md` §5.1). Production
+    /// code installs the observer through the runtime that owns the loop.
+    pub fn task_sink(&self) -> TaskSink {
+        self.runner.sink()
     }
 
     /// The current clock time.
@@ -495,7 +602,7 @@ impl EventLoop {
     /// still alive, so teardown does not depend on struct field drop order. The
     /// clock and task queues are left untouched.
     pub fn clear_pending_callbacks(&self) {
-        let discarded: Vec<Origin> = {
+        let (discarded, firings): (Vec<Origin>, Vec<FiredFiring>) = {
             let mut shared = self.shared.borrow_mut();
             // A tracked one-shot has been counted as pending since it was
             // scheduled, so discarding it has to balance that count. The
@@ -516,12 +623,22 @@ impl EventLoop {
             shared.timer_callbacks.clear();
             shared.frame_callbacks.clear();
             // Whatever the backend still holds from an earlier firing is going
-            // away with it; nothing may claim the right to run afterwards.
-            shared.fired_pending.clear();
-            discarded
+            // away with it; nothing may claim the right to run afterwards. A
+            // firing whose count is still held is released here - this is the
+            // teardown release, and it runs exactly once because the entries go
+            // with it.
+            let firings = shared
+                .fired_pending
+                .drain()
+                .flat_map(|(_, firings)| firings)
+                .collect();
+            (discarded, firings)
         };
         for origin in discarded {
             self.scheduler.sink.note_finished(origin);
+        }
+        for firing in firings {
+            self.scheduler.note_firing_finished(firing.origin);
         }
     }
 
@@ -555,24 +672,30 @@ impl EventLoop {
                     // Install this timer's nesting level so a timer it
                     // schedules is clamped one level deeper; the guard restores
                     // the top level even if the callback panics.
-                    let task = move || with_firing_timer(&shared, Some(id), nesting, run);
                     if origin == Origin::Tracked {
-                        // Already counted when it was scheduled.
-                        //
-                        // KNOWN GAP (closes with the page runtime, which is the
-                        // first thing to attach a settle tracker to an engine):
-                        // the count is released when this *task* ends, but a
-                        // backend that defers the JS call past the task still
-                        // has the handler in hand at that point. A settle poll
-                        // landing in that window sees no tracked work with
-                        // tracked script still to run - the very race that
-                        // counting from schedule time was introduced to close,
-                        // reopened at the other end of the timer's life. The fix
-                        // is to let the count follow the timer's whole life
-                        // (released by the call, the cancel, or teardown), which
-                        // needs the deferred handler to own it.
+                        // Counted when it was scheduled, so this task reports no
+                        // `queued` of its own: its `finished` *is* that count's
+                        // release when the callback ran inline. A backend that
+                        // defers the actual JS call past this task still has the
+                        // handler in hand when it ends, so `_hold` puts an equal
+                        // pending unit back for the call, the cancel, or
+                        // teardown to release instead.
+                        let sink = self.scheduler.sink.clone();
+                        let task = move || {
+                            // Cleared first so the flag reflects only this task.
+                            shared.borrow().firing_taken.set(false);
+                            let _hold = HoldPendingIfTaken {
+                                shared: &shared,
+                                sink: &sink,
+                                origin,
+                            };
+                            with_firing_timer(&shared, Some(id), nesting, run);
+                        };
                         self.scheduler.sink.queue_task_prearmed(origin, task);
                     } else {
+                        // Never counted before it fired: this task is its whole
+                        // queued/finished pair.
+                        let task = move || with_firing_timer(&shared, Some(id), nesting, run);
                         self.scheduler.sink.queue_task_from(origin, task);
                     }
                 }
@@ -763,6 +886,95 @@ mod tests {
             *log.events.borrow(),
             vec![("queued", Origin::Tracked), ("finished", Origin::Tracked)],
             "firing must not queue a second pending unit"
+        );
+    }
+
+    #[test]
+    fn a_deferred_firing_holds_the_scheduled_count_until_the_call() {
+        // The other half of the inline case above. A driver that calls its
+        // callbacks inline releases the scheduled count when the callback runs.
+        // The V8 bridge instead hands the firing off the way `defer_firing`
+        // records, so the task that moved the handle must leave the count held
+        // and only the deferred call may release it.
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let scheduler = loop_.scheduler();
+        let log = Rc::new(EventLog::default());
+        scheduler.sink.set_provenance_sink(log.clone());
+
+        let deferred: Rc<RefCell<Option<TimerId>>> = Rc::new(RefCell::new(None));
+        let recorder = {
+            let callback_scheduler = scheduler.clone();
+            let deferred = deferred.clone();
+            move || *deferred.borrow_mut() = callback_scheduler.defer_firing()
+        };
+        let id = scheduler.with_origin(Origin::Tracked, || {
+            scheduler.set_timeout(5, Box::new(recorder))
+        });
+
+        loop_.advance_to_next_timer();
+        assert_eq!(*deferred.borrow(), Some(id), "the call is owed");
+        assert_eq!(
+            *log.events.borrow(),
+            vec![
+                ("queued", Origin::Tracked),
+                ("queued", Origin::Tracked),
+                ("finished", Origin::Tracked),
+            ],
+            "the unit stays pending across the task that only moved the handle"
+        );
+
+        let firing = scheduler.claim_fired(id).expect("the firing is owed");
+        drop(FiringRelease::new(&scheduler, firing));
+        assert_eq!(
+            *log.events.borrow(),
+            vec![
+                ("queued", Origin::Tracked),
+                ("queued", Origin::Tracked),
+                ("finished", Origin::Tracked),
+                ("finished", Origin::Tracked),
+            ],
+            "and the deferred call is what releases it"
+        );
+    }
+
+    #[test]
+    fn a_background_one_shot_never_takes_a_count_to_hold() {
+        // The deferral machinery is about the tracked count only. A background
+        // one-shot was never counted at schedule time, so its task's
+        // queued/finished pair is the whole of it and a deferral adds nothing.
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let scheduler = loop_.scheduler();
+        let log = Rc::new(EventLog::default());
+        scheduler.sink.set_provenance_sink(log.clone());
+
+        let deferred: Rc<RefCell<Option<TimerId>>> = Rc::new(RefCell::new(None));
+        let recorder = {
+            let callback_scheduler = scheduler.clone();
+            let deferred = deferred.clone();
+            move || *deferred.borrow_mut() = callback_scheduler.defer_firing()
+        };
+        let id = scheduler.set_timeout(5, Box::new(recorder));
+
+        loop_.advance_to_next_timer();
+        assert_eq!(*deferred.borrow(), Some(id), "the call is owed");
+        assert_eq!(
+            *log.events.borrow(),
+            vec![
+                ("queued", Origin::Background),
+                ("finished", Origin::Background),
+            ],
+            "an uncounted firing passes through the deferral window unchanged"
+        );
+
+        let firing = scheduler.claim_fired(id).expect("the firing is owed");
+        drop(FiringRelease::new(&scheduler, firing));
+        assert_eq!(
+            *log.events.borrow(),
+            vec![
+                ("queued", Origin::Background),
+                ("finished", Origin::Background),
+            ],
+            "releasing an uncounted firing reports nothing"
         );
     }
 
@@ -1168,10 +1380,16 @@ mod tests {
         loop_.advance_to_next_timer();
         assert_eq!(*deferred.borrow(), vec![id, id], "two firings deferred");
 
-        assert!(scheduler.claim_fired(id), "first queued firing is wanted");
-        assert!(scheduler.claim_fired(id), "second queued firing is wanted");
         assert!(
-            !scheduler.claim_fired(id),
+            scheduler.claim_fired(id).is_some(),
+            "first queued firing is wanted"
+        );
+        assert!(
+            scheduler.claim_fired(id).is_some(),
+            "second queued firing is wanted"
+        );
+        assert!(
+            scheduler.claim_fired(id).is_none(),
             "a third claim has no firing behind it"
         );
     }
@@ -1196,7 +1414,7 @@ mod tests {
 
         scheduler.clear_timeout(id);
         assert!(
-            !scheduler.claim_fired(id),
+            scheduler.claim_fired(id).is_none(),
             "a cancelled timer must not be called even though it fired"
         );
     }
