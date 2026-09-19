@@ -5,8 +5,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
+use tenta_core::NodeRef;
 use tenta_core::atom::atoms;
-use tenta_core::{NodeId, NodeRef};
 use tenta_dom::{Document, Mutation};
 
 use super::*;
@@ -23,7 +23,7 @@ enum Action {
     Cancel,
     /// Remove another listener mid-dispatch.
     Remove {
-        target: NodeId,
+        target: NodeRef,
         type_: String,
         cb: CallbackRef,
         capture: bool,
@@ -200,7 +200,7 @@ fn add(ctx: &HostContext, target: NodeRef, type_: &str, cb: u64, capture: bool) 
     ctx.listeners
         .borrow_mut()
         .add(
-            target.id,
+            target,
             type_.to_owned(),
             CallbackRef(cb),
             capture,
@@ -250,7 +250,7 @@ fn non_bubbling_event_only_hits_target_in_bubble_pass() {
 fn duplicate_listener_is_rejected() {
     let f = fixture();
     let first = f.ctx.listeners.borrow_mut().add(
-        f.div.id,
+        f.div,
         "x".to_owned(),
         CallbackRef(1),
         false,
@@ -258,7 +258,7 @@ fn duplicate_listener_is_rejected() {
         false,
     );
     let dup = f.ctx.listeners.borrow_mut().add(
-        f.div.id,
+        f.div,
         "x".to_owned(),
         CallbackRef(1),
         false,
@@ -268,14 +268,11 @@ fn duplicate_listener_is_rejected() {
     assert!(first.is_some());
     assert!(dup.is_none());
     // But a different capture flag is a distinct listener.
-    let cap = f.ctx.listeners.borrow_mut().add(
-        f.div.id,
-        "x".to_owned(),
-        CallbackRef(1),
-        true,
-        false,
-        false,
-    );
+    let cap =
+        f.ctx
+            .listeners
+            .borrow_mut()
+            .add(f.div, "x".to_owned(), CallbackRef(1), true, false, false);
     assert!(cap.is_some());
     assert_eq!(f.ctx.listeners.borrow().len(), 2);
 }
@@ -287,18 +284,61 @@ fn once_listener_fires_once_and_is_removed() {
         .ctx
         .listeners
         .borrow_mut()
-        .add(f.div.id, "x".to_owned(), CallbackRef(1), false, true, false)
+        .add(f.div, "x".to_owned(), CallbackRef(1), false, true, false)
         .unwrap();
     let key = make_event(&f.ctx, "x", false, false);
     dispatch(&f.ctx, f.div, key, false).unwrap();
     assert_eq!(f.mock.calls.borrow().len(), 1);
-    assert!(!f.ctx.listeners.borrow().contains(f.div.id, id));
+    assert!(!f.ctx.listeners.borrow().contains(f.div, id));
     assert_eq!(f.mock.released.borrow().as_slice(), &[1]);
 
     // A second dispatch invokes nothing.
     let key2 = make_event(&f.ctx, "x", false, false);
     dispatch(&f.ctx, f.div, key2, false).unwrap();
     assert_eq!(f.mock.calls.borrow().len(), 1);
+}
+
+/// A listener registered on a node must die with it. The arena reuses a freed
+/// slot for a different node under a bumped generation, so a dispatch whose
+/// path contains that index must not match the stale registration and fire it
+/// against the unrelated new node.
+#[test]
+fn a_listener_does_not_survive_into_a_node_that_reuses_its_slot() {
+    let f = fixture();
+    add(&f.ctx, f.div, "x", 1, false);
+
+    // Detach the div and sweep it: it has no wrapper and no Rust handle, so the
+    // arena frees its slot, and the next allocation takes that index back.
+    let recycled = {
+        let mut doc = f.ctx.doc.borrow_mut();
+        doc.mutate(Mutation::Remove { child: f.div.id }).unwrap();
+        doc.sweep_detached();
+        let span = doc.create_html_element(atoms::SPAN);
+        assert_eq!(span, f.div.id, "the arena hands the freed slot back");
+        assert_ne!(
+            doc.node_ref(span).generation,
+            f.div.generation,
+            "the reused slot carries a bumped generation"
+        );
+        doc.node_ref(span)
+    };
+
+    let key = make_event(&f.ctx, "x", true, false);
+    dispatch(&f.ctx, recycled, key, false).unwrap();
+
+    assert!(
+        f.mock.calls.borrow().is_empty(),
+        "the stale listener must not fire for the node that reused its slot; \
+         (callback, current_target, phase) calls: {:?}",
+        f.mock.calls.borrow()
+    );
+    let events = f.ctx.events.borrow();
+    let record = events.get(key).unwrap();
+    assert_eq!(record.target, Some(encode_node_test(recycled)));
+    assert_eq!(
+        record.current_target, None,
+        "no stale listener ran, so no current target was bound to the new node"
+    );
 }
 
 #[test]
@@ -336,7 +376,7 @@ fn listener_removed_during_dispatch_is_skipped() {
     f.mock.set_action(
         CallbackRef(1),
         Action::Remove {
-            target: f.div.id,
+            target: f.div,
             type_: "x".to_owned(),
             cb: CallbackRef(2),
             capture: false,
@@ -376,7 +416,7 @@ fn passive_flag_is_visible_to_the_listener() {
     f.ctx
         .listeners
         .borrow_mut()
-        .add(f.div.id, "x".to_owned(), CallbackRef(1), false, false, true)
+        .add(f.div, "x".to_owned(), CallbackRef(1), false, false, true)
         .unwrap();
     let key = make_event(&f.ctx, "x", true, true);
     dispatch(&f.ctx, f.div, key, false).unwrap();
@@ -513,7 +553,7 @@ fn a_node_and_the_window_are_independent_targets_for_one_callback() {
         f.ctx
             .listeners
             .borrow()
-            .contains_at(TargetKey::Node(f.div.id), on_div)
+            .contains_at(TargetKey::Node(f.div), on_div)
     );
     assert!(
         !f.ctx

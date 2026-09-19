@@ -409,7 +409,7 @@ impl HostObject {
     /// [`Self::dispatch_target`] for why the other variants have none.
     fn target_key(&self) -> Option<TargetKey> {
         match self {
-            HostObject::Node { node, .. } => Some(TargetKey::Node(node.id)),
+            HostObject::Node { node, .. } => Some(TargetKey::Node(*node)),
             HostObject::Window { .. } => Some(TargetKey::Window),
             _ => None,
         }
@@ -2643,6 +2643,16 @@ impl HostObject {
     /// when a wrapper exists, the world's dead-event sweep reclaims the record.
     fn dispatch_synthetic_click(&self, doc: &SharedDocument, id: NodeId) -> Result<(), JsError> {
         let ctx = self.context();
+        let target = {
+            let doc = doc.borrow();
+            // A dead element has no listeners that could legitimately fire, and
+            // its arena slot may already belong to an unrelated node, so a
+            // dispatch here would be attributed to that node's listeners.
+            if !doc.is_live(id) {
+                return Ok(());
+            }
+            doc.node_ref(id)
+        };
         let mut record = EventRecord::new(
             "click".to_owned(),
             EventKind::Mouse {
@@ -2667,7 +2677,6 @@ impl HostObject {
         record.flags.initialized = true;
         let key = ctx.events.borrow_mut().insert(record);
 
-        let target = doc.borrow().node_ref(id);
         let dispatch_result = dispatch(ctx, target, key, false);
 
         // Remove the transient record unless a listener made a wrapper for it

@@ -350,19 +350,24 @@ struct TargetListeners {
 /// What a listener can be registered on: a node, or the window.
 ///
 /// The window is not a node — it has no arena slot, no id and no place in the
-/// tree — so it cannot be keyed by [`NodeId`] the way an element is. It is
+/// tree — so it cannot be keyed by [`NodeRef`] the way an element is. It is
 /// still a target, and it is the outermost entry of every event path, which is
 /// what makes `window.addEventListener('click', …)` fire for a click on a
 /// descendant.
+///
+/// The node key is a full [`NodeRef`], generation included. The arena reuses a
+/// freed slot for a different node under a bumped generation, so keying on the
+/// bare [`NodeId`] would let a dispatch whose path contains the recycled index
+/// match a listener left behind by the node that used to live there.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum TargetKey {
-    Node(NodeId),
+    Node(NodeRef),
     Window,
 }
 
-impl From<NodeId> for TargetKey {
-    fn from(id: NodeId) -> TargetKey {
-        TargetKey::Node(id)
+impl From<NodeRef> for TargetKey {
+    fn from(node: NodeRef) -> TargetKey {
+        TargetKey::Node(node)
     }
 }
 
@@ -388,7 +393,7 @@ impl DispatchTarget {
     /// Dispatches at `node`, whose handle bits carry the generation script sees.
     pub fn node(node: NodeRef) -> DispatchTarget {
         DispatchTarget {
-            target: TargetKey::Node(node.id),
+            target: TargetKey::Node(node),
             bits: encode_node(node),
         }
     }
@@ -418,7 +423,7 @@ impl ListenerTable {
     /// Adds a listener for the node `target`. See [`Self::add_at`].
     pub fn add(
         &mut self,
-        target: NodeId,
+        target: NodeRef,
         type_: String,
         callback: CallbackRef,
         capture: bool,
@@ -466,7 +471,7 @@ impl ListenerTable {
     /// `target` and returns its callback so the caller can release it.
     pub fn remove(
         &mut self,
-        target: NodeId,
+        target: NodeRef,
         type_: &str,
         callback: CallbackRef,
         capture: bool,
@@ -492,8 +497,10 @@ impl ListenerTable {
         Some(removed.callback)
     }
 
-    /// Removes the listener with `id` for node `target`. See [`Self::remove_by_id_at`].
-    pub fn remove_by_id(&mut self, target: NodeId, id: ListenerId) -> Option<CallbackRef> {
+    /// Removes the listener with `id` for node `target`. See
+    /// [`Self::remove_by_id_at`]. Addressing a node whose slot has already been
+    /// recycled is [`Self::drain_target`]'s job, not this one's.
+    pub fn remove_by_id(&mut self, target: NodeRef, id: ListenerId) -> Option<CallbackRef> {
         self.remove_by_id_at(target.into(), id)
     }
 
@@ -505,7 +512,7 @@ impl ListenerTable {
     }
 
     /// Whether a listener with `id` is still registered for node `target`.
-    pub fn contains(&self, target: NodeId, id: ListenerId) -> bool {
+    pub fn contains(&self, target: NodeRef, id: ListenerId) -> bool {
         self.contains_at(target.into(), id)
     }
 
@@ -520,7 +527,7 @@ impl ListenerTable {
     /// node `target`. See [`Self::snapshot_at`].
     pub fn snapshot(
         &self,
-        target: NodeId,
+        target: NodeRef,
         type_: &str,
         capture: bool,
     ) -> Vec<(ListenerId, CallbackRef, bool, bool)> {
@@ -559,12 +566,30 @@ impl ListenerTable {
     }
 
     /// Removes and returns every callback registered for node `target`.
+    ///
+    /// Generation is deliberately ignored here. A drain addresses a target that
+    /// is being torn down — a node that may already be freed, whose arena slot
+    /// may even have been recycled — and the callbacks that have to be released
+    /// are exactly the ones registered while it was live, i.e. under an older
+    /// generation than the slot now carries. Matching an exact [`NodeRef`]
+    /// would miss them, so every entry keyed by a node with this id is drained.
     pub fn drain_target(&mut self, target: NodeId) -> Vec<CallbackRef> {
-        self.drain_target_at(target.into())
+        let keys: Vec<TargetKey> = self
+            .targets
+            .keys()
+            .filter(|key| matches!(key, TargetKey::Node(node) if node.id == target))
+            .copied()
+            .collect();
+        keys.into_iter()
+            .filter_map(|key| self.targets.remove(&key))
+            .flat_map(|entry| entry.listeners)
+            .map(|listener| listener.callback)
+            .collect()
     }
 
     /// Removes and returns every callback registered for `target` (used when a
-    /// target is torn down).
+    /// target is torn down). The key is taken as given, generation included;
+    /// a node that may already have been freed needs [`Self::drain_target`].
     pub fn drain_target_at(&mut self, target: TargetKey) -> Vec<CallbackRef> {
         self.targets
             .remove(&target)
@@ -632,8 +657,8 @@ pub fn dispatch_at(
         let doc = ctx.doc.borrow();
         let mut path = Vec::new();
         path.push(target);
-        if let TargetKey::Node(id) = target.target {
-            for ancestor in doc.ancestors(id) {
+        if let TargetKey::Node(node) = target.target {
+            for ancestor in doc.ancestors(node.id) {
                 path.push(PathEntry::node(doc.node_ref(ancestor)));
             }
             path.push(PathEntry::window());
