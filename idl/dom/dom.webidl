@@ -137,6 +137,18 @@ interface Document : Node {
   readonly attribute DOMString readyState;
   readonly attribute Element? activeElement;
 
+  // d-7: the document metadata members. `title` is not a reflected attribute:
+  // it reads and writes the document's `<title>` element (see the host impl).
+  // `URL`/`documentURI` report the document's own URL, `characterSet` its
+  // encoding and `compatMode` its quirks mode. `referrer` has no navigation
+  // state behind it yet and reports the empty string.
+  attribute DOMString title;
+  readonly attribute USVString URL;
+  readonly attribute USVString documentURI;
+  readonly attribute DOMString characterSet;
+  readonly attribute DOMString compatMode;
+  readonly attribute USVString referrer;
+
   readonly attribute Element? firstElementChild;
   readonly attribute Element? lastElementChild;
   readonly attribute unsigned long childElementCount;

@@ -16,7 +16,7 @@ use std::rc::Rc;
 use tenta_core::atom::atoms;
 use tenta_core::{Atom, NodeId, NodeRef};
 use tenta_dom::{Document, Mutation, NodeKind};
-use tenta_html::{ElementFlags, QualName};
+use tenta_html::{ElementFlags, QualName, QuirksMode};
 
 use super::{
     AddEventListenerOptionsOrBoolean, AnyValue, CSSStyleDeclaration, CSSStyleDeclarationOps,
@@ -1466,6 +1466,131 @@ impl DocumentOps for HostObject {
         Ok(active.map(|id| Handle::from_bits(encode_node(doc.node_ref(id)))))
     }
 
+    fn title(&self) -> Result<String, JsError> {
+        // Not a reflected attribute. The HTML Standard's getter
+        // (<https://html.spec.whatwg.org/multipage/dom.html#dom-document-title>)
+        // reads the *title element* — the first `title` element in the document
+        // in tree order, wherever it sits, not necessarily in the head — and
+        // returns its child text content with ASCII whitespace stripped and
+        // collapsed. No title element reads as the empty string. The
+        // SVG-rooted-document branch of the algorithm is unreachable here:
+        // TentaBrowser builds HTML documents only.
+        let (doc, _) = self.anchor();
+        let doc = doc.borrow();
+        let Some(title) = document_title_element(&doc) else {
+            return Ok(String::new());
+        };
+        let mut value = String::new();
+        for child in doc.children(title) {
+            if matches!(doc.kind(child), NodeKind::Text | NodeKind::CData)
+                && let Some(data) = doc.text_data(child)
+            {
+                value.push_str(data);
+            }
+        }
+        Ok(strip_and_collapse_ascii_whitespace(&value))
+    }
+
+    fn set_title(&self, value: &str) {
+        // The HTML-namespace branch of the setter
+        // (<https://html.spec.whatwg.org/multipage/dom.html#dom-document-title>):
+        // a write with neither a title element nor a head element is ignored;
+        // otherwise it targets the existing title element, or a freshly created
+        // `title` appended to the head. The new value is written by "string
+        // replace all", so an empty value leaves the element with *no* children
+        // rather than an empty text node.
+        let (doc, _) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        let Some(root) = doc.document_element() else {
+            return;
+        };
+        // Any other document element (the SVG `svg` branch, or "otherwise: do
+        // nothing") is out of reach for an HTML document.
+        if doc.namespace(root) != Some(atoms::NS_HTML) {
+            return;
+        }
+        let title = match document_title_element(&doc) {
+            Some(title) => title,
+            None => {
+                let Some(head) = doc.head() else {
+                    return;
+                };
+                let created = doc.create_html_element(atoms::TITLE);
+                if doc
+                    .mutate(Mutation::Append {
+                        parent: head,
+                        child: created,
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                created
+            }
+        };
+        let children: Vec<NodeId> = doc.children(title).collect();
+        for child in children {
+            let _ = doc.mutate(Mutation::Remove { child });
+        }
+        if !value.is_empty() {
+            let text = doc.create_text(value);
+            let _ = doc.mutate(Mutation::Append {
+                parent: title,
+                child: text,
+            });
+        }
+    }
+
+    fn url(&self) -> Result<String, JsError> {
+        // https://dom.spec.whatwg.org/#dom-document-url: the document's URL,
+        // serialized. The engine keeps it as an `Option`, so a document built
+        // without one reports the empty string rather than the standard's
+        // default `about:blank`, which the tree does not model.
+        let (doc, _) = self.anchor();
+        let doc = doc.borrow();
+        Ok(doc.url().map(ToString::to_string).unwrap_or_default())
+    }
+
+    fn document_uri(&self) -> Result<String, JsError> {
+        // The same getter as `URL`
+        // (https://dom.spec.whatwg.org/#dom-document-documenturi).
+        self.url()
+    }
+
+    fn character_set(&self) -> Result<String, JsError> {
+        // https://dom.spec.whatwg.org/#dom-document-characterset: the encoding's
+        // name. The encoding is stored on `tenta_dom::Document`, defaulted to
+        // "UTF-8" and set from the sniffer by the page pipeline once the parse
+        // finishes (`tenta-page`'s `page.rs`).
+        let (doc, _) = self.anchor();
+        Ok(doc.borrow().encoding().to_owned())
+    }
+
+    fn compat_mode(&self) -> Result<String, JsError> {
+        // https://dom.spec.whatwg.org/#dom-document-compatmode: "BackCompat" in
+        // quirks mode, "CSS1Compat" otherwise; limited-quirks is *not* quirks
+        // mode. The tree really does record the mode — the HTML parser sets it
+        // from the doctype — so a page with no doctype reports "BackCompat".
+        let (doc, _) = self.anchor();
+        Ok(match doc.borrow().quirks_mode() {
+            QuirksMode::Quirks => "BackCompat",
+            QuirksMode::NoQuirks | QuirksMode::LimitedQuirks => "CSS1Compat",
+        }
+        .to_owned())
+    }
+
+    fn referrer(&self) -> Result<String, JsError> {
+        // The engine records no referrer for a navigation. `PageOptions::referer`
+        // only feeds the outgoing `Referer` header on a *request* and is never
+        // stored on the `Document`, which has no referrer accessor at all. The
+        // HTML Standard's `document.referrer` is the URL of the document the
+        // user navigated from, so the empty string is what a direct navigation
+        // must report — but it is also what this returns for every navigation,
+        // which cannot be distinguished from a wired one until the navigation
+        // side records the referrer on the document.
+        Ok(String::new())
+    }
+
     fn first_element_child(&self) -> Result<Option<Handle<Element>>, JsError> {
         let (doc, id) = self.anchor();
         let doc = doc.borrow();
@@ -2847,6 +2972,43 @@ fn mutation_error(e: &tenta_core::Error) -> JsError {
         tenta_core::Error::Other { code, message } => JsError::dom_exception(code, message),
         _ => JsError::type_error(e.to_string()),
     }
+}
+
+/// The HTML Standard's *title element* of a document: the first `title`
+/// element in the document in tree order, wherever in the tree it sits, or
+/// `None` when there is none
+/// (<https://html.spec.whatwg.org/multipage/dom.html#dom-document-title>).
+/// The element must be in the HTML namespace, so an SVG `title` is not it
+/// (`wpt/checkout/html/dom/documents/dom-tree-accessors/document.title-not-in-html-svg.html`).
+fn document_title_element(doc: &Document) -> Option<NodeId> {
+    doc.descendants(doc.document_node())
+        .find(|id| doc.tag(*id) == Some(atoms::TITLE) && doc.namespace(*id) == Some(atoms::NS_HTML))
+}
+
+/// Infra's "strip and collapse ASCII whitespace"
+/// (<https://infra.spec.whatwg.org/#strip-and-collapse-ascii-whitespace>):
+/// every run of ASCII whitespace becomes one U+0020 SPACE, and any leading or
+/// trailing ASCII whitespace is removed. ASCII whitespace is exactly U+0009
+/// TAB, U+000A LF, U+000C FF, U+000D CR and U+0020 SPACE — the wider Unicode
+/// set is deliberately not included, since `document.title` must preserve it
+/// (`wpt/checkout/html/dom/documents/dom-tree-accessors/document.title-05.html`).
+fn strip_and_collapse_ascii_whitespace(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut pending_space = false;
+    for ch in value.chars() {
+        if matches!(ch, '\t' | '\n' | '\u{c}' | '\r' | ' ') {
+            // Whitespace before any content is dropped, so a leading run never
+            // sets the flag; a trailing run leaves it set and is never flushed.
+            pending_space = !out.is_empty();
+            continue;
+        }
+        if pending_space {
+            out.push(' ');
+            pending_space = false;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// The DOM `nodeName` of `id` (https://dom.spec.whatwg.org/#dom-node-nodename).
