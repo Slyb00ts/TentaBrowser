@@ -344,11 +344,15 @@ impl Engine {
         v8::scope!(let scope, &mut bootstrap_scope);
 
         let global_template = v8::ObjectTemplate::new(scope);
+        // This one template outlives the block: the window's prototype chain is
+        // chained to `EventTarget.prototype` once the context exists
+        // (`host::install_window_prototype`).
+        let event_target;
         {
             let mut registry = world::SkeletonRegistry::default();
             // Install interfaces parent-first: EventTarget is the root (Node
             // inherits it), so it must precede Node.
-            tenta_js::bindings::install_event_target::<HostObject>(
+            event_target = tenta_js::bindings::install_event_target::<HostObject>(
                 scope,
                 global_template,
                 &mut registry,
@@ -558,6 +562,11 @@ impl Engine {
             let mut context_scope = v8::ContextScope::new(scope, local);
             v8::scope!(let inner, &mut context_scope);
             host::install(inner, local, host.scheduler.clock().time_origin_ms());
+            // The window is an `EventTarget`, so its prototype chain has to
+            // reach that interface's prototype — the one fact about the window
+            // the generated glue cannot express, since the window is the global
+            // object rather than an instance of any template.
+            host::install_window_prototype(inner, local, &event_target);
             install_dom_exception(inner);
 
             // Materialise the `document` wrapper, expose it as a global, then

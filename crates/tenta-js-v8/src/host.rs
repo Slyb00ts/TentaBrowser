@@ -122,6 +122,10 @@ impl HostState {
 /// the loop clock's wall-clock origin, which `performance.timeOrigin` reports;
 /// it is passed in because the host state slot this context reads is only set
 /// after `install` returns.
+///
+/// The window's prototype chain is *not* set here — [`install_window_prototype`]
+/// does that, and needs the interface template this function has no reason to
+/// know about.
 pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>, time_origin_ms: f64) {
     let global = context.global(scope);
     define(scope, global, "setTimeout", set_timeout);
@@ -179,6 +183,68 @@ fn install_window_event_target(scope: &mut v8::PinScope, global: v8::Local<v8::O
         window_remove_event_listener,
     );
     define(scope, global, "dispatchEvent", window_dispatch_event);
+}
+
+/// Chains the global object's prototype to `EventTarget.prototype`.
+///
+/// The window's members are own properties of the global (see
+/// [`install_window_event_target`]), but own properties say nothing to
+/// `instanceof`, which walks the prototype chain: without this,
+/// `window instanceof EventTarget` is false, and code that feature-detects
+/// event support that way takes the wrong branch.
+///
+/// The interface's own `FunctionTemplate` is the authority on what
+/// `EventTarget.prototype` is — [`v8::FunctionTemplate::get_function`] is the
+/// documented route to the one function instance a template has in a context,
+/// and its `prototype` property is the object the generated `instanceof` checks
+/// against. The template arrives from the caller rather than being looked up in
+/// the template cache here, because a template cache read in this position comes
+/// back empty: caching happens while the templates are built for the bootstrap
+/// context, and the slot is not visible from here. `tests/dom_window.rs` pins
+/// the result against the script-visible `EventTarget.prototype`, so a template
+/// that did not match the global's constructor would fail there rather than
+/// silently chain the window to a prototype nothing else uses.
+///
+/// Chaining to that object is what a browser's `window → Window.prototype →
+/// WindowProperties.prototype → EventTarget.prototype` chain reaches; the two
+/// intermediate links stand for interfaces this engine does not implement yet,
+/// and their absence is observable in `window.constructor` reporting
+/// `EventTarget`.
+///
+/// Replacing the global proxy's prototype does not hide the global object's own
+/// properties — a script's global reference resolves through the proxy to the
+/// global object, which is not what `v8::Object::Get` on the proxy does.
+/// `tests/dom_window.rs` pins both halves: the `instanceof` this exists for and
+/// the globals that must survive it.
+pub fn install_window_prototype(
+    scope: &mut v8::PinScope,
+    context: v8::Local<v8::Context>,
+    event_target: &v8::Global<v8::FunctionTemplate>,
+) {
+    let template = v8::Local::new(scope, event_target);
+    let constructor = template
+        .get_function(scope)
+        .expect("a template has a function instance in the context it is installed in");
+    // `to_object` because a function is not a `v8::Object` in V8's type
+    // hierarchy — only a JS-level object. `ToObject` of a callable is the
+    // callable, which is where its properties live.
+    let constructor: v8::Local<v8::Value> = constructor.into();
+    let constructor = constructor
+        .to_object(scope)
+        .expect("ToObject of a callable is the callable");
+    let key = v8::String::new(scope, "prototype").expect("the member name fits");
+    let prototype = constructor
+        .get(scope, key.into())
+        .expect("the EventTarget constructor has a prototype object");
+    let global = context.global(scope);
+    let installed = global
+        .set_prototype(scope, prototype)
+        .expect("the global's prototype is settable before script has run");
+    assert!(
+        installed,
+        "the global object must accept EventTarget.prototype, or `window instanceof EventTarget` \
+         silently stays false"
+    );
 }
 
 /// The window host for the current realm, or the error to report.

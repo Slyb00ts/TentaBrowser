@@ -226,6 +226,28 @@ fn a_mouse_event_relates_to_another_target() {
 }
 
 #[test]
+fn a_mouse_event_relates_to_the_window() {
+    // The window is an `EventTarget` whose wrapper is the global object, so it
+    // takes the `TAG_WINDOW` path through the wrapper world in both directions.
+    // `relatedTarget: window` is the case a review found: the getter always
+    // worked, but converting the dictionary member rejected the global as "not
+    // an interface instance".
+    assert_eq!(
+        eval(
+            r#"
+            const e = new MouseEvent('mouseout', { relatedTarget: window });
+            [
+                e.relatedTarget === window,
+                e.relatedTarget === self,
+                e.relatedTarget === document, // the window is not the document
+            ].join(',');
+        "#
+        ),
+        "true,true,false"
+    );
+}
+
+#[test]
 fn a_hot_loop_of_clicks_does_not_crash() {
     // click() is [Throws] (not fast-API), so it can reenter JS to dispatch; a
     // fast-API click would crash the isolate on the first reentry. 100k clicks

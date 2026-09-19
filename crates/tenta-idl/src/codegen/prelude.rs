@@ -567,7 +567,18 @@ pub trait WrapperWorld: 'static {
     ) -> Option<v8::Local<'s, v8::Object>>;
 
     /// Returns the handle a wrapper stands for.
-    fn handle(&self, interface: &'static str, wrapper: v8::Local<v8::Object>) -> Option<u64>;
+    ///
+    /// Takes the scope because not every object that stands for a handle is an
+    /// interface instance: the global object *is* the window, and recognising
+    /// it means comparing it against the current context's global. A world
+    /// whose interfaces never include such an object may ignore the scope;
+    /// [`handle_from_v8`] passes it for the worlds that need it.
+    fn handle(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        interface: &'static str,
+        wrapper: v8::Local<v8::Object>,
+    ) -> Option<u64>;
 
     /// Stores an arbitrary value and returns the bits that stand for it.
     ///
@@ -638,12 +649,19 @@ pub fn handle_from_v8<T: InterfaceMarker>(
     let object: v8::Local<v8::Object> = value
         .try_into()
         .map_err(|_| JsError::type_error("expected an interface instance"))?;
+    // The world is taken out of the scope for the duration of the call, as in
+    // `handle_to_v8`, because `handle` needs the scope mutably to ask the realm
+    // whether this object is its global.
+    //
+    // INVARIANT: nothing on `handle`'s path may call back into this function or
+    // `handle_to_v8` while the slot is out — they would find no world. Resolving
+    // a receiver only reads: it neither runs script nor creates a wrapper.
     let world = scope
-        .get_slot::<WrapperWorldSlot>()
+        .remove_slot::<WrapperWorldSlot>()
         .ok_or_else(|| JsError::type_error("no wrapper world is installed for this isolate"))?;
-    world
-        .0
-        .handle(interface, object)
+    let handle = world.0.handle(scope, interface, object);
+    scope.set_slot(world);
+    handle
         .map(Handle::from_bits)
         .ok_or_else(|| JsError::type_error("expected an interface instance"))
 }

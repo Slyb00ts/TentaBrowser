@@ -136,3 +136,59 @@ fn svg_element_constructor_exists_and_chains_through_element() {
         "function,function,true,false"
     );
 }
+
+#[test]
+fn the_window_is_an_event_target() {
+    // `instanceof` walks the prototype chain, so the window's own
+    // `addEventListener` is not enough for code that feature-detects event
+    // support with `window instanceof EventTarget`.
+    //
+    // `constructor` reports `EventTarget` because the chain joins there: a
+    // browser has `Window.prototype` and `WindowProperties.prototype` in
+    // between, and neither interface exists in this engine yet.
+    assert_eq!(
+        eval(
+            r#"
+            [
+                window instanceof EventTarget,
+                self instanceof EventTarget,
+                top instanceof EventTarget,
+                document instanceof EventTarget,
+                Object.getPrototypeOf(window) === EventTarget.prototype,
+                window.constructor === EventTarget,
+            ].join(',');
+        "#
+        ),
+        "true,true,true,true,true,true"
+    );
+}
+
+#[test]
+fn chaining_the_window_to_event_target_keeps_its_own_properties() {
+    // The window carries a prototype at all only because V8 resolves global
+    // names through the global proxy's named-property handler rather than
+    // through the prototype chain. This test is what says so: if that ever
+    // stopped being true, every global would vanish the moment the window got
+    // a prototype.
+    //
+    // The first entry is the precondition — the prototype really was replaced,
+    // so the rest is not vacuously true.
+    assert_eq!(
+        eval(
+            r#"
+            [
+                Object.getPrototypeOf(window) === EventTarget.prototype,
+                typeof document,
+                typeof setTimeout,
+                typeof EventTarget,
+                typeof navigator,
+                typeof performance,
+                window.document === document,
+                window.window === window,
+                typeof window.addEventListener,
+            ].join(',');
+        "#
+        ),
+        "true,object,function,function,object,object,true,true,function"
+    );
+}

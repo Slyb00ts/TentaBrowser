@@ -25,7 +25,7 @@ use tenta_core::atom::atoms;
 use tenta_dom::NodeKind;
 use tenta_js::bindings::host::{
     HostObject, SharedContext, TAG_EVENT, TAG_HTML_COLLECTION, TAG_NODE_LIST, TAG_STYLE,
-    TAG_TOKEN_LIST, TAG_WINDOW, decode,
+    TAG_TOKEN_LIST, TAG_WINDOW, decode, encode_window,
 };
 use tenta_js::bindings::{
     InterfaceDescriptor, InterfaceRegistry, WRAPPER_HOST_FIELD, WRAPPER_TAG, WrapperWorld,
@@ -461,11 +461,33 @@ impl WrapperWorld for V8World {
         Some(instance)
     }
 
-    fn handle(&self, _interface: &'static str, wrapper: v8::Local<v8::Object>) -> Option<u64> {
+    fn handle(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        _interface: &'static str,
+        wrapper: v8::Local<v8::Object>,
+    ) -> Option<u64> {
         // SAFETY: only wrappers created by `wrapper` carry a host pointer in
         // internal field 0; `unwrap_this` rejects any object without one.
-        let host = unsafe { unwrap_this::<HostObject>(&wrapper) }.ok()?;
-        Some(host.handle_bits())
+        if let Ok(host) = unsafe { unwrap_this::<HostObject>(&wrapper) } {
+            return Some(host.handle_bits());
+        }
+        // The reverse of the `TAG_WINDOW` arm in `wrapper`: an interface
+        // instance's host carries the bits, but the window has no host at all —
+        // it is the global object — so it is recognised by identity against the
+        // realm's global. Without this, a value holding the window is rejected
+        // as "not an interface instance" wherever an interface-typed argument is
+        // converted (`new MouseEvent('mouseout', { relatedTarget: window })`).
+        //
+        // Like `wrapper`, this answers for every interface name rather than only
+        // the ones the window can stand for: the tag decides what the bits mean,
+        // and the consumer that decodes them rejects a window where one is not
+        // allowed.
+        let global = scope.get_current_context().global(scope);
+        if wrapper.strict_equals(global.into()) {
+            return Some(encode_window());
+        }
+        None
     }
 
     fn store_value(&self, scope: &mut v8::PinScope<'_, '_>, value: v8::Local<v8::Value>) -> u64 {
