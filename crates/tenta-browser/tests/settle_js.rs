@@ -11,8 +11,10 @@ mod support;
 
 use std::time::Duration;
 
-use tenta_browser::{Document, Engine, Goto, PageOptions, Settle, SettleConfig, SettleState};
-use tenta_core::Tier;
+use tenta_browser::{
+    ContextOptions, Document, Engine, Goto, PageOptions, Settle, SettleConfig, SettleState,
+};
+use tenta_core::{Budgets, Tier};
 use tenta_testutil::{FixtureServer, FixtureServerConfig, TempDir};
 
 /// An engine whose ceiling reaches Tier 2, so a page may ask for JavaScript.
@@ -98,6 +100,65 @@ async fn an_inline_script_runs_and_mutates_the_document() {
         "the script's mutation survived the navigation"
     );
     assert!(has(&document, "#tail"), "the parse ran past the script");
+    engine.close();
+}
+
+/// A timer callback that never returns must not hang the page thread.
+///
+/// `setTimeout(() => { while (true) {} }, 0)` runs as a timer callback, which is
+/// an engine entry the engine does not bound itself: without the process-wide
+/// watchdog the page thread would spin for ever inside `pump_due_timers` and
+/// this navigation would never return. The callback mutates the tree before it
+/// loops, so the marker proves it ran at all — a test that only asserted
+/// "did not hang" would pass just as well if the script had never run.
+///
+/// The per-entry deadline is the page's `evaluate_time` budget, lowered here to
+/// tens of milliseconds so the test is fast; `tokio::time::timeout` turns a
+/// regression into a failure rather than a hung suite.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_runaway_timer_callback_does_not_hang_the_navigation() {
+    let (server, _temp) = serve(
+        "<!doctype html><html><head></head><body>\
+         <script>\
+         setTimeout(function () {\
+           document.getElementById('tail').textContent = 'reached';\
+           while (true) {}\
+         }, 0);\
+         </script>\
+         <p id=\"tail\">the rest of the parse</p>\
+         </body></html>",
+    )
+    .await;
+    let engine = js_engine(SettleConfig::library());
+    // A page's script deadline is its context's `evaluate_time`; lowering it
+    // lowers the deadline the page arms around an engine entry.
+    let context = engine
+        .new_context(ContextOptions {
+            allow_private_network: true,
+            budgets: Some(Budgets::desktop().evaluate_time(Duration::from_millis(100))),
+            ..ContextOptions::default()
+        })
+        .expect("context");
+    let page = context
+        .new_page(PageOptions::default())
+        .await
+        .expect("a JavaScript page");
+
+    let navigation = tokio::time::timeout(
+        Duration::from_secs(10),
+        page.goto(&server.url("/index.html"), Goto::default()),
+    )
+    .await
+    .expect("the navigation returned instead of hanging on the runaway callback")
+    .expect("navigation");
+    assert_eq!(navigation.status, 200);
+
+    let document = page.take_document().expect("document");
+    assert_eq!(
+        text_of(&document, "#tail"),
+        "reached",
+        "the runaway callback ran and mutated the tree before it was terminated"
+    );
     engine.close();
 }
 

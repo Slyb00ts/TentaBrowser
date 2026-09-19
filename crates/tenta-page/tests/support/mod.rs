@@ -12,7 +12,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -179,6 +179,12 @@ pub struct Record {
     pub frames_run: u32,
     /// Every `Engine::trim_memory` the page called, in order.
     pub trims: Vec<TrimObservation>,
+    /// Every `EngineWatchdog::terminate` the page's deadline sent to the
+    /// engine. Zero means no entry was ever cut short.
+    pub terminations: usize,
+    /// Whether a `block` command has been reached and is waiting to be
+    /// terminated. What a test polls to sequence two pages against each other.
+    pub blocked: bool,
 }
 
 pub type Recorder = Arc<Mutex<Record>>;
@@ -222,10 +228,72 @@ impl Record {
 
 // -------------------------------------------------------------- the engine
 
+/// The stub's termination latch: what `Isolate::TerminateExecution` is to a
+/// real backend.
+///
+/// A callback that "never returns" is one that reaches the `block` command,
+/// which waits here until a terminate arrives. The wait is a `Condvar`, never a
+/// spin: a page whose deadline is not enforced fails the test's patience
+/// instead of burning a core, which is what makes the hang observable rather
+/// than a wedged suite.
+#[derive(Default)]
+struct Termination {
+    fired: Mutex<bool>,
+    released: Condvar,
+}
+
+impl Termination {
+    /// Releases every waiter. Idempotent, like the real `terminate_execution`.
+    fn terminate(&self) {
+        *self
+            .fired
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+        self.released.notify_all();
+    }
+
+    /// Blocks the page thread until a terminate arrives.
+    fn wait(&self) {
+        let mut fired = self
+            .fired
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while !*fired {
+            fired = self
+                .released
+                .wait(fired)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+}
+
+/// The stub's watchdog: what the page arms a deadline through.
+///
+/// `terminate` is the only thing that releases a blocked callback, so a page
+/// test that observes it is observing a real terminate rather than the stub
+/// finishing on its own.
+struct StubWatchdog {
+    termination: Arc<Termination>,
+    record: Recorder,
+}
+
+impl EngineWatchdog for StubWatchdog {
+    fn terminate(&self) {
+        self.record
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .terminations += 1;
+        self.termination.terminate();
+    }
+}
+
 /// Builds [`StubEngine`]s; the record is shared with the test, so the factory
 /// is `Send + Sync` while the engines it builds are not.
 pub struct StubFactory {
     record: Recorder,
+    /// Whether the engines it builds offer a watchdog. A test that exercises
+    /// the "no handle to arm" path leaves this off.
+    watchdog: bool,
 }
 
 impl PageEngineFactory for StubFactory {
@@ -237,6 +305,7 @@ impl PageEngineFactory for StubFactory {
         Ok(Box::new(StubEngine::new(
             document,
             Arc::clone(&self.record),
+            self.watchdog,
         )))
     }
 }
@@ -258,6 +327,8 @@ struct ScriptContext {
     /// The engine's collection epoch, which the `gc` command advances and the
     /// page compares against the value it last saw.
     gc_epoch: Cell<u64>,
+    /// What the `block` command waits on, and what the watchdog releases.
+    termination: Arc<Termination>,
 }
 
 impl ScriptContext {
@@ -293,10 +364,14 @@ pub struct StubEngine {
     page_loop: EventLoop,
     scheduler: Scheduler,
     context: Rc<ScriptContext>,
+    /// Whether this engine hands out a watchdog handle. A V8 engine always
+    /// does; a stub test picks, so both the arm and the no-handle path are
+    /// reachable.
+    watchdog: bool,
 }
 
 impl StubEngine {
-    fn new(document: SharedDocument, record: Recorder) -> StubEngine {
+    fn new(document: SharedDocument, record: Recorder, watchdog: bool) -> StubEngine {
         let page_loop = EventLoop::new(Clock::real());
         let scheduler = page_loop.scheduler();
         let context = Rc::new(ScriptContext {
@@ -304,11 +379,13 @@ impl StubEngine {
             document,
             record,
             gc_epoch: Cell::new(0),
+            termination: Arc::new(Termination::default()),
         });
         StubEngine {
             page_loop,
             scheduler,
             context,
+            watchdog,
         }
     }
 }
@@ -421,7 +498,12 @@ impl PageEngine for StubEngine {
     }
 
     fn watchdog(&self) -> Option<Box<dyn EngineWatchdog>> {
-        None
+        self.watchdog.then(|| {
+            Box::new(StubWatchdog {
+                termination: Arc::clone(&self.context.termination),
+                record: Arc::clone(&self.context.record),
+            }) as Box<dyn EngineWatchdog>
+        })
     }
 }
 
@@ -461,6 +543,7 @@ impl ProvenanceSink for RecordingSink {
 /// mutate <id>
 /// detach <id>
 /// gc
+/// block
 /// setTimeout <command…> <ms>
 /// setInterval <command…> <ms>
 /// raf <command…>
@@ -513,6 +596,18 @@ fn run_command(command: &str, context: &Rc<ScriptContext>) {
         // "reclaim now" trigger and the one a test can pull directly. A real
         // engine advances it from a collector epilogue.
         "gc" => context.gc_epoch.set(context.gc_epoch.get() + 1),
+        // A callback that does not return until it is terminated: the stand-in
+        // for `while (true) {}`. It parks on the latch rather than spinning, so
+        // a page whose deadline is not enforced stalls the test's patience
+        // instead of the machine.
+        "block" => {
+            context
+                .record
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .blocked = true;
+            context.termination.wait();
+        }
         "setTimeout" | "setInterval" | "loop-forever" => {
             // The delay of a scheduled command is its last token; everything
             // before it is the command that runs.
@@ -608,6 +703,8 @@ impl Harness {
             settle: SettleConfig::library(),
             javascript: true,
             engine: true,
+            watchdog: false,
+            budgets: Budgets::default(),
             routes: Vec::new(),
         }
     }
@@ -651,6 +748,11 @@ pub struct Builder {
     settle: SettleConfig,
     javascript: bool,
     engine: bool,
+    /// Whether the stub engine hands out a watchdog handle.
+    watchdog: bool,
+    /// The page's budgets, which set the per-entry script deadline the page
+    /// arms around an engine entry.
+    budgets: Budgets,
     /// What the fixture answers for paths other than the document's.
     routes: Vec<(String, Answer)>,
 }
@@ -675,6 +777,20 @@ impl Builder {
     /// Tier 1 page is.
     pub fn no_engine(mut self) -> Builder {
         self.engine = false;
+        self
+    }
+
+    /// Whether the stub engine hands out a watchdog handle. Off by default, so
+    /// only the tests that are about the watchdog arm a deadline.
+    pub fn watchdog(mut self, on: bool) -> Builder {
+        self.watchdog = on;
+        self
+    }
+
+    /// The page's budgets. `evaluate_time` is the deadline the page arms
+    /// around one engine entry, so a watchdog test sets it small.
+    pub fn budgets(mut self, budgets: Budgets) -> Builder {
+        self.budgets = budgets;
         self
     }
 
@@ -719,6 +835,7 @@ impl Builder {
         let engine = self.engine.then(|| {
             Arc::new(StubFactory {
                 record: Arc::clone(&record),
+                watchdog: self.watchdog,
             }) as Arc<dyn PageEngineFactory>
         });
         let page = Page::new(PageConfig {
@@ -730,7 +847,7 @@ impl Builder {
             max_tier: if self.engine { Tier::Js } else { Tier::Dom },
             javascript: self.javascript,
             engine,
-            budgets: Budgets::default(),
+            budgets: self.budgets,
             settle: self.settle,
             locale: "en-US".to_owned(),
             extra_headers: Vec::new(),

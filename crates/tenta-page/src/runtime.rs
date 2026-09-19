@@ -15,6 +15,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -23,7 +24,7 @@ use tenta_core::atom::atoms;
 use tenta_core::{Error, Origin, PageId, Result};
 use tenta_dom::{SharedDocument, SharedSink};
 use tenta_html::{Encoding, Parser};
-use tenta_js::engine::{EngineClock, PageEngine, PageEngineConfig, ScriptKind};
+use tenta_js::engine::{EngineClock, EngineWatchdog, PageEngine, PageEngineConfig, ScriptKind};
 use tenta_js::event_loop::ProvenanceSink;
 use tenta_net::policy::cookies::Site;
 use tenta_net::{Client, NetError, Request, ResourceType};
@@ -129,6 +130,24 @@ pub(crate) struct PageRuntime {
     /// means the collector may have freed a wrapper since, which is a "reclaim
     /// now" trigger of its own (`docs/spec/04-dom-and-css.md` §1.1).
     last_gc_epoch: u64,
+    /// The engine's watchdog handle, taken once when the engine was built.
+    ///
+    /// `PageEngine::watchdog` is `&self` but hands out a fresh `Box` each call:
+    /// the engine's thread-safe handle is valid for the isolate's life, so the
+    /// page takes it once and names it, rather than asking the engine again
+    /// before every entry. `None` means the engine cannot be interrupted from
+    /// another thread, in which case no entry is armed and a callback that does
+    /// not return hangs the page (`docs/spec/05-javascript.md` §11).
+    watchdog: Option<Arc<dyn EngineWatchdog>>,
+    /// The deadline one engine entry gets, from the page's script budget.
+    ///
+    /// The engine already carries the same value as its `script_timeout`
+    /// (`engine_config`); this is that value in the page's own hands, because
+    /// it is the page that arms the deadline around the three entries the
+    /// engine does not bound itself. Zero means "no deadline here" — an
+    /// already-elapsed budget is a pre-entry failure, not a terminate
+    /// ([`PageRuntime::bounded`]).
+    script_timeout: Duration,
 }
 
 impl PageRuntime {
@@ -156,6 +175,17 @@ impl PageRuntime {
         // engine's own construction-time collection as a change that owes a
         // reclaim.
         let last_gc_epoch = engine.gc_epoch();
+        // Asked once, before the engine is boxed: the handle is valid for the
+        // isolate's life and is what the watchdog thread terminates through.
+        let watchdog = engine.watchdog().map(Arc::from);
+        if watchdog.is_none() {
+            tracing::debug!(
+                page = ?page,
+                "the engine cannot be terminated from another thread; a callback that does \
+                 not return will hang this page"
+            );
+        }
+        let script_timeout = engine_config.script_timeout.unwrap_or_default();
         Ok(PageRuntime {
             page,
             engine,
@@ -165,6 +195,8 @@ impl PageRuntime {
             parse_in_flight: true,
             bridge,
             last_gc_epoch,
+            watchdog,
+            script_timeout,
         })
     }
 
@@ -189,11 +221,52 @@ impl PageRuntime {
         if !self.parse_in_flight && self.should_reclaim_detached() {
             self.reclaim_detached();
         }
-        self.engine.pump_due_timers(budget);
+        // Both entries below run callback script the engine does not bound
+        // itself, so each is armed around its call (`PageRuntime::bounded`).
+        self.bounded("timers", |engine| engine.pump_due_timers(budget));
         if self.engine.frame_due() {
-            self.engine.run_animation_frame();
+            self.bounded("animation-frame", |engine| engine.run_animation_frame());
         }
         self.engine.next_wakeup()
+    }
+
+    /// Runs one engine entry under the page's per-entry script deadline, when
+    /// the engine offers a watchdog to enforce it.
+    ///
+    /// `run_script` bounds itself, by a private per-run thread inside the
+    /// backend, and is deliberately not armed here — arming it too would put a
+    /// second terminate on the same run. The entries this wraps are the ones
+    /// with no deadline at all: the timers and animation frames of a turn, and
+    /// the microtask checkpoint a script's own entry owes.
+    ///
+    /// The deadline is armed immediately before the entry and disarmed when
+    /// `arm` drops, after it returns. A fire that lands after the entry
+    /// returned but before the disarm still sets `fired` — the page learns the
+    /// deadline elapsed — while the terminate it issued is dropped by the next
+    /// entry's start-of-entry clear (`crates/tenta-js-v8`, stage (a), commit
+    /// `d1ee1d9`). A deadline that has already passed at arming time is a
+    /// pre-entry failure, not a terminate: the entry's clear would swallow it
+    /// and the entry would run unbounded, so nothing is armed when the page has
+    /// no time left. Deciding what that failure does is the page's script-CPU
+    /// budget work, not this stage's.
+    fn bounded<R>(&mut self, entry: &'static str, run: impl FnOnce(&mut dyn PageEngine) -> R) -> R {
+        let Some(handle) = self.watchdog.clone() else {
+            return run(&mut *self.engine);
+        };
+        if self.script_timeout.is_zero() {
+            return run(&mut *self.engine);
+        }
+        let arm = crate::watchdog::arm(handle, Instant::now() + self.script_timeout);
+        let outcome = run(&mut *self.engine);
+        if arm.fired() {
+            tracing::warn!(
+                page = ?self.page,
+                entry,
+                timeout = ?self.script_timeout,
+                "an engine entry did not return within its deadline and was terminated"
+            );
+        }
+        outcome
     }
 
     /// Whether this turn should reclaim detached nodes: the collector has run
@@ -344,7 +417,9 @@ impl PageRuntime {
                 "a script did not run to completion"
             );
         }
-        self.engine.run_microtasks();
+        // The script's own checkpoints are owed even when it threw, and the
+        // checkpoint runs callback script the engine does not bound itself.
+        self.bounded("microtasks", |engine| engine.run_microtasks());
     }
 }
 
@@ -808,6 +883,8 @@ mod tests {
             parse_in_flight,
             bridge: Rc::new(SettleBridge::new()),
             last_gc_epoch: 0,
+            watchdog: None,
+            script_timeout: Duration::from_secs(30),
         };
         (runtime, trims, epoch)
     }

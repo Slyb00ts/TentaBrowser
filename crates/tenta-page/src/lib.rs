@@ -16,6 +16,9 @@ mod runtime;
 pub mod settle;
 pub mod task;
 pub mod thread;
+// Private: the watchdog is process-wide machinery the page owns, not an API
+// (`crates/tenta-page/src/watchdog.rs`).
+mod watchdog;
 
 pub use clock::{Clock, ManualClock, SystemClock};
 pub use document::Document;
