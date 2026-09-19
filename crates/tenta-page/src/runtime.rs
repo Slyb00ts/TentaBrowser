@@ -1,11 +1,20 @@
 //! The page's JavaScript runtime: one engine bound to one parsed document
-//! (`docs/spec/05-javascript.md` §6).
+//! (`docs/spec/02-architecture.md` §3).
 //!
 //! A runtime exists only while a page with an engine drives a parse. It is
 //! built lazily on the first `</script>` pause, runs that parse's script
 //! elements against the very tree the parser is writing into, reports the
 //! engine's task provenance to the settle machine, and is dropped when the
 //! navigation that built it ends.
+//!
+//! *When* a classic script runs is the HTML standard's rule, not this
+//! project's: the local spec leaves script timing to the standard
+//! (`docs/spec/02-architecture.md` §5). The rules this module implements are
+//! the standard's "the `script` element": an external classic script blocks the
+//! parse unless it carries `async` or `defer`, `async` executes as soon as it
+//! arrives, `defer` executes in document order once the document is parsed,
+//! `defer` and `async` are ignored on an inline script, and `nomodule` is a
+//! gate rather than a timing attribute.
 //!
 //! It lives in a thread-local keyed by page id because neither half of it is
 //! `Send`: a document held jointly with script is `Rc<RefCell<_>>`, and an
@@ -310,22 +319,29 @@ impl PageRuntime {
         self.last_gc_epoch = self.engine.gc_epoch();
     }
 
-    /// Runs the script the parse is paused on, against the tree as it stands.
+    /// Runs the script the parse is paused on, against the tree as it stands,
+    /// or says how it must be run instead.
     ///
     /// This is the one place the page enters an engine with its parser
     /// stopped, and the three borrow rules of the boundary apply
     /// (`tenta_js::engine`): the document borrow ends before the engine is
     /// called, and nothing may free nodes while the parse is in flight. Every
     /// skip is a real decision about the HTML, so each one is logged: a
-    /// non-classic type is not this driver's to run, `defer`/`async`/
-    /// `nomodule` change when a script runs (P2 d-2b), and an empty element
-    /// has nothing to run.
+    /// non-classic type is not this driver's to run, and an empty element has
+    /// nothing to run.
+    ///
+    /// The decisions are taken in the order the standard takes them, because
+    /// each one is a precondition of the next: the `type` first, since a
+    /// non-classic script is not a classic script whatever else it carries and
+    /// must never become a deferred one; then `src`, which is what makes a
+    /// script external and therefore able to be deferred at all; then `async`
+    /// over `defer` over blocking.
     ///
     /// A classic script with a `src` is not skipped, but its text is not here
     /// either: it comes from the network, so the caller fetches what
-    /// [`ScriptStep::Fetch`] names and runs it through
-    /// [`PageRuntime::run_source`]. Splitting the two is what keeps no borrow
-    /// of this runtime alive across the fetch that separates them.
+    /// [`ScriptStep`] names and runs it through [`PageRuntime::run_source`].
+    /// Splitting the two is what keeps no borrow of this runtime alive across
+    /// the fetch that separates them.
     fn run_pending_script(
         &mut self,
         parser: &mut Parser<'_, SharedSink>,
@@ -345,23 +361,17 @@ impl PageRuntime {
         );
         // One short borrow: everything the decision needs is copied out before
         // the engine is entered.
-        let (source, kind, src, deferred) = {
+        let (source, kind, src, timing) = {
             let document = self.document.borrow();
             let source = document.text_content(script);
             let kind = document.attribute(script, atoms::TYPE).map(str::to_owned);
             let src = document.attribute(script, atoms::SRC).map(str::to_owned);
-            let deferred = document.has_attribute(script, atoms::DEFER)
-                || document.has_attribute(script, atoms::ASYNC)
-                || document.has_attribute(script, atoms::NOMODULE);
-            (source, kind, src, deferred)
+            let timing = ScriptTiming {
+                asynchronous: document.has_attribute(script, atoms::ASYNC),
+                deferred: document.has_attribute(script, atoms::DEFER),
+            };
+            (source, kind, src, timing)
         };
-        if deferred {
-            tracing::debug!(
-                page = ?self.page,
-                "a deferred, async or nomodule script does not run inline (P2 d-2b)"
-            );
-            return Ok(ScriptStep::Done);
-        }
         // Before `src`, because a module's text is not a classic script's:
         // running one inline would run it in the wrong scope.
         if let Some(kind) = &kind
@@ -374,12 +384,19 @@ impl PageRuntime {
             );
             return Ok(ScriptStep::Done);
         }
+        // `nomodule` is deliberately not consulted anywhere here: it is a
+        // gate, not a timing attribute, and it says "do not run this in a user
+        // agent that supports module scripts". This one refuses `type=module`
+        // (P2 d-2c), so the gate is open and a `nomodule` script runs exactly
+        // like the same script without it — which leaves a lone external one
+        // parser-blocking, since it carries no `async` or `defer`. **When
+        // module support lands, this gate must close.**
         if let Some(src) = &src {
             // The base is the document's, exactly as a recorded preload hint's
             // is resolved (`crate::fetch_policy`): the URL a relative `src`
             // resolves against, not the script's own.
-            return match base.join(src) {
-                Ok(url) => Ok(ScriptStep::Fetch(url)),
+            let url = match base.join(src) {
+                Ok(url) => url,
                 Err(error) => {
                     tracing::warn!(
                         page = ?self.page,
@@ -387,10 +404,21 @@ impl PageRuntime {
                         %error,
                         "a script's src does not resolve against the document; it does not run"
                     );
-                    Ok(ScriptStep::Done)
+                    return Ok(ScriptStep::Done);
                 }
             };
+            // `async` wins when both are present; `defer` is the legacy
+            // fallback the standard keeps for it.
+            return Ok(if timing.asynchronous {
+                ScriptStep::Deferred(DeferredTiming::Async(url))
+            } else if timing.deferred {
+                ScriptStep::Deferred(DeferredTiming::Defer(url))
+            } else {
+                ScriptStep::Fetch(url)
+            });
         }
+        // Inline: `defer` and `async` are ignored on a script with no `src`,
+        // so it runs here whatever it carries.
         if source.trim().is_empty() {
             tracing::debug!(page = ?self.page, "an empty script element runs nothing");
             return Ok(ScriptStep::Done);
@@ -399,16 +427,23 @@ impl PageRuntime {
         Ok(ScriptStep::Done)
     }
 
-    /// Runs `source` as a classic script against the tree, at the pause.
+    /// Runs `source` as a classic script against the tree.
     ///
     /// A script error is a page-level fact, not an engine failure: the page
     /// keeps loading, exactly as a browser does. The script's own checkpoints
     /// are owed even when it threw.
-    fn run_source(&mut self, source: &str) {
-        debug_assert!(
-            self.parse_in_flight,
-            "a script ran while no parser was writing into its document"
-        );
+    ///
+    /// Two callers, and they are the two points at which a classic script
+    /// runs: the parse pause, for an inline script and for an external
+    /// parser-blocking one (`run_pending_script` above), and the fetch that
+    /// resolves later, for `defer` and `async` (`crate::page`). The second is
+    /// why there is no `parse_in_flight` assertion here: after
+    /// `parser.finish()` no parser is writing into the tree, and that is
+    /// exactly when a deferred script runs. That a script may be run without a
+    /// parser in flight is not a loosening of the boundary — the boundary
+    /// forbids *freeing nodes* while a parser is in flight, and the reclaim
+    /// guard is on `turn`, which this never reaches.
+    pub(crate) fn run_source(&mut self, source: &str) {
         if let Err(error) = self.engine.run_script(source, ScriptKind::Classic) {
             tracing::warn!(
                 page = ?self.page,
@@ -423,29 +458,61 @@ impl PageRuntime {
     }
 }
 
+/// How a script element asks to be timed.
+///
+/// `defer` and `async` are read together because they are decided together:
+/// HTML ignores both on an inline script, and gives `async` precedence when an
+/// external one carries both.
+#[derive(Clone, Copy)]
+struct ScriptTiming {
+    asynchronous: bool,
+    deferred: bool,
+}
+
 /// What running the script the parse is paused on needs next.
 enum ScriptStep {
     /// Nothing to fetch: the script ran, or a rule skipped it. The parse may
     /// resume.
     Done,
-    /// The script is classic and external, and its `src` resolved to this URL.
-    /// It runs once the caller has fetched and decoded it.
+    /// The script is classic and external with no `async` or `defer`: it is
+    /// fetched now, and the parse resumes only once it has run.
     Fetch(Url),
+    /// The script is classic and external with `async` or `defer`: its fetch
+    /// runs in parallel with the parse, so the caller starts it and the parse
+    /// resumes at once.
+    Deferred(DeferredTiming),
+}
+
+/// When an external classic script with `async` or `defer` runs.
+///
+/// The two are different facts, and the difference is what each one waits for:
+/// an `async` script waits for nothing but its own fetch and runs the moment
+/// it arrives, while a `defer` script waits for the document to be parsed and
+/// for every earlier deferred script to have run.
+pub(crate) enum DeferredTiming {
+    /// `async`: fetched in parallel with the parse, run as soon as it arrives,
+    /// in whatever order arrivals happen.
+    Async(Url),
+    /// `defer`: fetched in parallel with the parse, run in document order once
+    /// the document is parsed and before `DOMContentLoaded`.
+    Defer(Url),
 }
 
 /// What the parse knows about its document when it hands a script out
-/// (`docs/spec/05-javascript.md` §6).
+/// (the HTML standard's "fetch a classic script").
 ///
 /// The two URLs are different facts and are needed for different reasons: the
 /// base is what a relative `src` resolves against, while the document's own URL
 /// is what the request is first-party to — a script served from a third-party
-/// origin is still a first-party request of this page.
-pub(crate) struct ScriptMeta<'a> {
+/// origin is still a first-party request of this page. Both are owned rather
+/// than borrowed because a `defer`/`async` script is fetched by a task that
+/// outlives the parse pause which discovered it.
+pub(crate) struct ScriptMeta {
     /// The document's base URL: its `<base href>` resolved against its URL, or
     /// its URL when it declares none.
-    pub base: &'a Url,
+    pub base: Url,
     /// The document's own URL.
-    pub document_url: &'a Url,
+    pub document_url: Url,
     /// The navigation's deadline. A script may not outlive it: the deadline is
     /// the whole navigation's, and the parse is part of the navigation.
     pub deadline: Instant,
@@ -586,30 +653,38 @@ pub(crate) fn ensure_runtime(
 /// awaits. Nothing may borrow it across one, so the script is run on the far
 /// side of the fetch and only if the same engine is still bound to the same
 /// tree.
+///
+/// `Some` means the script is not this call's to run at all: it carries `async`
+/// or `defer`, so its fetch runs in parallel with the parse and the caller
+/// starts it (`crate::page`). This is a classification rather than a spawn
+/// because starting one needs the page's `PageInner`, which belongs to that
+/// module.
 pub(crate) async fn run_pending_script(
     parser: &mut Parser<'_, SharedSink>,
     document: &SharedDocument,
     config: &PageConfig,
     tracker: &Rc<RefCell<SettleTracker>>,
-    meta: &ScriptMeta<'_>,
-) -> Result<(), Error> {
+    meta: &ScriptMeta,
+) -> Result<Option<DeferredTiming>, Error> {
     let page = config.id;
     ensure_runtime(page, document.clone(), config, Rc::clone(tracker));
     let Some(step) = with_runtime_for(page, document, |runtime| {
-        runtime.run_pending_script(parser, meta.base)
+        runtime.run_pending_script(parser, &meta.base)
     }) else {
         if parser.take_pending_script().is_some() {
             tracing::debug!(?page, "a script is skipped: no engine can run it");
         }
-        return Ok(());
+        return Ok(None);
     };
-    let ScriptStep::Fetch(url) = step? else {
-        return Ok(());
+    let url = match step? {
+        ScriptStep::Done => return Ok(None),
+        ScriptStep::Deferred(timing) => return Ok(Some(timing)),
+        ScriptStep::Fetch(url) => url,
     };
     let Some(body) = fetch_script(config, meta, &url, tracker).await else {
         // A script that could not be fetched is a page-level fact, not a failed
         // navigation: the parse goes on without it, exactly as a browser's does.
-        return Ok(());
+        return Ok(None);
     };
     let Some(source) = decode_script(&body, parser.encoding()) else {
         tracing::warn!(
@@ -617,7 +692,7 @@ pub(crate) async fn run_pending_script(
             url = %url,
             "an external script is skipped: the parse has no document encoding to decode it with"
         );
-        return Ok(());
+        return Ok(None);
     };
     let ran = with_runtime_for(page, document, |runtime| runtime.run_source(&source));
     if ran.is_none() {
@@ -627,23 +702,27 @@ pub(crate) async fn run_pending_script(
             "a fetched script did not run: its engine is no longer bound to this tree"
         );
     }
-    Ok(())
+    Ok(None)
 }
 
-/// Issues the fetch of one parser-blocking external script and reads its body.
+/// Issues the fetch of one external classic script and reads its body.
 ///
-/// The request is registered as a *parser* request rather than an ordinary
-/// tracked one: a script the parser inserted is exempt from reclassification,
-/// so a slow origin cannot make this fetch background mid-settle and end a
-/// settle the load chain is still waiting on (`docs/spec/02-architecture.md`
-/// §5.1, and this is `note_parser_request_started`'s first production caller).
+/// Every timing of external script goes through here, parser-blocking and
+/// parallel alike, so a deferred script's provenance is exactly a blocking
+/// one's. The request is registered as a *parser* request rather than an
+/// ordinary tracked one: a script the parser inserted is exempt from
+/// reclassification, so a slow origin cannot make this fetch background
+/// mid-settle and end a settle the load chain is still waiting on
+/// (`docs/spec/02-architecture.md` §5.1, and this is
+/// `note_parser_request_started`'s first production caller).
 ///
 /// `None` means the script has no text: the fetch failed, the origin answered
 /// with a status that is not ok, or the navigation's deadline left no time to
-/// issue the request at all. Either way the caller resumes the parse.
-async fn fetch_script(
+/// issue the request at all. Either way the caller runs nothing and the parse
+/// goes on.
+pub(crate) async fn fetch_script(
     config: &PageConfig,
-    meta: &ScriptMeta<'_>,
+    meta: &ScriptMeta,
     url: &Url,
     tracker: &Rc<RefCell<SettleTracker>>,
 ) -> Option<Bytes> {
@@ -705,7 +784,7 @@ async fn fetch_script(
     }
 }
 
-/// The request one parser-blocking script fetch issues.
+/// The request one external classic script's fetch issues.
 ///
 /// The page's own headers go on it exactly as they go on the document request
 /// (`crate::page::build_request`): a `User-Agent` override that reached the
@@ -713,7 +792,7 @@ async fn fetch_script(
 /// One that cannot go on the wire is an error, as it is there.
 fn script_request(
     config: &PageConfig,
-    meta: &ScriptMeta<'_>,
+    meta: &ScriptMeta,
     url: &Url,
     remaining: Duration,
 ) -> std::result::Result<Request, NetError> {
@@ -728,7 +807,7 @@ fn script_request(
     // What the request is first-party to is the document it is for, not the
     // script's own origin: a script served from a third-party origin is still
     // a first-party request of this page.
-    request.first_party = Site::from_url(meta.document_url);
+    request.first_party = Site::from_url(&meta.document_url);
     for (name, value) in &config.extra_headers {
         request = request.header(name, value)?;
     }
@@ -771,10 +850,14 @@ async fn read_script_body(
 /// certain. `None` means the parser has no encoding yet, which cannot happen at
 /// a pause; the script is skipped rather than decoded on a guess.
 ///
+/// The encoding is passed in rather than read from a parser because a
+/// `defer`/`async` script outlives the pause that discovered it: its fetch runs
+/// as a task, and the encoding the pause made certain is captured there.
+///
 /// HTML's "fetch a classic script" decodes with that encoding as the *fallback*
 /// — "The decode algorithm overrides encoding if the file contains a BOM" — so
 /// the BOM-aware entry point is the one that matches it.
-fn decode_script(body: &[u8], encoding: Option<&'static Encoding>) -> Option<String> {
+pub(crate) fn decode_script(body: &[u8], encoding: Option<&'static Encoding>) -> Option<String> {
     let encoding = encoding?;
     let (text, _, had_errors) = encoding.decode(body);
     if had_errors {

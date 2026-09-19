@@ -16,6 +16,7 @@
 //! it; the other sources exist because Tier 2 (P2) drives the same machine.
 
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -333,6 +334,19 @@ impl SettleTracker {
 
     pub fn load_fired(&self) -> bool {
         self.load_fired
+    }
+
+    /// Whether something the document itself started still holds `load` back:
+    /// a parser writing into the tree, or a script still awaiting its fetch or
+    /// its turn to run.
+    ///
+    /// The page asks this before it fires `load`, because the event is defined
+    /// over the document's own work rather than over the navigation's: a
+    /// `defer` or `async` script is part of the document's load chain, and a
+    /// page that reported `load` when the parse ended would report it while
+    /// scripts were still arriving (`docs/spec/02-architecture.md` §5.1).
+    pub fn load_delayed(&self) -> bool {
+        self.parser_running || self.pending_scripts > 0
     }
 
     pub fn domcontentloaded_fired(&self) -> bool {
@@ -756,19 +770,26 @@ impl SettleTracker {
 /// this a guard rather than a pair of calls: whoever drops the guard has
 /// finished with the script, whether that was a resume, a skipped script, a
 /// fetch that failed, or an error unwound past the pause.
-pub struct PendingScripts<'a> {
-    tracker: &'a RefCell<SettleTracker>,
+///
+/// The guard owns its tracker rather than borrowing it, because the holder of
+/// a `defer`/`async` script outlives the frame that discovered it: the count
+/// travels into the task that fetches the script, or into the queue the drain
+/// runs it from, and neither can borrow a cell on `navigate`'s stack.
+pub struct PendingScripts {
+    tracker: Rc<RefCell<SettleTracker>>,
 }
 
-impl<'a> PendingScripts<'a> {
+impl PendingScripts {
     /// Counts one script as awaiting fetch or execution until the guard drops.
-    pub fn hold(tracker: &'a RefCell<SettleTracker>) -> PendingScripts<'a> {
+    pub fn hold(tracker: &Rc<RefCell<SettleTracker>>) -> PendingScripts {
         tracker.borrow_mut().hold_pending_script();
-        PendingScripts { tracker }
+        PendingScripts {
+            tracker: Rc::clone(tracker),
+        }
     }
 }
 
-impl Drop for PendingScripts<'_> {
+impl Drop for PendingScripts {
     fn drop(&mut self) {
         self.tracker.borrow_mut().release_pending_script();
     }
@@ -1077,8 +1098,9 @@ mod tests {
     /// The count a parser-blocking script holds spans the fetch of its `src`,
     /// so it is the guard that releases it — including when the pause is left
     /// by an early return rather than by a resume. Two scripts held at once is
-    /// what `defer`/`async` will need, and it is also what tells a pair of
-    /// add-and-release calls apart from setting the count outright.
+    /// what `defer`/`async` need, since theirs run in parallel with the parse,
+    /// and it is also what tells a pair of add-and-release calls apart from
+    /// setting the count outright.
     #[test]
     fn a_held_script_counts_until_the_guard_drops() {
         let (tracker, _clock) = tracker(Settle::NetworkIdle);

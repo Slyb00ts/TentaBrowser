@@ -7,7 +7,7 @@
 //! (`docs/spec/02-architecture.md` §1.2), and settle.
 
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -23,6 +23,7 @@ use tenta_net::policy::error_names::ErrorName;
 use tenta_net::request::RequestLimits;
 use tenta_net::{Client, RedirectHop, Request, ResourceType, Response, Timing};
 use tokio::sync::{Notify, broadcast, oneshot};
+use tokio::task::JoinHandle;
 use url::Url;
 
 use crate::clock::Clock;
@@ -832,6 +833,12 @@ async fn navigate(
     });
 
     tracker.borrow_mut().note_parser_running(true);
+    // The `defer`/`async` scripts of this navigation, and the fetches they
+    // started. It is created here, on this navigation's own stack, rather than
+    // inside the parse: an `async` script may still be in flight after the
+    // parse has handed the document over, and a queue that died with
+    // `parse_body` would abort it.
+    let mut jobs = ScriptJobs::new(Rc::clone(&tracker));
     let parsed = parse_body(
         &inner,
         response,
@@ -842,7 +849,7 @@ async fn navigate(
         deadline,
         timeout_millis,
         generation,
-        &tracker,
+        &mut jobs,
     )
     .await
     .inspect_err(|_| {
@@ -871,10 +878,12 @@ async fn navigate(
 
     tracker.borrow_mut().note_parser_running(false);
     tracker.borrow_mut().note_request_done(request_id);
+    // `DOMContentLoaded` is reported here, after the parse has run the
+    // `defer` scripts it was holding and after it handed the tree over
+    // (`docs/spec/02-architecture.md` §5.1). `load` is *not* reported here:
+    // this page may still have an `async` script in flight, and `load` waits
+    // for it. The settle loop fires it once nothing delays it.
     tracker.borrow_mut().note_domcontentloaded();
-    // Tier 1 issues no subresource, so nothing delays the load event
-    // (`docs/spec/02-architecture.md` §1.2).
-    tracker.borrow_mut().note_load_fired();
 
     let policy = FetchPolicy::for_tier(Tier::Dom);
     // Read through `deferred` rather than the local binding: the tree was moved
@@ -1127,45 +1136,365 @@ enum ParseStep {
     Restart(&'static Encoding),
 }
 
+/// The `defer`/`async` scripts one navigation has discovered, the fetches
+/// behind them, and the settle call they are counted against.
+///
+/// This is one local on `navigate`'s stack, like `ParseCleanup` and
+/// `DeferredDocument`, and for the same reason: it holds work that outlives the
+/// call which started it, so every early return out of the navigation has to
+/// own it. It cannot live in `PageRuntime` instead — the runtime table is a
+/// thread-local `RefCell` that a second navigation of the same page reaches at
+/// its own awaits, and anything borrowed across one of those awaits panics
+/// (`crate::runtime`).
+///
+/// The tracker is a field rather than a parameter: every count in this queue is
+/// held against that one settle call, so the parse would otherwise carry the
+/// same pair through every function it passes the queue to.
+///
+/// Two timings share it, because they differ only in what they wait for. An
+/// `async` script's task runs it as soon as its fetch completes. A `defer`
+/// script's task only fetches it: the text is handed to `deferred`, and the
+/// drain runs the queue in document order once the document is parsed.
+///
+/// A known limitation, recorded rather than fixed: a navigation lives for one
+/// settle call, and a caller who asks for less than `load` ends it while an
+/// `async` script may still be in flight. That script then never runs — the
+/// engine it would have run in goes with the navigation. Closing this means
+/// keeping the engine alive past the settlement the caller asked for.
+struct ScriptJobs {
+    /// The settle call of the navigation that owns this queue.
+    tracker: Rc<RefCell<SettleTracker>>,
+    /// `defer` scripts awaiting the end of the parse, in document order.
+    deferred: Vec<DeferredEntry>,
+    /// Every parallel fetch still running. Aborted when the navigation ends, so
+    /// a script the page will never run stops being fetched.
+    inflight: Vec<JoinHandle<()>>,
+}
+
+impl ScriptJobs {
+    fn new(tracker: Rc<RefCell<SettleTracker>>) -> ScriptJobs {
+        ScriptJobs {
+            tracker,
+            deferred: Vec::new(),
+            inflight: Vec::new(),
+        }
+    }
+}
+
+impl Drop for ScriptJobs {
+    fn drop(&mut self) {
+        for handle in &self.inflight {
+            handle.abort();
+        }
+    }
+}
+
+/// One `defer` script whose text is on its way, and the claim it has on the
+/// settle until the drain runs it.
+struct DeferredEntry {
+    url: Url,
+    /// The script's decoded text, or `None` when it has none: the fetch failed,
+    /// the origin answered with a status that is not ok, or the document's
+    /// encoding could not decode it.
+    text: oneshot::Receiver<Option<String>>,
+    pending: PendingScripts,
+}
+
+/// Starts the parallel fetch of one `defer`/`async` external classic script.
+///
+/// The fetch runs as its own task on the page thread's `LocalSet` rather than
+/// as part of the parse: that is what lets the parse carry on while a script is
+/// in flight, and it is the whole difference between these two timings and a
+/// parser-blocking script.
+///
+/// `spawn_local`, not `post_job`: the task holds the settle tracker, which is
+/// an `Rc` and cannot enter a `Send + 'static` closure. That
+/// makes a `LocalSet` a precondition of the navigation — one is provided by
+/// every in-tree driver (`crates/tenta-browser/src/threads.rs`,
+/// `crates/tenta-page/tests/support/mod.rs`), and a caller that drives
+/// `Page::goto` outside one panics here rather than misbehaving.
+///
+/// The tree reaches an `async` script's task weakly: the fetch outlives the
+/// parse, and a task holding the tree would keep the page from ever installing
+/// it alone.
+///
+/// The task's body runs inside `catch_unwind_future`, so a panic in the page's
+/// own code is logged rather than swallowed into a dropped `JoinHandle`
+/// (`docs/spec/02-architecture.md` §8).
+fn start_deferred_script(
+    timing: runtime::DeferredTiming,
+    meta: runtime::ScriptMeta,
+    encoding: Option<&'static Encoding>,
+    inner: &Arc<PageInner>,
+    document: &SharedDocument,
+    pending: PendingScripts,
+    jobs: &mut ScriptJobs,
+) {
+    let page = inner.config.id;
+    let inner = Arc::clone(inner);
+    let document = Rc::downgrade(document);
+    let tracker = Rc::clone(&jobs.tracker);
+    match timing {
+        // `async` waits only for its own fetch: its task runs the script the
+        // moment the text arrives, which is why the count it holds ends with
+        // that task rather than with the parse.
+        runtime::DeferredTiming::Async(url) => {
+            let handle = tokio::task::spawn_local(async move {
+                let fetched = catch_unwind_future(async {
+                    let source =
+                        fetch_deferred_script(&inner, &tracker, &meta, &url, encoding).await;
+                    if let Some(source) = source {
+                        run_fetched_script(page, &document, &url, &source);
+                    }
+                })
+                .await;
+                if let Err(payload) = fetched {
+                    tracing::error!(
+                        ?page,
+                        reason = %panic_message(&payload),
+                        "the fetch of an async script panicked"
+                    );
+                }
+                drop(pending);
+            });
+            jobs.inflight.push(handle);
+        }
+        // `defer` waits for the document too, and for every deferred script
+        // before it, so its task only delivers the text: the drain decides when
+        // it runs, and owns the count until it has.
+        runtime::DeferredTiming::Defer(url) => {
+            let (sender, text) = oneshot::channel();
+            // The entry keeps the URL for the drain's log lines; the task needs
+            // its own copy for the fetch and its own messages.
+            let fetched_url = url.clone();
+            let handle = tokio::task::spawn_local(async move {
+                let fetched = catch_unwind_future(async {
+                    let source =
+                        fetch_deferred_script(&inner, &tracker, &meta, &fetched_url, encoding)
+                            .await;
+                    // A receiver that is gone means the navigation ended before
+                    // the drain reached this script; the text has nowhere to go.
+                    let _ = sender.send(source);
+                })
+                .await;
+                if let Err(payload) = fetched {
+                    tracing::error!(
+                        ?page,
+                        reason = %panic_message(&payload),
+                        "the fetch of a deferred script panicked"
+                    );
+                }
+            });
+            jobs.deferred.push(DeferredEntry { url, text, pending });
+            jobs.inflight.push(handle);
+        }
+    }
+}
+
+/// Fetches one `defer`/`async` external classic script and decodes it with the
+/// document's encoding.
+///
+/// It shares the parser-blocking path's fetch verbatim
+/// ([`runtime::fetch_script`]), so a parallel script is exactly as tracked and
+/// as exempt from reclassification as a blocking one; only the waiting differs.
+///
+/// `None` means there is nothing to run, which is the same set of failures the
+/// blocking path reports: a fetch that failed or was not served, a deadline
+/// that left no time to issue the request, or a body the document's encoding
+/// cannot make text of.
+async fn fetch_deferred_script(
+    inner: &Arc<PageInner>,
+    tracker: &Rc<RefCell<SettleTracker>>,
+    meta: &runtime::ScriptMeta,
+    url: &Url,
+    encoding: Option<&'static Encoding>,
+) -> Option<String> {
+    let body = runtime::fetch_script(&inner.config, meta, url, tracker).await?;
+    let source = runtime::decode_script(&body, encoding);
+    if source.is_none() {
+        tracing::warn!(
+            page = ?inner.config.id,
+            url = %url,
+            "a parallel external script is skipped: it cannot be decoded"
+        );
+    }
+    source
+}
+
+/// Runs one already-fetched classic script against the tree, if this
+/// navigation's engine is still bound to it.
+///
+/// The tree is named *weakly*, because a parallel fetch outlives the parse that
+/// started it and nothing here may keep the tree alive across that: the page
+/// installs its document by taking it from the navigation that owns it alone
+/// (`DeferredDocument::take_if_owned`), and a fetch task still holding a
+/// reference would deny the page its own tree — silently, since the navigation
+/// would then drop the document it could not install.
+///
+/// `with_runtime_for` names the tree as well as the page, so a script fetched
+/// for a navigation that has been superseded does not run in the engine of the
+/// one that replaced it.
+fn run_fetched_script(
+    page: PageId,
+    document: &Weak<RefCell<DomDocument>>,
+    url: &Url,
+    source: &str,
+) {
+    let Some(document) = document.upgrade() else {
+        tracing::debug!(
+            ?page,
+            url = %url,
+            "a fetched script did not run: the navigation that asked for it is over"
+        );
+        return;
+    };
+    if runtime::with_runtime_for(page, &document, |runtime| runtime.run_source(source)).is_none() {
+        tracing::debug!(
+            ?page,
+            url = %url,
+            "a fetched script did not run: its engine is no longer bound to this tree"
+        );
+    }
+}
+
+/// Runs the `defer` scripts the parse collected, in document order, once the
+/// document is parsed.
+///
+/// This is the one thing `defer` does that `async` does not: the standard runs
+/// a deferred classic script "as soon as the document has finished parsing", in
+/// document order, and before `DOMContentLoaded` — which the caller reports
+/// only after this returns. An `async` script is deliberately not here; it runs
+/// from its own task, whenever its fetch arrives.
+///
+/// The wait is raced against the two things that can end this navigation: a
+/// newer `goto`/`close` and the deadline. A deferred script whose fetch has not
+/// arrived by either is dropped, and so is its claim on the settle — the
+/// navigation is over, and waiting out the script's own fetch timeout would
+/// keep a superseded navigation alive for work nobody will read.
+async fn drain_deferred(
+    jobs: &mut ScriptJobs,
+    inner: &Arc<PageInner>,
+    document: &SharedDocument,
+    deadline: Instant,
+    generation: u64,
+) {
+    let page = inner.config.id;
+    let at = tokio::time::Instant::from_std(deadline);
+    // The scripts run against this navigation's tree, named weakly for the same
+    // reason an `async` task names it weakly (see `run_fetched_script`): the
+    // navigation itself is what keeps the tree alive here.
+    let document = Rc::downgrade(document);
+    // Taken up front so an early return still releases every script it did not
+    // reach: each entry holds a count on the settle, and a count released by no
+    // one is a settle that can never end.
+    let entries = std::mem::take(&mut jobs.deferred);
+    for entry in entries {
+        let DeferredEntry {
+            url,
+            mut text,
+            pending,
+        } = entry;
+        // Registered before the check, so a bump between the two is not lost
+        // (`notify_waiters` reaches only registered waiters).
+        let received = loop {
+            let generation_notified = inner.generation_changed.notified();
+            tokio::pin!(generation_notified);
+            generation_notified.as_mut().enable();
+            if inner.state.lock().navigation_generation != generation {
+                return;
+            }
+            tokio::select! {
+                biased;
+                _ = &mut generation_notified => {
+                    if inner.state.lock().navigation_generation != generation {
+                        return;
+                    }
+                }
+                received = &mut text => break received,
+                _ = tokio::time::sleep_until(at) => {
+                    tracing::warn!(
+                        ?page,
+                        url = %url,
+                        "a deferred script did not arrive before the navigation deadline; \
+                         the document ends without it"
+                    );
+                    return;
+                }
+            }
+        };
+        match received {
+            Ok(Some(source)) => run_fetched_script(page, &document, &url, &source),
+            // The fetch already logged why there is nothing to run.
+            Ok(None) => {}
+            Err(_) => tracing::debug!(
+                ?page,
+                url = %url,
+                "a deferred script's fetch ended without delivering it"
+            ),
+        }
+        // The script has run, so the load chain is one script lighter: the drop
+        // signals the settle loop, whose `load` gate is what waits for it.
+        drop(pending);
+    }
+}
+
 /// Drives one parse status to the point where the caller may feed again,
 /// running the scripts the parse paused on.
 ///
 /// A `Script` pause is the one place the page enters an engine with its parser
-/// stopped (`docs/spec/05-javascript.md` §6): everything before the script is
-/// in the tree, nothing after it is, and the parse stays where it is until
-/// [`Parser::resume`]. An external classic script is fetched inside the pause,
-/// so this is one of the few places the page thread awaits with a parser
-/// stopped on a node — and the only one that resumes it afterwards.
+/// stopped: everything before the script is in the tree, nothing after it is,
+/// and the parse stays where it is until [`Parser::resume`]. A parser-blocking
+/// external classic script is fetched inside the pause, so this is one of the
+/// few places the page thread awaits with a parser stopped on a node — and the
+/// only one that resumes it afterwards.
+///
+/// A script carrying `async` or `defer` is the opposite case: its fetch must
+/// not hold the parse at all, so this starts it as its own task and resumes
+/// immediately (`start_deferred_script`). Which is which is the HTML
+/// standard's question, answered in `crate::runtime`.
 async fn drive_parse(
     parser: &mut Parser<'_, SharedSink>,
     status: ParseStatus,
+    inner: &Arc<PageInner>,
     document: &SharedDocument,
-    config: &PageConfig,
-    tracker: &Rc<RefCell<SettleTracker>>,
+    jobs: &mut ScriptJobs,
     final_url: &Url,
     deadline: Instant,
 ) -> Result<ParseStep> {
+    let config = &inner.config;
     let mut status = status;
     while status == ParseStatus::Script {
         // A script the parse is paused on is work in flight: it holds a
         // `NetworkIdle` settle open, exactly as a subresource would. The count
         // spans the fetch of the script's own `src`, so it is owned by the
         // guard rather than by this loop iteration's two ends.
-        let pending = PendingScripts::hold(tracker);
+        let pending = PendingScripts::hold(&jobs.tracker);
         let base = {
             let document = document.borrow();
             document.base_url().or(document.url()).cloned()
         }
         .unwrap_or_else(|| final_url.clone());
         let meta = runtime::ScriptMeta {
-            base: &base,
-            document_url: final_url,
+            base,
+            document_url: final_url.clone(),
             deadline,
         };
-        runtime::run_pending_script(parser, document, config, tracker, &meta).await?;
+        let deferred =
+            runtime::run_pending_script(parser, document, config, &jobs.tracker, &meta).await?;
+        // Handing a script out makes the document's encoding certain, so this
+        // is the encoding the script's bytes are decoded with — including for a
+        // parallel fetch, whose decoding happens after the pause is over.
+        let encoding = parser.encoding();
         // Resuming is the caller's statement that it is done with the pause.
         status = parser.resume();
-        drop(pending);
+        match deferred {
+            // The script's fetch outlives this iteration, so its count travels
+            // with it rather than being released here.
+            Some(timing) => {
+                start_deferred_script(timing, meta, encoding, inner, document, pending, jobs)
+            }
+            None => drop(pending),
+        }
     }
     Ok(match status {
         ParseStatus::Continue => ParseStep::Fed,
@@ -1188,6 +1517,10 @@ struct BodyMeta<'a> {
 
 /// Streams the response into the parser, running each script the parse pauses
 /// on and restarting once if a `<meta charset>` overrides the sniffed encoding.
+///
+/// `jobs` is the navigation's queue of `defer`/`async` scripts, threaded in
+/// from `navigate`: this is where they are started (through `drive_parse`) and
+/// where the deferred ones are run, at either end of the parse.
 async fn parse_body(
     inner: &Arc<PageInner>,
     response: Response,
@@ -1195,7 +1528,7 @@ async fn parse_body(
     deadline: Instant,
     timeout_millis: u64,
     generation: u64,
-    tracker: &Rc<RefCell<SettleTracker>>,
+    jobs: &mut ScriptJobs,
 ) -> Result<ParsedBody> {
     let config = &inner.config;
     let final_url = meta.final_url;
@@ -1331,6 +1664,11 @@ async fn parse_body(
                     document.set_ready_state(tenta_dom::ReadyState::Complete);
                 }
                 let hints = std::mem::take(&mut *hints.lock());
+                // The deferred scripts run at this end of the parse too, and
+                // for the same reason: the document is as complete as it will
+                // be. The deadline has already passed here, so the drain only
+                // takes what has already arrived.
+                drain_deferred(jobs, inner, &document, deadline, generation).await;
                 cleanup.disarm();
                 return Ok(ParsedBody {
                     document,
@@ -1373,9 +1711,9 @@ async fn parse_body(
         match drive_parse(
             &mut parser,
             status,
+            inner,
             &document,
-            config,
-            tracker,
+            jobs,
             final_url,
             deadline,
         )
@@ -1408,9 +1746,9 @@ async fn parse_body(
                     match drive_parse(
                         &mut parser,
                         status,
+                        inner,
                         &document,
-                        config,
-                        tracker,
+                        jobs,
                         final_url,
                         deadline,
                     )
@@ -1453,9 +1791,9 @@ async fn parse_body(
     match drive_parse(
         &mut parser,
         status,
+        inner,
         &document,
-        config,
-        tracker,
+        jobs,
         final_url,
         deadline,
     )
@@ -1486,9 +1824,18 @@ async fn parse_body(
         document.set_scripting_enabled(config.javascript);
         document.set_encoding(encoding.clone());
         document.refresh_base_url();
+        // Pre-existing, and not this pass's to change: the tree reports
+        // `complete` from here — before the `defer` scripts below and before
+        // the caller reports `DOMContentLoaded` — where the standard goes
+        // `interactive`, then the deferred scripts, then `complete` at `load`.
         document.set_ready_state(tenta_dom::ReadyState::Complete);
     }
     let hints = std::mem::take(&mut *hints.lock());
+    // The `defer` scripts run here: the document is parsed and its tree is
+    // finished, and the caller reports `DOMContentLoaded` only after this
+    // returns. The `async` ones are not waited for — theirs started at their
+    // own pauses and run whenever their fetch arrives.
+    drain_deferred(jobs, inner, &document, deadline, generation).await;
     // The parse handed the tree over: the navigation owns it, and the engine
     // behind it, from here.
     cleanup.disarm();
@@ -1598,6 +1945,18 @@ async fn settle_loop(
             tracker.borrow_mut().note_dom_mutation();
         }
         let now = inner.config.clock.now();
+        // `load` fires here, once nothing holds it back: the parse is over and
+        // no script is still awaiting its fetch or its turn to run
+        // (`SettleTracker::load_delayed`). It is decided *before* `evaluate`,
+        // because `evaluate` is what reports this turn's state and latches a
+        // final one; a `load` set after it would be a turn late, and the park
+        // computed in between would be the whole deadline on a page that is
+        // otherwise finished. This is why the page no longer reports `load`
+        // when its parse ends: an `async` script is still part of the
+        // document's load chain after that.
+        if !tracker.borrow().load_fired() && !tracker.borrow().load_delayed() {
+            tracker.borrow_mut().note_load_fired();
+        }
         // At Tier 1 the condition is evaluated once after install and no
         // mutation can change it. With an engine it is re-evaluated whenever
         // the tree may have moved.

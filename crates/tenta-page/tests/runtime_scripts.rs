@@ -168,17 +168,25 @@ async fn a_non_classic_script_type_is_not_run() {
     assert!(harness.has("#tail"), "the parse resumed past both");
 }
 
+/// `defer` and `async` are timing attributes of an *external* script: on an
+/// inline one HTML ignores both, and `nomodule` is a gate that is open while
+/// there is no module support. So all three of these run where they stand.
 #[tokio::test(flavor = "current_thread")]
-async fn a_deferred_script_is_not_run_inline() {
+async fn inline_timing_attributes_do_not_change_when_a_script_runs() {
     let harness = Harness::new(&body(
         "<script defer>a</script><script async>b</script><script nomodule>c</script>\
          <p id=tail>after</p>",
     ));
     harness.settle(Settle::Load).await.expect("navigation");
 
+    assert_eq!(
+        sources(&harness.record),
+        vec!["a".to_owned(), "b".to_owned(), "c".to_owned()],
+        "an inline script runs at the parse point whatever timing it carries (P2 d-2b)"
+    );
     assert!(
-        sources(&harness.record).is_empty(),
-        "defer, async and nomodule change when a script runs (P2 d-2), so none runs inline"
+        !saw_tail(&harness.record, 0),
+        "and it runs there, before the markup that follows it is parsed"
     );
     assert!(harness.has("#tail"), "the parse resumed past all three");
 }

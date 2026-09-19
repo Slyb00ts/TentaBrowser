@@ -1,10 +1,13 @@
 //! A parser-blocking external classic script: the fetch the parse waits on
-//! (`docs/spec/05-javascript.md` §6, P2 d-2a).
+//! (the HTML standard's "the `script` element", P2 d-2a).
 //!
 //! A `<script src>` with no `defer`/`async` pauses the parse, is fetched and
-//! run in document order, and the parse resumes past it. `defer` and `async`
-//! are not this sub-phase's: a deferred script is still skipped, and the tests
-//! below pin that boundary where it is easy to cross it by accident.
+//! run in document order, and the parse resumes past it. The *other* two
+//! timings are not this sub-phase's either — a `defer`/`async` script is
+//! fetched in parallel with the parse and `crates/tenta-page/tests/runtime_defer.rs`
+//! is what pins when each of them runs. The one test of theirs here is the
+//! boundary between them: `nomodule` alone is not a timing attribute, so it is
+//! still this file's case.
 
 mod support;
 
@@ -159,11 +162,13 @@ async fn a_script_the_origin_does_not_serve_does_not_run() {
     assert_eq!(tail(&harness), Some("after".to_owned()));
 }
 
-/// `defer` and `async` change when a script runs, which is d-2b: until then an
-/// external one is skipped exactly as it was, and skipping it means the fetch
-/// is never issued.
+/// The three timing attributes of an *external* script, at their simplest:
+/// `defer` and `async` make the fetch parallel with the parse rather than
+/// blocking it, and `nomodule` — which is a gate, open while this engine has no
+/// module support — leaves the script parser-blocking, because it carries
+/// neither. All three run, and all three are fetched.
 #[tokio::test(flavor = "current_thread")]
-async fn a_deferred_or_async_external_script_is_not_fetched() {
+async fn a_deferred_async_or_nomodule_external_script_is_fetched_and_run() {
     let harness = Harness::builder(&body(
         "<script src=\"deferred.js\" defer></script>\
          <script src=\"asynced.js\" async></script>\
@@ -176,16 +181,34 @@ async fn a_deferred_or_async_external_script_is_not_fetched() {
     .build();
     harness.settle(Settle::Load).await.expect("navigation");
 
-    assert!(
-        sources(&harness.record).is_empty(),
-        "none of the three ran (P2 d-2b)"
-    );
+    let mut ran = sources(&harness.record);
+    ran.sort();
     assert_eq!(
-        harness.requests(),
-        vec!["/".to_owned()],
-        "and none of them was even fetched"
+        ran,
+        vec![
+            "asynced".to_owned(),
+            "deferred".to_owned(),
+            "nomodule".to_owned()
+        ],
+        "all three ran: defer and async fetch in parallel, nomodule is only a gate"
     );
-    assert!(harness.has("#tail"), "the parse resumed past all three");
+    // Which order the three fetches are *issued* in is a scheduling question
+    // (a parallel fetch leaves through its task, a blocking one through the
+    // parse), so this compares the set: what the test is about is that a
+    // parallel script is fetched at all.
+    let mut fetched = harness.requests();
+    fetched.sort();
+    assert_eq!(
+        fetched,
+        vec![
+            "/".to_owned(),
+            "/asynced.js".to_owned(),
+            "/deferred.js".to_owned(),
+            "/nomodule.js".to_owned()
+        ],
+        "and all three were fetched (P2 d-2b)"
+    );
+    assert!(harness.has("#tail"), "the parse went past all three");
 }
 
 /// A `src` naming a module is not a classic script's text: it is skipped

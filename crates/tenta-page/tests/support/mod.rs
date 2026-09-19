@@ -800,7 +800,29 @@ impl Builder {
     pub fn route(mut self, path: &str, body: impl Into<Bytes>) -> Builder {
         self.routes.push((
             route_path(path),
-            Answer::Body(body.into(), "text/javascript".to_owned()),
+            Answer::Body {
+                body: body.into(),
+                content_type: "text/javascript".to_owned(),
+                delay: Duration::ZERO,
+            },
+        ));
+        self
+    }
+
+    /// [`Builder::route`] with the answer held back, so a test can order two
+    /// subresource fetches by hand.
+    ///
+    /// This is what makes a `defer`/`async` script's *timing* observable: which
+    /// of two scripts arrives first, and whether the parse waited for one at
+    /// all, are otherwise a race between two fetches that both answer at once.
+    pub fn delayed_route(mut self, path: &str, body: impl Into<Bytes>, delay: Duration) -> Builder {
+        self.routes.push((
+            route_path(path),
+            Answer::Body {
+                body: body.into(),
+                content_type: "text/javascript".to_owned(),
+                delay,
+            },
         ));
         self
     }
@@ -876,8 +898,12 @@ fn route_path(path: &str) -> String {
 
 /// What the fixture does with one path.
 enum Answer {
-    /// A body, with the content type it is served as.
-    Body(Bytes, String),
+    /// A body, with the content type it is served as, after `delay`.
+    Body {
+        body: Bytes,
+        content_type: String,
+        delay: Duration,
+    },
     /// A transport failure, as a dead origin gives.
     Fail,
 }
@@ -912,10 +938,21 @@ impl Interceptor for Fixture {
                         format!("the fixture refuses {path}"),
                     ))
                 }),
-                Answer::Body(body, content_type) => {
+                Answer::Body {
+                    body,
+                    content_type,
+                    delay,
+                } => {
                     let body = body.clone();
                     let content_type = content_type.clone();
+                    let delay = *delay;
                     Box::pin(async move {
+                        // Held on the io runtime, so the page thread is not
+                        // blocked by a slow origin — this is the same wait a
+                        // real one would impose.
+                        if !delay.is_zero() {
+                            tokio::time::sleep(delay).await;
+                        }
                         Interception::Fulfill(fulfilled(StatusCode::OK, body, &content_type))
                     })
                 }
