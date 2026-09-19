@@ -9,7 +9,8 @@
 //!    never see a typedef name in a type;
 //! 3. definitions are lowered. Partials are appended to their main definition,
 //!    `includes` statements append the mixin's members, operations that share a
-//!    name are grouped into overload sets, unions are named and collected, and
+//!    name are grouped into overload sets, two members that would collide in
+//!    the generated trait are rejected, unions are named and collected, and
 //!    every member is classified for the V8 fast-API path.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -300,6 +301,7 @@ impl<'a> Lowerer<'a> {
         }
 
         for interface in &mut model.interfaces {
+            check_member_collisions(interface)?;
             finish_interface(interface);
         }
         for namespace in &mut model.namespaces {
@@ -1236,6 +1238,116 @@ fn push_operation(
         fast: FastApi::Eligible,
         origin,
     }));
+}
+
+/// Rejects two members that would collide in the generated Rust trait.
+///
+/// Partials and mixins are merged before this runs, so a duplicate that only
+/// appears once an `includes` statement has copied a mixin's members is caught
+/// here instead of surfacing as a trait with two identically named methods.
+fn check_member_collisions(interface: &Interface) -> Result<()> {
+    check_duplicate_attributes(interface)?;
+    check_duplicate_operations(interface)
+}
+
+/// Rejects two attributes of the same name in one interface. WebIDL names in an
+/// interface are unique, so a mixin attribute that an interface also declares
+/// is an authoring error, not a second property.
+fn check_duplicate_attributes(interface: &Interface) -> Result<()> {
+    let mut seen: Vec<&Attribute> = Vec::new();
+    for member in &interface.members {
+        let Member::Attribute(attribute) = member else {
+            continue;
+        };
+        let Some(earlier) = seen.iter().find(|seen| seen.name == attribute.name) else {
+            seen.push(attribute);
+            continue;
+        };
+        return Err(Error::Model(format!(
+            "interface `{}` declares the attribute `{}` more than once: {}",
+            interface.name,
+            attribute.name,
+            describe_contributors(&interface.name, &earlier.origin, &attribute.origin),
+        )));
+    }
+    Ok(())
+}
+
+/// Rejects two overloads that no caller could tell apart: the same name and
+/// staticness with argument lists that agree in type, optionality and
+/// variadicness. The generator names overloads by arity alone, so such a pair
+/// would become a dead Rust method beside a live twin.
+///
+/// Overloads that differ in argument type, count or optionality are legal
+/// WebIDL and stay accepted.
+fn check_duplicate_operations(interface: &Interface) -> Result<()> {
+    for member in &interface.members {
+        let Member::Operation(group) = member else {
+            continue;
+        };
+        for (index, overload) in group.overloads.iter().enumerate() {
+            let duplicated = group.overloads[..index]
+                .iter()
+                .any(|earlier| same_signature(earlier, overload));
+            if duplicated {
+                return Err(Error::Model(format!(
+                    "interface `{}` declares the operation `{}` more than once with the \
+                     argument list `{}`; overloads must differ in argument type or count",
+                    interface.name,
+                    group.name,
+                    operation_signature(overload),
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// True when two overloads of one group carry the same argument list in every
+/// way WebIDL overload resolution can see. The argument names are deliberately
+/// ignored: they take no part in dispatch.
+fn same_signature(left: &Operation, right: &Operation) -> bool {
+    left.arguments.len() == right.arguments.len()
+        && left
+            .arguments
+            .iter()
+            .zip(&right.arguments)
+            .all(|(a, b)| a.ty == b.ty && a.optional == b.optional && a.variadic == b.variadic)
+}
+
+/// One overload's argument list, spelled for a diagnostic.
+fn operation_signature(operation: &Operation) -> String {
+    let arguments = operation
+        .arguments
+        .iter()
+        .map(|argument| {
+            let optional = if argument.optional { "optional " } else { "" };
+            let variadic = if argument.variadic { "..." } else { "" };
+            format!("{optional}{}{variadic}", argument.ty.idl_name())
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("({arguments})")
+}
+
+/// Names the two declarations that contributed a duplicate member, as
+/// precisely as the position-less syntax tree allows.
+fn describe_contributors(interface: &str, first: &MemberOrigin, second: &MemberOrigin) -> String {
+    let first = origin_description(interface, first);
+    let second = origin_description(interface, second);
+    if first == second {
+        format!("declared twice in {first}")
+    } else {
+        format!("declared in {first} and in {second}")
+    }
+}
+
+fn origin_description(interface: &str, origin: &MemberOrigin) -> String {
+    match origin {
+        MemberOrigin::Interface => format!("`interface {interface}`"),
+        MemberOrigin::Partial => format!("`partial interface {interface}`"),
+        MemberOrigin::Mixin(mixin) => format!("`mixin {mixin}` included by `{interface}`"),
+    }
 }
 
 /// Assigns overload-aware Rust names, records origins and classifies members
