@@ -12,6 +12,7 @@
 use tenta_core as _;
 
 mod host;
+mod page_engine;
 mod script_host;
 mod world;
 
@@ -22,10 +23,13 @@ use std::sync::Once;
 use tenta_js::bindings::WrapperWorld;
 use tenta_js::bindings::host::{HostContext, HostObject, SharedContext, SharedDocument};
 use tenta_js::dom::events::ScriptHost;
+use tenta_js::engine::ScriptErrorKind;
 use tenta_js::event_loop::{Clock, EventLoop, FiringRelease, MonoTime};
 
 use host::{HostState, ReadyHandler};
 use script_host::V8ScriptHost;
+
+pub use page_engine::V8EngineFactory;
 
 static PLATFORM_INIT: Once = Once::new();
 
@@ -58,6 +62,14 @@ impl std::fmt::Display for JsError {
 
 impl std::error::Error for JsError {}
 
+/// A script that did not run to completion, before [`Engine::run_inner`]
+/// attaches the wording only it can know (which limit stopped it). The kind
+/// records where the failure happened, which the message alone cannot say.
+struct ScriptFailure {
+    kind: ScriptErrorKind,
+    message: String,
+}
+
 /// One V8 isolate with a single long-lived context. This is the seed of the
 /// per-thread pooled isolate of `docs/spec/05-javascript.md` §4: it owns the
 /// isolate, is neither `Send` nor `Sync`, and is created and used on one
@@ -70,12 +82,21 @@ pub struct Engine {
     isolate: v8::OwnedIsolate,
     context: v8::Global<v8::Context>,
     heap_guard: Option<Box<HeapGuard>>,
+    // The isolate's GC epilogue callback holds a raw pointer into `gc_counter`
+    // for the same reason, and `Drop` removes it under the same discipline. A
+    // `Box`'s pointee does not move when the `Engine` is moved by value out of
+    // `build`, which is what keeps that pointer valid; a pointer into the
+    // `Engine` itself would dangle the moment `build` returned.
+    gc_counter: Box<GcCounter>,
     // The engine-independent event loop this isolate drives, plus the state the
     // host callbacks reach through the context slot. Both share the same
     // `Scheduler` and ready queue, so a `setTimeout` from script schedules into
     // the very loop `run_event_loop` drives.
     event_loop: EventLoop,
     host: Rc<HostState>,
+    // The deadline every subsequent run is given, when the page set one. `None`
+    // leaves the watchdog off, which is what one-shot evaluation wants.
+    script_timeout: Option<std::time::Duration>,
     // Present when the engine was built with a DOM document. The engine keeps
     // its own clones of the wrapper world's state (and the document) so its
     // `Drop` can drain every host and disarm every finalizer while the isolate
@@ -115,6 +136,38 @@ unsafe extern "C" fn on_near_heap_limit(
     guard.handle.terminate_execution();
     // Headroom so the interrupted allocation can complete and unwind.
     current_heap_limit + current_heap_limit / 2
+}
+
+/// How many collections this isolate has completed, bumped by a GC epilogue
+/// callback — the "after engine GC callbacks" trigger a detached-node sweep
+/// reads (`docs/spec/04-dom-and-css.md` §1.1).
+///
+/// Boxed by its owning `Engine` so its address is stable across the move out of
+/// [`Engine::build`]; see the `gc_counter` field.
+struct GcCounter {
+    epoch: std::sync::atomic::AtomicU64,
+}
+
+/// GC epilogue callback: records that a collection completed.
+///
+/// It may only bump the counter. It runs *during* collection, where touching
+/// the document, the wrapper world or any `Rc<RefCell<_>>` would either panic or
+/// hand out a recycled slot, so it dereferences one atomic and nothing else.
+/// `kGCTypeAll` deliberately over-counts: a collection that freed nothing still
+/// advances the epoch, and a spurious advance costs the sweep one pointless
+/// check, while a missed one would leave a detached node pinned.
+unsafe extern "C" fn on_gc_epilogue(
+    _isolate: v8::UnsafeRawIsolatePtr,
+    _gc_type: v8::GCType,
+    _flags: v8::GCCallbackFlags,
+    data: *mut std::os::raw::c_void,
+) {
+    // SAFETY: `data` is the pointer to the `GcCounter` boxed in the owning
+    // `Engine`, which outlives the isolate that holds this callback.
+    let counter = unsafe { &*(data as *const GcCounter) };
+    counter
+        .epoch
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 impl Engine {
@@ -188,6 +241,15 @@ impl Engine {
             guard
         });
 
+        let gc_counter = {
+            let mut counter = Box::new(GcCounter {
+                epoch: std::sync::atomic::AtomicU64::new(0),
+            });
+            let data = (&mut *counter as *mut GcCounter).cast::<std::os::raw::c_void>();
+            isolate.add_gc_epilogue_callback(on_gc_epilogue, data, v8::GCType::kGCTypeAll);
+            counter
+        };
+
         let event_loop = EventLoop::new(clock);
         let host = HostState::new(event_loop.scheduler());
 
@@ -212,8 +274,10 @@ impl Engine {
             isolate,
             context,
             heap_guard,
+            gc_counter,
             event_loop,
             host,
+            script_timeout: None,
             dom,
         };
         engine.install_script_host();
@@ -518,6 +582,16 @@ impl Engine {
         (v8::Global::new(scope, local), Some(DomWorld { state, ctx }))
     }
 
+    /// Sets the deadline every subsequent [`Self::run_script`] is given, or
+    /// clears it with `None`. The page carries this on its engine configuration
+    /// ([`tenta_js::engine::PageEngineConfig::script_timeout`]) and the engine
+    /// boundary's `run_script` takes no timeout argument, so the engine has to
+    /// remember it. One-shot evaluation ([`Self::evaluate`]) is unaffected: it
+    /// is the no-deadline path.
+    pub fn set_script_timeout(&mut self, timeout: Option<std::time::Duration>) {
+        self.script_timeout = timeout;
+    }
+
     /// Compiles and runs `source` in this engine's context. Global state set by
     /// an earlier call is still visible. A compile-time or runtime exception is
     /// returned as [`JsError`] rather than unwinding across the V8 boundary
@@ -568,11 +642,47 @@ impl Engine {
     /// The shared run path: an optional deadline watchdog, one context-scoped
     /// evaluation, then translation of a termination into the right [`JsError`]
     /// (heap-limit or deadline) and a reset so the isolate stays usable.
+    ///
+    /// A thin mapper over [`Self::run_inner`]: the message is already final by
+    /// the time a failure leaves there, so this only restates it as a
+    /// [`JsError`].
     fn run(
         &mut self,
         source: &str,
         timeout: Option<std::time::Duration>,
     ) -> Result<String, JsError> {
+        self.run_inner(source, timeout).map_err(|failure| JsError {
+            message: failure.message,
+        })
+    }
+
+    /// Runs `source` and reports only *where* it failed, for a caller at the
+    /// engine boundary that has no use for the evaluated value.
+    ///
+    /// A thin mapper over [`Self::run_inner`], as [`Self::run`] is: the body —
+    /// the watchdog, the termination reset and the heap/deadline wording — is
+    /// shared, never duplicated.
+    fn run_classified(
+        &mut self,
+        source: &str,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<(), ScriptFailure> {
+        self.run_inner(source, timeout).map(|_| ())
+    }
+
+    /// The whole run: an optional deadline watchdog, one context-scoped
+    /// compilation and evaluation, then a failure classified by *where* it
+    /// happened and worded by what stopped it.
+    ///
+    /// The heap-limit and deadline branches below are the only places that know
+    /// which limit stopped a script, so a termination carries the wording they
+    /// produce; [`Engine::run`] and [`Engine::run_classified`] both just hand it
+    /// on.
+    fn run_inner(
+        &mut self,
+        source: &str,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<String, ScriptFailure> {
         let watchdog = timeout.map(|timeout| {
             let handle = self.isolate.thread_safe_handle();
             let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
@@ -629,17 +739,22 @@ impl Engine {
         }
 
         if heap_tripped {
-            Err(JsError {
+            Err(ScriptFailure {
+                kind: ScriptErrorKind::Terminated,
                 message: "script exceeded the isolate heap limit".to_owned(),
             })
         } else if terminated && timeout.is_some() {
-            Err(JsError {
+            Err(ScriptFailure {
+                kind: ScriptErrorKind::Terminated,
                 message: format!(
                     "script execution exceeded the {:?} deadline",
                     timeout.expect("timeout is set when a deadline watchdog ran")
                 ),
             })
         } else {
+            // Anything else: the script's own syntax or uncaught exception, or a
+            // termination no limit here accounts for (`compile_and_run` words
+            // that one, and records the kind where it happened).
             outcome
         }
     }
@@ -922,31 +1037,21 @@ impl Drop for Engine {
             // disposed and before the world is drained below.
             dom.ctx.script.borrow_mut().take();
 
-            // Clean up any live snapshot wrappers first: their slab entries are
-            // held by the context and must be reclaimed.
-            let dead_snapshot_bits = dom.state.borrow_mut().take_dead_snapshots();
-            for bits in dead_snapshot_bits {
-                let snapshot_key = tenta_js::bindings::host::decode(bits).snapshot_key();
-                dom.ctx.snapshots.borrow_mut().remove(snapshot_key);
-            }
+            // Apply every piece of dead bookkeeping a finalizer recorded and no
+            // later `wrapper` call swept: `HAS_WRAPPER` for the node wrappers it
+            // collected, and the snapshot and event slab entries of the others.
+            // It must run before the `clear` below drops those lists, and it is
+            // the same function the lazy sweep and `trim_memory` use, so the
+            // three cannot drift.
+            world::reclaim_dead_bookkeeping(&dom.state, &dom.ctx);
 
-            // Symmetrically reclaim event records for wrappers a finalizer
-            // recorded but that no later `wrapper` call swept: their records are
-            // held by the context's event slab. `clear` below drops the
-            // `dead_events` list, so this final sweep must run before it.
-            let dead_event_bits = dom.state.borrow_mut().take_dead_events();
-            {
-                let mut state = dom.state.borrow_mut();
-                world::reclaim_dead_events(&mut state, &dom.ctx.events, dead_event_bits);
-            }
-
-            // Clear `HAS_WRAPPER` for every node still wrapped — the ids a
-            // finalizer already recorded AND the anchor of every live host —
-            // while the document is still borrowable and the isolate still
-            // alive, before dropping the hosts. Wrappers still live at teardown
-            // are dropped here without ever running a finalizer, so their bits
-            // must be cleared explicitly; otherwise a document that outlives
-            // the engine keeps those nodes pinned forever.
+            // Clear `HAS_WRAPPER` for every node still wrapped — the anchor of
+            // every live host (the ids a finalizer recorded were cleared just
+            // above) — while the document is still borrowable and the isolate
+            // still alive, before dropping the hosts. Wrappers still live at
+            // teardown are dropped here without ever running a finalizer, so
+            // their bits must be cleared explicitly; otherwise a document that
+            // outlives the engine keeps those nodes pinned forever.
             let ids = dom.state.borrow().wrapped_node_ids();
             if !ids.is_empty() {
                 let mut doc = dom.ctx.doc.borrow_mut();
@@ -964,6 +1069,17 @@ impl Drop for Engine {
             self.isolate
                 .remove_near_heap_limit_callback(on_near_heap_limit, 0);
         }
+        // Same reasoning for the GC epilogue callback and the `GcCounter` box:
+        // the callback has to be gone before either the isolate or the box is
+        // dropped, and the `data` pointer has to be the one it was registered
+        // with — V8 matches the pair, not the function alone. The pointer is
+        // recomputed from the box, which has not moved.
+        self.isolate.remove_gc_epilogue_callback(
+            on_gc_epilogue,
+            (&*self.gc_counter as *const GcCounter)
+                .cast_mut()
+                .cast::<std::os::raw::c_void>(),
+        );
     }
 }
 
@@ -1056,48 +1172,66 @@ fn install_dom_exception(scope: &mut v8::PinScope) {
 fn compile_and_run(
     tc: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>,
     source: &str,
-) -> Result<String, JsError> {
+) -> Result<String, ScriptFailure> {
     let Some(code) = v8::String::new(tc, source) else {
-        return Err(JsError {
+        return Err(ScriptFailure {
+            kind: ScriptErrorKind::Syntax,
             message: "source string exceeds the V8 string length limit".to_owned(),
         });
     };
 
     let Some(script) = v8::Script::compile(tc, code, None) else {
-        return Err(exception(tc));
+        // A compile that was terminated returns `None` just as one that did not
+        // parse does, and the termination flag is the only thing that tells them
+        // apart: reporting a stop as a syntax error would blame the page for the
+        // engine's own limit.
+        let kind = if tc.has_terminated() {
+            ScriptErrorKind::Terminated
+        } else {
+            ScriptErrorKind::Syntax
+        };
+        return Err(ScriptFailure {
+            kind,
+            message: exception_message(tc),
+        });
     };
     let Some(value) = script.run(tc) else {
         // A terminated run has no exception value; report it as termination so
-        // the caller (`Engine::run`) can classify it as a deadline or heap-limit
-        // stop instead of a misleading "uncaught exception with no value".
+        // the caller (`Engine::run_inner`) can classify it as a deadline or
+        // heap-limit stop instead of a misleading "uncaught exception with no
+        // value".
         if tc.has_terminated() {
-            return Err(JsError {
+            return Err(ScriptFailure {
+                kind: ScriptErrorKind::Terminated,
                 message: "script execution was terminated".to_owned(),
             });
         }
-        return Err(exception(tc));
+        return Err(ScriptFailure {
+            kind: ScriptErrorKind::Uncaught,
+            message: exception_message(tc),
+        });
     };
 
     match value.to_string(tc) {
         Some(string) => Ok(string.to_rust_string_lossy(tc)),
-        None => Err(JsError {
+        None => Err(ScriptFailure {
+            kind: ScriptErrorKind::Uncaught,
             message: "result value could not be coerced to a string".to_owned(),
         }),
     }
 }
 
-/// Extracts the pending exception message from a caught [`v8::TryCatch`].
-fn exception(tc: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>) -> JsError {
+/// Extracts the pending exception message from a caught [`v8::TryCatch`]. The
+/// kind is the caller's to supply: the same wording is reachable from a compile
+/// and from a run, and only the call site knows which it was.
+fn exception_message(tc: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>) -> String {
     let Some(value) = tc.exception() else {
-        return JsError {
-            message: "uncaught exception with no value".to_owned(),
-        };
+        return "uncaught exception with no value".to_owned();
     };
-    let message = value
+    value
         .to_string(tc)
         .map(|string| string.to_rust_string_lossy(tc))
-        .unwrap_or_else(|| "uncaught exception".to_owned());
-    JsError { message }
+        .unwrap_or_else(|| "uncaught exception".to_owned())
 }
 
 #[cfg(test)]

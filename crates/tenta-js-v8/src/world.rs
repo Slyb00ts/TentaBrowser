@@ -216,6 +216,44 @@ pub fn reclaim_dead_events(
     }
 }
 
+/// Applies every piece of dead bookkeeping a finalizer has recorded: clears
+/// `HAS_WRAPPER` for the node wrappers it collected, and reclaims the slab
+/// entries of the collected snapshot and event wrappers.
+///
+/// This is *the* implementation of "dead bookkeeping is applied", shared by
+/// [`V8World::wrapper`]'s lazy sweep, the engine's `trim_memory` and its
+/// teardown, so the three cannot drift apart.
+///
+/// Call it where no document borrow is held and outside any finalizer: a
+/// finalizer records ids only precisely because this is the safe point to
+/// borrow the document ([`WorldState::take_dead`]).
+pub fn reclaim_dead_bookkeeping(state: &RefCell<WorldState>, ctx: &SharedContext) {
+    {
+        let mut state_mut = state.borrow_mut();
+        let dead = state_mut.take_dead();
+        if !dead.is_empty() {
+            let mut doc = ctx.doc.borrow_mut();
+            for id in dead {
+                doc.set_has_wrapper(id, false);
+            }
+        }
+
+        // Remove dead snapshot wrappers' slab entries and disarm their
+        // tombstone `Weak`s.
+        let dead_snapshot_bits = state_mut.take_dead_snapshots();
+        for bits in dead_snapshot_bits {
+            let snapshot_key = decode(bits).snapshot_key();
+            ctx.snapshots.borrow_mut().remove(snapshot_key);
+            state_mut.wrappers.remove(&bits);
+        }
+
+        // Remove dead event wrappers' event-slab records, release any interned
+        // `CustomEvent` detail they owned, and disarm tombstone `Weak`s.
+        let dead_event_bits = state_mut.take_dead_events();
+        reclaim_dead_events(&mut state_mut, &ctx.events, dead_event_bits);
+    }
+}
+
 impl WrapperWorld for V8World {
     fn wrapper<'s>(
         &self,
@@ -224,38 +262,15 @@ impl WrapperWorld for V8World {
         handle: u64,
     ) -> Option<v8::Local<'s, v8::Object>> {
         // Reflect wrappers collected since the last call into the document now,
-        // where no document borrow is held. The finalizer only records ids (it
-        // must not borrow the document during GC), so this is the safe point to
-        // apply `set_has_wrapper(false)`.
+        // where no document borrow is held, and reclaim their slab records. The
+        // finalizer only records ids (it must not borrow the document during
+        // GC), so this is the safe point to apply the bookkeeping.
         //
         // INVARIANT: nothing on this method's path may call back into
         // `handle_to_v8` (which removes the wrapper-world slot around this
         // call). Wrapper creation only instantiates a template and attaches a
         // host — it never runs script or a getter — so re-entry cannot happen.
-        let mut state_mut = self.state.borrow_mut();
-        let dead = state_mut.take_dead();
-        if !dead.is_empty() {
-            let mut doc = self.ctx.doc.borrow_mut();
-            for id in dead {
-                doc.set_has_wrapper(id, false);
-            }
-        }
-
-        // Clean up dead snapshot wrappers: remove their slab entries and disarm tombstone Weaks.
-        let dead_snapshot_bits = state_mut.take_dead_snapshots();
-        for bits in dead_snapshot_bits {
-            let snapshot_key = decode(bits).snapshot_key();
-            self.ctx.snapshots.borrow_mut().remove(snapshot_key);
-            // Also remove the tombstone Weak so it doesn't accumulate.
-            state_mut.wrappers.remove(&bits);
-        }
-
-        // Clean up dead event wrappers: remove their event-slab records,
-        // release any interned `CustomEvent` detail they owned, and disarm
-        // tombstone Weaks.
-        let dead_event_bits = state_mut.take_dead_events();
-        reclaim_dead_events(&mut state_mut, &self.ctx.events, dead_event_bits);
-        drop(state_mut);
+        reclaim_dead_bookkeeping(&self.state, &self.ctx);
 
         // Fast path: a live wrapper for this handle is revived and reused, so a
         // host is created at most once per live id. The borrow is released with
