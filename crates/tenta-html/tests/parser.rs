@@ -568,6 +568,146 @@ fn a_short_byte_fed_document_is_not_truncated_by_the_pause() {
 }
 
 #[test]
+fn a_short_byte_fed_document_reports_its_script_from_feed_last() {
+    // Regression: a body under the sniffing window is buffered by `feed`, so a
+    // driver that ends its stream at `feed` first tokenizes the whole document
+    // inside `finish` — where pausing is off — and silently runs no script.
+    // `feed_last` is the end-of-stream entry point that still pauses.
+    let html = "<p>a<script>var x = 1;</script><p>b";
+    assert!(
+        html.len() < 1024,
+        "the point of this test is the sniff buffer"
+    );
+
+    let mut parser = scripting_parser();
+    assert_eq!(parser.feed(html.as_bytes()), ParseStatus::Continue);
+
+    assert_eq!(
+        parser.feed_last(b""),
+        ParseStatus::Script,
+        "a short byte-fed document must report its script, not swallow it"
+    );
+    let script = parser
+        .take_pending_script()
+        .expect("the pause names the script element");
+    assert!(
+        matches!(&parser.sink().nodes[script].data, NodeData::Element { name, .. }
+            if name.local == tenta_core::atom::atoms::SCRIPT),
+        "the handle must be the script element in the document"
+    );
+
+    while parser.resume() == ParseStatus::Script {
+        parser.take_pending_script();
+    }
+    let tree = parser.finish();
+    assert_eq!(serialize(&tree, 0, true), parse_whole(html));
+}
+
+/// The byte-stream counterpart of [`drive_to_end`]: every chunk but the last
+/// through `feed`, the last through `feed_last`, driving the pause to
+/// completion after each. Returns the local name of every script paused on, in
+/// the order the parser stopped.
+fn drive_bytes_to_end(parser: &mut Parser<'_, Tree>, chunks: &[&[u8]]) -> Vec<String> {
+    let mut scripts = Vec::new();
+    let last = chunks.len().checked_sub(1);
+    for (index, chunk) in chunks.iter().enumerate() {
+        let mut status = if Some(index) == last {
+            parser.feed_last(chunk)
+        } else {
+            parser.feed(chunk)
+        };
+        while status == ParseStatus::Script {
+            let handle = parser
+                .take_pending_script()
+                .expect("a paused parser names its script");
+            scripts.push(handle.to_string());
+            status = parser.resume();
+        }
+    }
+    scripts
+}
+
+#[test]
+fn a_short_multi_chunk_byte_feed_reports_every_script_from_the_last_chunk() {
+    // The whole body is under the sniff window, so every chunk but the last
+    // only buffers; the final `feed_last` is where it is first tokenized. It
+    // must report each script in turn, and the markup around them must all
+    // reach the tree.
+    let html = "<p>before<script>1</script><p>middle<script>2</script><p>after";
+    assert!(
+        html.len() < 1024,
+        "the point of this test is the sniff buffer"
+    );
+    let bytes = html.as_bytes();
+    let chunks: Vec<&[u8]> = bytes.chunks(7).collect();
+
+    let mut parser = scripting_parser();
+    let scripts = drive_bytes_to_end(&mut parser, &chunks);
+    assert_eq!(scripts.len(), 2, "two scripts, two pauses");
+
+    let tree = parser.finish();
+    let serialized = serialize(&tree, 0, true);
+    for fragment in ["before", "middle", "after"] {
+        assert!(
+            serialized.contains(fragment),
+            "{fragment} missing from {serialized}"
+        );
+    }
+    assert_eq!(
+        serialized,
+        parse_whole(html),
+        "pausing must not change the tree"
+    );
+}
+
+/// A document whose `<meta charset>` sits past the pre-scan window — so it is a
+/// runtime encoding *indicator*, not something the sniff already used. The
+/// optional `<script>` comes before the padding.
+fn late_meta_document(with_script: bool) -> String {
+    let mut html = String::from("<!doctype html><html><head>");
+    if with_script {
+        html.push_str("<script>var x = 1;</script>");
+    }
+    // Push the <meta> past the 1024-byte pre-scan window.
+    html.push_str(&"<!-- padding -->".repeat(80));
+    html.push_str("<meta charset=\"iso-8859-2\"><title>t</title></head><body><p>a");
+    assert!(
+        html.find("<meta").expect("meta") > 1024,
+        "the <meta> must sit past the pre-scan window"
+    );
+    html
+}
+
+#[test]
+fn a_taken_script_makes_a_late_meta_charset_ineffective() {
+    // Mirror of `a_late_meta_charset_reports_an_encoding_change`: the same
+    // contradicting declaration, but with a script taken before it. Handing a
+    // script out makes the encoding certain, so the declaration is dropped
+    // rather than triggering a restart that would run the page's scripts twice.
+    let html = late_meta_document(true);
+
+    let mut parser = scripting_parser();
+    assert_eq!(parser.feed(html.as_bytes()), ParseStatus::Script);
+    let _script = parser.take_pending_script().expect("the script");
+
+    // The <meta> is tokenized here, after the script was handed out.
+    assert_eq!(
+        parser.resume(),
+        ParseStatus::Continue,
+        "a contradicting <meta charset> after a taken script must not restart"
+    );
+
+    // Contrast: with no script taken nothing is certain, so the very same
+    // declaration still reports the change.
+    let mut plain = Parser::new(Tree::new(), ParserOptions::default());
+    let status = plain.feed(late_meta_document(false).as_bytes());
+    let ParseStatus::EncodingChanged(encoding) = status else {
+        panic!("expected an encoding change, got {status:?}");
+    };
+    assert_eq!(encoding, encoding_rs::ISO_8859_2);
+}
+
+#[test]
 fn an_empty_feed_between_chunks_keeps_the_character_reference_tail() {
     // The retained tail is what lets a character reference un-consume across a
     // chunk boundary. A feed with nothing new in it (and `resume` on an

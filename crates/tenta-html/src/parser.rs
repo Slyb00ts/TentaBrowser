@@ -48,6 +48,13 @@ pub struct ParserOptions<'cb> {
     /// [`ParseStatus::Script`]. Only a caller that can actually run the script
     /// sets this; a Tier 1 caller leaves it off and the parser walks past
     /// script elements as it does today.
+    ///
+    /// A script is only reported once the encoding sniff has completed, since
+    /// bytes buffered for sniffing are not tokenized. A document shorter than
+    /// the sniff window therefore reports its scripts from [`Parser::feed_last`]
+    /// (or the [`Parser::resume`] that follows it), never from
+    /// [`Parser::feed`]; a driver that stops feeding at `feed` silently runs
+    /// no script of such a page.
     pub pause_on_script: bool,
     /// The context element for the fragment parsing algorithm. When set, the
     /// parser creates the element in the sink and parses a fragment.
@@ -136,6 +143,12 @@ pub struct Parser<'cb, S: TreeSink> {
     restart: Option<&'static Encoding>,
     /// The script element the parse is paused on, until the caller takes it.
     pending_script: Option<S::Handle>,
+    /// Whether a script has been handed out. It makes the encoding certain, so
+    /// it is also what explains a later `<meta charset>` being dropped.
+    script_handed_out: bool,
+    /// Whether an end-of-stream feed has already flushed the decoder. A second
+    /// flush would use a finished `encoding_rs` decoder, which panics.
+    saw_last: bool,
 }
 
 impl<'cb, S: TreeSink> Parser<'cb, S> {
@@ -218,6 +231,8 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
             stopped: false,
             restart: None,
             pending_script: None,
+            script_handed_out: false,
+            saw_last: false,
         }
     }
 
@@ -257,6 +272,7 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
         // restart. WHATWG's answer is to navigate again; the parser cannot do
         // that, and mojibake beats running a page's scripts twice.
         self.confidence = Confidence::Certain;
+        self.script_handed_out = true;
         Some(script)
     }
 
@@ -314,8 +330,37 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
     }
 
     /// Feeds raw bytes, decoding them with the sniffed or configured encoding.
+    ///
+    /// A driver that still wants scripts run ends its byte stream through
+    /// [`Self::feed_last`], drives each pause (take the script, run it,
+    /// [`Self::resume`]) and calls [`Self::finish`] only once neither
+    /// `feed_last` nor `resume` returns [`ParseStatus::Script`].
+    ///
+    /// This is the middle of that stream, so it may report
+    /// [`ParseStatus::Script`] — but only once the encoding sniff has
+    /// completed. While bytes are still being buffered for sniffing nothing is
+    /// tokenized, so a document shorter than the sniff window reports its
+    /// scripts from [`Self::feed_last`], never from here.
     pub fn feed(&mut self, bytes: &[u8]) -> ParseStatus {
         self.feed_bytes(bytes, false)
+    }
+
+    /// Feeds the final bytes of the stream, with the pause left enabled.
+    ///
+    /// The end-of-stream entry point for a driver that runs scripts: it is
+    /// [`Self::feed`] with the stream known to be over, so a short document's
+    /// encoding sniff is allowed to complete and [`ParseStatus::Script`] is
+    /// still reported. A document whose whole body is shorter than the sniff
+    /// window is only tokenized here, which is why such a page reports every
+    /// script from this call (or the [`Self::resume`] that follows it) rather
+    /// than from `feed`.
+    ///
+    /// Unlike [`Self::finish`], this neither abandons a pending script nor
+    /// drains with pausing disabled, so it can return [`ParseStatus::Script`].
+    /// The driver drives those pauses and calls `finish` only once `feed_last`
+    /// and `resume` have stopped returning [`ParseStatus::Script`].
+    pub fn feed_last(&mut self, bytes: &[u8]) -> ParseStatus {
+        self.feed_bytes(bytes, true)
     }
 
     /// Feeds already decoded text. The encoding is reported as UTF-8.
@@ -339,6 +384,16 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
     }
 
     /// Ends the parse and returns the tree.
+    ///
+    /// This is "I am done, give me the tree": it abandons any pending script
+    /// and parses the buffered tail with pausing turned off. A driver that runs
+    /// scripts must have driven its pauses first — ended the byte stream
+    /// through [`Self::feed_last`] and resumed until no [`ParseStatus::Script`]
+    /// was reported — because a script still unrun at this point is skipped.
+    /// Pausing is turned off for the drain rather than just clearing the
+    /// handle: clearing it alone would let the drain stop on the *next* script
+    /// and lose both the rest of the document and the end-of-file steps that
+    /// pop the open elements.
     pub fn finish(mut self) -> S::Output {
         // Finishing abandons any pending script: the caller is asking for the
         // tree, so the buffered tail is parsed rather than dropped. Pausing is
@@ -347,7 +402,11 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
         // the document and the end-of-file steps that pop the open elements.
         self.options.pause_on_script = false;
         self.pending_script = None;
-        if self.restart.is_none() && !self.stopped {
+        // A `feed_last` has already completed the sniff and flushed the
+        // decoder, so there is nothing left to drain with `last = true` — and
+        // flushing a finished `encoding_rs` decoder panics. The end-of-stream
+        // steps below still have to run either way.
+        if self.restart.is_none() && !self.stopped && !self.saw_last {
             let _ = self.feed_bytes(b"", true);
         }
         if self.restart.is_none() && !self.stopped {
@@ -367,6 +426,9 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
         }
         if self.stopped {
             return ParseStatus::Stopped;
+        }
+        if last {
+            self.saw_last = true;
         }
 
         // Buffer until there is enough input to run the sniffing algorithm.
@@ -506,6 +568,21 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
     /// with, or `None` when the declaration can be ignored.
     fn handle_encoding_indicator(&mut self, label: &str) -> Option<&'static Encoding> {
         if self.confidence == Confidence::Certain {
+            // Dropping the declaration is the documented trade-off, but it
+            // leaves the resulting mojibake with no other trace, so say why.
+            if self.script_handed_out {
+                tracing::debug!(
+                    label,
+                    "dropped a <meta charset> declaration: a script has already been handed \
+                     out, so the encoding is certain and a restart would run that page's \
+                     scripts a second time"
+                );
+            } else {
+                tracing::debug!(
+                    label,
+                    "ignored a <meta charset> declaration: the encoding is already certain"
+                );
+            }
             return None;
         }
         let declared = encoding_from_meta_label(label)?;

@@ -2279,6 +2279,7 @@ dependencies = [
  "parking_lot",
  "tenta-core",
  "tenta-dom",
+ "tenta-js",
  "tenta-net",
  "tenta-page",
  "tenta-testutil",
@@ -2371,6 +2372,7 @@ dependencies = [
  "memchr",
  "serde_json",
  "tenta-core",
+ "tracing",
 ]
 
 [[package]]
@@ -2498,6 +2500,7 @@ dependencies = [
  "tenta-core",
  "tenta-dom",
  "tenta-html",
+ "tenta-js",
  "tenta-net",
  "tokio",
  "tracing",
@@ -2582,6 +2585,8 @@ dependencies = [
  "tenta-browser",
  "tenta-core",
  "tenta-dom",
+ "tenta-js",
+ "tenta-js-v8",
  "tenta-net",
  "tenta-page",
  "tenta-search",
