@@ -5,6 +5,11 @@
 //! `store_value` handed back), and the only way to run one is through the
 //! [`ScriptHost`] the engine installs on the [`HostContext`].
 //!
+//! A listener is registered on a [`TargetKey`] — a node, or the window. The
+//! window is not a node, so it cannot be keyed by [`NodeId`] like an element;
+//! it is still the outermost entry of every event path, and it is what makes
+//! `window.addEventListener('click', …)` fire for a click on a descendant.
+//!
 //! # Borrow discipline (invariant A5)
 //!
 //! No `RefCell` borrow of the document, the listener table or the event slab is
@@ -19,7 +24,7 @@ use std::collections::HashMap;
 use tenta_core::{NodeId, NodeRef};
 
 use crate::bindings::JsError;
-use crate::bindings::host::{HostContext, encode_event, encode_node};
+use crate::bindings::host::{HostContext, encode_event, encode_node, encode_window};
 
 #[cfg(test)]
 mod tests;
@@ -342,10 +347,65 @@ struct TargetListeners {
     listeners: Vec<Listener>,
 }
 
-/// The per-target listener lists for one world, keyed by node id.
+/// What a listener can be registered on: a node, or the window.
+///
+/// The window is not a node — it has no arena slot, no id and no place in the
+/// tree — so it cannot be keyed by [`NodeId`] the way an element is. It is
+/// still a target, and it is the outermost entry of every event path, which is
+/// what makes `window.addEventListener('click', …)` fire for a click on a
+/// descendant.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum TargetKey {
+    Node(NodeId),
+    Window,
+}
+
+impl From<NodeId> for TargetKey {
+    fn from(id: NodeId) -> TargetKey {
+        TargetKey::Node(id)
+    }
+}
+
+/// The target of a dispatch: the table key it is keyed under, plus the handle
+/// bits script sees as `event.target`.
+///
+/// The two are carried together on purpose. The key is a [`TargetKey`], because
+/// that is all `addEventListener` has; the bits are a full handle — a node
+/// handle with its generation, or the window's payload-free handle — because
+/// that is what script resolves back to an object, so a handle taken before a
+/// node was freed does not silently become the node that reused its slot.
+///
+/// A dispatch walks a path of these, the target first; the target is also the
+/// only entry whose key is used for script-visible identity, so this type is
+/// introduced at the call site and reused as the head of the path.
+#[derive(Clone, Copy)]
+pub struct DispatchTarget {
+    target: TargetKey,
+    bits: u64,
+}
+
+impl DispatchTarget {
+    /// Dispatches at `node`, whose handle bits carry the generation script sees.
+    pub fn node(node: NodeRef) -> DispatchTarget {
+        DispatchTarget {
+            target: TargetKey::Node(node.id),
+            bits: encode_node(node),
+        }
+    }
+
+    /// Dispatches at the window, which has no arena slot and no id.
+    pub fn window() -> DispatchTarget {
+        DispatchTarget {
+            target: TargetKey::Window,
+            bits: encode_window(),
+        }
+    }
+}
+
+/// The per-target listener lists for one world.
 #[derive(Default)]
 pub struct ListenerTable {
-    targets: HashMap<NodeId, TargetListeners>,
+    targets: HashMap<TargetKey, TargetListeners>,
     next_id: u64,
 }
 
@@ -355,13 +415,26 @@ impl ListenerTable {
         Self::default()
     }
 
+    /// Adds a listener for the node `target`. See [`Self::add_at`].
+    pub fn add(
+        &mut self,
+        target: NodeId,
+        type_: String,
+        callback: CallbackRef,
+        capture: bool,
+        once: bool,
+        passive: bool,
+    ) -> Option<ListenerId> {
+        self.add_at(target.into(), type_, callback, capture, once, passive)
+    }
+
     /// Adds a listener for `target`. Returns the new listener's id, or `None`
     /// when an identical `(type, callback, capture)` entry already exists (the
     /// DOM "add an event listener" duplicate rule) — in that case the caller
     /// must release `callback`.
-    pub fn add(
+    pub fn add_at(
         &mut self,
-        target: NodeId,
+        target: TargetKey,
         type_: String,
         callback: CallbackRef,
         capture: bool,
@@ -389,11 +462,23 @@ impl ListenerTable {
         Some(id)
     }
 
-    /// Removes the listener matching `(type, callback, capture)` for `target`
-    /// and returns its callback so the caller can release it.
+    /// Removes the listener matching `(type, callback, capture)` for node
+    /// `target` and returns its callback so the caller can release it.
     pub fn remove(
         &mut self,
         target: NodeId,
+        type_: &str,
+        callback: CallbackRef,
+        capture: bool,
+    ) -> Option<CallbackRef> {
+        self.remove_at(target.into(), type_, callback, capture)
+    }
+
+    /// Removes the listener matching `(type, callback, capture)` for `target`
+    /// and returns its callback so the caller can release it.
+    pub fn remove_at(
+        &mut self,
+        target: TargetKey,
         type_: &str,
         callback: CallbackRef,
         capture: bool,
@@ -407,25 +492,46 @@ impl ListenerTable {
         Some(removed.callback)
     }
 
-    /// Removes the listener with `id` for `target`, returning its callback.
+    /// Removes the listener with `id` for node `target`. See [`Self::remove_by_id_at`].
     pub fn remove_by_id(&mut self, target: NodeId, id: ListenerId) -> Option<CallbackRef> {
+        self.remove_by_id_at(target.into(), id)
+    }
+
+    /// Removes the listener with `id` for `target`, returning its callback.
+    pub fn remove_by_id_at(&mut self, target: TargetKey, id: ListenerId) -> Option<CallbackRef> {
         let entry = self.targets.get_mut(&target)?;
         let pos = entry.listeners.iter().position(|l| l.id == id)?;
         Some(entry.listeners.remove(pos).callback)
     }
 
-    /// Whether a listener with `id` is still registered for `target`.
+    /// Whether a listener with `id` is still registered for node `target`.
     pub fn contains(&self, target: NodeId, id: ListenerId) -> bool {
+        self.contains_at(target.into(), id)
+    }
+
+    /// Whether a listener with `id` is still registered for `target`.
+    pub fn contains_at(&self, target: TargetKey, id: ListenerId) -> bool {
         self.targets
             .get(&target)
             .is_some_and(|e| e.listeners.iter().any(|l| l.id == id))
     }
 
-    /// A snapshot of the `(id, callback, once, passive)` of every listener for
-    /// `target` matching `type_` and `capture`, in registration order.
+    /// A snapshot of the `(id, callback, once, passive)` of every listener on
+    /// node `target`. See [`Self::snapshot_at`].
     pub fn snapshot(
         &self,
         target: NodeId,
+        type_: &str,
+        capture: bool,
+    ) -> Vec<(ListenerId, CallbackRef, bool, bool)> {
+        self.snapshot_at(target.into(), type_, capture)
+    }
+
+    /// A snapshot of the `(id, callback, once, passive)` of every listener for
+    /// `target` matching `type_` and `capture`, in registration order.
+    pub fn snapshot_at(
+        &self,
+        target: TargetKey,
         type_: &str,
         capture: bool,
     ) -> Vec<(ListenerId, CallbackRef, bool, bool)> {
@@ -452,9 +558,14 @@ impl ListenerTable {
         self.len() == 0
     }
 
+    /// Removes and returns every callback registered for node `target`.
+    pub fn drain_target(&mut self, target: NodeId) -> Vec<CallbackRef> {
+        self.drain_target_at(target.into())
+    }
+
     /// Removes and returns every callback registered for `target` (used when a
     /// target is torn down).
-    pub fn drain_target(&mut self, target: NodeId) -> Vec<CallbackRef> {
+    pub fn drain_target_at(&mut self, target: TargetKey) -> Vec<CallbackRef> {
         self.targets
             .remove(&target)
             .map(|e| e.listeners.into_iter().map(|l| l.callback).collect())
@@ -479,6 +590,19 @@ pub fn dispatch(
     key: EventKey,
     trusted: bool,
 ) -> Result<bool, JsError> {
+    dispatch_at(ctx, DispatchTarget::node(target), key, trusted)
+}
+
+/// Dispatches `key` at `target`, walking the path from the window down to the
+/// target and back up. The target is a [`DispatchTarget`] rather than a node so
+/// the window can be one: `window.dispatchEvent(new Event("x"))` has no node to
+/// name, and its path is the window alone.
+pub fn dispatch_at(
+    ctx: &HostContext,
+    target: DispatchTarget,
+    key: EventKey,
+    trusted: bool,
+) -> Result<bool, JsError> {
     // Step 1: validate + set up, under a short borrow of the event slab.
     let type_ = {
         let mut events = ctx.events.borrow_mut();
@@ -492,26 +616,34 @@ pub fn dispatch(
         }
         record.flags.dispatch = true;
         record.is_trusted = trusted;
-        record.target = Some(encode_node(target));
+        record.target = Some(target.bits);
         record.flags.stop_propagation = false;
         record.flags.stop_immediate = false;
         record.type_.clone()
     };
 
     // Step 2: build the propagation path under a short borrow of the document.
-    let path: Vec<NodeRef> = {
+    // The window is the outermost entry: it is not an ancestor in the tree, but
+    // it is the document's parent in the event path, which is what makes a
+    // listener on `window` fire for an event on a descendant. A dispatch *at*
+    // the window has no ancestors to walk and no window above it, so its path is
+    // the target alone.
+    let path: Vec<PathEntry> = {
         let doc = ctx.doc.borrow();
         let mut path = Vec::new();
         path.push(target);
-        for ancestor in doc.ancestors(target.id) {
-            path.push(doc.node_ref(ancestor));
+        if let TargetKey::Node(id) = target.target {
+            for ancestor in doc.ancestors(id) {
+                path.push(PathEntry::node(doc.node_ref(ancestor)));
+            }
+            path.push(PathEntry::window());
         }
         path
     };
     let bubbles = {
         let mut events = ctx.events.borrow_mut();
         if let Some(record) = events.get_mut(key) {
-            record.path = path.iter().map(|n| encode_node(*n)).collect();
+            record.path = path.iter().map(|entry| entry.bits).collect();
             record.bubbles
         } else {
             false
@@ -523,13 +655,14 @@ pub fn dispatch(
 
     if let Some(script) = script {
         // Step 4: capture pass, from the root down to and including the target.
-        for node in path.iter().rev() {
-            let phase = if node.id == target.id {
+        for entry in path.iter().rev() {
+            let phase = if entry.target == target.target {
                 PHASE_AT_TARGET
             } else {
                 PHASE_CAPTURING
             };
-            let stop = invoke_listeners(ctx, &*script, *node, &type_, phase, true, key, event_bits);
+            let stop =
+                invoke_listeners(ctx, &*script, *entry, &type_, phase, true, key, event_bits);
             if stop {
                 break;
             }
@@ -538,17 +671,17 @@ pub fn dispatch(
         // Step 5: bubble pass, from the target up to the root (ancestors only
         // when the event bubbles).
         if !propagation_stopped(ctx, key) {
-            for (index, node) in path.iter().enumerate() {
+            for (index, entry) in path.iter().enumerate() {
                 if index > 0 && !bubbles {
                     break;
                 }
-                let phase = if node.id == target.id {
+                let phase = if entry.target == target.target {
                     PHASE_AT_TARGET
                 } else {
                     PHASE_BUBBLING
                 };
                 let stop =
-                    invoke_listeners(ctx, &*script, *node, &type_, phase, false, key, event_bits);
+                    invoke_listeners(ctx, &*script, *entry, &type_, phase, false, key, event_bits);
                 if stop {
                     break;
                 }
@@ -571,7 +704,11 @@ pub fn dispatch(
     }
 }
 
-/// Runs the listeners registered on `node` for `(type_, capture)`, in order,
+/// One entry of a propagation path. The target is the first entry; the rest are
+/// its ancestors, then the window.
+type PathEntry = DispatchTarget;
+
+/// Runs the listeners registered on `target` for `(type_, capture)`, in order,
 /// honouring `once`/`passive`/removal-during-dispatch and
 /// `stopImmediatePropagation`. Returns whether the "stop propagation" flag is
 /// set afterwards.
@@ -579,14 +716,15 @@ pub fn dispatch(
 fn invoke_listeners(
     ctx: &HostContext,
     script: &dyn ScriptHost,
-    node: NodeRef,
+    entry: PathEntry,
     type_: &str,
     phase: u16,
     capture: bool,
     key: EventKey,
     event_bits: u64,
 ) -> bool {
-    let snapshot = ctx.listeners.borrow().snapshot(node.id, type_, capture);
+    let target = entry.target;
+    let snapshot = ctx.listeners.borrow().snapshot_at(target, type_, capture);
     if snapshot.is_empty() {
         return propagation_stopped(ctx, key);
     }
@@ -594,26 +732,25 @@ fn invoke_listeners(
     {
         let mut events = ctx.events.borrow_mut();
         if let Some(record) = events.get_mut(key) {
-            record.current_target = Some(encode_node(node));
+            record.current_target = Some(entry.bits);
             record.phase = phase;
         }
     }
 
-    let current_target_bits = encode_node(node);
     for (id, callback, once, passive) in snapshot {
         // Skip a listener removed by an earlier listener in this dispatch.
-        if !ctx.listeners.borrow().contains(node.id, id) {
+        if !ctx.listeners.borrow().contains_at(target, id) {
             continue;
         }
         if once {
-            ctx.listeners.borrow_mut().remove_by_id(node.id, id);
+            ctx.listeners.borrow_mut().remove_by_id_at(target, id);
         }
         if passive {
             set_passive(ctx, key, true);
         }
 
         // No borrow is held across the call into script.
-        script.invoke_listener(callback, current_target_bits, event_bits);
+        script.invoke_listener(callback, entry.bits, event_bits);
 
         if passive {
             set_passive(ctx, key, false);

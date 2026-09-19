@@ -32,7 +32,8 @@ use super::{
     Realm, SVGElementOps, Text, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
 };
 use crate::dom::events::{
-    CallbackRef, EventKey, EventKind, EventRecord, EventSlab, ListenerTable, ScriptHost, dispatch,
+    CallbackRef, DispatchTarget, EventKey, EventKind, EventRecord, EventSlab, ListenerTable,
+    ScriptHost, TargetKey, dispatch, dispatch_at,
 };
 use crate::event_loop::SharedClock;
 
@@ -246,6 +247,18 @@ pub enum HostObject {
         /// A generational reference to the element whose `style` the block reflects.
         owner: NodeRef,
     },
+    /// The window: the browsing context itself, not a node.
+    ///
+    /// It is the only host with no arena slot and no id, because the window is
+    /// the JavaScript global object — `window`, `self`, `top` and `globalThis`
+    /// are one object, so a wrapper for it cannot be a fresh instance of a
+    /// template. The world resolves its handle to that global object instead of
+    /// instantiating anything (see `WrapperWorld::wrapper`), which is why this
+    /// variant carries nothing but the context.
+    Window {
+        /// The context whose browsing context this is.
+        ctx: SharedContext,
+    },
 }
 
 impl HostObject {
@@ -289,6 +302,11 @@ impl HostObject {
         Self::Event { ctx, key }
     }
 
+    /// Builds the window host for `ctx`.
+    pub fn window(ctx: SharedContext) -> Self {
+        Self::Window { ctx }
+    }
+
     /// The shared context this host belongs to.
     pub fn context(&self) -> &SharedContext {
         match self {
@@ -299,7 +317,8 @@ impl HostObject {
             | HostObject::StaticHtmlCollection { ctx, .. }
             | HostObject::Event { ctx, .. }
             | HostObject::TokenList { ctx, .. }
-            | HostObject::Style { ctx, .. } => ctx,
+            | HostObject::Style { ctx, .. }
+            | HostObject::Window { ctx } => ctx,
         }
     }
 
@@ -344,6 +363,7 @@ impl HostObject {
             HostObject::Event { key, .. } => encode_event(*key),
             HostObject::TokenList { owner, .. } => encode_token_list(*owner),
             HostObject::Style { owner, .. } => encode_style(*owner),
+            HostObject::Window { .. } => encode_window(),
         }
     }
 
@@ -362,6 +382,36 @@ impl HostObject {
             HostObject::StaticNodeList { ctx, .. } => (&ctx.doc, NodeId::NONE),
             HostObject::StaticHtmlCollection { ctx, .. } => (&ctx.doc, NodeId::NONE),
             HostObject::Event { ctx, .. } => (&ctx.doc, NodeId::NONE),
+            // The window is not in the tree, so there is no node to anchor to.
+            // It only reaches the anchored paths if a generated operation that
+            // needs a node is somehow reachable on the window, which none is:
+            // the window's own members are installed natively.
+            HostObject::Window { ctx } => (&ctx.doc, NodeId::NONE),
+        }
+    }
+
+    /// The event target this host stands for, or `None` for a host that cannot
+    /// be one.
+    ///
+    /// Only a node wrapper and the window carry the `EventTarget` prototype
+    /// chain, so a `NodeList`, a snapshot, an `Event` or a style declaration
+    /// reaching here means the receiver was not what the template's signature
+    /// promised.
+    fn dispatch_target(&self) -> Option<DispatchTarget> {
+        match self {
+            HostObject::Node { node, .. } => Some(DispatchTarget::node(*node)),
+            HostObject::Window { .. } => Some(DispatchTarget::window()),
+            _ => None,
+        }
+    }
+
+    /// The listener-table key this host registers listeners under. See
+    /// [`Self::dispatch_target`] for why the other variants have none.
+    fn target_key(&self) -> Option<TargetKey> {
+        match self {
+            HostObject::Node { node, .. } => Some(TargetKey::Node(node.id)),
+            HostObject::Window { .. } => Some(TargetKey::Window),
+            _ => None,
         }
     }
 
@@ -1700,10 +1750,12 @@ impl EventTargetOps for HostObject {
                 (o.capture, o.once, o.passive.unwrap_or(false))
             }
         };
-        let (_, id) = self.anchor();
+        let target = self
+            .target_key()
+            .ok_or_else(|| JsError::type_error("the receiver is not an event target"))?;
         let cb = CallbackRef(callback.bits());
-        let added = self.context().listeners.borrow_mut().add(
-            id,
+        let added = self.context().listeners.borrow_mut().add_at(
+            target,
             r#type.to_owned(),
             cb,
             capture,
@@ -1733,13 +1785,15 @@ impl EventTargetOps for HostObject {
             Some(EventListenerOptionsOrBoolean::Boolean(capture)) => capture,
             Some(EventListenerOptionsOrBoolean::EventListenerOptions(o)) => o.capture,
         };
-        let (_, id) = self.anchor();
+        let target = self
+            .target_key()
+            .ok_or_else(|| JsError::type_error("the receiver is not an event target"))?;
         let cb = CallbackRef(callback.bits());
         let removed = self
             .context()
             .listeners
             .borrow_mut()
-            .remove(id, r#type, cb, capture);
+            .remove_at(target, r#type, cb, capture);
         // Release the argument's stored reference, plus the removed listener's.
         self.release_stored(cb.0);
         if let Some(removed) = removed {
@@ -1754,11 +1808,10 @@ impl EventTargetOps for HostObject {
             return Err(JsError::type_error("dispatchEvent requires an Event"));
         }
         let key = decoded.event_key();
-        let target = {
-            let (doc, id) = self.anchor();
-            doc.borrow().node_ref(id)
-        };
-        dispatch(self.context(), target, key, false)
+        let target = self
+            .dispatch_target()
+            .ok_or_else(|| JsError::type_error("the receiver is not an event target"))?;
+        dispatch_at(self.context(), target, key, false)
     }
 }
 
@@ -1894,7 +1947,12 @@ impl EventOps for HostObject {
 /// wrapper world hands its own context as the realm, so this only fails if a
 /// foreign world is installed — a wiring bug surfaced as a `TypeError` rather
 /// than a panic.
-fn realm_context(realm: &Realm) -> Result<SharedContext, JsError> {
+///
+/// Public because a backend that installs its own host members outside the
+/// generated glue — the window's `addEventListener` and friends, which cannot
+/// be generated while the window is not an IDL interface — needs the same
+/// realm-to-context step the generated callbacks perform.
+pub fn realm_context(realm: &Realm) -> Result<SharedContext, JsError> {
     realm
         .clone()
         .downcast::<HostContext>()
@@ -2850,6 +2908,11 @@ pub const TAG_TOKEN_LIST: u8 = 6;
 /// Handle tag for an element's inline `CSSStyleDeclaration` (`style`); it
 /// anchors to the owning element's node like a live collection.
 pub const TAG_STYLE: u8 = 7;
+/// Handle tag for the window. The window is not a node — it has no arena slot
+/// and no id — so its handle carries no payload at all: the tag alone names it.
+/// It exists because the window is the outermost target of every event path,
+/// and a listener's `currentTarget` has to be the window object.
+pub const TAG_WINDOW: u8 = 8;
 
 /// A handle decoded back into its parts.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2871,7 +2934,10 @@ impl DecodedHandle {
             TAG_NODE | TAG_NODE_LIST | TAG_HTML_COLLECTION | TAG_TOKEN_LIST | TAG_STYLE => {
                 Some(self.node_id)
             }
-            _ => None, // Snapshot tags 3 and 4, and TAG_EVENT
+            // Snapshot tags 3 and 4, TAG_EVENT, and TAG_WINDOW: a window handle
+            // is deliberately not anchored to any node, so a sweep cannot
+            // mistake its zero payload for node 0.
+            _ => None,
         }
     }
 
@@ -2930,6 +2996,13 @@ pub fn encode_token_list(owner: NodeRef) -> u64 {
 /// Packs a style declaration owner's reference into a [`TAG_STYLE`] handle.
 pub fn encode_style(owner: NodeRef) -> u64 {
     pack(TAG_STYLE, owner)
+}
+
+/// Packs the window into a [`TAG_WINDOW`] handle. Every window handle is
+/// identical, which is what lets a listener compare `currentTarget` against the
+/// global object.
+pub fn encode_window() -> u64 {
+    (TAG_WINDOW as u64) << TAG_SHIFT
 }
 
 /// Packs a snapshot tag and key into handle bits.

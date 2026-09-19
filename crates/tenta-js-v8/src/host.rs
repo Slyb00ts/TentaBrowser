@@ -24,6 +24,12 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use tenta_core::Origin;
+use tenta_js::bindings::host::{HostObject, realm_context};
+use tenta_js::bindings::{
+    AddEventListenerOptionsOrBoolean, Event, EventListener, EventListenerOptionsOrBoolean,
+    EventTargetOps, JsError, string_from_v8, throw_js_error, throw_type_error, value_from_v8,
+    world_realm,
+};
 use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId};
 
 /// Timer functions whose deadline has passed, in fire order, waiting for the
@@ -110,11 +116,12 @@ impl HostState {
 }
 
 /// Installs the timer/microtask/animation-frame host functions, the
-/// window/global self-aliases, and the `navigator` and `performance` globals as
-/// own properties of `context`'s global object. Call once per context, inside a
-/// context scope. `time_origin_ms` is the loop clock's wall-clock origin, which
-/// `performance.timeOrigin` reports; it is passed in because the host state
-/// slot this context reads is only set after `install` returns.
+/// window/global self-aliases, the window's event-target members, and the
+/// `navigator` and `performance` globals as own properties of `context`'s global
+/// object. Call once per context, inside a context scope. `time_origin_ms` is
+/// the loop clock's wall-clock origin, which `performance.timeOrigin` reports;
+/// it is passed in because the host state slot this context reads is only set
+/// after `install` returns.
 pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>, time_origin_ms: f64) {
     let global = context.global(scope);
     define(scope, global, "setTimeout", set_timeout);
@@ -146,6 +153,184 @@ pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>, time_o
 
     install_performance(scope, global, time_origin_ms);
     install_navigator(scope, global);
+    install_window_event_target(scope, global);
+}
+
+/// Installs the window's `EventTarget` members on the global object.
+///
+/// The generated `EventTarget` glue cannot serve the window: it resolves its
+/// receiver through the wrapper's internal field and a `Signature` that only
+/// instances of the interface's template satisfy, and the window is the global
+/// object, which has neither. So the three operations are installed here as own
+/// properties of the global — which is also what makes them reachable as
+/// `self.addEventListener` and `top.addEventListener`, since every alias names
+/// this one object.
+///
+/// Only the argument decoding is repeated from the generated glue; the
+/// semantics — the listener table, the duplicate rule, the reference discipline
+/// on the stored callback — stay in [`HostObject`]'s `EventTargetOps`
+/// implementation, reached through a window host.
+fn install_window_event_target(scope: &mut v8::PinScope, global: v8::Local<v8::Object>) {
+    define(scope, global, "addEventListener", window_add_event_listener);
+    define(
+        scope,
+        global,
+        "removeEventListener",
+        window_remove_event_listener,
+    );
+    define(scope, global, "dispatchEvent", window_dispatch_event);
+}
+
+/// The window host for the current realm, or the error to report.
+///
+/// Resolving it per call rather than caching it keeps the window's state on the
+/// `HostContext` the bindings already share, so a listener registered through
+/// `window.addEventListener` and one registered through
+/// `document.addEventListener` live in the same table.
+fn window_host(scope: &mut v8::PinScope) -> Result<HostObject, JsError> {
+    let realm = world_realm(scope)?;
+    let ctx = realm_context(&realm)?;
+    Ok(HostObject::window(ctx))
+}
+
+/// Decodes the `(type, callback, options)` tail shared by `addEventListener` and
+/// `removeEventListener`, mirroring the generated glue's coercion exactly.
+fn event_listener_args(
+    scope: &mut v8::PinScope,
+    args: &v8::FunctionCallbackArguments,
+) -> Result<(String, Option<EventListener>), JsError> {
+    let type_ = string_from_v8(scope, args.get(0));
+    let raw = args.get(1);
+    let callback = if raw.is_null_or_undefined() {
+        None
+    } else {
+        Some(EventListener::from_bits(value_from_v8(scope, raw)?))
+    };
+    Ok((type_, callback))
+}
+
+/// `window.addEventListener(type, callback, options)`.
+fn window_add_event_listener(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    if args.length() < 2 {
+        throw_type_error(
+            scope,
+            "Failed to execute 'addEventListener' on 'EventTarget': 2 argument(s) required",
+        );
+        return;
+    }
+    let host = match window_host(scope) {
+        Ok(host) => host,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let (type_, callback) = match event_listener_args(scope, &args) {
+        Ok(parts) => parts,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let options = if args.length() > 2 && !args.get(2).is_undefined() {
+        match AddEventListenerOptionsOrBoolean::from_v8(scope, args.get(2)) {
+            Ok(options) => Some(options),
+            Err(error) => {
+                throw_js_error(scope, &error);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    if let Err(error) = host.add_event_listener(&type_, callback, options) {
+        throw_js_error(scope, &error);
+        return;
+    }
+    retval.set_undefined();
+}
+
+/// `window.removeEventListener(type, callback, options)`.
+fn window_remove_event_listener(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    if args.length() < 2 {
+        throw_type_error(
+            scope,
+            "Failed to execute 'removeEventListener' on 'EventTarget': 2 argument(s) required",
+        );
+        return;
+    }
+    let host = match window_host(scope) {
+        Ok(host) => host,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let (type_, callback) = match event_listener_args(scope, &args) {
+        Ok(parts) => parts,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let options = if args.length() > 2 && !args.get(2).is_undefined() {
+        match EventListenerOptionsOrBoolean::from_v8(scope, args.get(2)) {
+            Ok(options) => Some(options),
+            Err(error) => {
+                throw_js_error(scope, &error);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    if let Err(error) = host.remove_event_listener(&type_, callback, options) {
+        throw_js_error(scope, &error);
+        return;
+    }
+    retval.set_undefined();
+}
+
+/// `window.dispatchEvent(event)`, which dispatches *at* the window: its path is
+/// the window alone, so a listener on a node does not see it.
+fn window_dispatch_event(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    if args.length() < 1 {
+        throw_type_error(
+            scope,
+            "Failed to execute 'dispatchEvent' on 'EventTarget': 1 argument(s) required",
+        );
+        return;
+    }
+    let host = match window_host(scope) {
+        Ok(host) => host,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let event = match tenta_js::bindings::handle_from_v8::<Event>(scope, args.get(0)) {
+        Ok(event) => event,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    match host.dispatch_event(event) {
+        Ok(not_canceled) => retval.set(v8::Boolean::new(scope, not_canceled).into()),
+        Err(error) => throw_js_error(scope, &error),
+    }
 }
 
 /// Sets a string-valued own data property on `target`.

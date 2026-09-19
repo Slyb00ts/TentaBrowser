@@ -378,8 +378,10 @@ fn src_element_aliases_target() {
 
 #[test]
 fn composed_path_is_the_propagation_chain_during_dispatch_only() {
-    // composedPath() returns [target, ...ancestors] while dispatching and an
-    // empty array otherwise.
+    // composedPath() returns [target, ...ancestors, window] while dispatching
+    // and an empty array otherwise. The window is not a link in `parentNode`,
+    // so it is appended explicitly: it is the outermost entry of the event
+    // path without being an ancestor in the tree.
     assert_eq!(
         eval(
             r#"
@@ -388,11 +390,12 @@ fn composed_path_is_the_propagation_chain_during_dispatch_only() {
             let result = 'not-run';
             el.addEventListener('x', (e) => {
                 const cp = e.composedPath();
-                const expected = chain(el);
+                const expected = chain(el).concat([window]);
                 let ok = cp.length === expected.length;
                 for (let i = 0; i < cp.length; i++) if (cp[i] !== expected[i]) ok = false;
                 result = ok + '/' + cp.length + '/' + (cp[0] === el)
-                    + '/' + (cp[cp.length - 1] === document);
+                    + '/' + (cp[cp.length - 2] === document)
+                    + '/' + (cp[cp.length - 1] === window);
             });
             const ev = document.createEvent('Event');
             ev.initEvent('x', true, true);
@@ -400,7 +403,7 @@ fn composed_path_is_the_propagation_chain_during_dispatch_only() {
             result + '/outside:' + ev.composedPath().length;
         "#
         ),
-        "true/4/true/true/outside:0"
+        "true/5/true/true/true/outside:0"
     );
 }
 
@@ -447,5 +450,146 @@ fn return_value_false_cancels_a_cancelable_event() {
         "#
         ),
         "true/false/false/true"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The window as a target
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_window_is_the_global_object_and_an_event_target() {
+    // `window`, `self`, `top` and `globalThis` name one object, and that object
+    // is an event target: every alias reaches the same listener table. A page's
+    // own listeners are almost always here rather than on `document`.
+    assert_eq!(
+        eval(
+            r#"
+            const same = (window === globalThis) && (window === self)
+                && (window === top) && (window === window.window);
+            const has = typeof window.addEventListener + '/'
+                + typeof window.removeEventListener + '/'
+                + typeof window.dispatchEvent;
+            same + '/' + has;
+        "#
+        ),
+        "true/function/function/function"
+    );
+}
+
+#[test]
+fn a_window_listener_sees_an_event_dispatched_at_a_descendant() {
+    // The window is the outermost entry of every event path, so a listener
+    // registered on it fires for an event dispatched at an element — with the
+    // window as `currentTarget` and the element still as `target`.
+    assert_eq!(
+        eval(
+            r#"
+            const el = document.querySelector('#target');
+            let out = [];
+            window.addEventListener('x', (e) => {
+                out.push('window:' + (e.currentTarget === window)
+                    + '/' + (e.target === el) + '/' + e.eventPhase);
+            });
+            el.addEventListener('x', (e) => { out.push('el:' + e.eventPhase); });
+            const ev = document.createEvent('Event');
+            ev.initEvent('x', true, false);
+            el.dispatchEvent(ev);
+            out.join(',');
+        "#
+        ),
+        "el:2,window:true/true/3"
+    );
+}
+
+#[test]
+fn a_window_listener_does_not_see_a_non_bubbling_event() {
+    // Without bubbling the path stops at the target, so an ancestor — and the
+    // window above it — is reached only by a capture listener.
+    assert_eq!(
+        eval(
+            r#"
+            const el = document.querySelector('#target');
+            let out = [];
+            window.addEventListener('x', () => { out.push('bubble'); });
+            window.addEventListener('x', () => { out.push('capture'); }, true);
+            const ev = document.createEvent('Event');
+            ev.initEvent('x', false, false);
+            el.dispatchEvent(ev);
+            out.join(',');
+        "#
+        ),
+        "capture"
+    );
+}
+
+#[test]
+fn dispatching_at_the_window_gives_the_window_as_the_target() {
+    // `window.dispatchEvent` has no node to name, so its path is the window
+    // alone: a listener on an element must not see it.
+    assert_eq!(
+        eval(
+            r#"
+            const el = document.querySelector('#target');
+            let out = [];
+            window.addEventListener('x', (e) => {
+                out.push('window:' + (e.target === window)
+                    + '/' + (e.currentTarget === window) + '/' + e.eventPhase
+                    + '/' + e.composedPath().length);
+            });
+            el.addEventListener('x', () => { out.push('el'); });
+            const ev = document.createEvent('Event');
+            ev.initEvent('x', true, false);
+            const r = window.dispatchEvent(ev);
+            out.join(',') + '/r:' + r;
+        "#
+        ),
+        "window:true/true/2/1/r:true"
+    );
+}
+
+#[test]
+fn a_window_listener_is_removed_by_the_same_callback() {
+    // The identity rule is the same on the window as on a node: the same
+    // function removes, a different one does not.
+    assert_eq!(
+        eval(
+            r#"
+            let n = 0;
+            const f = () => { n++; };
+            const g = () => { n++; };
+            window.addEventListener('x', f);
+            window.removeEventListener('x', g);
+            window.dispatchEvent(new Event('x'));
+            window.removeEventListener('x', f);
+            window.dispatchEvent(new Event('x'));
+            String(n);
+        "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn a_window_listener_can_dispatch_a_node_event_and_be_seen() {
+    // A window listener runs re-entrantly: dispatching a second event from
+    // inside one must not disturb the outer dispatch's path. Both events
+    // bubble, or the window would not be on their path at all.
+    assert_eq!(
+        eval(
+            r#"
+            const el = document.querySelector('#target');
+            let out = [];
+            window.addEventListener('outer', (e) => {
+                out.push('outer-path:' + e.composedPath().length);
+                el.dispatchEvent(new Event('inner', { bubbles: true }));
+                out.push('outer-after:' + e.composedPath().length);
+            });
+            window.addEventListener('inner', () => { out.push('inner'); });
+            el.dispatchEvent(new Event('outer', { bubbles: true }));
+            out.join(',');
+        "#
+        ),
+        "outer-path:5,inner,outer-after:5"
     );
 }

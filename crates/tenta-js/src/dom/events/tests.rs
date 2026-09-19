@@ -30,6 +30,10 @@ enum Action {
     },
 }
 
+/// A hook the mock runs at each invocation, to observe dispatch state that is
+/// cleared before `dispatch` returns (`composedPath()`).
+type PathProbe = Box<dyn Fn(EventKey)>;
+
 struct MockHost {
     ctx: RefCell<Weak<HostContext>>,
     /// (callback bits, current_target bits, phase) in invocation order.
@@ -39,6 +43,8 @@ struct MockHost {
     passive_seen: RefCell<Vec<u64>>,
     /// Callbacks whose stored value was released.
     released: RefCell<Vec<u64>>,
+    /// Called with the event key at each invocation.
+    path_probe: RefCell<Option<PathProbe>>,
 }
 
 impl MockHost {
@@ -49,11 +55,16 @@ impl MockHost {
             actions: RefCell::new(HashMap::new()),
             passive_seen: RefCell::new(Vec::new()),
             released: RefCell::new(Vec::new()),
+            path_probe: RefCell::new(None),
         })
     }
 
     fn set_action(&self, cb: CallbackRef, action: Action) {
         self.actions.borrow_mut().insert(cb.0, action);
+    }
+
+    fn set_path_probe(&self, probe: impl Fn(EventKey) + 'static) {
+        *self.path_probe.borrow_mut() = Some(Box::new(probe));
     }
 }
 
@@ -76,6 +87,9 @@ impl ScriptHost for MockHost {
             .push((callback.0, current_target, phase));
         if passive {
             self.passive_seen.borrow_mut().push(callback.0);
+        }
+        if let Some(probe) = self.path_probe.borrow().as_ref() {
+            probe(key);
         }
 
         let action = self
@@ -406,4 +420,228 @@ fn target_and_current_target_are_set_then_cleared() {
 
 fn encode_node_test(node: NodeRef) -> u64 {
     crate::bindings::host::encode_node(node)
+}
+
+// ---------------------------------------------------------------------------
+// The window as a target
+// ---------------------------------------------------------------------------
+
+/// Registers a listener on the window.
+fn add_window(ctx: &HostContext, type_: &str, cb: u64, capture: bool) -> ListenerId {
+    ctx.listeners
+        .borrow_mut()
+        .add_at(
+            TargetKey::Window,
+            type_.to_owned(),
+            CallbackRef(cb),
+            capture,
+            false,
+            false,
+        )
+        .expect("listener added")
+}
+
+/// The window is not an ancestor in the tree, but it is the outermost entry of
+/// the event path: this is the whole reason `window.addEventListener` is worth
+/// having, since a page's own listeners are almost never on `document`.
+#[test]
+fn a_window_listener_fires_for_an_event_dispatched_at_a_descendant() {
+    let f = fixture();
+    add(&f.ctx, f.div, "x", 1, false);
+    add_window(&f.ctx, "x", 2, false);
+
+    let key = make_event(&f.ctx, "x", true, false);
+    dispatch(&f.ctx, f.div, key, false).unwrap();
+
+    let calls = f.mock.calls.borrow();
+    let order: Vec<u64> = calls.iter().map(|c| c.0).collect();
+    assert_eq!(order, vec![1, 2], "the window runs last in the bubble pass");
+    // The window entry is the outermost, so it is visited first in the capture
+    // pass — nothing else in this fixture captures.
+    assert_eq!(calls[1].1, encode_window());
+    assert_eq!(calls[1].2, PHASE_BUBBLING);
+}
+
+#[test]
+fn a_capturing_window_listener_runs_before_every_node() {
+    let f = fixture();
+    add(&f.ctx, f.html, "x", 1, true);
+    add_window(&f.ctx, "x", 2, true);
+
+    let key = make_event(&f.ctx, "x", true, false);
+    dispatch(&f.ctx, f.div, key, false).unwrap();
+
+    let calls = f.mock.calls.borrow();
+    let order: Vec<u64> = calls.iter().map(|c| c.0).collect();
+    assert_eq!(order, vec![2, 1], "the window captures from the outside in");
+    assert_eq!(calls[0].2, PHASE_CAPTURING);
+}
+
+/// A non-bubbling event stops at the target, so the window is reached only by a
+/// capture listener. This is what keeps `focus`-style events from running every
+/// bubble-phase window listener in the page on every dispatch.
+#[test]
+fn a_non_bubbling_event_reaches_the_window_only_in_capture() {
+    let f = fixture();
+    add_window(&f.ctx, "x", 1, false);
+    let key = make_event(&f.ctx, "x", false, false);
+    dispatch(&f.ctx, f.div, key, false).unwrap();
+    assert!(f.mock.calls.borrow().is_empty());
+
+    add_window(&f.ctx, "x", 2, true);
+    let key = make_event(&f.ctx, "x", false, false);
+    dispatch(&f.ctx, f.div, key, false).unwrap();
+    let order: Vec<u64> = f.mock.calls.borrow().iter().map(|c| c.0).collect();
+    assert_eq!(order, vec![2]);
+}
+
+/// The same callback registered on a node and on the window is two registrations
+/// on two targets: removing one must not remove the other.
+#[test]
+fn a_node_and_the_window_are_independent_targets_for_one_callback() {
+    let f = fixture();
+    let on_div = add(&f.ctx, f.div, "x", 7, false);
+    let on_window = add_window(&f.ctx, "x", 7, false);
+
+    let removed = f
+        .ctx
+        .listeners
+        .borrow_mut()
+        .remove_by_id_at(TargetKey::Window, on_window);
+    assert_eq!(removed, Some(CallbackRef(7)));
+    assert!(
+        f.ctx
+            .listeners
+            .borrow()
+            .contains_at(TargetKey::Node(f.div.id), on_div)
+    );
+    assert!(
+        !f.ctx
+            .listeners
+            .borrow()
+            .contains_at(TargetKey::Window, on_window)
+    );
+
+    let key = make_event(&f.ctx, "x", true, false);
+    dispatch(&f.ctx, f.div, key, false).unwrap();
+    let order: Vec<u64> = f.mock.calls.borrow().iter().map(|c| c.0).collect();
+    assert_eq!(order, vec![7], "only the node's registration is left");
+}
+
+/// A window listener removed by an earlier listener in the same dispatch is
+/// skipped, exactly as a node's is: the removal check is on the target, not on
+/// the kind of target.
+#[test]
+fn a_window_listener_removed_during_dispatch_is_skipped() {
+    let f = fixture();
+    add_window(&f.ctx, "x", 1, false);
+    let second = add_window(&f.ctx, "x", 2, false);
+
+    // The first callback removes the second while the dispatch is running.
+    let weak = Rc::downgrade(&f.ctx);
+    f.mock.set_path_probe(move |_| {
+        if let Some(ctx) = weak.upgrade() {
+            ctx.listeners
+                .borrow_mut()
+                .remove_by_id_at(TargetKey::Window, second);
+        }
+    });
+
+    let key = make_event(&f.ctx, "x", true, false);
+    dispatch(&f.ctx, f.div, key, false).unwrap();
+
+    let order: Vec<u64> = f.mock.calls.borrow().iter().map(|c| c.0).collect();
+    assert_eq!(order, vec![1], "the second window listener was removed");
+    assert!(
+        !f.ctx
+            .listeners
+            .borrow()
+            .contains_at(TargetKey::Window, second)
+    );
+}
+
+/// `composedPath()` is the path the dispatcher walked, window included and last.
+#[test]
+fn the_recorded_path_ends_with_the_window() {
+    let f = fixture();
+    add_window(&f.ctx, "x", 1, false);
+
+    let path_seen: Rc<RefCell<Vec<u64>>> = Rc::new(RefCell::new(Vec::new()));
+    let seen = path_seen.clone();
+    // A `Weak` here: the probe lives inside the mock, which the context holds,
+    // so a strong handle would be a cycle.
+    let weak = Rc::downgrade(&f.ctx);
+    f.mock.set_path_probe(move |k| {
+        if let Some(ctx) = weak.upgrade() {
+            let events = ctx.events.borrow();
+            if let Some(record) = events.get(k) {
+                *seen.borrow_mut() = record.path.clone();
+            }
+        }
+    });
+
+    let key = make_event(&f.ctx, "x", true, false);
+    dispatch(&f.ctx, f.div, key, false).unwrap();
+
+    let path = path_seen.borrow();
+    assert_eq!(path.len(), 5, "div, body, html, document, window");
+    assert_eq!(*path.last().unwrap(), encode_window());
+    assert_eq!(path[0], encode_node_test(f.div));
+    let document_node = {
+        let doc = f.ctx.doc.borrow();
+        doc.node_ref(doc.document_node())
+    };
+    assert_eq!(
+        path[3],
+        encode_node_test(document_node),
+        "the document is the last node, and the window sits outside it"
+    );
+
+    // Cleared outside a dispatch, so `composedPath()` is empty then.
+    let events = f.ctx.events.borrow();
+    assert!(events.get(key).expect("record alive").path.is_empty());
+}
+
+/// A dispatch *at* the window: no ancestors to walk and nothing above it, so
+/// the path is the window alone. This is what `window.dispatchEvent(...)` and
+/// the runtime's own `load` dispatch do, and it is why the window's path cannot
+/// be built by walking the tree.
+#[test]
+fn a_dispatch_at_the_window_has_the_window_as_its_whole_path() {
+    let f = fixture();
+    add_window(&f.ctx, "x", 1, false);
+    // A listener on an element must not see a window-targeted event, even
+    // though the window is on every element's path.
+    add(&f.ctx, f.div, "x", 2, false);
+
+    let path_seen: Rc<RefCell<Vec<u64>>> = Rc::new(RefCell::new(Vec::new()));
+    let seen = path_seen.clone();
+    let weak = Rc::downgrade(&f.ctx);
+    f.mock.set_path_probe(move |k| {
+        if let Some(ctx) = weak.upgrade() {
+            let events = ctx.events.borrow();
+            if let Some(record) = events.get(k) {
+                *seen.borrow_mut() = record.path.clone();
+            }
+        }
+    });
+
+    let key = make_event(&f.ctx, "x", true, false);
+    dispatch_at(&f.ctx, DispatchTarget::window(), key, false).unwrap();
+
+    let calls = f.mock.calls.borrow();
+    let order: Vec<u64> = calls.iter().map(|c| c.0).collect();
+    assert_eq!(order, vec![1], "only the window's own listener ran");
+    assert_eq!(calls[0].1, encode_window());
+    // The window is the target, so both passes see it AT_TARGET — not once as
+    // a capturing ancestor and once as a bubbling one.
+    assert_eq!(calls[0].2, PHASE_AT_TARGET);
+
+    assert_eq!(*path_seen.borrow(), vec![encode_window()]);
+    // The target the record reports is the window, and it is cleared after.
+    assert_eq!(
+        f.ctx.events.borrow().get(key).unwrap().current_target,
+        None,
+        "the transient dispatch state is cleared"
+    );
 }

@@ -25,7 +25,7 @@ use tenta_core::atom::atoms;
 use tenta_dom::NodeKind;
 use tenta_js::bindings::host::{
     HostObject, SharedContext, TAG_EVENT, TAG_HTML_COLLECTION, TAG_NODE_LIST, TAG_STYLE,
-    TAG_TOKEN_LIST, decode,
+    TAG_TOKEN_LIST, TAG_WINDOW, decode,
 };
 use tenta_js::bindings::{
     InterfaceDescriptor, InterfaceRegistry, WRAPPER_HOST_FIELD, WRAPPER_TAG, WrapperWorld,
@@ -284,7 +284,16 @@ impl WrapperWorld for V8World {
         // is reclaimed on finalize via `dead_events`.
         let is_event: bool;
 
-        if decoded.tag == 3 {
+        if decoded.tag == TAG_WINDOW {
+            // The window *is* the global object: `window`, `self`, `top` and
+            // `globalThis` must be one object, so no instance is created for it
+            // and none is memoised in `wrappers`. Its members are own properties
+            // of the global, installed by `host::install`.
+            //
+            // The current context is the page's only context, so the object
+            // `window` resolves to is the one script is running in.
+            return scope.get_current_context().global(scope).into();
+        } else if decoded.tag == 3 {
             // TAG_STATIC_NODE_LIST
             interface_name = "NodeList";
             let key = decoded.snapshot_key();
