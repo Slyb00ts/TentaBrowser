@@ -24,6 +24,16 @@ pub enum ParseStatus {
     /// away and re-parse from the first byte with
     /// [`Parser::restart_with_encoding`].
     EncodingChanged(&'static Encoding),
+    /// A `</script>` closed a parser-blocking script and the parse is paused
+    /// on it. Only a parser built with [`ParserOptions::pause_on_script`] ever
+    /// reports this. The element is taken with
+    /// [`Parser::take_pending_script`], and [`Parser::resume`] continues the
+    /// parse once the script has run (`docs/spec/05-javascript.md` §6).
+    ///
+    /// Input fed while the parse is paused is buffered, not parsed: the
+    /// document is still "the one the script sees", so no markup after the
+    /// script may reach the tree before the script has run.
+    Script,
 }
 
 /// Parser configuration.
@@ -34,6 +44,11 @@ pub struct ParserOptions<'cb> {
     /// Whether the document's scripting flag is set. It changes how
     /// `<noscript>` is parsed.
     pub scripting_enabled: bool,
+    /// Whether a `</script>` pauses the parse and reports
+    /// [`ParseStatus::Script`]. Only a caller that can actually run the script
+    /// sets this; a Tier 1 caller leaves it off and the parser walks past
+    /// script elements as it does today.
+    pub pause_on_script: bool,
     /// The context element for the fragment parsing algorithm. When set, the
     /// parser creates the element in the sink and parses a fragment.
     pub fragment_context: Option<QualName>,
@@ -66,6 +81,7 @@ impl Default for ParserOptions<'_> {
     fn default() -> Self {
         ParserOptions {
             scripting_enabled: true,
+            pause_on_script: false,
             fragment_context: None,
             quirks_mode: None,
             iframe_srcdoc: false,
@@ -84,6 +100,7 @@ impl Default for ParserOptions<'_> {
 #[derive(Clone)]
 struct RestartOptions {
     scripting_enabled: bool,
+    pause_on_script: bool,
     fragment_context: Option<QualName>,
     quirks_mode: Option<QuirksMode>,
     iframe_srcdoc: bool,
@@ -117,6 +134,8 @@ pub struct Parser<'cb, S: TreeSink> {
     options: RestartOptions,
     stopped: bool,
     restart: Option<&'static Encoding>,
+    /// The script element the parse is paused on, until the caller takes it.
+    pending_script: Option<S::Handle>,
 }
 
 impl<'cb, S: TreeSink> Parser<'cb, S> {
@@ -124,6 +143,7 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
     pub fn new(mut sink: S, options: ParserOptions<'cb>) -> Parser<'cb, S> {
         let ParserOptions {
             scripting_enabled,
+            pause_on_script,
             fragment_context,
             quirks_mode,
             iframe_srcdoc,
@@ -185,6 +205,7 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
             preload: preload.map(|callback| (PreloadScanner::new(scripting_enabled), callback)),
             options: RestartOptions {
                 scripting_enabled,
+                pause_on_script,
                 fragment_context,
                 quirks_mode,
                 iframe_srcdoc,
@@ -196,6 +217,7 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
             },
             stopped: false,
             restart: None,
+            pending_script: None,
         }
     }
 
@@ -210,6 +232,60 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
         self.stopped
     }
 
+    /// The sink, with the tree as it stands right now.
+    ///
+    /// Meaningful mainly while the parse is paused on a script
+    /// ([`ParseStatus::Script`]): that tree is exactly what the script is
+    /// entitled to see. A sink shared with the script (an `Rc` in
+    /// `tenta-dom`) does not need this.
+    pub fn sink(&self) -> &S {
+        &self.tree_builder.sink
+    }
+
+    /// Takes the script element the parse is paused on, if any.
+    ///
+    /// The parse stays paused until [`Self::resume`], so the caller may run
+    /// the script against the very tree the parser is writing into: everything
+    /// before the `</script>` is in the document, and nothing after it is.
+    pub fn take_pending_script(&mut self) -> Option<S::Handle> {
+        let script = self.pending_script.take()?;
+        // Handing a script out makes the document script-observable, and a
+        // restart re-parses from byte zero into a fresh sink — which would run
+        // every script so far a second time, with its side effects already
+        // committed. The encoding in use becomes certain at this point, so a
+        // late `<meta charset>` is ignored rather than triggering an unsound
+        // restart. WHATWG's answer is to navigate again; the parser cannot do
+        // that, and mojibake beats running a page's scripts twice.
+        self.confidence = Confidence::Certain;
+        Some(script)
+    }
+
+    /// Continues a parse paused on a script, without new input.
+    ///
+    /// Abandons a pending script the caller never took: resuming says the
+    /// caller is done with the pause. Taking the script first is the contract
+    /// (a debug build asserts it).
+    pub fn resume(&mut self) -> ParseStatus {
+        if let Some(encoding) = self.restart {
+            return ParseStatus::EncodingChanged(encoding);
+        }
+        if self.stopped {
+            return ParseStatus::Stopped;
+        }
+        // Resuming is the caller's statement that it is done with the pause.
+        // A script it never took cannot have run, but reporting the pause
+        // again would hang a driver that locates the script some other way
+        // (through the shared document, say) — a silent hang is worse than a
+        // skipped script, and the debug assertion catches the mistake where
+        // it is made.
+        debug_assert!(
+            self.pending_script.is_none(),
+            "resume() before take_pending_script() abandons the script"
+        );
+        self.pending_script = None;
+        self.run("", false)
+    }
+
     /// Builds a fresh parser for a re-parse after
     /// [`ParseStatus::EncodingChanged`].
     ///
@@ -222,6 +298,7 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
             sink,
             ParserOptions {
                 scripting_enabled: options.scripting_enabled,
+                pause_on_script: options.pause_on_script,
                 fragment_context: options.fragment_context,
                 quirks_mode: options.quirks_mode,
                 iframe_srcdoc: options.iframe_srcdoc,
@@ -263,6 +340,13 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
 
     /// Ends the parse and returns the tree.
     pub fn finish(mut self) -> S::Output {
+        // Finishing abandons any pending script: the caller is asking for the
+        // tree, so the buffered tail is parsed rather than dropped. Pausing is
+        // turned off for the drain as well — clearing the handle alone would
+        // let the drain stop on the *next* script and lose both the rest of
+        // the document and the end-of-file steps that pop the open elements.
+        self.options.pause_on_script = false;
+        self.pending_script = None;
         if self.restart.is_none() && !self.stopped {
             let _ = self.feed_bytes(b"", true);
         }
@@ -314,7 +398,9 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
         if !owned.is_empty() {
             status = self.run(owned, false);
         }
-        if status == ParseStatus::Continue && !borrowed.is_empty() {
+        // `Script` is not the end of the parse, so the rest of the decoded
+        // chunk must still be handed over; `run` buffers it behind the pause.
+        if matches!(status, ParseStatus::Continue | ParseStatus::Script) && !borrowed.is_empty() {
             status = self.run(borrowed, false);
         }
         self.decoder = Some(decoder);
@@ -328,6 +414,15 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
             }
         }
 
+        // Paused on a script: the input keeps arriving from the network but
+        // must not reach the tree builder, so it queues behind the unconsumed
+        // tail and is tokenized by `resume`. The preload scanner above still
+        // sees it, which is the point of scanning ahead of the parse.
+        if self.pending_script.is_some() {
+            self.pending.push_str(text);
+            return ParseStatus::Script;
+        }
+
         let owned;
         let (buffer, start) = if self.pending.is_empty() {
             (text, 0usize)
@@ -338,6 +433,11 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
             (owned.as_str(), self.pending_start)
         };
         if buffer.len() <= start && !last {
+            // Nothing new to tokenize. The retained tail was moved out of
+            // `self.pending` above, so it has to go back: it holds the bytes
+            // a character reference may still un-consume into, and
+            // `pending_start` already indexes into it.
+            self.pending.push_str(buffer);
             return ParseStatus::Continue;
         }
 
@@ -345,8 +445,15 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
         let status = loop {
             match self.tokenizer.feed(&mut input, &mut self.tree_builder) {
                 TokenizerResult::Done => break ParseStatus::Continue,
-                // Tier 1 never runs scripts, so tokenization simply continues.
-                TokenizerResult::Script(_) => continue,
+                TokenizerResult::Script(node) => {
+                    // A caller that cannot run scripts simply tokenizes on,
+                    // which is what every Tier 1 parse does.
+                    if !self.options.pause_on_script {
+                        continue;
+                    }
+                    self.pending_script = Some(node);
+                    break ParseStatus::Script;
+                }
                 TokenizerResult::EncodingIndicator(label) => {
                     match self.handle_encoding_indicator(&label) {
                         Some(encoding) => break ParseStatus::EncodingChanged(encoding),

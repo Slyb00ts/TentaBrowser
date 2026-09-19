@@ -39,7 +39,11 @@ use crate::event_loop::SharedClock;
 /// A document shared between the host objects of one world and the engine that
 /// drives it. Every `HostObject` for the document holds one of these clones, so
 /// the arena outlives every wrapper.
-pub type SharedDocument = Rc<RefCell<Document>>;
+///
+/// Re-exported from `tenta-dom`, which parses into the same handle
+/// (`tenta_dom::SharedSink`): the engine and the parser must name one type, or
+/// a page would have to choose between running script and building the tree.
+pub use tenta_dom::SharedDocument;
 
 /// A key referencing a static snapshot in the slab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

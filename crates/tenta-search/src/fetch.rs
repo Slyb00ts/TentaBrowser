@@ -189,6 +189,14 @@ pub async fn fetch_and_parse(
                 stopped_early = true;
                 break;
             }
+            ParseStatus::Script => {
+                // Cannot happen: search extraction never runs scripts, so this
+                // parser is built without `pause_on_script` and tokenizes past
+                // script elements. Stop rather than buffer a tail nothing will
+                // ever parse.
+                stopped_early = true;
+                break;
+            }
             ParseStatus::EncodingChanged(encoding) => {
                 // A `<meta charset>` that contradicts a tentative encoding:
                 // throw the tree away and re-run the bytes seen so far. The

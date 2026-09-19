@@ -387,3 +387,198 @@ fn adoption_agency_wraps_at_the_cap_stay_neutral() {
 
     assert_eq!(tree.depth_of_deepest_element(), MAX_DOM_DEPTH);
 }
+
+/// A parser that can run scripts: it pauses on every `</script>` instead of
+/// tokenizing past it.
+fn scripting_parser() -> Parser<'static, Tree> {
+    Parser::new(
+        Tree::new(),
+        ParserOptions {
+            pause_on_script: true,
+            ..ParserOptions::default()
+        },
+    )
+}
+
+/// Runs a paused parse to completion, collecting the local name of every
+/// script the parser stopped on, in the order it stopped.
+fn drive_to_end(parser: &mut Parser<'_, Tree>, chunks: &[&str]) -> Vec<String> {
+    let mut scripts = Vec::new();
+    for chunk in chunks {
+        let mut status = parser.feed_str(chunk);
+        while status == ParseStatus::Script {
+            let handle = parser
+                .take_pending_script()
+                .expect("a paused parser names its script");
+            scripts.push(handle.to_string());
+            status = parser.resume();
+        }
+    }
+    scripts
+}
+
+#[test]
+fn a_parser_that_cannot_run_scripts_never_pauses() {
+    // Every Tier 1 parse: the script element is built like any other and
+    // tokenization walks straight past its end tag.
+    let mut parser = Parser::new(Tree::new(), ParserOptions::default());
+    assert_eq!(
+        parser.feed_str("<p>a<script>var x = 1;</script><p>b"),
+        ParseStatus::Continue
+    );
+    assert!(parser.take_pending_script().is_none());
+}
+
+#[test]
+fn a_script_end_tag_pauses_the_parse_and_names_the_element() {
+    let mut parser = scripting_parser();
+    assert_eq!(
+        parser.feed_str("<p>a<script>var x = 1;</script><p>b"),
+        ParseStatus::Script
+    );
+
+    let script = parser
+        .take_pending_script()
+        .expect("the pause names the script element");
+    assert_eq!(parser.resume(), ParseStatus::Continue);
+
+    let tree = parser.finish();
+    assert!(
+        matches!(&tree.nodes[script].data, NodeData::Element { name, .. }
+            if name.local == tenta_core::atom::atoms::SCRIPT),
+        "the handle must be the script element itself"
+    );
+}
+
+#[test]
+fn resuming_after_taking_the_script_leaves_no_pause_behind() {
+    // Resuming says the caller is done with the pause. A caller that never
+    // took the script would have it abandoned rather than reported again,
+    // because reporting it again hangs a driver that finds the script some
+    // other way — through the shared document, say. A debug build asserts on
+    // that mistake, so only the correct order is exercised here.
+    let mut parser = scripting_parser();
+    assert_eq!(
+        parser.feed_str("<script>1</script><p>a"),
+        ParseStatus::Script
+    );
+    assert!(parser.take_pending_script().is_some());
+    assert_eq!(parser.resume(), ParseStatus::Continue);
+    assert!(parser.take_pending_script().is_none());
+}
+
+#[test]
+fn markup_after_a_script_reaches_the_tree_only_after_the_resume() {
+    // The pause exists so a script sees exactly the document up to its own
+    // end tag. Feeding more input while paused must buffer it, not parse it.
+    let html = "<p>before<script>var x = 1;</script><p>after";
+    let mut parser = scripting_parser();
+
+    assert_eq!(parser.feed_str(html), ParseStatus::Script);
+    // More of the response arrives while the script is still pending.
+    assert_eq!(parser.feed_str("<p>later"), ParseStatus::Script);
+    let before_resume = parser.sink().nodes.len();
+
+    parser.take_pending_script();
+    while parser.resume() == ParseStatus::Script {
+        parser.take_pending_script();
+    }
+    let tree = parser.finish();
+
+    assert!(
+        tree.nodes.len() > before_resume,
+        "the buffered tail must be parsed after the resume, not before it"
+    );
+    assert_eq!(
+        serialize(&tree, 0, true),
+        parse_whole(&format!("{html}<p>later")),
+        "a paused parse must build the same tree as an unpaused one"
+    );
+}
+
+#[test]
+fn a_pause_survives_a_chunk_boundary_inside_the_script() {
+    // The bytes of one script arrive split across three network chunks, and
+    // the tail after the end tag arrives in the same chunk as the end tag.
+    let mut parser = scripting_parser();
+    let scripts = drive_to_end(
+        &mut parser,
+        &["<p>a<scr", "ipt>var x =", " 1;</scri", "pt><p>b"],
+    );
+    assert_eq!(scripts.len(), 1, "one script, one pause");
+
+    let tree = parser.finish();
+    assert_eq!(
+        serialize(&tree, 0, true),
+        parse_whole("<p>a<script>var x = 1;</script><p>b")
+    );
+}
+
+#[test]
+fn every_script_in_a_document_pauses_the_parse_once() {
+    let html = "<script>1</script><p>a<script>2</script><div><script>3</script></div>";
+    let mut parser = scripting_parser();
+    let scripts = drive_to_end(&mut parser, &[html]);
+    assert_eq!(scripts.len(), 3, "three scripts, three pauses");
+
+    let tree = parser.finish();
+    assert_eq!(serialize(&tree, 0, true), parse_whole(html));
+}
+
+#[test]
+fn finishing_while_paused_parses_the_buffered_tail() {
+    // A page that is torn down mid-script still asks for its tree. The script
+    // is abandoned, but the markup that was already buffered is not lost.
+    let html = "<p>a<script>var x = 1;</script><p>b";
+    let mut parser = scripting_parser();
+    assert_eq!(parser.feed_str(html), ParseStatus::Script);
+
+    let tree = parser.finish();
+    assert_eq!(serialize(&tree, 0, true), parse_whole(html));
+}
+
+#[test]
+fn finishing_while_paused_parses_a_tail_that_holds_another_script() {
+    // Regression: `finish` used to clear the pause once and then drain, so the
+    // drain itself could stop on the *next* script and drop everything after
+    // it — including the EOF steps that pop the open elements.
+    let html = "<p>a<script>1</script><p>b<script>2</script><p>c";
+    let mut parser = scripting_parser();
+    assert_eq!(parser.feed_str(html), ParseStatus::Script);
+
+    let tree = parser.finish();
+    assert_eq!(serialize(&tree, 0, true), parse_whole(html));
+}
+
+#[test]
+fn a_short_byte_fed_document_is_not_truncated_by_the_pause() {
+    // Bytes under the sniffing window are buffered, so the whole document is
+    // first tokenized inside `finish`. The pause must not eat the tail there.
+    let html = "<p>a<script>var x = 1;</script><p>b";
+    assert!(
+        html.len() < 1024,
+        "the point of this test is the sniff buffer"
+    );
+
+    let mut parser = scripting_parser();
+    assert_eq!(parser.feed(html.as_bytes()), ParseStatus::Continue);
+
+    let tree = parser.finish();
+    assert_eq!(serialize(&tree, 0, true), parse_whole(html));
+}
+
+#[test]
+fn an_empty_feed_between_chunks_keeps_the_character_reference_tail() {
+    // The retained tail is what lets a character reference un-consume across a
+    // chunk boundary. A feed with nothing new in it (and `resume` on an
+    // unpaused parser is exactly that) must not drop it.
+    // The split leaves the character reference tokenizer mid-name, so the
+    // retained tail is the only thing it can un-consume into.
+    let mut parser = Parser::new(Tree::new(), ParserOptions::default());
+    parser.feed_str("x&noti");
+    parser.feed_str("");
+    parser.feed_str("t;y");
+    let tree = parser.finish();
+
+    assert_eq!(serialize(&tree, 0, true), parse_whole("x&notit;y"));
+}

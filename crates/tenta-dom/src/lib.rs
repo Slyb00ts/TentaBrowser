@@ -20,6 +20,7 @@ pub mod interner;
 pub mod mutation;
 pub mod selectors;
 pub mod serialize;
+pub mod shared_sink;
 pub mod sink;
 pub mod text;
 
@@ -30,6 +31,7 @@ pub use mutation::{
     Mutation, MutationObserverSink, MutationRecord, NoopObserverSink, RecordingObserverSink,
 };
 pub use selectors::{CompiledSelector, ElementRef, SelectorCache, TentaSelectorImpl};
+pub use shared_sink::{SharedDocument, SharedSink};
 pub use text::{CHUNK_MAX, CHUNK_TARGET, TextChunk};
 
 /// Depth past which extraction and serialisation stop descending and emit

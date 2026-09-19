@@ -1161,6 +1161,20 @@ async fn parse_body(
         match parser.feed(&chunk) {
             ParseStatus::Continue => {}
             ParseStatus::Stopped => break,
+            ParseStatus::Script => {
+                // Unreachable by construction: this parse is built without
+                // `pause_on_script`, so the parser walks past script elements
+                // instead of stopping on them. Running them is the page
+                // runtime's job (`docs/spec/05-javascript.md` §6). Feeding on
+                // through a pause would buffer the rest of the document
+                // without parsing it, so stop with the tree built so far
+                // rather than truncate it silently.
+                tracing::warn!(
+                    url = %final_url,
+                    "the parse paused on a script, which this parser cannot run"
+                );
+                break;
+            }
             ParseStatus::EncodingChanged(encoding) => {
                 let Some(buffer) = restart_buffer.take() else {
                     tracing::warn!(
