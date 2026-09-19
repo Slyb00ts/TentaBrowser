@@ -16,3 +16,6 @@ v8 = { workspace = true }
 
 [dev-dependencies]
 tenta-html = { workspace = true }
+# URL reflection tests need a document with a base URL, and
+# `Document::with_url` takes a `url::Url`.
+url = { workspace = true }

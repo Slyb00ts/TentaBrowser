@@ -69,6 +69,7 @@ include!(concat!(env!("OUT_DIR"), "/html_button_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_select_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_text_area_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_option_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_script_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_ops.rs"));
 
@@ -114,6 +115,7 @@ include!(concat!(
     "/html_text_area_element_register.rs"
 ));
 include!(concat!(env!("OUT_DIR"), "/html_option_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_script_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_register.rs"));
 
@@ -177,6 +179,8 @@ include!(concat!(env!("OUT_DIR"), "/html_select_element_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_text_area_element_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/html_option_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_script_element_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/node_v8.rs"));
 #[cfg(feature = "v8")]

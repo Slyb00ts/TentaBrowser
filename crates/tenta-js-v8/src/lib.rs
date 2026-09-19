@@ -489,6 +489,12 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the HTMLOptionElement interface");
+            tenta_js::bindings::install_html_script_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLScriptElement interface");
             tenta_js::bindings::install_document_fragment::<HostObject>(
                 scope,
                 global_template,

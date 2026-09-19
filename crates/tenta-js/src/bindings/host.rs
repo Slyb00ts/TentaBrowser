@@ -26,10 +26,11 @@ use super::{
     EventOps, EventTarget, EventTargetOps, HTMLAnchorElementOps, HTMLButtonElementOps,
     HTMLCollection, HTMLCollectionOps, HTMLDivElementOps, HTMLElement, HTMLElementOps,
     HTMLFormElementOps, HTMLIFrameElementOps, HTMLImageElementOps, HTMLInputElementOps,
-    HTMLLabelElementOps, HTMLOptionElementOps, HTMLParagraphElementOps, HTMLSelectElementOps,
-    HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps, Handle, JsError,
-    MouseEventConstructor, MouseEventInit, MouseEventOps, Node, NodeList, NodeListOps, NodeOps,
-    Realm, SVGElementOps, Text, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
+    HTMLLabelElementOps, HTMLOptionElementOps, HTMLParagraphElementOps, HTMLScriptElementOps,
+    HTMLSelectElementOps, HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps,
+    Handle, JsError, MouseEventConstructor, MouseEventInit, MouseEventOps, Node, NodeList,
+    NodeListOps, NodeOps, Realm, SVGElementOps, Text, TextOps, UIEventConstructor, UIEventInit,
+    UIEventOps,
 };
 use crate::dom::events::{
     CallbackRef, DispatchTarget, EventKey, EventKind, EventRecord, EventSlab, ListenerTable,
@@ -482,6 +483,27 @@ impl HostObject {
             .attribute_str(id, name)
             .unwrap_or("")
             .to_owned()
+    }
+
+    /// Reads a reflected URL-valued attribute — the HTML Standard's rule for a
+    /// `USVString` attribute whose content attribute is defined to contain a
+    /// URL, which is what backs `href`, `src` and `action`
+    /// (`wpt/checkout/html/dom/reflection.js`, the `"url"` reflection case).
+    /// An absent attribute yields the empty string (never the document URL, so
+    /// `if (img.src)` stays falsy for `<img>` with no `src`); a present value
+    /// is resolved against the element's node document and the serialized
+    /// absolute URL returned; a value that will not parse is returned verbatim
+    /// rather than throwing. `name` is an already-lowercase local name.
+    fn reflect_url(&self, name: &str) -> String {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        let Some(raw) = doc.attribute_str(id, name) else {
+            return String::new();
+        };
+        match doc.resolve_url(raw) {
+            Some(url) => url.to_string(),
+            None => raw.to_owned(),
+        }
     }
 
     /// Reads a reflected boolean attribute: present (any value) is `true`.
@@ -2315,13 +2337,30 @@ impl HTMLIFrameElementOps for HostObject {}
 
 // Phase 4d per-tag interface shells. The block/inline elements carry no members
 // of their own; the form controls reflect only the safe attributes (`name`,
-// `placeholder`, `disabled`, `htmlFor`). The dirty value model, enumerated and
-// URL-valued attributes are deferred.
+// `placeholder`, `disabled`, `htmlFor`). d-2c adds the URL-valued `href`/`src`/
+// `action` through `reflect_url`; the dirty value model and the enumerated
+// attributes stay deferred.
 impl HTMLDivElementOps for HostObject {}
 impl HTMLSpanElementOps for HostObject {}
 impl HTMLParagraphElementOps for HostObject {}
-impl HTMLAnchorElementOps for HostObject {}
-impl HTMLImageElementOps for HostObject {}
+
+impl HTMLAnchorElementOps for HostObject {
+    fn href(&self) -> Result<String, JsError> {
+        Ok(self.reflect_url("href"))
+    }
+    fn set_href(&self, value: &str) {
+        self.reflect_attribute("href", value);
+    }
+}
+
+impl HTMLImageElementOps for HostObject {
+    fn src(&self) -> Result<String, JsError> {
+        Ok(self.reflect_url("src"))
+    }
+    fn set_src(&self, value: &str) {
+        self.reflect_attribute("src", value);
+    }
+}
 
 impl HTMLLabelElementOps for HostObject {
     fn html_for(&self) -> Result<String, JsError> {
@@ -2338,6 +2377,12 @@ impl HTMLFormElementOps for HostObject {
     }
     fn set_name(&self, value: &str) {
         self.reflect_attribute("name", value);
+    }
+    fn action(&self) -> Result<String, JsError> {
+        Ok(self.reflect_url("action"))
+    }
+    fn set_action(&self, value: &str) {
+        self.reflect_attribute("action", value);
     }
 }
 
@@ -2448,6 +2493,61 @@ impl HTMLOptionElementOps for HostObject {
     }
     fn set_disabled(&self, value: bool) {
         self.set_reflect_bool("disabled", value);
+    }
+}
+
+// d-2c: `<script>` content-attribute reflection. `async`, `defer` and
+// `noModule` are present-or-absent booleans here; whether a script actually
+// defers or runs asynchronously is decided when it is prepared, not by this
+// surface.
+impl HTMLScriptElementOps for HostObject {
+    fn src(&self) -> Result<String, JsError> {
+        Ok(self.reflect_url("src"))
+    }
+    fn set_src(&self, value: &str) {
+        self.reflect_attribute("src", value);
+    }
+    fn r#type(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("type"))
+    }
+    fn set_type(&self, value: &str) {
+        self.reflect_attribute("type", value);
+    }
+    fn charset(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("charset"))
+    }
+    fn set_charset(&self, value: &str) {
+        self.reflect_attribute("charset", value);
+    }
+    fn cross_origin(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("crossorigin"))
+    }
+    fn set_cross_origin(&self, value: &str) {
+        self.reflect_attribute("crossorigin", value);
+    }
+    fn integrity(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("integrity"))
+    }
+    fn set_integrity(&self, value: &str) {
+        self.reflect_attribute("integrity", value);
+    }
+    fn r#async(&self) -> bool {
+        self.reflect_bool("async")
+    }
+    fn set_async(&self, value: bool) {
+        self.set_reflect_bool("async", value);
+    }
+    fn defer(&self) -> bool {
+        self.reflect_bool("defer")
+    }
+    fn set_defer(&self, value: bool) {
+        self.set_reflect_bool("defer", value);
+    }
+    fn no_module(&self) -> bool {
+        self.reflect_bool("nomodule")
+    }
+    fn set_no_module(&self, value: bool) {
+        self.set_reflect_bool("nomodule", value);
     }
 }
 

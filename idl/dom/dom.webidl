@@ -241,8 +241,13 @@ interface HTMLTemplateElement : HTMLElement {
 // and layout/query code checks the common block/inline interfaces. Only the
 // unambiguously-safe reflected attributes are wired here: `name`, `placeholder`
 // (verbatim string reflections) and `disabled` (boolean). The dirty-value model
-// (`value`/`checked`/`selected`), the enumerated `type`/`method` attributes and
-// the URL-valued `href`/`src`/`action` are deliberately deferred.
+// (`value`/`checked`/`selected`) and the enumerated `type`/`method` attributes
+// are deliberately deferred.
+//
+// d-2c wires the URL-valued `href`/`src`/`action` — the `USVString` reflections
+// the HTML Standard defines through the URL rule, which the host implements as
+// `reflect_url` (absent -> "", else resolved against the element's node
+// document's base URL, falling back to the raw value when it will not parse).
 [Exposed=Window]
 interface HTMLDivElement : HTMLElement {};
 
@@ -253,10 +258,14 @@ interface HTMLSpanElement : HTMLElement {};
 interface HTMLParagraphElement : HTMLElement {};
 
 [Exposed=Window]
-interface HTMLAnchorElement : HTMLElement {};
+interface HTMLAnchorElement : HTMLElement {
+  attribute USVString href;
+};
 
 [Exposed=Window]
-interface HTMLImageElement : HTMLElement {};
+interface HTMLImageElement : HTMLElement {
+  attribute USVString src;
+};
 
 [Exposed=Window]
 interface HTMLLabelElement : HTMLElement {
@@ -266,6 +275,7 @@ interface HTMLLabelElement : HTMLElement {
 [Exposed=Window]
 interface HTMLFormElement : HTMLElement {
   attribute DOMString name;
+  attribute USVString action;
 };
 
 [Exposed=Window]
@@ -306,6 +316,24 @@ interface HTMLTextAreaElement : HTMLElement {
 [Exposed=Window]
 interface HTMLOptionElement : HTMLElement {
   attribute boolean disabled;
+};
+
+// d-2c: the `<script>` element interface, the generated planning manifest's
+// most-accessed missing HTML interface (1089 accesses across the golden sites,
+// `src` first among its members — `idl/MANIFEST.toml`). Every member here is a
+// content-attribute reflection only: `defer`, `async` and `noModule` say
+// nothing about *when* a script runs, which stays the parser's and the task
+// queue's business.
+[Exposed=Window]
+interface HTMLScriptElement : HTMLElement {
+  attribute USVString src;
+  attribute DOMString type;
+  attribute DOMString charset;
+  attribute DOMString crossOrigin;
+  attribute DOMString integrity;
+  attribute boolean async;
+  attribute boolean defer;
+  attribute boolean noModule;
 };
 
 // Phase 4b-2: the ChildNode mixin (the first `includes` in idl/dom). Frameworks
