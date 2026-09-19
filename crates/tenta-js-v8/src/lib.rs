@@ -690,6 +690,47 @@ impl Engine {
         self.run_inner(source, timeout).map(|_| ())
     }
 
+    /// Discards a termination left pending on the isolate by a watchdog that
+    /// fired while nothing was running to consume it.
+    ///
+    /// V8 termination is a *pending request*, not a one-shot signal delivered
+    /// to whoever asked. `terminate_execution()` sets the isolate's
+    /// `TERMINATE_EXECUTION` interrupt flag and nothing else; the flag becomes a
+    /// thrown termination exception only when running code next handles an
+    /// interrupt. A terminate that lands while an entry runs no interruptible
+    /// script — or in the window just after one returned — therefore stays set,
+    /// and aborts the *next* entry's script, which is innocent code.
+    /// [`tenta_js::engine::EngineWatchdog::terminate`] describes the same fact
+    /// from the caller's side: "best effort and idempotent: the engine may be
+    /// between scripts, or already stopped".
+    ///
+    /// The clear must be **unconditional**. `Isolate::is_execution_terminating()`
+    /// — and `TryCatch::has_terminated()`, which is the same predicate — answer
+    /// "is a termination exception *active*", which is exactly false for the
+    /// state this clears: a request no running code has handled yet. V8 only
+    /// reports the active exception (`isolate-inl.h`: the current thread's
+    /// exception compared against the termination exception), while a pending
+    /// request is a stack-guard interrupt bit. `cancel_terminate_execution()`
+    /// clears both — the api drops the interrupt flag *and* the internal
+    /// exception — and clearing an unset flag is a no-op, so gating the call on
+    /// a predicate that is false here would leave the poison in place. That is
+    /// not theoretical: a terminate issued from another thread while the engine
+    /// is idle makes `is_execution_terminating()` read false and the following
+    /// script get aborted anyway
+    /// (`tests/page_engine.rs::a_stray_termination_does_not_abort_the_next_script`).
+    ///
+    /// The *start* of an entry is the safe place to clear, because the isolate
+    /// is thread-affine and the page thread is the only thread that ever enters
+    /// it: a termination pending when an entry starts cannot belong to a script
+    /// this entry has not yet run, since there is no other script in flight. The
+    /// clear cannot blunt a real kill either — a terminate issued *during* the
+    /// entry lands after it and still aborts that entry's script. It is one
+    /// stack-guard interrupt flag behind a short lock, once per script or
+    /// callback, which is nothing next to running one.
+    fn discard_stray_termination(&mut self) {
+        self.isolate.cancel_terminate_execution();
+    }
+
     /// The whole run: an optional deadline watchdog, one context-scoped
     /// compilation and evaluation, then a failure classified by *where* it
     /// happened and worded by what stopped it.
@@ -703,6 +744,12 @@ impl Engine {
         source: &str,
         timeout: Option<std::time::Duration>,
     ) -> Result<String, ScriptFailure> {
+        // One of the three ways script is entered (see
+        // `discard_stray_termination`): clear before the watchdog is even
+        // spawned, so a stray termination from an earlier entry cannot abort
+        // this script and be blamed on this run's own deadline.
+        self.discard_stray_termination();
+
         let watchdog = timeout.map(|timeout| {
             let handle = self.isolate.thread_safe_handle();
             let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
@@ -754,6 +801,12 @@ impl Engine {
         // observe. Clear any pending termination unconditionally once the
         // watchdog has joined (and whenever a run was terminated), so the next
         // evaluation on this isolate never inherits it.
+        //
+        // The start-of-entry clear makes this redundant for every entry that
+        // runs script — each clears before its own script anyway — but it stays:
+        // it keeps this function's own contract, that a run which ended in a
+        // termination leaves the isolate resumable, true without depending on
+        // what the caller does next, and it is one flag clear per run.
         if terminated || timeout.is_some() {
             self.isolate.cancel_terminate_execution();
         }
@@ -836,7 +889,14 @@ impl Engine {
     /// microtasks queued by microtasks in the same pass, so once this returns
     /// the queue is genuinely empty, and any script entered afterwards sets the
     /// flag again on its own.
+    ///
+    /// The checkpoint enters script — a promise reaction or `queueMicrotask`
+    /// callback — so it starts with no termination pending, like every other
+    /// way in (`discard_stray_termination`). It is the only clear `run_microtasks`
+    /// goes through; on the other drive paths it is the one in front of the
+    /// first handler.
     fn checkpoint(&mut self) {
+        self.discard_stray_termination();
         self.isolate.perform_microtask_checkpoint();
         self.host.microtasks_pending.set(false);
     }
@@ -919,6 +979,10 @@ impl Engine {
     /// with the frame timestamp in milliseconds, followed by a microtask
     /// checkpoint. Callbacks registered during the frame wait for the next one
     /// (`docs/spec/05-javascript.md` §5).
+    ///
+    /// It runs script only through `invoke_handler`, which clears a stray
+    /// termination before each callback; the checkpoint that follows is behind
+    /// them, so this entry does not clear one itself.
     pub fn run_animation_frame(&mut self) {
         // Moves each due callback's handle onto the ready-frame queue.
         self.event_loop.run_animation_frame();
@@ -1000,7 +1064,16 @@ impl Engine {
     /// to disturb the following microtask checkpoint, and the next handler still
     /// runs. Surfacing the exception to the error console lands with the
     /// reporting work package.
+    ///
+    /// This is the third way script is entered and so the third start-of-entry
+    /// clear (`discard_stray_termination`): every timer and animation-frame
+    /// callback in the crate reaches V8 through here, which is what makes
+    /// `pump_due_timers`, `run_animation_frame` *and* `tick_frame` covered
+    /// without each clearing on its own — `run_animation_frame` runs its
+    /// callbacks before its first checkpoint, so a clear there would come too
+    /// late for the first one.
     fn invoke_handler(&mut self, handler: &v8::Global<v8::Function>, timestamp: Option<f64>) {
+        self.discard_stray_termination();
         // A timer or animation-frame callback is a script activation too: an
         // event it dispatches must not checkpoint microtasks between listeners.
         self.host.enter_script();

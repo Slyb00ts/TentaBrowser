@@ -253,6 +253,62 @@ fn trim_memory_advances_the_gc_epoch_and_clears_a_collected_wrapper() {
     );
 }
 
+/// A loop V8 reaches an interrupt check inside many times while it runs.
+///
+/// This is what makes the stray-termination tests below real: a terminate that
+/// is pending when the script starts aborts it at one of those checks, and a
+/// terminate issued *during* it does the same. A trivial `1 + 1` proves nothing
+/// — V8 can complete it without ever looking at the termination request, so a
+/// test built on it would pass with the bug still in place. The loop is short
+/// enough to finish in milliseconds when nothing terminates it.
+const INTERRUPTIBLE_SCRIPT: &str =
+    "let sum = 0; for (let i = 0; i < 10_000_000; i++) { sum += i; } sum;";
+
+/// Terminates the engine from another thread while nothing is running on it,
+/// and returns only once the request has landed.
+///
+/// This is the "between scripts" window `EngineWatchdog::terminate` documents
+/// ("best effort and idempotent: the engine may be between scripts, or already
+/// stopped"): the request is a real one, through the engine's own watchdog, but
+/// no running script is there to consume it, so it sits on the isolate until
+/// the next entry — the state the entry-start clear exists for. The terminate
+/// still has to be issued *before* the entry under test starts, so it cannot
+/// arrive late and kill the wrong thing: `IsolateHandle::terminate_execution`
+/// is synchronous, and joining the issuing thread makes that ordering explicit
+/// rather than timing-dependent.
+fn terminate_while_idle(engine: &mut Box<dyn PageEngine>) {
+    let watchdog = engine.watchdog().expect("a V8 isolate can be interrupted");
+    std::thread::spawn(move || watchdog.terminate())
+        .join()
+        .expect("the terminating thread finished");
+}
+
+/// Whether `class` is on the document's `<body>`.
+fn body_has_class(document: &SharedDocument, class: &str) -> bool {
+    let doc = document.borrow();
+    let body = doc.body().expect("<body> exists");
+    doc.has_class(body, class)
+}
+
+/// Runs `body` on a thread of its own and returns what it produced, failing
+/// rather than hanging if it does not finish.
+///
+/// The engine is not `Send`, so a test that terminates from another thread has
+/// to build its document and engine on a worker; the bounded receive is the
+/// outer timeout, so an engine that spins instead of returning fails the suite
+/// rather than blocking it.
+fn run_bounded<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let runner = std::thread::spawn(move || {
+        let _ = tx.send(body());
+    });
+    let result = rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the engine work must finish; a hang here is the bug");
+    runner.join().expect("the runner thread finished");
+    result
+}
+
 #[test]
 fn the_watchdog_stops_a_runaway_script_from_another_thread() {
     // The engine is not `Send`, so the run happens on a thread that builds its
@@ -275,10 +331,15 @@ fn the_watchdog_stops_a_runaway_script_from_another_thread() {
         let error = engine
             .run_script("while (true) {}", ScriptKind::Classic)
             .expect_err("the watchdog stopped the script");
-        let _ = tx.send((error.kind, error.message, started.elapsed()));
+        // The kill must leave the isolate usable, and the entry-start clear must
+        // not have blunted it: this script was never terminated and must run.
+        let follow_up = engine
+            .run_script(INTERRUPTIBLE_SCRIPT, ScriptKind::Classic)
+            .is_ok();
+        let _ = tx.send((error.kind, error.message, started.elapsed(), follow_up));
     });
 
-    let (kind, message, elapsed) = rx
+    let (kind, message, elapsed, follow_up) = rx
         .recv_timeout(Duration::from_secs(10))
         .expect("the watchdog must stop the script; a hang here is the bug");
     assert_eq!(kind, ScriptErrorKind::Terminated, "got {message:?}");
@@ -286,7 +347,164 @@ fn the_watchdog_stops_a_runaway_script_from_another_thread() {
         elapsed < Duration::from_secs(1),
         "the watchdog stopped it early, not the 3 s deadline: {elapsed:?}"
     );
+    assert!(follow_up, "the isolate is usable after a terminated run");
     runner.join().expect("the runner thread finished");
+}
+
+// The four tests below pin the entry-start clear one way in at a time. Each
+// arranges a real terminate through the engine's watchdog from another thread
+// while nothing runs on the isolate, then requires the next script — the one
+// the terminate was never aimed at — to run. Without the clear they all fail:
+// V8's termination is a pending request on the isolate, invisible to
+// `is_execution_terminating()` until running code handles it, so the next entry
+// inherits it and its script dies.
+
+#[test]
+fn a_stray_termination_does_not_abort_the_next_script() {
+    // The `run_inner` entry: a top-level script through the page boundary.
+    let ran = run_bounded(|| {
+        let (document, _target) = test_document();
+        let mut engine = engine_over(&document);
+        terminate_while_idle(&mut engine);
+        engine
+            .run_script(INTERRUPTIBLE_SCRIPT, ScriptKind::Classic)
+            .map_err(|error| (error.kind, error.message))
+    });
+    ran.expect("a termination issued while the engine was idle must not abort the next script");
+}
+
+#[test]
+fn a_stray_termination_does_not_abort_the_next_microtask() {
+    // The `checkpoint` entry, on its own: `run_microtasks` drives no timers and
+    // no callbacks, so the clear it needs is the one in the checkpoint.
+    let ran = run_bounded(|| {
+        let (document, _target) = test_document();
+        let mut engine = engine_over(&document);
+        engine
+            .run_script(
+                "queueMicrotask(() => { document.body.classList.add('microtask-ran'); });",
+                ScriptKind::Classic,
+            )
+            .expect("the queueing script runs");
+        terminate_while_idle(&mut engine);
+
+        engine.run_microtasks();
+        body_has_class(&document, "microtask-ran")
+    });
+    assert!(ran, "a stray termination must not abort the next microtask");
+}
+
+#[test]
+fn a_stray_termination_does_not_abort_the_next_timer_callback() {
+    // The `pump_due_timers` entry. Note what makes this *not* the same test as
+    // "terminate during a timer callback": V8 consumes a terminate that a
+    // running script reaches an interrupt check for, so a callback that is
+    // already spinning when the terminate arrives is killed by it and leaves
+    // nothing pending. The state that poisons a later entry is a request no
+    // running script consumed, which is what `terminate_while_idle` arranges.
+    let ran = run_bounded(|| {
+        let (document, _target) = test_document();
+        let mut engine = engine_over(&document);
+        engine
+            .run_script(
+                "setTimeout(() => { document.body.classList.add('timer-ran'); }, 0);",
+                ScriptKind::Classic,
+            )
+            .expect("the scheduling script runs");
+        terminate_while_idle(&mut engine);
+
+        let pumped = engine.pump_due_timers(10);
+        (pumped, body_has_class(&document, "timer-ran"))
+    });
+    assert_eq!(ran.0, 1, "the pump ran the due callback");
+    assert!(
+        ran.1,
+        "a stray termination must not abort the next timer callback"
+    );
+}
+
+#[test]
+fn a_stray_termination_does_not_abort_the_next_animation_frame_callback() {
+    // The `invoke_handler` entry with nothing in front of it: unlike
+    // `pump_due_timers`, `run_animation_frame` reaches its first callback
+    // before any microtask checkpoint, so this one is covered by the clear in
+    // `invoke_handler` and by nothing else.
+    let ran = run_bounded(|| {
+        let (document, _target) = test_document();
+        let mut engine = engine_over(&document);
+        engine
+            .run_script(
+                "requestAnimationFrame(() => { document.body.classList.add('frame-ran'); });",
+                ScriptKind::Classic,
+            )
+            .expect("the registering script runs");
+        terminate_while_idle(&mut engine);
+
+        engine.run_animation_frame();
+        body_has_class(&document, "frame-ran")
+    });
+    assert!(
+        ran,
+        "a stray termination must not abort the next animation-frame callback"
+    );
+}
+
+#[test]
+fn a_terminate_during_a_timer_callback_stops_that_callback_and_no_later_script() {
+    // The real kill on the `invoke_handler` path, and the check that the
+    // entry-start clear does not blunt it: the terminate arrives *after* the
+    // callback started, so nothing has cleared it away.
+    //
+    // It is deliberately not one of the regression tests above. V8 consumes a
+    // terminate the running callback reaches an interrupt check for, clearing
+    // both the request and the exception, so the isolate is already clean by
+    // the time the pump returns and this passes with or without the clear. What
+    // it pins is the other half: the clear must still leave a terminate issued
+    // inside an entry alone.
+    let (ran, completed, follow_up) = run_bounded(|| {
+        let (document, _target) = test_document();
+        let mut engine = engine_over(&document);
+
+        // The loop runs for seconds on its own, so the 50 ms terminate always
+        // lands inside it — and it is finite, so a watchdog that never fires
+        // ends the callback rather than hanging the suite. The class is added
+        // only if the callback reaches its end, which makes its absence proof
+        // that the terminate did stop the callback.
+        engine
+            .run_script(
+                "setTimeout(() => { \
+                     let sum = 0; \
+                     for (let i = 0; i < 2_000_000_000; i++) { sum += i; } \
+                     document.body.classList.add('callback-completed'); \
+                 }, 0);",
+                ScriptKind::Classic,
+            )
+            .expect("the scheduling script runs");
+
+        let watchdog = engine.watchdog().expect("a V8 isolate can be interrupted");
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            watchdog.terminate();
+        });
+
+        // The callback starts spinning here, and the terminate lands inside it.
+        let pumped = engine.pump_due_timers(10);
+        let completed = body_has_class(&document, "callback-completed");
+        let follow_up = engine
+            .run_script(INTERRUPTIBLE_SCRIPT, ScriptKind::Classic)
+            .is_ok();
+        (pumped, completed, follow_up)
+    });
+
+    assert_eq!(
+        ran, 1,
+        "the pump entered the terminated callback exactly once"
+    );
+    assert!(
+        !completed,
+        "the terminate must have stopped the callback before its last statement"
+    );
+    assert!(follow_up, "a stopped callback leaves the isolate usable");
 }
 
 #[test]
