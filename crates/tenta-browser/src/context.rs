@@ -435,6 +435,9 @@ impl BrowserContext {
             clock: tenta_page::clock::system_clock(),
             max_tier: options.max_tier.unwrap_or(ceiling).min(ceiling),
             javascript: options.javascript,
+            // The JavaScript backend lands with the P2 page runtime; until a
+            // context can be given a factory, every page it builds is Tier 1.
+            engine: None,
             budgets: self.inner.budgets.clone(),
             settle: self.inner.engine.options.settle,
             locale: self.inner.engine.options.locale.clone(),

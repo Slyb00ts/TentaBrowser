@@ -6,6 +6,8 @@
 //! thread, record every subresource hint without issuing it
 //! (`docs/spec/02-architecture.md` §1.2), and settle.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -13,8 +15,9 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use tenta_core::{BudgetKind, Budgets, ContextId, Error, FrameId, PageId, RequestId, Result, Tier};
-use tenta_dom::Document as DomDocument;
-use tenta_html::{ParseStatus, Parser, ParserOptions, PreloadHint};
+use tenta_dom::{Document as DomDocument, SharedDocument, SharedSink};
+use tenta_html::{Encoding, ParseStatus, Parser, ParserOptions, PreloadHint};
+use tenta_js::engine::PageEngineFactory;
 use tenta_net::policy::cookies::Site;
 use tenta_net::policy::error_names::ErrorName;
 use tenta_net::request::RequestLimits;
@@ -27,6 +30,7 @@ use crate::document::Document;
 use crate::error_page::error_document;
 use crate::event::{EVENT_BUFFER, PageEvent, PageEvents};
 use crate::fetch_policy::{FetchPolicy, RecordedHint};
+use crate::runtime;
 use crate::settle::{Origin, RequestClass, Settle, SettleConfig, SettleState, SettleTracker};
 use crate::task::{catch_unwind_future, panic_message};
 use crate::thread::PageThread;
@@ -226,6 +230,14 @@ pub struct PageConfig {
     pub max_tier: Tier,
     /// Whether scripts run. Tier 1 pages always have this off.
     pub javascript: bool,
+    /// The JavaScript backend this page runs scripts with.
+    ///
+    /// `None` means the page never enters an engine: every script element is
+    /// skipped and the page stays at Tier 1. It is a factory rather than an
+    /// engine because a page thread holds one engine per page at a time
+    /// (`docs/spec/05-javascript.md` §6) and the factory is what survives a
+    /// crash (`docs/spec/02-architecture.md` §8).
+    pub engine: Option<Arc<dyn PageEngineFactory>>,
     pub budgets: Budgets,
     pub settle: SettleConfig,
     /// BCP 47 tag that picks the fallback encoding when nothing declares one.
@@ -416,6 +428,10 @@ impl Page {
     }
 
     /// Takes the parsed document and the navigation out of the page.
+    ///
+    /// The runtime needs no unwinding here: a document is installed exactly
+    /// when the engine that was bound to it is gone, so a page that has a
+    /// document has no engine still holding it.
     pub fn take_document(&self) -> Result<Document> {
         let mut state = self.inner.state.lock();
         if let Some(reason) = &state.crashed {
@@ -537,6 +553,10 @@ impl Page {
         let thread = Arc::clone(&self.inner.config.thread);
         let (reply, answer) = oneshot::channel();
         let posted = thread.post_task(Box::new(move || {
+            // A closed page has no engine: the navigation that built it is
+            // cancelled and unwinds on this thread, and this is the one place
+            // that can reclaim it without waiting for that.
+            drop(runtime::take_runtime(inner.config.id));
             let document = inner.state.lock().document.take();
             drop(document);
             let _ = reply.send(());
@@ -577,17 +597,23 @@ async fn navigate(
     let deadline = started + options.timeout;
     let timeout_millis = options.timeout.as_millis() as u64;
 
-    let mut tracker = SettleTracker::new(
-        config.settle,
-        options.wait_until.clone(),
-        Arc::clone(&config.clock),
-    )
-    .with_timeout(options.timeout);
-    tracker.note_navigation_started();
+    // The tracker lives behind a shared cell because the engine's provenance
+    // reports reach it from inside an engine call, while the page feeds it
+    // from here: both sides borrow it for one operation and no longer
+    // (`crates/tenta-page/src/runtime.rs`).
+    let tracker = Rc::new(RefCell::new(
+        SettleTracker::new(
+            config.settle,
+            options.wait_until.clone(),
+            Arc::clone(&config.clock),
+        )
+        .with_timeout(options.timeout),
+    ));
+    tracker.borrow_mut().note_navigation_started();
     // Commit immediately to reset idle windows for the new navigation (M-R2-6).
     // This ensures that the document request we're about to start is tracked
     // correctly and the idle windows are restarted when the request completes.
-    tracker.note_navigation_commit();
+    tracker.borrow_mut().note_navigation_commit();
 
     let request_id = next_request_id();
     let request = build_request(config, &url, &options)?;
@@ -597,7 +623,9 @@ async fn navigate(
         method: "GET".to_owned(),
         resource_type: "document",
     });
-    tracker.note_request_started(request_id, RequestClass::Document, Origin::Tracked);
+    tracker
+        .borrow_mut()
+        .note_request_started(request_id, RequestClass::Document, Origin::Tracked);
 
     // The request races the navigation generation (B-R4-1): another `goto`
     // or `close()` while the head is outstanding aborts it at once instead
@@ -796,19 +824,22 @@ async fn navigate(
         from_cache: response.from_cache,
     });
 
-    tracker.note_parser_running(true);
+    tracker.borrow_mut().note_parser_running(true);
     let parsed = parse_body(
         &inner,
         response,
-        &final_url,
-        &content_type,
+        BodyMeta {
+            final_url: &final_url,
+            content_type: &content_type,
+        },
         deadline,
         timeout_millis,
         generation,
+        &tracker,
     )
     .await
     .inspect_err(|_| {
-        tracker.note_parser_running(false);
+        tracker.borrow_mut().note_parser_running(false);
     })?;
     let ParsedBody {
         document,
@@ -822,15 +853,18 @@ async fn navigate(
         mid_body_timeout,
     } = parsed;
 
-    tracker.note_parser_running(false);
-    tracker.note_request_done(request_id);
-    tracker.note_domcontentloaded();
+    tracker.borrow_mut().note_parser_running(false);
+    tracker.borrow_mut().note_request_done(request_id);
+    tracker.borrow_mut().note_domcontentloaded();
     // Tier 1 issues no subresource, so nothing delays the load event
     // (`docs/spec/02-architecture.md` §1.2).
-    tracker.note_load_fired();
+    tracker.borrow_mut().note_load_fired();
 
     let policy = FetchPolicy::for_tier(Tier::Dom);
-    let base = document.base_url().or(document.url()).cloned();
+    let base = {
+        let document = document.borrow();
+        document.base_url().or(document.url()).cloned()
+    };
     let recorded: Vec<RecordedHint> = hints
         .iter()
         .map(|hint| RecordedHint::from_hint(hint, base.as_ref(), &policy))
@@ -847,9 +881,17 @@ async fn navigate(
         url: final_url.clone(),
     });
 
+    // The tree becomes the page's at the first install point at which the page
+    // owns it alone; a tree an engine is bound to is still shared until the
+    // engine is gone (`DeferredDocument`). The engine is not released here:
+    // the settle call this navigation is about to run pumps it.
+    let mut deferred = DeferredDocument::new(inner.config.id, document);
+
     {
         let mut state = inner.state.lock();
-        state.document = Some(document);
+        if let Some(document) = deferred.take_if_owned() {
+            state.document = Some(document);
+        }
         state.hints = recorded;
         state.tier = Tier::Dom;
         state.document_navigation_id = generation;
@@ -859,7 +901,7 @@ async fn navigate(
     // If a mid-body timeout occurred while reading the response body,
     // return an error after installing the partial document.
     if mid_body_timeout {
-        let pending = tracker.pending();
+        let pending = tracker.borrow().pending();
         let navigation = Navigation {
             url: url.clone(),
             final_url: final_url.clone(),
@@ -885,6 +927,9 @@ async fn navigate(
                     message: "navigation was cancelled".into(),
                 });
             }
+            if let Some(document) = deferred.take() {
+                state.document = Some(document);
+            }
             state.navigation = Some(navigation.clone());
             state.settle = Some(SettleState::Timeout { pending });
         }
@@ -897,14 +942,18 @@ async fn navigate(
     // Evaluate Selector/Text conditions once after install (Tier 1: once and for all;
     // at Tier 2: on DOM mutation). This avoids spinning the page thread on repeated
     // evaluations in the settle loop (B-R2-2).
-    if tracker.wait_until().needs_condition() {
-        let met = condition_met(&inner, tracker.wait_until());
-        tracker.note_condition_met(met);
+    if tracker.borrow().wait_until().needs_condition() {
+        let met = {
+            let tracker = tracker.borrow();
+            condition_met(&inner, &deferred, tracker.wait_until())
+        };
+        tracker.borrow_mut().note_condition_met(met);
     }
 
     let settle = match wait_for_settle(
         &inner,
-        &mut tracker,
+        &tracker,
+        &deferred,
         deadline,
         timeout_millis,
         true,
@@ -917,7 +966,7 @@ async fn navigate(
             // Navigation timed out while settling (after the document was installed).
             // Keep the partial document and return the Timeout outcome.
             // Check and write under one lock to prevent race with close() (N-R4-1/N-R4-2).
-            let pending = tracker.pending();
+            let pending = tracker.borrow().pending();
             let navigation = Navigation {
                 url: url.clone(),
                 final_url: final_url.clone(),
@@ -944,6 +993,9 @@ async fn navigate(
                         code: ErrorName::Aborted.as_str().to_string(),
                         message: "navigation was cancelled".into(),
                     });
+                }
+                if let Some(document) = deferred.take() {
+                    state.document = Some(document);
                 }
                 state.navigation = Some(navigation.clone());
                 state.settle = Some(SettleState::Timeout { pending });
@@ -979,6 +1031,9 @@ async fn navigate(
                 message: "navigation was cancelled".into(),
             });
         }
+        if let Some(document) = deferred.take() {
+            state.document = Some(document);
+        }
         state.navigation = Some(navigation.clone());
         state.settle = Some(settle);
     }
@@ -986,7 +1041,7 @@ async fn navigate(
 }
 
 struct ParsedBody {
-    document: DomDocument,
+    document: SharedDocument,
     hints: Vec<PreloadHint>,
     bytes: u64,
     encoding: String,
@@ -997,18 +1052,125 @@ struct ParsedBody {
     mid_body_timeout: bool,
 }
 
-/// Streams the response into the parser, enforcing the byte budget and
-/// restarting once if a `<meta charset>` overrides the sniffed encoding.
+/// Releases the runtime a failed parse built.
+///
+/// A parse that ends in an error hands no tree to a navigation, so nothing
+/// later would release the engine it built at a script pause: without this the
+/// engine and its document would stay on the page thread until some later
+/// navigation of the same page replaced them.
+struct ParseCleanup {
+    page: PageId,
+    document: SharedDocument,
+    armed: bool,
+}
+
+impl ParseCleanup {
+    fn new(page: PageId, document: SharedDocument) -> ParseCleanup {
+        ParseCleanup {
+            page,
+            document,
+            armed: true,
+        }
+    }
+
+    /// The parse replaced its tree with a re-parse; the engine can only be
+    /// bound to the tree in use, and at this point it can only be bound to
+    /// none.
+    fn rebind(&mut self, document: &SharedDocument) {
+        self.document = document.clone();
+    }
+
+    /// The parse handed its tree over: a navigation owns it from here.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ParseCleanup {
+    fn drop(&mut self) {
+        if self.armed {
+            drop(runtime::take_runtime_for(self.page, &self.document));
+        }
+    }
+}
+
+/// How far one parse step got.
+///
+/// A `</script>` pause is reported as a *status*, not through a callback, so
+/// driving it is a loop rather than a single call: take the script, run it,
+/// resume, and look at what the resume reported. A pause can be followed by
+/// another pause (two adjacent scripts in one chunk), by the chunk simply
+/// being consumed, by the end of the document, or by a declaration that
+/// changes the encoding.
+enum ParseStep {
+    Fed,
+    Stopped,
+    Restart(&'static Encoding),
+}
+
+/// Drives one parse status to the point where the caller may feed again,
+/// running the scripts the parse paused on.
+///
+/// A `Script` pause is the one place the page enters an engine with its parser
+/// stopped (`docs/spec/05-javascript.md` §6): everything before the script is
+/// in the tree, nothing after it is, and the parse stays where it is until
+/// [`Parser::resume`].
+fn drive_parse(
+    parser: &mut Parser<'_, SharedSink>,
+    status: ParseStatus,
+    document: &SharedDocument,
+    config: &PageConfig,
+    tracker: &Rc<RefCell<SettleTracker>>,
+    final_url: &Url,
+) -> Result<ParseStep> {
+    let mut status = status;
+    while status == ParseStatus::Script {
+        // A script the parse is paused on is work in flight: it holds a
+        // `NetworkIdle` settle open, exactly as a subresource would.
+        tracker.borrow_mut().note_pending_scripts(1);
+        let base = {
+            let document = document.borrow();
+            document.base_url().or(document.url()).cloned()
+        }
+        .unwrap_or_else(|| final_url.clone());
+        runtime::run_pending_script(parser, document, config, tracker, &base)?;
+        // Resuming is the caller's statement that it is done with the pause.
+        status = parser.resume();
+        tracker.borrow_mut().note_pending_scripts(0);
+    }
+    Ok(match status {
+        ParseStatus::Continue => ParseStep::Fed,
+        ParseStatus::Stopped => ParseStep::Stopped,
+        ParseStatus::EncodingChanged(encoding) => ParseStep::Restart(encoding),
+        // The loop above leaves no `Script` behind.
+        ParseStatus::Script => ParseStep::Fed,
+    })
+}
+
+/// What the response head told the parse about the body it is about to read.
+///
+/// Separate from [`Response`] because the body stream is consumed while these
+/// are still needed — the URL every relative reference resolves against, and
+/// the `Content-Type` that decides the MIME type and the encoding hint.
+struct BodyMeta<'a> {
+    final_url: &'a Url,
+    content_type: &'a Option<String>,
+}
+
+/// Streams the response into the parser, running each script the parse pauses
+/// on and restarting once if a `<meta charset>` overrides the sniffed encoding.
 async fn parse_body(
     inner: &Arc<PageInner>,
     response: Response,
-    final_url: &Url,
-    content_type: &Option<String>,
+    meta: BodyMeta<'_>,
     deadline: Instant,
     timeout_millis: u64,
     generation: u64,
+    tracker: &Rc<RefCell<SettleTracker>>,
 ) -> Result<ParsedBody> {
     let config = &inner.config;
+    let final_url = meta.final_url;
+    let content_type = meta.content_type;
     let transport_charset = content_type.as_deref().and_then(charset_of);
     let mime = content_type
         .as_deref()
@@ -1021,15 +1183,27 @@ async fn parse_body(
     let max_bytes = config.budgets.network_bytes;
 
     let hints: Arc<Mutex<Vec<PreloadHint>>> = Arc::new(Mutex::new(Vec::new()));
+    // The parse is written into a document that script may read while it runs,
+    // so the sink holds it behind `Rc<RefCell<_>>` rather than owning it
+    // (`docs/spec/05-javascript.md` §6). A page without an engine uses the same
+    // sink: one tree type, one install path.
     let make_document = || {
-        let mut document = DomDocument::with_url(final_url.clone());
-        document.set_content_type(mime.clone());
-        document
+        let (sink, document) = SharedSink::with_new_document();
+        {
+            let mut fresh = document.borrow_mut();
+            fresh.set_url(Some(final_url.clone()));
+            fresh.set_content_type(mime.clone());
+        }
+        (sink, document)
     };
-    let make_options = |encoding: Option<&'static tenta_html::Encoding>| {
+    // Pausing is only useful to a caller that can run the script it is pausing
+    // on (`crates/tenta-html/src/parser.rs`).
+    let pause_on_script = config.javascript && config.engine.is_some();
+    let make_options = |encoding: Option<&'static Encoding>| {
         let sink = Arc::clone(&hints);
         ParserOptions {
             scripting_enabled: config.javascript,
+            pause_on_script,
             default_locale: config.locale.clone(),
             transport_charset: transport_charset.clone(),
             encoding,
@@ -1040,7 +1214,9 @@ async fn parse_body(
         }
     };
 
-    let mut parser = Parser::new(make_document(), make_options(None));
+    let (sink, mut document) = make_document();
+    let mut cleanup = ParseCleanup::new(inner.config.id, document.clone());
+    let mut parser = Parser::new(sink, make_options(None));
     let mut body = response.body;
     let mut total: u64 = 0;
     let mut head: Vec<u8> = Vec::new();
@@ -1106,7 +1282,10 @@ async fn parse_body(
                         });
                     }
                 }
-                let document = parser.finish();
+                // The parse is over, whatever the body did: the tree it built
+                // so far is the page's, and no parser writes into it again.
+                document = parser.finish();
+                runtime::note_parse_finished(inner.config.id, &document);
                 let encoding = match restarted {
                     Some(encoding) => encoding.name().to_owned(),
                     None => tenta_html::sniff(&head, transport_charset.as_deref(), &config.locale)
@@ -1114,13 +1293,16 @@ async fn parse_body(
                         .name()
                         .to_owned(),
                 };
-                let mut document = document;
                 // Apply the same post-parse fix-ups as the full parse (N-R3-2)
-                document.set_scripting_enabled(config.javascript);
-                document.set_encoding(encoding.clone());
-                document.refresh_base_url();
-                document.set_ready_state(tenta_dom::ReadyState::Complete);
+                {
+                    let mut document = document.borrow_mut();
+                    document.set_scripting_enabled(config.javascript);
+                    document.set_encoding(encoding.clone());
+                    document.refresh_base_url();
+                    document.set_ready_state(tenta_dom::ReadyState::Complete);
+                }
                 let hints = std::mem::take(&mut *hints.lock());
+                cleanup.disarm();
                 return Ok(ParsedBody {
                     document,
                     hints,
@@ -1158,24 +1340,11 @@ async fn parse_body(
         if config.test_hooks.panic_in_parse {
             panic!("test hook: panic inside the parse task");
         }
-        match parser.feed(&chunk) {
-            ParseStatus::Continue => {}
-            ParseStatus::Stopped => break,
-            ParseStatus::Script => {
-                // Unreachable by construction: this parse is built without
-                // `pause_on_script`, so the parser walks past script elements
-                // instead of stopping on them. Running them is the page
-                // runtime's job (`docs/spec/05-javascript.md` §6). Feeding on
-                // through a pause would buffer the rest of the document
-                // without parsing it, so stop with the tree built so far
-                // rather than truncate it silently.
-                tracing::warn!(
-                    url = %final_url,
-                    "the parse paused on a script, which this parser cannot run"
-                );
-                break;
-            }
-            ParseStatus::EncodingChanged(encoding) => {
+        let status = parser.feed(&chunk);
+        match drive_parse(&mut parser, status, &document, config, tracker, final_url)? {
+            ParseStep::Fed => {}
+            ParseStep::Stopped => break,
+            ParseStep::Restart(encoding) => {
                 let Some(buffer) = restart_buffer.take() else {
                     tracing::warn!(
                         url = %final_url,
@@ -1185,11 +1354,31 @@ async fn parse_body(
                     break;
                 };
                 hints.lock().clear();
-                parser = parser.restart_with_encoding(make_document(), encoding);
+                // The restart throws the tree away, so it gets a fresh one.
+                // The parser only reports an encoding change before it has
+                // handed a script out — handing one out makes the encoding
+                // certain — so no engine is bound to the tree being dropped,
+                // and every script of the new pass still runs.
+                let (sink, fresh) = make_document();
+                document = fresh;
+                cleanup.rebind(&document);
+                parser = parser.restart_with_encoding(sink, encoding);
                 restarted = Some(encoding);
                 for buffered_chunk in &buffer {
-                    if parser.feed(buffered_chunk) != ParseStatus::Continue {
-                        break;
+                    let status = parser.feed(buffered_chunk);
+                    match drive_parse(&mut parser, status, &document, config, tracker, final_url)? {
+                        ParseStep::Fed => {}
+                        ParseStep::Stopped => break,
+                        ParseStep::Restart(next) => {
+                            // The encoding is explicit for the re-parse, so a
+                            // second declaration cannot change it.
+                            tracing::warn!(
+                                url = %final_url,
+                                encoding = next.name(),
+                                "a second <meta charset> during the re-parse is ignored"
+                            );
+                            break;
+                        }
                     }
                 }
                 restart_buffer = Some(buffer);
@@ -1208,7 +1397,24 @@ async fn parse_body(
         }
     }
 
-    let document = parser.finish();
+    // `feed_last` is what reports the scripts of a body shorter than the
+    // sniff window: the rest of the stream is over, and pausing still
+    // applies (`crates/tenta-html/src/parser.rs`).
+    let status = parser.feed_last(b"");
+    match drive_parse(&mut parser, status, &document, config, tracker, final_url)? {
+        ParseStep::Fed => {}
+        ParseStep::Stopped => {}
+        ParseStep::Restart(encoding) => {
+            tracing::warn!(
+                url = %final_url,
+                encoding = encoding.name(),
+                "an encoding declared at the end of the stream is ignored"
+            );
+        }
+    }
+
+    document = parser.finish();
+    runtime::note_parse_finished(inner.config.id, &document);
     let encoding = match restarted {
         Some(encoding) => encoding.name().to_owned(),
         None => tenta_html::sniff(&head, transport_charset.as_deref(), &config.locale)
@@ -1216,12 +1422,17 @@ async fn parse_body(
             .name()
             .to_owned(),
     };
-    let mut document = document;
-    document.set_scripting_enabled(config.javascript);
-    document.set_encoding(encoding.clone());
-    document.refresh_base_url();
-    document.set_ready_state(tenta_dom::ReadyState::Complete);
+    {
+        let mut document = document.borrow_mut();
+        document.set_scripting_enabled(config.javascript);
+        document.set_encoding(encoding.clone());
+        document.refresh_base_url();
+        document.set_ready_state(tenta_dom::ReadyState::Complete);
+    }
     let hints = std::mem::take(&mut *hints.lock());
+    // The parse handed the tree over: the navigation owns it, and the engine
+    // behind it, from here.
+    cleanup.disarm();
     Ok(ParsedBody {
         document,
         hints,
@@ -1235,20 +1446,63 @@ async fn parse_body(
     })
 }
 
-/// Evaluates the settle machine, waking on state changes or deadline.
+/// How many due timer callbacks one turn of the settle loop runs before the
+/// machine gets a look at the page. A page whose timers are always due would
+/// otherwise run them forever and never let the settle call end.
+const TIMERS_PER_TURN: usize = 64;
+
+/// The shortest park the settle loop allows. A turn has just run, so parking
+/// at zero would spin on the engine's own work.
+const MINIMUM_PARK: Duration = Duration::from_millis(1);
+
+/// Evaluates the settle machine, running the engine between evaluations and
+/// waking on state changes, engine work or the deadline.
 async fn wait_for_settle(
     inner: &Arc<PageInner>,
-    tracker: &mut SettleTracker,
+    tracker: &Rc<RefCell<SettleTracker>>,
+    deferred: &DeferredDocument,
     deadline: Instant,
     timeout_millis: u64,
     condition_already_evaluated: bool,
     generation: u64,
 ) -> Result<SettleState> {
-    let notify = tracker.notify_handle();
+    let outcome = settle_loop(
+        inner,
+        tracker,
+        deferred,
+        deadline,
+        timeout_millis,
+        condition_already_evaluated,
+        generation,
+    )
+    .await;
+    // The settle call is over. Nothing the engine reports afterwards belongs to
+    // it, and the next navigation attaches a tracker of its own. Only this
+    // navigation's runtime is detached: a newer navigation's engine is feeding
+    // a newer settle call.
+    runtime::end_settle(inner.config.id, deferred.shared());
+    outcome
+}
+
+async fn settle_loop(
+    inner: &Arc<PageInner>,
+    tracker: &Rc<RefCell<SettleTracker>>,
+    deferred: &DeferredDocument,
+    deadline: Instant,
+    timeout_millis: u64,
+    condition_already_evaluated: bool,
+    generation: u64,
+) -> Result<SettleState> {
+    let page = inner.config.id;
+    let notify = tracker.borrow().notify_handle();
     // The navigation's own generation, never re-read from the state: a bump
     // that lands between the install and this wait would otherwise be taken
     // as the baseline and the wait would run to its deadline.
     let initial_generation = generation;
+    // Mutations are detected by generation rather than by a callback
+    // (`docs/spec/02-architecture.md` §5.1): one `u64` compare per turn.
+    let mut mutation_generation =
+        with_document(inner, deferred, |document| document.mutation_generation());
     loop {
         // The generation waiter is registered before the check, so a bump
         // between the check and the select below is never lost
@@ -1265,14 +1519,26 @@ async fn wait_for_settle(
                 });
             }
         }
-        let now = inner.config.clock.now();
-        // At Tier 1, conditions are evaluated once after install, not repeatedly.
-        // At Tier 2, they would be re-evaluated on note_dom_mutation (not yet implemented).
-        if tracker.wait_until().needs_condition() && !condition_already_evaluated {
-            let met = condition_met(inner, tracker.wait_until());
-            tracker.note_condition_met(met);
+        // One turn of the page loop: the timer callbacks that came due and the
+        // rendering opportunity the engine owes. A script that queued work
+        // therefore runs it while this settle call is waiting, and both kinds
+        // of callback can mutate the tree.
+        let engine_wakeup =
+            runtime::with_runtime(page, |runtime| runtime.turn(TIMERS_PER_TURN)).flatten();
+        let mutated = with_document(inner, deferred, |document| document.mutation_generation());
+        if mutated != mutation_generation {
+            mutation_generation = mutated;
+            tracker.borrow_mut().note_dom_mutation();
         }
-        match tracker.evaluate(now) {
+        let now = inner.config.clock.now();
+        // At Tier 1 the condition is evaluated once after install and no
+        // mutation can change it. With an engine it is re-evaluated whenever
+        // the tree may have moved.
+        if tracker.borrow().wait_until().needs_condition() && !condition_already_evaluated {
+            let met = condition_met(inner, deferred, tracker.borrow().wait_until());
+            tracker.borrow_mut().note_condition_met(met);
+        }
+        match tracker.borrow_mut().evaluate(now) {
             SettleState::Settled { busy } => return Ok(SettleState::Settled { busy }),
             SettleState::Timeout { pending } => {
                 return Err(Error::Timeout {
@@ -1282,12 +1548,24 @@ async fn wait_for_settle(
             }
             _ => {}
         }
-        let wakeup = tracker
+        // Park until the machine, the engine or the deadline next needs the
+        // thread. Only *remaining* durations are compared: the engine's clock
+        // and the page's clock are not the same clock, so their instants never
+        // meet — their delays do.
+        let until_settle = tracker
+            .borrow()
             .next_wakeup(now)
             .unwrap_or(deadline)
-            .max(now + Duration::from_millis(1))
-            .min(deadline + Duration::from_millis(1));
-        let wakeup_instant = tokio::time::Instant::from_std(wakeup);
+            .saturating_duration_since(now);
+        let mut park = until_settle.min(deadline.saturating_duration_since(now));
+        if let Some(engine_remaining) = engine_wakeup {
+            park = park.min(engine_remaining);
+        }
+        // A turn has just run, so work that is due now is the *next* turn's
+        // work: never park at zero and spin.
+        let park_until = tokio::time::Instant::from_std(
+            (now + park.max(MINIMUM_PARK)).min(deadline + MINIMUM_PARK),
+        );
 
         // A tracker change, a generation bump (B-R4-1) or the next tracker
         // deadline all loop back to the checks above.
@@ -1296,18 +1574,14 @@ async fn wait_for_settle(
             biased;
             _ = &mut generation_notified => {}
             _ = tracker_notified => {}
-            _ = tokio::time::sleep_until(wakeup_instant) => {}
+            _ = tokio::time::sleep_until(park_until) => {}
         }
     }
 }
 
 /// Whether the document satisfies a `Selector` or `Text` wait.
-fn condition_met(inner: &Arc<PageInner>, wait_until: &Settle) -> bool {
-    let state = inner.state.lock();
-    let Some(document) = state.document.as_ref() else {
-        return false;
-    };
-    match wait_until {
+fn condition_met(inner: &Arc<PageInner>, deferred: &DeferredDocument, wait_until: &Settle) -> bool {
+    with_document(inner, deferred, |document| match wait_until {
         Settle::Selector(selector) => document
             .query_selector(document.document_node(), selector)
             .ok()
@@ -1315,7 +1589,99 @@ fn condition_met(inner: &Arc<PageInner>, wait_until: &Settle) -> bool {
             .is_some(),
         Settle::Text(text) => document.text().contains(text.as_str()),
         _ => true,
+    })
+    .unwrap_or(false)
+}
+
+/// The tree a settle call reads while its navigation is still in flight.
+///
+/// `PageState` holds its document by value, so a tree the page owns alone is
+/// moved in as soon as the parse hands it over, and every reader finds it
+/// there. A tree an engine is bound to is not owned alone — the engine holds a
+/// handle for as long as the settle runs — so it is installed when the
+/// navigation ends and the engine goes with it. Until then this is the only
+/// place that tree is reachable from, which is what makes the move-out at the
+/// end possible at all.
+///
+/// Every exit from a navigation releases the engine, so a cancelled or failed
+/// navigation cannot leave one behind on the page thread.
+struct DeferredDocument {
+    page: PageId,
+    document: Option<SharedDocument>,
+}
+
+impl DeferredDocument {
+    fn new(page: PageId, document: SharedDocument) -> DeferredDocument {
+        DeferredDocument {
+            page,
+            document: Some(document),
+        }
     }
+
+    /// The tree while this navigation still holds it, for a settle call to
+    /// read.
+    fn shared(&self) -> Option<&SharedDocument> {
+        self.document.as_ref()
+    }
+
+    /// Moves the tree into the page, releasing this navigation's engine first.
+    ///
+    /// Only for an install point at which the navigation is done with its
+    /// engine. The engine is the other owner of the tree, so dropping it is
+    /// what makes the tree movable — and it drops on the page thread that
+    /// built it. Dropping it any earlier leaves a settling navigation with no
+    /// engine to run the work it is settling for.
+    ///
+    /// `None` means the tree is still shared and the page's installed document
+    /// is left alone; the caller tries again at its next install point.
+    fn take(&mut self) -> Option<DomDocument> {
+        if let Some(document) = self.document.as_ref() {
+            drop(runtime::take_runtime_for(self.page, document));
+        }
+        self.take_if_owned()
+    }
+
+    /// Moves the tree into the page if the navigation already owns it alone.
+    ///
+    /// A tree an engine is bound to is shared with it, and this leaves it that
+    /// way: the navigation is about to settle, and the engine is what the
+    /// settle call pumps. The tree stays reachable through [`Self::shared`]
+    /// until the install point that follows the settle, which is the first one
+    /// at which the engine may go.
+    fn take_if_owned(&mut self) -> Option<DomDocument> {
+        let document = self.document.take()?;
+        match Rc::try_unwrap(document) {
+            Ok(cell) => Some(cell.into_inner()),
+            Err(shared) => {
+                self.document = Some(shared);
+                None
+            }
+        }
+    }
+}
+
+impl Drop for DeferredDocument {
+    fn drop(&mut self) {
+        if let Some(document) = self.document.take() {
+            // A navigation that ends without installing still ends its engine:
+            // nothing else owns it, and its tree is about to be dropped.
+            drop(runtime::take_runtime_for(self.page, &document));
+        }
+    }
+}
+
+/// Runs `f` over the tree a settle call reads: the one this navigation still
+/// holds, or the one the page has installed.
+fn with_document<R>(
+    inner: &Arc<PageInner>,
+    deferred: &DeferredDocument,
+    f: impl FnOnce(&DomDocument) -> R,
+) -> Option<R> {
+    if let Some(shared) = deferred.shared() {
+        return Some(f(&shared.borrow()));
+    }
+    let state = inner.state.lock();
+    state.document.as_ref().map(f)
 }
 
 /// Replaces the document with the error page a failed navigation leaves

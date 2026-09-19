@@ -10,6 +10,9 @@ pub mod error_page;
 pub mod event;
 pub mod fetch_policy;
 pub mod page;
+// Private: the runtime is page-thread-local state the page owns, not an API
+// (`crates/tenta-page/src/runtime.rs`).
+mod runtime;
 pub mod settle;
 pub mod task;
 pub mod thread;
