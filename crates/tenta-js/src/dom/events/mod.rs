@@ -87,11 +87,17 @@ pub trait ScriptHost {
     /// microtask checkpoint runs afterwards only when no script is already on
     /// the stack.
     ///
+    /// Returns whether the callback returned exactly `false`. The comparison is
+    /// strict because an `EventHandler` returns `any`: `0`, `""`, `null` and
+    /// `undefined` are not `false` and do not cancel. Only an event handler's
+    /// result is meaningful (HTML §8.1.8.1's processing algorithm); the
+    /// dispatcher discards it for every other listener.
+    ///
     /// # Preconditions
     ///
     /// The caller holds no `RefCell` borrow of the document, listener table or
     /// event slab (invariant A5).
-    fn invoke_listener(&self, callback: CallbackRef, current_target: u64, event: u64);
+    fn invoke_listener(&self, callback: CallbackRef, current_target: u64, event: u64) -> bool;
 
     /// Drops one owned reference to a stored value (a callback, or a
     /// `CustomEvent` detail).
@@ -467,6 +473,40 @@ impl EventRecord {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ListenerId(pub u64);
 
+/// The name of an event handler IDL attribute: `onclick`, `onload`, `onabort`.
+///
+/// HTML §8.1.8.1 gives every event handler a *name*, "a string that always
+/// starts with `on` and is followed by the name of the event for which the
+/// handler is intended", and the listener a handler registers for listens for
+/// that event type. So the type is derived by stripping the prefix, which is
+/// exactly what the standard's name/type pairs do (`onload` → `load`).
+///
+/// It is *not* what the legacy-prefixed handlers do: `onwebkitanimationend`'s
+/// event type is `webkitAnimationEnd`, whose name does not start with the
+/// stripped remainder at all, so those names cannot be built by prefix
+/// stripping and are not supported here. Every handler this tree needs so far
+/// (`onabort`, and b-5's XHR `onload`/`onerror`/`onprogress`/`ontimeout`/
+/// `onreadystatechange`) is a plain one.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct EventHandlerName(&'static str);
+
+impl EventHandlerName {
+    /// The handler named by its IDL attribute name, e.g. `onload`.
+    pub const fn new(attribute: &'static str) -> Self {
+        Self(attribute)
+    }
+
+    /// The IDL attribute name, e.g. `onload`.
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+
+    /// The event type the handler's listener listens for: `onload` → `load`.
+    pub fn event_type(self) -> &'static str {
+        self.0.strip_prefix("on").unwrap_or(self.0)
+    }
+}
+
 /// One registered event listener.
 #[derive(Clone, Debug)]
 pub struct Listener {
@@ -482,6 +522,41 @@ pub struct Listener {
     pub once: bool,
     /// Whether it is passive (its `preventDefault` is ignored).
     pub passive: bool,
+    /// Whether it is the listener of an event handler rather than one the page
+    /// registered with `addEventListener` (HTML §8.1.8.1).
+    ///
+    /// The flag exists for dispatch: a handler's callback is the page's own
+    /// handler function, so the return value the dispatcher receives is the
+    /// handler's, and exactly `false` sets the event's canceled flag. A plain
+    /// listener's return value means nothing.
+    ///
+    /// That same sharing is why identity matching has to know the flag. HTML
+    /// registers a handler's listener with an internal callback the page cannot
+    /// name, so this entry is never the one a page's `addEventListener` made or
+    /// one its `removeEventListener` may take: [`ListenerTable::add_handler_at`]
+    /// skips the duplicate rule and [`ListenerTable::remove_at`] skips these
+    /// entries, which is how the page's own function passed to an `onX` setter
+    /// stays two independent listeners from the same function passed to
+    /// `addEventListener`.
+    pub handler: bool,
+}
+
+/// One listener as [`ListenerTable::snapshot_at`] reports it: the fields the
+/// dispatcher needs, copied out of the table so no borrow of it is held while
+/// script runs.
+#[derive(Clone, Copy, Debug)]
+pub struct ListenerSnapshot {
+    /// The listener's stable id, for the removal-during-dispatch check.
+    pub id: ListenerId,
+    /// The stored JS callback.
+    pub callback: CallbackRef,
+    /// Whether the entry is removed after firing once.
+    pub once: bool,
+    /// Whether the entry is passive.
+    pub passive: bool,
+    /// Whether the entry is an event handler's listener (HTML §8.1.8.1), the
+    /// only kind whose return value the dispatcher acts on.
+    pub handler: bool,
 }
 
 #[derive(Default)]
@@ -608,6 +683,13 @@ impl ListenerTable {
     /// when an identical `(type, callback, capture)` entry already exists (the
     /// DOM "add an event listener" duplicate rule) — in that case the caller
     /// must release `callback`.
+    ///
+    /// Only a listener the page registered itself can be that duplicate. An
+    /// event handler's listener is skipped in both directions: HTML registers it
+    /// with an internal callback the page cannot name, so the same page function
+    /// passed to an `onX` setter and to `addEventListener` are two independent
+    /// listeners whichever order they were registered in. See
+    /// [`Self::add_handler_at`] for the other half.
     pub fn add_at(
         &mut self,
         target: TargetKey,
@@ -617,16 +699,16 @@ impl ListenerTable {
         once: bool,
         passive: bool,
     ) -> Option<ListenerId> {
-        let entry = self.targets.entry(target).or_default();
-        if entry
-            .listeners
-            .iter()
-            .any(|l| l.type_ == type_ && l.callback == callback && l.capture == capture)
-        {
+        let duplicate = self.targets.get(&target).is_some_and(|entry| {
+            entry.listeners.iter().any(|l| {
+                !l.handler && l.type_ == type_ && l.callback == callback && l.capture == capture
+            })
+        });
+        if duplicate {
             return None;
         }
-        let id = ListenerId(self.next_id);
-        self.next_id += 1;
+        let id = self.next_id();
+        let entry = self.targets.entry(target).or_default();
         entry.listeners.push(Listener {
             id,
             type_,
@@ -634,8 +716,48 @@ impl ListenerTable {
             capture,
             once,
             passive,
+            handler: false,
         });
         Some(id)
+    }
+
+    /// Registers the listener of an event handler (HTML §8.1.8.1) for `target`
+    /// and returns its id.
+    ///
+    /// This is not `addEventListener`. The standard registers a handler's
+    /// listener with an internal callback the page cannot name, so the DOM
+    /// duplicate rule — which is what [`Self::add_at`] applies — does not apply
+    /// here: the same page function registered as a handler and as a plain
+    /// listener are two independent listeners, and setting a handler twice is
+    /// caught by the handler map, not by the table. The two registrations spell
+    /// their flags out separately rather than sharing a helper so that the
+    /// difference between them, and every flag a new one would add, is visible
+    /// at the point of registration.
+    pub fn add_handler_at(
+        &mut self,
+        target: TargetKey,
+        type_: String,
+        callback: CallbackRef,
+    ) -> ListenerId {
+        let id = self.next_id();
+        let entry = self.targets.entry(target).or_default();
+        entry.listeners.push(Listener {
+            id,
+            type_,
+            callback,
+            capture: false,
+            once: false,
+            passive: false,
+            handler: true,
+        });
+        id
+    }
+
+    /// Allocates the next listener id.
+    fn next_id(&mut self) -> ListenerId {
+        let id = ListenerId(self.next_id);
+        self.next_id += 1;
+        id
     }
 
     /// Removes the listener matching `(type, callback, capture)` for node
@@ -652,6 +774,10 @@ impl ListenerTable {
 
     /// Removes the listener matching `(type, callback, capture)` for `target`
     /// and returns its callback so the caller can release it.
+    ///
+    /// A handler's listener is never a match: HTML registers it with an internal
+    /// callback the page cannot name, so `removeEventListener` can only remove
+    /// what `addEventListener` registered.
     pub fn remove_at(
         &mut self,
         target: TargetKey,
@@ -660,10 +786,9 @@ impl ListenerTable {
         capture: bool,
     ) -> Option<CallbackRef> {
         let entry = self.targets.get_mut(&target)?;
-        let pos = entry
-            .listeners
-            .iter()
-            .position(|l| l.type_ == type_ && l.callback == callback && l.capture == capture)?;
+        let pos = entry.listeners.iter().position(|l| {
+            !l.handler && l.type_ == type_ && l.callback == callback && l.capture == capture
+        })?;
         let removed = entry.listeners.remove(pos);
         Some(removed.callback)
     }
@@ -697,32 +822,69 @@ impl ListenerTable {
             .is_some_and(|e| e.listeners.iter().any(|l| l.id == id))
     }
 
-    /// A snapshot of the `(id, callback, once, passive)` of every listener on
-    /// node `target`. See [`Self::snapshot_at`].
-    pub fn snapshot(
-        &self,
-        target: NodeRef,
-        type_: &str,
-        capture: bool,
-    ) -> Vec<(ListenerId, CallbackRef, bool, bool)> {
+    /// Replaces the stored callback of the listener with `id` on `target`, in
+    /// place, and returns the callback it displaced so the caller can release it.
+    ///
+    /// In-place replacement is the rule for reassigning an event handler: HTML
+    /// §8.1.8.1's "activate an event handler" returns early when the handler
+    /// already has a listener, so the new value is stored in that same listener
+    /// and its position among the target's listeners does not move.
+    ///
+    /// `None` when no listener with `id` is registered for `target`, including a
+    /// listener whose target's entries a sweep or a reclamation has drained; the
+    /// caller keeps ownership of `callback` in that case.
+    pub fn set_callback_at(
+        &mut self,
+        target: TargetKey,
+        id: ListenerId,
+        callback: CallbackRef,
+    ) -> Option<CallbackRef> {
+        let entry = self.targets.get_mut(&target)?;
+        let listener = entry.listeners.iter_mut().find(|l| l.id == id)?;
+        Some(std::mem::replace(&mut listener.callback, callback))
+    }
+
+    /// The stored callback of the listener with `id` on `target`, if it is still
+    /// registered.
+    ///
+    /// The bits are handed back as they are — non-owning. The table holds the
+    /// one owned reference for the entry, so two reads give the same bits and
+    /// `el.onx === el.onx` holds by identity.
+    pub fn callback_by_id_at(&self, target: TargetKey, id: ListenerId) -> Option<CallbackRef> {
+        self.targets
+            .get(&target)?
+            .listeners
+            .iter()
+            .find(|l| l.id == id)
+            .map(|l| l.callback)
+    }
+
+    /// A snapshot of every listener on node `target`. See [`Self::snapshot_at`].
+    pub fn snapshot(&self, target: NodeRef, type_: &str, capture: bool) -> Vec<ListenerSnapshot> {
         self.snapshot_at(target.into(), type_, capture)
     }
 
-    /// A snapshot of the `(id, callback, once, passive)` of every listener for
-    /// `target` matching `type_` and `capture`, in registration order.
+    /// A snapshot of every listener for `target` matching `type_` and `capture`,
+    /// in registration order.
     pub fn snapshot_at(
         &self,
         target: TargetKey,
         type_: &str,
         capture: bool,
-    ) -> Vec<(ListenerId, CallbackRef, bool, bool)> {
+    ) -> Vec<ListenerSnapshot> {
         self.targets
             .get(&target)
             .map(|e| {
                 e.listeners
                     .iter()
                     .filter(|l| l.type_ == type_ && l.capture == capture)
-                    .map(|l| (l.id, l.callback, l.once, l.passive))
+                    .map(|l| ListenerSnapshot {
+                        id: l.id,
+                        callback: l.callback,
+                        once: l.once,
+                        passive: l.passive,
+                        handler: l.handler,
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -922,26 +1084,42 @@ fn invoke_listeners(
         }
     }
 
-    for (id, callback, once, passive) in snapshot {
+    for listener in snapshot {
         // Skip a listener removed by an earlier listener in this dispatch.
-        if !ctx.listeners.borrow().contains_at(target, id) {
+        if !ctx.listeners.borrow().contains_at(target, listener.id) {
             continue;
         }
-        if once {
-            ctx.listeners.borrow_mut().remove_by_id_at(target, id);
+        if listener.once {
+            ctx.listeners
+                .borrow_mut()
+                .remove_by_id_at(target, listener.id);
         }
-        if passive {
+        if listener.passive {
             set_passive(ctx, key, true);
         }
 
         // No borrow is held across the call into script.
-        script.invoke_listener(callback, entry.bits, event_bits);
+        let returned_false = script.invoke_listener(listener.callback, entry.bits, event_bits);
 
-        if passive {
+        if listener.passive {
             set_passive(ctx, key, false);
         }
-        if once {
-            script.release_value(callback.0);
+        if listener.once {
+            script.release_value(listener.callback.0);
+        }
+        // The event handler processing algorithm (HTML §8.1.8.1): a handler that
+        // returns exactly `false` sets the event's canceled flag. Only a handler
+        // entry's result is acted on — a plain `addEventListener` callback's
+        // return value is meaningless — and the flag is set here, where no JS
+        // call is on the stack (invariant A5), rather than inside the callback.
+        //
+        // The flag is set unconditionally rather than gated on `cancelable`,
+        // which is what `Event.canceled` applies. The standard's two exceptions
+        // are a window `onerror` handler, where `true` cancels, and
+        // `onbeforeunload`, where any non-null value cancels; neither is
+        // implemented.
+        if listener.handler && returned_false {
+            set_canceled(ctx, key);
         }
         if immediate_stopped(ctx, key) {
             break;
@@ -954,6 +1132,12 @@ fn invoke_listeners(
 fn set_passive(ctx: &HostContext, key: EventKey, value: bool) {
     if let Some(record) = ctx.events.borrow_mut().get_mut(key) {
         record.flags.in_passive_listener = value;
+    }
+}
+
+fn set_canceled(ctx: &HostContext, key: EventKey) {
+    if let Some(record) = ctx.events.borrow_mut().get_mut(key) {
+        record.flags.canceled = true;
     }
 }
 

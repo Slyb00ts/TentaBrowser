@@ -10,7 +10,7 @@
 //! the handle validation instead of aliasing a recycled slot.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::SystemTime;
 
@@ -27,25 +27,26 @@ use super::SequenceOfSequenceOfUsvStringOrRecordOfUsvStringToUsvStringOrUsvStrin
 use super::{
     AbortControllerConstructor, AbortControllerOps, AbortSignal, AbortSignalOps,
     AddEventListenerOptionsOrBoolean, AnyValue, BufferSourceOrUsvString, CSSStyleDeclaration,
-    CSSStyleDeclarationOps, CharacterDataOps, Comment, CommentOps, CustomEventConstructor,
-    CustomEventInit, CustomEventOps, DOMTokenList, DOMTokenListOps, DocumentFragment,
-    DocumentFragmentOps, DocumentOps, Element, ElementOps, Event, EventConstructor, EventInit,
-    EventListener, EventListenerOptionsOrBoolean, EventOps, EventTarget, EventTargetOps,
-    HTMLAnchorElementOps, HTMLButtonElementOps, HTMLCollection, HTMLCollectionOps,
-    HTMLDivElementOps, HTMLElement, HTMLElementOps, HTMLFormElementOps, HTMLIFrameElementOps,
-    HTMLImageElementOps, HTMLInputElementOps, HTMLLabelElementOps, HTMLOptionElementOps,
-    HTMLParagraphElementOps, HTMLScriptElementOps, HTMLSelectElementOps, HTMLSpanElementOps,
-    HTMLTemplateElementOps, HTMLTextAreaElementOps, Handle, Headers, HeadersConstructor,
-    HeadersInit, HeadersOps, JsError, MouseEventConstructor, MouseEventInit, MouseEventOps, Node,
-    NodeList, NodeListOps, NodeOps, Promise, Realm, ResponseConstructor, ResponseInit, ResponseOps,
-    ResponseType, SVGElementOps, Text, TextDecodeOptions, TextDecoderConstructor, TextDecoderOps,
-    TextDecoderOptions, TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor,
-    UIEventInit, UIEventOps, URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor,
-    URLSearchParamsOps,
+    CSSStyleDeclarationOps, Callback, CharacterDataOps, Comment, CommentOps,
+    CustomEventConstructor, CustomEventInit, CustomEventOps, DOMTokenList, DOMTokenListOps,
+    DocumentFragment, DocumentFragmentOps, DocumentOps, Element, ElementOps, Event,
+    EventConstructor, EventInit, EventListener, EventListenerOptionsOrBoolean, EventOps,
+    EventTarget, EventTargetOps, HTMLAnchorElementOps, HTMLButtonElementOps, HTMLCollection,
+    HTMLCollectionOps, HTMLDivElementOps, HTMLElement, HTMLElementOps, HTMLFormElementOps,
+    HTMLIFrameElementOps, HTMLImageElementOps, HTMLInputElementOps, HTMLLabelElementOps,
+    HTMLOptionElementOps, HTMLParagraphElementOps, HTMLScriptElementOps, HTMLSelectElementOps,
+    HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps, Handle, Headers,
+    HeadersConstructor, HeadersInit, HeadersOps, JsError, MouseEventConstructor, MouseEventInit,
+    MouseEventOps, Node, NodeList, NodeListOps, NodeOps, Promise, Realm, ResponseConstructor,
+    ResponseInit, ResponseOps, ResponseType, SVGElementOps, Text, TextDecodeOptions,
+    TextDecoderConstructor, TextDecoderOps, TextDecoderOptions, TextEncoderConstructor,
+    TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps, URLConstructor, URLOps,
+    URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
 };
 use crate::dom::events::{
-    CallbackRef, DispatchTarget, EventKey, EventKind, EventRecord, EventSlab, GenKey, GenSlab,
-    HostValue, ListenerTable, PromiseOutcome, ScriptHost, TargetKey, dispatch, dispatch_at,
+    CallbackRef, DispatchTarget, EventHandlerName, EventKey, EventKind, EventRecord, EventSlab,
+    GenKey, GenSlab, HostValue, ListenerId, ListenerTable, PromiseOutcome, ScriptHost, TargetKey,
+    dispatch, dispatch_at,
 };
 use crate::event_loop::SharedClock;
 use crate::fetch::FetchedResponse;
@@ -58,6 +59,16 @@ use crate::fetch::FetchedResponse;
 /// (`tenta_dom::SharedSink`): the engine and the parser must name one type, or
 /// a page would have to choose between running script and building the tree.
 pub use tenta_dom::SharedDocument;
+
+/// WebIDL's `EventHandlerNonNull` — `callback EventHandlerNonNull = any (Event
+/// event)` — the type every `attribute EventHandler onX` carries.
+///
+/// It is spelled here rather than generated because no IDL file declares an
+/// event handler attribute yet; b-5 declares them, and the generator emits this
+/// same alias into `crate::bindings` from `[LegacyTreatNonObjectAsNull] callback
+/// EventHandlerNonNull`. The `on*` host surface is written against it so the
+/// two name one type.
+pub type EventHandlerNonNull = Callback<(Handle<Event>,), AnyValue>;
 
 /// A key referencing a static snapshot in the slab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -621,6 +632,15 @@ pub struct HostContext {
     pub snapshots: RefCell<SnapshotSlab>,
     /// The event listeners registered on this world's nodes.
     pub listeners: RefCell<ListenerTable>,
+    /// HTML §8.1.8.1's "event handler map" — one entry per (target, handler
+    /// name), for every `attribute EventHandler onX` a page has set.
+    ///
+    /// A handler *is* an ordinary listener: the entry in [`Self::listeners`]
+    /// this map names is the registration, and the map exists only to find that
+    /// listener again — to replace its callback in place when the handler is
+    /// reassigned (reassignment reuses the listener, so its position does not
+    /// move) and to remove it when the handler is set to null.
+    pub handlers: RefCell<HashMap<(TargetKey, EventHandlerName), ListenerId>>,
     /// The live event records for this world.
     pub events: RefCell<EventSlab>,
     /// The live `URL`, `URLSearchParams`, `Headers`, `AbortController`,
@@ -660,6 +680,7 @@ impl HostContext {
             doc,
             snapshots: RefCell::new(SnapshotSlab::new()),
             listeners: RefCell::new(ListenerTable::new()),
+            handlers: RefCell::new(HashMap::new()),
             events: RefCell::new(EventSlab::new()),
             host_records: RefCell::new(HostSlab::new()),
             script: RefCell::new(None),
@@ -758,6 +779,117 @@ impl HostContext {
             .as_ref()
             .and_then(|script| script.build_value(HostValue::Undefined))
             .map_or(AnyValue::NULL, AnyValue)
+    }
+
+    /// Sets the event handler named `name` on `target` — the setter of an event
+    /// handler IDL attribute (HTML §8.1.8.1).
+    ///
+    /// A handler is an ordinary event listener whose callback is the page's own
+    /// handler function, so the standard's three algorithms are three operations
+    /// on the listener table: a first non-null assignment registers the listener
+    /// and remembers its id; a reassignment replaces that listener's callback in
+    /// place, so the listener keeps its position among the target's listeners;
+    /// and `None` removes it. The listener's type is the handler's event type
+    /// ([`EventHandlerName::event_type`]) and it is an ordinary listener in
+    /// every other respect — non-capturing, not once, not passive.
+    ///
+    /// The registration is [`ListenerTable::add_handler_at`], not
+    /// `addEventListener`: HTML gives a handler's listener an internal callback
+    /// the page cannot name, so it never collides with the page's own listener
+    /// for the same type and function, and `removeEventListener` cannot remove
+    /// it. The handler map, not the table's duplicate rule, is what keeps a
+    /// handler to one listener.
+    ///
+    /// # Ownership
+    ///
+    /// `value` carries one stored reference, exactly as an `addEventListener`
+    /// callback does, and the listener entry becomes its owner: a reassignment
+    /// and a deactivation hand the reference they displace back through
+    /// [`ScriptHost::release_value`], and a first assignment always registers,
+    /// so nothing is ever rejected and nothing is released on the way in.
+    pub fn set_event_handler(
+        &self,
+        target: TargetKey,
+        name: EventHandlerName,
+        value: Option<EventHandlerNonNull>,
+    ) {
+        let key = (target, name);
+        // A map entry can outlive the listener it names: a sweep or a host
+        // reclamation drains a dead target's listeners and knows nothing about
+        // this map. An id that is no longer registered is therefore treated as
+        // absent, which is also what keeps a reassignment from writing the new
+        // value into a listener that no longer exists and losing its reference.
+        let current = self
+            .handlers
+            .borrow()
+            .get(&key)
+            .copied()
+            .filter(|id| self.listeners.borrow().contains_at(target, *id));
+
+        let Some(value) = value else {
+            // Deactivate: the handler value is null, so its listener — if it has
+            // one — is removed and the reference it held is given back.
+            if let Some(id) = current {
+                self.handlers.borrow_mut().remove(&key);
+                let removed = self.listeners.borrow_mut().remove_by_id_at(target, id);
+                if let Some(removed) = removed {
+                    self.release_stored(removed.0);
+                }
+            }
+            return;
+        };
+
+        let callback = CallbackRef(value.bits());
+        if let Some(id) = current {
+            // Reassignment reuses the listener the first non-null assignment
+            // registered, so the value changes in place and the list position
+            // does not move.
+            let replaced = self
+                .listeners
+                .borrow_mut()
+                .set_callback_at(target, id, callback);
+            if let Some(replaced) = replaced {
+                self.release_stored(replaced.0);
+            }
+            return;
+        }
+
+        // A first assignment registers the handler's listener. It is not
+        // `addEventListener`: the DOM duplicate rule never applies to it, and
+        // the entry this returns is what the map remembers.
+        let id = self.listeners.borrow_mut().add_handler_at(
+            target,
+            name.event_type().to_owned(),
+            callback,
+        );
+        self.handlers.borrow_mut().insert(key, id);
+    }
+
+    /// Reads the event handler named `name` on `target` — the getter of an event
+    /// handler IDL attribute. `None` when no handler is set, or when the
+    /// listener it named has been drained with its target.
+    ///
+    /// The bits are handed back as they are — non-owning. The listener entry
+    /// holds the one stored reference, exactly as an `AbortSignal` owns its
+    /// abort reason, so two reads return the same value and `el.onx === el.onx`
+    /// holds by identity.
+    pub fn event_handler(
+        &self,
+        target: TargetKey,
+        name: EventHandlerName,
+    ) -> Option<EventHandlerNonNull> {
+        let id = *self.handlers.borrow().get(&(target, name))?;
+        let callback = self.listeners.borrow().callback_by_id_at(target, id)?;
+        Some(Callback::from_bits(callback.0))
+    }
+
+    /// Gives one stored reference back through the installed script host, if
+    /// there is one. The context's counterpart of [`HostObject::release_stored`],
+    /// for the handlers this context alone owns.
+    fn release_stored(&self, bits: u64) {
+        if let Some(script) = self.script.borrow().as_ref() {
+            script.release_value(bits);
+        }
     }
 }
 
@@ -945,6 +1077,37 @@ impl HostObject {
         if let Some(script) = self.context().script.borrow().as_ref() {
             script.release_value(bits);
         }
+    }
+
+    /// Sets the event handler IDL attribute named `name` (`onclick`, `onload`).
+    ///
+    /// This is the body of a generated `set_onX(&self, value:
+    /// Option<EventHandlerNonNull>)`: the value is a `Callback` over an `Event`
+    /// returning `any`, which is what `EventHandlerNonNull` aliases. A receiver
+    /// that is not an event target — a `NodeList`, an `Event`, a `Response` — is
+    /// refused with a `TypeError`, the same refusal `addEventListener` makes.
+    pub fn set_event_handler(
+        &self,
+        name: EventHandlerName,
+        value: Option<EventHandlerNonNull>,
+    ) -> Result<(), JsError> {
+        let target = self
+            .target_key()
+            .ok_or_else(|| JsError::type_error("the receiver is not an event target"))?;
+        self.context().set_event_handler(target, name, value);
+        Ok(())
+    }
+
+    /// Reads the event handler IDL attribute named `name`: the value the page
+    /// last assigned, or `None` when the handler is unset.
+    pub fn event_handler(
+        &self,
+        name: EventHandlerName,
+    ) -> Result<Option<EventHandlerNonNull>, JsError> {
+        let target = self
+            .target_key()
+            .ok_or_else(|| JsError::type_error("the receiver is not an event target"))?;
+        Ok(self.context().event_handler(target, name))
     }
 
     /// Reads the `URL` this host stands for, or returns `default` when the host

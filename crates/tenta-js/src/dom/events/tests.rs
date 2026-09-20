@@ -10,8 +10,8 @@ use tenta_core::atom::atoms;
 use tenta_dom::{Document, Mutation};
 
 use super::*;
-use crate::bindings::AnyValue;
 use crate::bindings::host::{HostContext, decode};
+use crate::bindings::{AnyValue, Callback, Event, Handle};
 use crate::event_loop::{Clock, MonoTime, SharedClock};
 
 /// What a mock listener does when invoked, to exercise re-entrant paths.
@@ -35,11 +35,36 @@ enum Action {
 /// cleared before `dispatch` returns (`composedPath()`).
 type PathProbe = Box<dyn Fn(EventKey)>;
 
+/// The value a mock callback returns. The dispatcher acts only on an event
+/// handler's return value, and only on an exact `false` (an `EventHandler`
+/// returns `any`), so the mock models the value rather than the comparison: the
+/// V8 host performs the same strict test with `Value::is_false()`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum MockReturn {
+    /// Exactly `false`, which cancels.
+    False,
+    /// `true`, which does not.
+    True,
+    /// `undefined`, a falsy value that is not `false`.
+    Undefined,
+    /// `0`, also falsy and also not `false`.
+    Zero,
+}
+
+impl MockReturn {
+    fn cancels(self) -> bool {
+        matches!(self, MockReturn::False)
+    }
+}
+
 struct MockHost {
     ctx: RefCell<Weak<HostContext>>,
     /// (callback bits, current_target bits, phase) in invocation order.
     calls: RefCell<Vec<(u64, u64, u16)>>,
     actions: RefCell<HashMap<u64, Action>>,
+    /// What each callback returns when invoked; unlisted callbacks return
+    /// `undefined`.
+    returns: RefCell<HashMap<u64, MockReturn>>,
     /// Callbacks that observed `in_passive_listener == true` when invoked.
     passive_seen: RefCell<Vec<u64>>,
     /// Callbacks whose stored value was released.
@@ -74,6 +99,7 @@ impl MockHost {
             ctx: RefCell::new(Weak::new()),
             calls: RefCell::new(Vec::new()),
             actions: RefCell::new(HashMap::new()),
+            returns: RefCell::new(HashMap::new()),
             passive_seen: RefCell::new(Vec::new()),
             released: RefCell::new(Vec::new()),
             path_probe: RefCell::new(None),
@@ -86,13 +112,17 @@ impl MockHost {
         self.actions.borrow_mut().insert(cb.0, action);
     }
 
+    fn set_return(&self, cb: CallbackRef, value: MockReturn) {
+        self.returns.borrow_mut().insert(cb.0, value);
+    }
+
     fn set_path_probe(&self, probe: impl Fn(EventKey) + 'static) {
         *self.path_probe.borrow_mut() = Some(Box::new(probe));
     }
 }
 
 impl ScriptHost for MockHost {
-    fn invoke_listener(&self, callback: CallbackRef, current_target: u64, event: u64) {
+    fn invoke_listener(&self, callback: CallbackRef, current_target: u64, event: u64) -> bool {
         let ctx = self
             .ctx
             .borrow()
@@ -153,6 +183,15 @@ impl ScriptHost for MockHost {
                     .remove(target, &type_, cb, capture);
             }
         }
+
+        // The dispatcher asks only about an event handler's return value, and
+        // acts on it only when it is exactly `false`.
+        self.returns
+            .borrow()
+            .get(&callback.0)
+            .copied()
+            .unwrap_or(MockReturn::Undefined)
+            .cancels()
     }
 
     fn release_value(&self, bits: u64) {
@@ -962,4 +1001,399 @@ fn a_host_target_is_its_own_listener_bucket() {
             .contains_at(TargetKey::Host(second), on_first),
         "the drain of one key never reaches another key's bucket"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Event handler IDL attributes (HTML §8.1.8.1)
+// ---------------------------------------------------------------------------
+
+/// The value an `onX` setter receives: WebIDL's `EventHandlerNonNull`, which is
+/// `Callback<(Handle<Event>,), AnyValue>`.
+fn handler(bits: u64) -> Callback<(Handle<Event>,), AnyValue> {
+    Callback::from_bits(bits)
+}
+
+/// The handler name these tests use. Its event type is `x`, which is what the
+/// fixture's events are dispatched with.
+fn on_x() -> EventHandlerName {
+    EventHandlerName::new("onx")
+}
+
+/// Sets the fixture div's `onx` handler, or deactivates it when `bits` is `None`
+/// — the setter of an event handler IDL attribute.
+fn set_onx(f: &Fixture, bits: Option<u64>) {
+    f.ctx
+        .set_event_handler(TargetKey::Node(f.div), on_x(), bits.map(handler));
+}
+
+/// Reads the fixture div's `onx` handler as the bits the page would see.
+fn get_onx(f: &Fixture) -> Option<u64> {
+    f.ctx
+        .event_handler(TargetKey::Node(f.div), on_x())
+        .map(|callback| callback.bits())
+}
+
+/// The handler's name is an `on`-prefixed string and its listener's type is what
+/// follows. The legacy-prefixed names are the documented exception: their type
+/// is not the stripped remainder, which is why nothing strips the prefix
+/// silently.
+#[test]
+fn a_handler_name_derives_its_event_type_by_stripping_on() {
+    assert_eq!(EventHandlerName::new("onload").as_str(), "onload");
+    assert_eq!(EventHandlerName::new("onload").event_type(), "load");
+    assert_eq!(on_x().event_type(), "x");
+    assert_ne!(
+        EventHandlerName::new("onwebkitanimationend").event_type(),
+        "webkitAnimationEnd",
+        "a legacy-prefixed handler's type is not the stripped remainder"
+    );
+}
+
+/// The discriminating case. A handler registered by an assignment is an ordinary
+/// listener, added where the assignment happened — *between* the listeners the
+/// page registered before and after it. A design that ran the handler after all
+/// of the target's listeners in the at-target phase would answer A, C, B.
+#[test]
+fn a_handler_takes_its_place_where_the_assignment_happens() {
+    let f = fixture();
+    add(&f.ctx, f.div, "x", 1, false);
+    set_onx(&f, Some(2));
+    add(&f.ctx, f.div, "x", 3, false);
+
+    let key = make_event(&f.ctx, "x", false, false);
+    dispatch(&f.ctx, f.div, key, false).unwrap();
+
+    let order: Vec<u64> = f.mock.calls.borrow().iter().map(|c| c.0).collect();
+    assert_eq!(order, vec![1, 2, 3]);
+}
+
+/// A reassignment changes the value in place: the listener the first non-null
+/// assignment registered is reused, so the handler keeps its position and no
+/// second listener is added.
+#[test]
+fn reassigning_a_handler_reuses_its_listener_in_place() {
+    let f = fixture();
+    add(&f.ctx, f.div, "x", 1, false);
+    set_onx(&f, Some(2));
+    add(&f.ctx, f.div, "x", 3, false);
+    set_onx(&f, Some(4));
+
+    let key = make_event(&f.ctx, "x", false, false);
+    dispatch(&f.ctx, f.div, key, false).unwrap();
+
+    let order: Vec<u64> = f.mock.calls.borrow().iter().map(|c| c.0).collect();
+    assert_eq!(
+        order,
+        vec![1, 4, 3],
+        "the handler fires where it first registered"
+    );
+    assert_eq!(f.ctx.listeners.borrow().len(), 3, "no listener was added");
+    assert_eq!(
+        f.mock.released.borrow().as_slice(),
+        &[2],
+        "the value the reassignment displaced is released exactly once"
+    );
+}
+
+/// The spec's second worked example. A deactivation removes the handler's
+/// listener outright, and a later assignment registers a fresh one at the end of
+/// the list — so a handler re-activated after a deactivation fires after every
+/// listener registered while it was unset.
+#[test]
+fn a_deactivated_handler_is_removed_and_re_registers_last() {
+    let f = fixture();
+    add(&f.ctx, f.div, "x", 1, false); // A
+    set_onx(&f, Some(2)); // the handler's listener, activated
+    add(&f.ctx, f.div, "x", 3, false); // C, registered after the activation
+    set_onx(&f, None); // deactivated: its listener is removed
+    add(&f.ctx, f.div, "x", 4, false); // D, registered while it is unset
+    set_onx(&f, Some(5)); // re-activated, at the end of the list
+
+    let key = make_event(&f.ctx, "x", false, false);
+    dispatch(&f.ctx, f.div, key, false).unwrap();
+
+    let order: Vec<u64> = f.mock.calls.borrow().iter().map(|c| c.0).collect();
+    assert_eq!(
+        order,
+        vec![1, 3, 4, 5],
+        "the deactivated handler does not fire, and the re-activated one is last"
+    );
+}
+
+/// A handler that returns exactly `false` cancels a cancelable event. `true`,
+/// `undefined` and `0` do not: the comparison is strict, because an
+/// `EventHandler` returns `any` and the standard's test is `=== false`.
+#[test]
+fn a_handler_returning_false_cancels_a_cancelable_event() {
+    for (returned, cancels) in [
+        (MockReturn::False, true),
+        (MockReturn::True, false),
+        (MockReturn::Undefined, false),
+        (MockReturn::Zero, false),
+    ] {
+        let f = fixture();
+        set_onx(&f, Some(1));
+        f.mock.set_return(CallbackRef(1), returned);
+
+        let key = make_event(&f.ctx, "x", false, true);
+        let not_canceled = dispatch(&f.ctx, f.div, key, false).unwrap();
+
+        assert_eq!(
+            !not_canceled,
+            cancels,
+            "a handler returning {returned:?} must {} the event",
+            if cancels { "cancel" } else { "not cancel" }
+        );
+        assert_eq!(
+            f.ctx.events.borrow().get(key).unwrap().flags.canceled,
+            cancels,
+            "the canceled flag follows the same rule"
+        );
+    }
+}
+
+/// The canceling return is not gated on `cancelable`: the processing algorithm
+/// sets the flag unconditionally, and a non-cancelable event's flag therefore
+/// ends up set too. The two observations agree — `dispatch` reports canceled and
+/// the flag is set — because `Event.defaultPrevented` reads the flag itself;
+/// what the `cancelable` test gates is `preventDefault`, which a plain listener
+/// on this same event calls without effect.
+#[test]
+fn a_handler_returning_false_sets_the_flag_on_a_non_cancelable_event() {
+    let f = fixture();
+    set_onx(&f, Some(1));
+    f.mock.set_return(CallbackRef(1), MockReturn::False);
+
+    let key = make_event(&f.ctx, "x", false, false);
+    let not_canceled = dispatch(&f.ctx, f.div, key, false).unwrap();
+
+    assert!(!not_canceled, "dispatch reports the event canceled");
+    assert!(
+        f.ctx.events.borrow().get(key).unwrap().flags.canceled,
+        "so does the flag `Event.defaultPrevented` reads"
+    );
+}
+
+/// The negative control for the flag: only a handler's return value is acted on,
+/// so a listener the page registered with `addEventListener` that returns
+/// `false` cancels nothing.
+#[test]
+fn a_plain_listeners_false_return_does_not_cancel() {
+    let f = fixture();
+    add(&f.ctx, f.div, "x", 1, false);
+    f.mock.set_return(CallbackRef(1), MockReturn::False);
+
+    let key = make_event(&f.ctx, "x", false, true);
+    let not_canceled = dispatch(&f.ctx, f.div, key, false).unwrap();
+
+    assert!(
+        not_canceled,
+        "a plain listener's return value is meaningless"
+    );
+    assert!(!f.ctx.events.borrow().get(key).unwrap().flags.canceled);
+}
+
+/// The getter returns the value the page last assigned, and the same value
+/// across two reads — the stored bits are handed back as they are, non-owning,
+/// so `el.onx === el.onx` holds by identity rather than by construction.
+#[test]
+fn the_handler_getter_returns_the_assigned_value() {
+    let f = fixture();
+    assert_eq!(get_onx(&f), None, "an unset handler reads as null");
+
+    set_onx(&f, Some(7));
+    let first = f
+        .ctx
+        .event_handler(TargetKey::Node(f.div), on_x())
+        .expect("the handler is set");
+    assert_eq!(first.bits(), 7);
+    assert_eq!(
+        f.ctx.event_handler(TargetKey::Node(f.div), on_x()),
+        Some(first),
+        "two reads are the same value"
+    );
+
+    set_onx(&f, Some(8));
+    assert_eq!(get_onx(&f), Some(8), "a reassignment is what reads back");
+
+    set_onx(&f, None);
+    assert_eq!(get_onx(&f), None, "a deactivation unsets the handler");
+}
+
+/// Deactivation is once-only: the listener leaves the table and the one stored
+/// reference the entry owned is given back, so a second `= null` finds nothing
+/// to release and a registration is what owns the reference until then.
+#[test]
+fn deactivating_a_handler_removes_its_listener_and_releases_once() {
+    let f = fixture();
+    add(&f.ctx, f.div, "x", 1, false);
+    set_onx(&f, Some(2));
+    assert_eq!(f.ctx.listeners.borrow().len(), 2);
+    assert!(
+        f.mock.released.borrow().is_empty(),
+        "registering the handler owns its reference"
+    );
+
+    set_onx(&f, None);
+    assert_eq!(
+        f.ctx.listeners.borrow().len(),
+        1,
+        "the handler's listener is gone"
+    );
+    assert_eq!(f.mock.released.borrow().as_slice(), &[2]);
+
+    set_onx(&f, None);
+    assert_eq!(
+        f.mock.released.borrow().as_slice(),
+        &[2],
+        "a second deactivation releases nothing"
+    );
+    assert_eq!(get_onx(&f), None);
+}
+
+/// The handler map can name a listener that is no longer registered: only the
+/// setter writes the map, so a removal the setter does not perform — a sweep's
+/// drain, a host reclamation — leaves the entry behind. A reassignment must
+/// then register a fresh listener instead of writing the new value into the
+/// dead entry, which would lose both the value and its reference.
+///
+/// `removeEventListener` is not such a removal: see
+/// [`remove_event_listener_does_not_remove_a_handler`]. This is the real sweep
+/// drain the fixture's other drain test performs, because that is the one path
+/// that takes a target's listeners away without the setter's knowledge.
+#[test]
+fn a_reassignment_after_its_listener_was_drained_registers_a_fresh_one() {
+    let f = fixture();
+    set_onx(&f, Some(2));
+
+    // Detach the div and sweep it: no wrapper and no handle, so it is freed and
+    // its listeners are what the engine has to drain.
+    {
+        let mut doc = f.ctx.doc.borrow_mut();
+        doc.mutate(Mutation::Remove { child: f.div.id })
+            .expect("detach the div");
+        assert_eq!(doc.sweep_detached().nodes_freed, 1);
+        assert_eq!(doc.sweep_freed_nodes(), &[f.div]);
+    }
+    f.ctx.drain_swept_listeners();
+
+    assert_eq!(
+        f.mock.released.borrow().as_slice(),
+        &[2],
+        "the drain releases the handler's reference"
+    );
+    assert_eq!(
+        get_onx(&f),
+        None,
+        "the getter does not resurrect a drained handler"
+    );
+
+    set_onx(&f, Some(9));
+
+    assert_eq!(
+        get_onx(&f),
+        Some(9),
+        "the new value is stored, not written into the dead entry"
+    );
+    assert_eq!(
+        f.mock.released.borrow().as_slice(),
+        &[2],
+        "the drained entry's reference is not released twice"
+    );
+    assert_eq!(
+        f.ctx.listeners.borrow().len(),
+        1,
+        "a fresh listener carries the handler"
+    );
+}
+
+/// A handler and a plain listener are two entries even when the page passes one
+/// function to both: HTML registers a handler's listener with an internal
+/// callback the page cannot name, so the DOM duplicate rule that makes
+/// `addEventListener('x', f)` twice a no-op does not apply between the two.
+/// Both run, and the getter still returns the function the page assigned.
+///
+/// The order matters, because the duplicate rule is evaluated by whichever
+/// registration comes second: a table that matched on callback identity alone
+/// would answer one listener for one of these orders and two for the other.
+#[test]
+fn a_plain_listener_and_a_handler_with_the_same_function_are_two_listeners() {
+    for handler_first in [false, true] {
+        let f = fixture();
+        let order = if handler_first {
+            set_onx(&f, Some(5));
+            add(&f.ctx, f.div, "x", 5, false);
+            "handler first"
+        } else {
+            add(&f.ctx, f.div, "x", 5, false);
+            set_onx(&f, Some(5));
+            "plain listener first"
+        };
+
+        assert_eq!(
+            f.ctx.listeners.borrow().len(),
+            2,
+            "{order}: two listeners, neither the other's duplicate"
+        );
+        assert_eq!(
+            get_onx(&f),
+            Some(5),
+            "{order}: the handler map is written, so the getter opens"
+        );
+        assert!(
+            f.mock.released.borrow().is_empty(),
+            "{order}: each entry owns its own reference"
+        );
+
+        let key = make_event(&f.ctx, "x", false, false);
+        dispatch(&f.ctx, f.div, key, false).unwrap();
+
+        let calls: Vec<u64> = f.mock.calls.borrow().iter().map(|c| c.0).collect();
+        assert_eq!(calls, vec![5, 5], "{order}: both listeners are invoked");
+    }
+}
+
+/// `removeEventListener` cannot unhook a handler: it can only remove a listener
+/// it registered, and a handler's listener is HTML's own internal registration.
+/// The removal finds nothing, the handler keeps firing, and the argument's
+/// reference is still released, because that is what the binding does with
+/// every callback argument it is handed.
+#[test]
+fn remove_event_listener_does_not_remove_a_handler() {
+    let f = fixture();
+    set_onx(&f, Some(5));
+
+    // `EventTargetOps::remove_event_listener`'s body, which the fixture cannot
+    // call directly: remove by `(type, callback, capture)`, then release the
+    // argument's stored reference, then any removed entry's.
+    let removed =
+        f.ctx
+            .listeners
+            .borrow_mut()
+            .remove_at(TargetKey::Node(f.div), "x", CallbackRef(5), false);
+    f.ctx
+        .script
+        .borrow()
+        .as_ref()
+        .expect("the fixture installs a script host")
+        .release_value(5);
+
+    assert!(removed.is_none(), "nothing was removed");
+    assert_eq!(
+        f.ctx.listeners.borrow().len(),
+        1,
+        "the handler's listener is still registered"
+    );
+    assert_eq!(get_onx(&f), Some(5), "and the handler is still set");
+    assert_eq!(
+        f.mock.released.borrow().as_slice(),
+        &[5],
+        "the argument's own reference is released even though nothing matched"
+    );
+
+    let key = make_event(&f.ctx, "x", false, false);
+    dispatch(&f.ctx, f.div, key, false).unwrap();
+
+    let calls: Vec<u64> = f.mock.calls.borrow().iter().map(|c| c.0).collect();
+    assert_eq!(calls, vec![5], "the handler still fires");
 }

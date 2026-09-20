@@ -1535,7 +1535,12 @@ mod prelude_helpers {
     }
 
     impl ScriptHost for RecordingHost {
-        fn invoke_listener(&self, _callback: CallbackRef, _current_target: u64, _event: u64) {
+        fn invoke_listener(
+            &self,
+            _callback: CallbackRef,
+            _current_target: u64,
+            _event: u64,
+        ) -> bool {
             unreachable!("no `Body` member dispatches an event");
         }
 

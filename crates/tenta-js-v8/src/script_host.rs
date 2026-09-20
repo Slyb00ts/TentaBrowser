@@ -184,7 +184,7 @@ pub(crate) fn construct_global<'s>(
 }
 
 impl ScriptHost for V8ScriptHost {
-    fn invoke_listener(&self, callback: CallbackRef, current_target: u64, event: u64) {
+    fn invoke_listener(&self, callback: CallbackRef, current_target: u64, event: u64) -> bool {
         let mut raw = self.isolate;
         let isolate: &mut v8::Isolate =
             unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut raw) };
@@ -199,15 +199,16 @@ impl ScriptHost for V8ScriptHost {
         v8::scope!(let scope, &mut context_scope);
 
         // Resolve `this`, the event argument and the callable. A stale handle or
-        // a released callback simply skips the invocation.
+        // a released callback simply skips the invocation, which is not a
+        // `false` return.
         let Ok(this) = handle_to_v8::<EventTarget>(scope, Handle::from_bits(current_target)) else {
-            return;
+            return false;
         };
         let Ok(event_value) = handle_to_v8::<Event>(scope, Handle::from_bits(event)) else {
-            return;
+            return false;
         };
         let Ok(callee) = value_to_v8(scope, callback.0) else {
-            return;
+            return false;
         };
 
         // Whether this dispatch originated outside running script has to be read
@@ -228,15 +229,17 @@ impl ScriptHost for V8ScriptHost {
         // the moment the native-dispatch branch below is implemented an unpaid
         // checkpoint would strand the reaction until an unrelated timer fired.
         self.host.enter_script();
-        if let Ok(function) = v8::Local::<v8::Function>::try_from(callee) {
-            let _ = function.call(tc, this, &[event_value]);
+        let result = if let Ok(function) = v8::Local::<v8::Function>::try_from(callee) {
+            function.call(tc, this, &[event_value])
         } else if let Ok(object) = v8::Local::<v8::Object>::try_from(callee)
             && let Some(key) = v8::String::new(tc, "handleEvent")
             && let Some(method) = object.get(tc, key.into())
             && let Ok(function) = v8::Local::<v8::Function>::try_from(method)
         {
-            let _ = function.call(tc, object.into(), &[event_value]);
-        }
+            function.call(tc, object.into(), &[event_value])
+        } else {
+            None
+        };
         self.host.exit_script();
 
         // A microtask checkpoint runs only for a dispatch that did not originate
@@ -247,6 +250,13 @@ impl ScriptHost for V8ScriptHost {
         if native {
             // Deferred: native-initiated dispatch checkpoint.
         }
+
+        // Only an event handler acts on its return value, and only on exactly
+        // `false` (HTML §8.1.8.1): `is_false` is the strict comparison the
+        // `any` return type needs, so `0`, `""`, `null` and `undefined` do not
+        // read as a cancel. A thrown exception leaves no return value and so
+        // never cancels either.
+        result.is_some_and(|value| value.is_false())
     }
 
     fn release_value(&self, bits: u64) {
