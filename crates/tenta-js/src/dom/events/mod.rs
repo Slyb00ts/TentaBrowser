@@ -603,18 +603,18 @@ pub enum TargetKey {
     Node(NodeRef),
     Window,
     /// A host object that is an `EventTarget` and is neither a node nor the
-    /// window: today only an `AbortSignal`.
+    /// window: an `AbortSignal` or an `XMLHttpRequest`.
     ///
     /// It is keyed by its [`HostKey`], generation included, because that is the
     /// only identity such an object has — it is not in the tree, so it has no
     /// [`NodeRef`]. Keying it by anything coarser would be wrong rather than
-    /// merely imprecise: a `URL`, a `Headers` and an `AbortSignal` all share the
-    /// `TAG_HOST` handle tag, so a table keyed by the tag — or by the interface
-    /// name its record reports — would let a listener registered on one signal
-    /// fire for another. The generation matters for the same reason it does on a
-    /// node: the slab reuses a freed slot, and a signal that took a recycled
-    /// slot must not inherit the listeners of the signal that used to live
-    /// there.
+    /// merely imprecise: a `URL`, a `Headers`, an `AbortSignal` and an
+    /// `XMLHttpRequest` all share the `TAG_HOST` handle tag, so a table keyed by
+    /// the tag — or by the interface name its record reports — would let a
+    /// listener registered on one signal fire for another. The generation
+    /// matters for the same reason it does on a node: the slab reuses a freed
+    /// slot, and an object that took a recycled slot must not inherit the
+    /// listeners of the object that used to live there.
     Host(HostKey),
 }
 
@@ -660,7 +660,7 @@ impl DispatchTarget {
     }
 
     /// Dispatches at the host object whose record key is `key` — an
-    /// `AbortSignal`.
+    /// `AbortSignal` or an `XMLHttpRequest`.
     ///
     /// The bits are the record's own tagged handle, which is exactly what
     /// `controller.signal` handed script: the world memoises one wrapper per

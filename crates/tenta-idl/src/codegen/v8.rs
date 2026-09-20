@@ -1250,8 +1250,13 @@ fn pass_expr(argument: &Argument) -> String {
     if argument.optional {
         return match &argument.ty {
             ty if is_string(ty) => format!("{name}.as_deref()"),
+            // A *nullable* optional string binds as `Option<Option<String>>`, so
+            // the borrow has to reach through the outer `Option` by reference.
+            // `.map(|inner| inner.as_deref())` would move the inner `Option` into
+            // the closure and return a `&str` borrowed from the closure's own
+            // parameter — a dangling borrow the borrow checker refuses (E0515).
             Type::Nullable(inner) if is_string(inner) => {
-                format!("{name}.map(|inner| inner.as_deref())")
+                format!("{name}.as_ref().map(|inner| inner.as_deref())")
             }
             _ => name.clone(),
         };

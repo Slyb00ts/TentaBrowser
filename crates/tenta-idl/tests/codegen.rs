@@ -741,3 +741,47 @@ fn the_registry_entry_point_carries_the_interface_description() {
     assert!(file.contents.contains("\"ELEMENT_NODE\""));
     assert!(file.contents.contains("Symbol.toStringTag"));
 }
+
+/// A nullable *optional* string argument binds as `Option<Option<String>>`, so
+/// the borrowed form the trait method takes has to reach through the outer
+/// `Option` **by reference**.
+///
+/// `.map(|inner| inner.as_deref())` moves the inner `Option` into the closure and
+/// returns a `&str` borrowed from the closure's own parameter, which does not
+/// outlive the call: `rustc` rejects it with E0515. `XMLHttpRequest.open`'s
+/// `username`/`password` are the first arguments in the corpus to reach this
+/// branch, and they are why the outer `.as_ref()` exists.
+#[test]
+fn a_nullable_optional_string_argument_is_borrowed_through_its_outer_option() {
+    let model = tenta_idl::parse_webidl(
+        "interface Sample { undefined probe(optional DOMString? value = null); };",
+    )
+    .expect("the sample lowers");
+
+    // The trait's own spelling, so the emission below is checked against the
+    // parameter type it has to produce rather than in isolation.
+    assert!(
+        generated_file(&model, "sample_ops.rs")
+            .contents
+            .contains("fn probe(&self, value: Option<Option<&str>>) -> Result<(), JsError>;")
+    );
+
+    let v8 = generated_file(&model, "sample_v8.rs").contents;
+    assert!(
+        v8.contains("host.probe(value.as_ref().map(|inner| inner.as_deref()))"),
+        "the V8 argument does not borrow the outer `Option` by reference"
+    );
+    assert!(
+        !v8.contains("value.map(|inner| inner.as_deref())"),
+        "the V8 argument moves the inner `Option` into the closure"
+    );
+
+    // The QuickJS arm is not compiled by any gate in this repository (the
+    // `quickjs` feature does not build), so this asserts the emitted text only;
+    // see `quickjs_pass` for why it carries the same fix.
+    let qjs = generated_file(&model, "sample_qjs.rs").contents;
+    assert!(
+        qjs.contains("probe(value.0.as_ref().map(|inner| inner.as_deref()))"),
+        "the QuickJS argument does not borrow the outer `Option` by reference"
+    );
+}

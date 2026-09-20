@@ -682,6 +682,22 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the Response interface");
+            // `XMLHttpRequest` is an `EventTarget` twice over — its own two-level
+            // chain is `XMLHttpRequest -> XMLHttpRequestEventTarget ->
+            // EventTarget` — so the event target interface installs first, and
+            // `EventTarget` before it, which the block above already did.
+            tenta_js::bindings::install_xml_http_request_event_target::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the XMLHttpRequestEventTarget interface");
+            tenta_js::bindings::install_xml_http_request::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the XMLHttpRequest interface");
         }
 
         let local = v8::Context::new(

@@ -1,5 +1,5 @@
-//! DOM binding glue generated from `idl/dom`, `idl/url`, `idl/fetch` and
-//! `idl/encoding` by `tenta-idl` (see `build.rs`).
+//! DOM binding glue generated from `idl/dom`, `idl/url`, `idl/fetch`,
+//! `idl/encoding` and `idl/xhr` by `tenta-idl` (see `build.rs`).
 //!
 //! The engine-independent output (`prelude.rs`, `types.rs`, the `*Ops` traits
 //! and the `register_*` functions) is always compiled. The V8 glue (`*_v8.rs`)
@@ -82,6 +82,11 @@ include!(concat!(env!("OUT_DIR"), "/abort_controller_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_decoder_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_encoder_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/response_ops.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/xml_http_request_event_target_ops.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/xml_http_request_ops.rs"));
 
 include!(concat!(env!("OUT_DIR"), "/character_data_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_register.rs"));
@@ -137,6 +142,11 @@ include!(concat!(env!("OUT_DIR"), "/abort_controller_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_decoder_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_encoder_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/response_register.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/xml_http_request_event_target_register.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/xml_http_request_register.rs"));
 
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/character_data_v8.rs"));
@@ -222,6 +232,13 @@ include!(concat!(env!("OUT_DIR"), "/text_decoder_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_encoder_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/response_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(
+    env!("OUT_DIR"),
+    "/xml_http_request_event_target_v8.rs"
+));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/xml_http_request_v8.rs"));
 
 pub mod host;
 

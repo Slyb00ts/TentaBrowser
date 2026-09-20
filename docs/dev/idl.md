@@ -486,9 +486,9 @@ cargo run -p tenta-idl -- gen --idl idl/toy --out /tmp/generated
 
 An interface whose instances are host records rather than wrapper-world nodes —
 `URL`/`URLSearchParams`, `Headers`, `AbortController`/`AbortSignal`,
-`TextEncoder`/`TextDecoder`, `Response` — uses the same generated glue as a
-node-backed interface, and differs from it in three places outside the
-generator:
+`TextEncoder`/`TextDecoder`, `Response`, `XMLHttpRequest` — uses the same
+generated glue as a node-backed interface, and differs from it in three places
+outside the generator:
 
 - the record lives in the host's slab and every wrapper for it carries
   `TAG_HOST`, a tag shared by all of them; the `HostRecord` variant is what
@@ -927,6 +927,23 @@ generated code:
   `clone()` needs a body tee and the statics need the request and redirect
   machinery. `Response.body`'s stand-in in the record is a `Vec<u8>`, which is
   what makes *unusable* "the body has already been read".
+- `XMLHttpRequest` is declared down to the first two states of its state machine
+  (`UNSENT`, `OPENED`) and the request attributes `open()` sets up; nothing is
+  sent. The response state machine with its events and accessors arrives next
+  (`b-5a2`), then `send()`/`setRequestHeader()` with the driver seam
+  (`b-5a3`), then the `tenta-net` driver that makes either reachable from a page
+  (`b-6`). `abort()` and `[SameObject] upload` / `XMLHttpRequestUpload` are
+  absent — an inert upload object would invite handlers that can never fire, so
+  the deviation is recorded rather than implemented. Five narrowings are this
+  engine's own and each refuses synchronously: `open(…, async = false)` throws
+  `NotSupportedError` (the driver is asynchronous and a blocking request would
+  deadlock the page's turn loop), a non-null `username`/`password` throws it
+  (this engine sends no credentialed request, and what the network layer does
+  with URL userinfo is unverified), `withCredentials = true` throws it (the
+  shared cookie jar decides on its own), `overrideMimeType` throws it (there is
+  no decoding step to override), and `responseType` accepts only `""` and
+  `"text"`. `idl/xhr/XMLHttpRequest.webidl`'s header carries the same list
+  beside the members it applies to.
 - A *throwing getter* on a dictionary member is treated as an absent member: the
   generated `dictionary_member` maps an empty `Object::get` — the shape a throw
   takes — to `Ok(None)` and the next member lookup then drops the pending

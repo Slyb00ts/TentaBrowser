@@ -42,7 +42,8 @@ use super::{
     ResponseOps, ResponseType, SVGElementOps, Text, TextDecodeOptions, TextDecoderConstructor,
     TextDecoderOps, TextDecoderOptions, TextEncoderConstructor, TextEncoderOps, TextOps,
     UIEventConstructor, UIEventInit, UIEventOps, URLConstructor, URLOps, URLSearchParams,
-    URLSearchParamsConstructor, URLSearchParamsOps,
+    URLSearchParamsConstructor, URLSearchParamsOps, XMLHttpRequestConstructor,
+    XMLHttpRequestEventTargetOps, XMLHttpRequestOps, XMLHttpRequestResponseType,
 };
 use crate::dom::events::{
     CallbackRef, DispatchTarget, EventHandlerName, EventKey, EventKind, EventRecord, EventSlab,
@@ -64,11 +65,12 @@ pub use tenta_dom::SharedDocument;
 /// WebIDL's `EventHandlerNonNull` — `callback EventHandlerNonNull = any (Event
 /// event)` — the type every `attribute EventHandler onX` carries.
 ///
-/// It is spelled here rather than generated because no IDL file declares an
-/// event handler attribute yet; b-5 declares them, and the generator emits this
-/// same alias into `crate::bindings` from `[LegacyTreatNonObjectAsNull] callback
-/// EventHandlerNonNull`. The `on*` host surface is written against it so the
-/// two name one type.
+/// `idl/xhr/XMLHttpRequestEventTarget.webidl` is where the declarations live
+/// now, so the generator emits this alias into `crate::bindings` from
+/// `[LegacyTreatNonObjectAsNull] callback EventHandlerNonNull`. This spelling
+/// stays for the same reason: the two are type aliases of one another, so a
+/// `Option<EventHandlerNonNull>` is the same type whichever name reaches it, and
+/// the host's own `on*` surface reads better against the short name.
 pub type EventHandlerNonNull = Callback<(Handle<Event>,), AnyValue>;
 
 /// A key referencing a static snapshot in the slab.
@@ -162,14 +164,14 @@ impl Default for SnapshotSlab {
 
 // ---------------------------------------------------------------------------
 // Host records: URL, URLSearchParams, Headers, AbortController, AbortSignal,
-// Response, TextDecoder and TextEncoder
+// Response, TextDecoder, TextEncoder and XMLHttpRequest
 // ---------------------------------------------------------------------------
 
 /// A key into a world's [`HostSlab`]; the payload of a [`TAG_HOST`] handle.
 pub type HostKey = GenKey;
 
-/// The generational slab of live `URL`, `URLSearchParams` and `Headers` records
-/// for one world.
+/// The generational slab of live `URL`, `URLSearchParams`, `Headers` and
+/// `XMLHttpRequest` records for one world.
 ///
 /// It is a [`GenSlab`] rather than a [`SnapshotSlab`] because a host record has
 /// no document row to live in and no other referent: the wrapper is its owner,
@@ -195,6 +197,8 @@ pub enum HostRecord {
     TextDecoder(TextDecoderRecord),
     /// A `TextEncoder`, which has no state at all.
     TextEncoder,
+    /// An `XMLHttpRequest`.
+    Xhr(XhrRecord),
 }
 
 impl HostRecord {
@@ -212,6 +216,7 @@ impl HostRecord {
             HostRecord::Response(_) => "Response",
             HostRecord::TextDecoder(_) => "TextDecoder",
             HostRecord::TextEncoder => "TextEncoder",
+            HostRecord::Xhr(_) => "XMLHttpRequest",
         }
     }
 }
@@ -357,6 +362,46 @@ impl ResponseRecord {
     fn is_unusable(&self) -> bool {
         self.body.is_some() && self.body_used
     }
+}
+
+/// An `XMLHttpRequest` record.
+///
+/// The record *is* the standard's request object, reduced to the part the first
+/// slice of the surface implements: the two states `UNSENT` and `OPENED`, the
+/// request `open()` sets up, and the four request attributes. Nothing is sent,
+/// so there is no `send()` flag, no response, no received bytes and no author
+/// request headers to hold — the fields here are the ones the standard's
+/// `open()` steps write, and the ones a later slice reads.
+///
+/// The record is also the object's *event target key*: an `XMLHttpRequest` is an
+/// `EventTarget` that is neither a node nor the window, so its listeners live
+/// under [`TargetKey::Host`] of this record's key, and the state machine's
+/// `readystatechange` is dispatched at it. That is why the record has to outlive
+/// its own wrapper's listeners rather than being rebuilt from them.
+pub struct XhrRecord {
+    /// The *state*, which the five constants name: `UNSENT` (0) or `OPENED` (1)
+    /// in this slice. `HEADERS_RECEIVED`, `LOADING` and `DONE` arrive with the
+    /// response state machine (b-5a2).
+    pub ready_state: u16,
+    /// The *request method*, once `open()` has validated and normalised it.
+    ///
+    /// Nothing reads the method or the URL yet. They are `open()`'s own step 8
+    /// state, kept because b-5a3 builds the `FetchRequest` out of them rather
+    /// than out of arguments it would have to be handed a second time — and
+    /// because a state machine that forgot what it was opened with would not be
+    /// the standard's.
+    pub method: Option<String>,
+    /// The *request URL*: the parsed `url` argument, resolved against the
+    /// document's URL.
+    pub url: Option<url::Url>,
+    /// The *timeout*, an `unsigned long`. A non-zero value is refused by the
+    /// setter, because nothing here can time a request out.
+    pub timeout: u32,
+    /// *With credentials*. `true` is refused by the setter, because the shared
+    /// cookie jar decides on its own whether credentials travel.
+    pub with_credentials: bool,
+    /// The *response type*, which the setter narrows to `""` and `"text"`.
+    pub response_type: XMLHttpRequestResponseType,
 }
 
 /// An `AbortController` record.
@@ -1258,18 +1303,43 @@ impl HostObject {
         default
     }
 
-    /// The record key of the `AbortSignal` this host stands for, or `None` for
-    /// every other host.
+    /// Reads the `XMLHttpRequest` this host stands for, or returns `default`
+    /// when the host is not one or its record has been reclaimed.
+    fn with_xhr<R>(&self, default: R, f: impl FnOnce(&XhrRecord) -> R) -> R {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::Xhr(record)) = ctx.host_records.borrow().get(*key)
+        {
+            return f(record);
+        }
+        default
+    }
+
+    /// Mutates the `XMLHttpRequest` this host stands for, or returns `default`
+    /// when the host is not one or its record has been reclaimed. `open()` and
+    /// the three refusing setters all write through the record, because its
+    /// state is what the next member call reads.
+    fn with_xhr_mut<R>(&self, default: R, f: impl FnOnce(&mut XhrRecord) -> R) -> R {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::Xhr(record)) = ctx.host_records.borrow_mut().get_mut(*key)
+        {
+            return f(record);
+        }
+        default
+    }
+
+    /// The record key of the host object this host stands for when that object
+    /// is an `EventTarget`, or `None` for every other host.
     ///
-    /// The tag cannot answer this: `URL`, `Headers` and `AbortSignal` share
-    /// [`TAG_HOST`], so only the record knows which interface it is. This is the
+    /// The tag cannot answer this: `URL`, `Headers`, `AbortSignal` and
+    /// `XMLHttpRequest` share [`TAG_HOST`], so only the record knows which
+    /// interface it is — and of those, only two are event targets. This is the
     /// one place the host asks, and both event-target queries below go through
-    /// it.
-    fn signal_key(&self) -> Option<HostKey> {
+    /// it, as does every refusal that has to name the receiver as a target.
+    fn event_target_key(&self) -> Option<HostKey> {
         if let HostObject::Host { ctx, key } = self
             && matches!(
                 ctx.host_records.borrow().get(*key),
-                Some(HostRecord::Signal(_))
+                Some(HostRecord::Signal(_) | HostRecord::Xhr(_))
             )
         {
             return Some(*key);
@@ -1326,17 +1396,17 @@ impl HostObject {
     /// The event target this host stands for, or `None` for a host that cannot
     /// be one.
     ///
-    /// A node wrapper, the window and an `AbortSignal` carry the `EventTarget`
-    /// prototype chain — the signal is the first of the JS-owned host objects
-    /// that does, which is why [`Self::dispatch_target`] has to consult the
-    /// record rather than the handle tag. A `NodeList`, a snapshot, an `Event`,
-    /// a `URL`, a `URLSearchParams` or a style declaration reaching here means
+    /// A node wrapper, the window, an `AbortSignal` and an `XMLHttpRequest`
+    /// carry the `EventTarget` prototype chain — the last two are JS-owned host
+    /// objects, which is why [`Self::dispatch_target`] has to consult the record
+    /// rather than the handle tag. A `NodeList`, a snapshot, an `Event`, a
+    /// `URL`, a `URLSearchParams` or a style declaration reaching here means
     /// the receiver was not what the template's signature promised.
     fn dispatch_target(&self) -> Option<DispatchTarget> {
         match self {
             HostObject::Node { node, .. } => Some(DispatchTarget::node(*node)),
             HostObject::Window { .. } => Some(DispatchTarget::window()),
-            _ => self.signal_key().map(DispatchTarget::host),
+            _ => self.event_target_key().map(DispatchTarget::host),
         }
     }
 
@@ -1346,7 +1416,7 @@ impl HostObject {
         match self {
             HostObject::Node { node, .. } => Some(TargetKey::Node(*node)),
             HostObject::Window { .. } => Some(TargetKey::Window),
-            _ => self.signal_key().map(TargetKey::Host),
+            _ => self.event_target_key().map(TargetKey::Host),
         }
     }
 
@@ -4005,8 +4075,9 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
         HostRecord::Controller(_) | HostRecord::Signal(_) => return None,
         // A response holds no pair list of its own; its headers do.
         HostRecord::Response(_) => return None,
-        // Neither encoding record holds one either.
-        HostRecord::TextDecoder(_) | HostRecord::TextEncoder => return None,
+        // Neither encoding record holds one either, and neither does an
+        // `XMLHttpRequest`.
+        HostRecord::TextDecoder(_) | HostRecord::TextEncoder | HostRecord::Xhr(_) => return None,
     };
     match params.url {
         Some(owner) => match slab.get(owner)? {
@@ -4017,7 +4088,8 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
             | HostRecord::Signal(_)
             | HostRecord::Response(_)
             | HostRecord::TextDecoder(_)
-            | HostRecord::TextEncoder => None,
+            | HostRecord::TextEncoder
+            | HostRecord::Xhr(_) => None,
         },
         None => Some(params.list.clone()),
     }
@@ -4110,6 +4182,8 @@ enum HostLink {
     TextDecoder,
     /// The record is a `TextEncoder`, which links to nothing.
     TextEncoder,
+    /// The record is an `XMLHttpRequest`, which links to nothing.
+    Xhr,
 }
 
 /// What freeing host records took out of the world: the record slots that left
@@ -4155,11 +4229,13 @@ fn free_record(slab: &mut HostSlab, key: HostKey, out: &mut ReclaimedHost) {
 ///
 /// A `Headers` a page built owns nothing else, so it is freed outright, and the
 /// two encoding records are the same: a `TextDecoder` owns only its own decoder
-/// state and a `TextEncoder` owns nothing at all. Two pairs point at
-/// each other. A URL and its query object: the object writes every mutation
-/// through to its URL, and the URL caches the object's key so that
-/// `url.searchParams` can return the same object twice. An `AbortController` and
-/// its signal: `[SameObject]` makes every read of `controller.signal` answer
+/// state and a `TextEncoder` owns nothing at all. An `XMLHttpRequest` is freed
+/// outright too — nothing points at its record but its own wrapper — though it is
+/// an event target, so its listener entries leave with the key this reports.
+/// Two pairs point at each other. A URL and its query object: the object writes
+/// every mutation through to its URL, and the URL caches the object's key so
+/// that `url.searchParams` can return the same object twice. An `AbortController`
+/// and its signal: `[SameObject]` makes every read of `controller.signal` answer
 /// with the object the constructor made, so the signal record has to outlive its
 /// own wrapper for as long as the controller's record does. A `Response` and the
 /// `Headers` it created are the same shape read the other way round: the response
@@ -4200,6 +4276,7 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         Some(HostRecord::Response(record)) => HostLink::Response(record.headers),
         Some(HostRecord::TextDecoder(_)) => HostLink::TextDecoder,
         Some(HostRecord::TextEncoder) => HostLink::TextEncoder,
+        Some(HostRecord::Xhr(_)) => HostLink::Xhr,
         None => return freed,
     };
     match link {
@@ -4207,8 +4284,11 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         // wrapper's death is the record's death — freed here and nowhere else,
         // exactly once, because the world calls this once per finalized wrapper
         // and `GenSlab::remove` bumps the generation so a second call for the
-        // same key finds nothing.
-        HostLink::TextDecoder | HostLink::TextEncoder => {
+        // same key finds nothing. An `XMLHttpRequest` is the same shape: nothing
+        // else points at its record, and its own state (no stored value, not
+        // even an interned one) frees with it. Its *listeners* are keyed by the
+        // record's key, so the caller drains them from the freed key.
+        HostLink::TextDecoder | HostLink::TextEncoder | HostLink::Xhr => {
             free_record(slab, key, &mut freed);
         }
         // The headers record a response owns outlives its own wrapper, because
@@ -5709,6 +5789,418 @@ impl TextEncoderOps for HostObject {
         // A constant, and not a read of a record: the encoder has no encoding
         // to vary, which is what makes the record empty.
         Ok(String::from(TEXT_ENCODER_ENCODING))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// XMLHttpRequest
+// ---------------------------------------------------------------------------
+
+/// The event type `open()` fires when the state changes to `OPENED`
+/// (<https://xhr.spec.whatwg.org/#the-open()-method>, step 9).
+///
+/// It is also the event type `onreadystatechange`'s listener listens for:
+/// [`EventHandlerName::event_type`] derives that one by stripping the `on`
+/// prefix, so the two spellings have to name the same event — which the
+/// `readystatechange` dispatch test pins by observing the event from both a
+/// listener and the handler attribute.
+const READY_STATE_CHANGE: &str = "readystatechange";
+
+/// The three *forbidden methods*, byte-case-insensitively
+/// (<https://fetch.spec.whatwg.org/#forbidden-method>). `open()` refuses each
+/// with a `SecurityError`.
+const FORBIDDEN_METHODS: [&[u8]; 3] = [b"CONNECT", b"TRACE", b"TRACK"];
+
+/// The methods `normalize a method` byte-uppercases; every other method keeps
+/// the case the page wrote it in (<https://xhr.spec.whatwg.org/#the-open()-method>).
+const NORMALIZED_METHODS: [&[u8]; 6] = [b"DELETE", b"GET", b"HEAD", b"OPTIONS", b"POST", b"PUT"];
+
+/// Whether `byte` is one of HTTP's `tchar`s, which is what the `method`
+/// production is built from: `method = token` and `token = 1*tchar`, with
+/// `tchar = "!" / "#" / "$" / "%" / "&" / "'" / "*" / "+" / "-" / "." / "^" /
+/// "_" / "`" / "|" / "~" / DIGIT / ALPHA` (RFC 9110 §5.6.2).
+fn is_tchar(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+}
+
+/// The *method* production of `open()`: a method is `token`, and `token =
+/// 1*tchar` — so the empty byte sequence is not a method, and neither is a
+/// sequence containing a byte outside the `tchar` set (RFC 9110 §5.6.2).
+///
+/// Yields the ASCII text the bytes spell, or `None` when they are not a method.
+/// The caller must not `String::from_utf8` them itself: a `tchar` is ASCII, so
+/// the two agree on every accepted input and the rejected ones never reach a
+/// conversion.
+fn method_token(bytes: &[u8]) -> Option<String> {
+    let mut token = String::with_capacity(bytes.len());
+    for &byte in bytes {
+        if !is_tchar(byte) {
+            return None;
+        }
+        // Every byte is checked first, so the cast is exact rather than lossy.
+        token.push(byte as char);
+    }
+    (!token.is_empty()).then_some(token)
+}
+
+impl XMLHttpRequestEventTargetOps for HostObject {
+    fn onloadstart(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
+        self.event_handler(EventHandlerName::new("onloadstart"))
+    }
+
+    fn set_onloadstart(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
+        self.set_event_handler(EventHandlerName::new("onloadstart"), value)
+    }
+
+    fn onprogress(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
+        self.event_handler(EventHandlerName::new("onprogress"))
+    }
+
+    fn set_onprogress(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
+        self.set_event_handler(EventHandlerName::new("onprogress"), value)
+    }
+
+    fn onabort(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
+        self.event_handler(EventHandlerName::new("onabort"))
+    }
+
+    fn set_onabort(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
+        self.set_event_handler(EventHandlerName::new("onabort"), value)
+    }
+
+    fn onerror(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
+        self.event_handler(EventHandlerName::new("onerror"))
+    }
+
+    fn set_onerror(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
+        self.set_event_handler(EventHandlerName::new("onerror"), value)
+    }
+
+    fn onload(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
+        self.event_handler(EventHandlerName::new("onload"))
+    }
+
+    fn set_onload(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
+        self.set_event_handler(EventHandlerName::new("onload"), value)
+    }
+
+    fn ontimeout(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
+        self.event_handler(EventHandlerName::new("ontimeout"))
+    }
+
+    fn set_ontimeout(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
+        self.set_event_handler(EventHandlerName::new("ontimeout"), value)
+    }
+
+    fn onloadend(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
+        self.event_handler(EventHandlerName::new("onloadend"))
+    }
+
+    fn set_onloadend(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
+        self.set_event_handler(EventHandlerName::new("onloadend"), value)
+    }
+}
+
+impl XMLHttpRequestOps for HostObject {
+    fn onreadystatechange(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
+        self.event_handler(EventHandlerName::new("onreadystatechange"))
+    }
+
+    fn set_onreadystatechange(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
+        self.set_event_handler(EventHandlerName::new("onreadystatechange"), value)
+    }
+
+    fn ready_state(&self) -> u16 {
+        self.with_xhr(<HostObject as XMLHttpRequestOps>::UNSENT, |record| {
+            record.ready_state
+        })
+    }
+
+    fn open(
+        &self,
+        method: &[u8],
+        url: &str,
+        r#async: Option<bool>,
+        username: Option<Option<&str>>,
+        password: Option<Option<&str>>,
+    ) -> Result<(), JsError> {
+        // The XHR Standard's `open()` steps, in its order. Step 1 — "if this's
+        // relevant global object is not fully active, then throw an
+        // InvalidStateError" — is omitted: this product has no browsing context
+        // that can be not fully active and no way to ask for one, so there is
+        // nothing the step could test.
+        //
+        // Steps 2 to 4: the method must be a method, must not be forbidden, and
+        // is then normalised. The standard declares `method` as a `ByteString`,
+        // and its validity test is defined over bytes, so `method_token` reads
+        // the argument as the page's own code units rather than as a `USVString`
+        // re-encoded to UTF-8.
+        let Some(mut normalized) = method_token(method) else {
+            return Err(JsError::dom_exception(
+                "SyntaxError",
+                "the method is not a valid HTTP method token",
+            ));
+        };
+        if FORBIDDEN_METHODS
+            .iter()
+            .any(|forbidden| method.eq_ignore_ascii_case(forbidden))
+        {
+            return Err(JsError::dom_exception(
+                "SecurityError",
+                "the method is forbidden",
+            ));
+        }
+        if NORMALIZED_METHODS
+            .iter()
+            .any(|known| method.eq_ignore_ascii_case(known))
+        {
+            normalized.make_ascii_uppercase();
+        }
+
+        // Steps 5 to 7: parse the URL against the document's URL, and let an
+        // omitted `async` default to true. The base is the *document's* URL, not
+        // the caller's: a relative URL in `xhr.open('GET', '/x')` resolves
+        // against the page, which is what a page expects and what the fetch path
+        // does with its `initiator`.
+        let base = self.context().doc.borrow().url().cloned();
+        let parsed = match &base {
+            Some(base) => base.join(url),
+            None => url::Url::parse(url),
+        }
+        .map_err(|_| JsError::dom_exception("SyntaxError", "the URL could not be parsed"))?;
+        let r#async = r#async.unwrap_or(true);
+
+        // Step 8's first part, refused for the same reason `withCredentials` is:
+        // the standard writes a non-null username or password onto the parsed
+        // URL, and this engine sends no credentialed request at all. Storing
+        // them would again promise something the request will not carry — and
+        // what the network layer would do with URL userinfo is not something
+        // this slice has verified.
+        if username.flatten().is_some() || password.flatten().is_some() {
+            return Err(JsError::dom_exception(
+                "NotSupportedError",
+                "this engine cannot send a request with credentials",
+            ));
+        }
+
+        // Step 9, refused for every `async = false` rather than only for the
+        // condition the standard names (a non-zero `timeout` or a non-empty
+        // `responseType`): a synchronous request cannot be expressed by the
+        // network driver (`tenta-net` is asynchronous all the way down) and
+        // would block the page's own turn loop, deadlocking the settle machinery
+        // rather than merely answering slowly. Refusing loudly is the only
+        // honest answer; silently treating `false` as `true` would hand the page
+        // a result it did not ask for.
+        if !r#async {
+            return Err(JsError::dom_exception(
+                "NotSupportedError",
+                "this engine cannot send a synchronous request",
+            ));
+        }
+
+        // Step 10 ("terminate this's fetch controller") and the rest of step 11
+        // have nothing to act on: nothing is sent in this slice, so there is no
+        // request in flight to terminate, no `send()` flag, no author request
+        // headers, no body, no response and no received bytes. The two parts of
+        // step 11 a record exists for are the request method and the request URL,
+        // which b-5a3 builds its `FetchRequest` from.
+        //
+        // Step 12: "if this's state is not opened, then set this's state to
+        // opened and fire an event named readystatechange at this". A second
+        // `open()` on an already-opened object therefore rewrites the request
+        // and fires nothing.
+        let key = self
+            .event_target_key()
+            .ok_or_else(|| JsError::type_error("the receiver is not an event target"))?;
+        let opened = self.with_xhr_mut(false, |record| {
+            record.method = Some(normalized);
+            record.url = Some(parsed);
+            let opened = record.ready_state != <HostObject as XMLHttpRequestOps>::OPENED;
+            record.ready_state = <HostObject as XMLHttpRequestOps>::OPENED;
+            opened
+        });
+        if !opened {
+            return Ok(());
+        }
+
+        // The event is UA-created, so `isTrusted` is true; "fire an event named
+        // e at target" gives it no bubbles, no cancelable and no default action.
+        // It is fired here, on this stack, which is what makes a listener
+        // registered before the call run before `open()` returns — the same
+        // shape `AbortSignal::abort` gives its `abort` event.
+        let ctx = self.context();
+        let mut record = EventRecord::new(
+            READY_STATE_CHANGE.to_owned(),
+            EventKind::Plain,
+            ctx.time_stamp(),
+        );
+        record.flags.initialized = true;
+        record.is_trusted = true;
+        let event_key = ctx.events.borrow_mut().insert(record);
+        let dispatched = dispatch_at(ctx, DispatchTarget::host(key), event_key, true);
+        // Remove the transient record unless a listener made a wrapper for it
+        // (in which case the world's dead-event sweep owns its removal).
+        let orphaned = ctx
+            .events
+            .borrow()
+            .get(event_key)
+            .is_some_and(|record| !record.has_wrapper);
+        if orphaned {
+            ctx.events.borrow_mut().remove(event_key);
+        }
+        dispatched.map(|_| ())
+    }
+
+    fn timeout(&self) -> u32 {
+        self.with_xhr(0, |record| record.timeout)
+    }
+
+    fn set_timeout(&self, value: u32) -> Result<(), JsError> {
+        // The standard stores any value here and fires a `timeout` event when
+        // the request outlives it. Nothing in this slice can time a request out
+        // — nothing is sent — so a non-zero value is refused rather than
+        // stored: keeping it would promise an event that can never fire.
+        if value != 0 {
+            return Err(JsError::dom_exception(
+                "NotSupportedError",
+                "this engine cannot time a request out",
+            ));
+        }
+        self.with_xhr_mut((), |record| record.timeout = value);
+        Ok(())
+    }
+
+    fn with_credentials(&self) -> bool {
+        self.with_xhr(false, |record| record.with_credentials)
+    }
+
+    fn set_with_credentials(&self, value: bool) -> Result<(), JsError> {
+        // The standard stores the value and lets the fetch layer decide whether
+        // credentials travel. Here the shared cookie jar decides on its own
+        // policy, with no per-request opt-out, so accepting `true` would silently
+        // mean the opposite of what it says.
+        if value {
+            return Err(JsError::dom_exception(
+                "NotSupportedError",
+                "this engine cannot opt a request in to cross-origin credentials",
+            ));
+        }
+        self.with_xhr_mut((), |record| record.with_credentials = value);
+        Ok(())
+    }
+
+    fn status(&self) -> u16 {
+        // "If this's state is unsent or opened, then return 0." Those are the
+        // only two states this slice has, so the answer is the standard's own
+        // and not a stub.
+        0
+    }
+
+    fn status_text(&self) -> Result<Vec<u8>, JsError> {
+        // "If this's state is unsent or opened, then return the empty
+        // bytestring", as above.
+        Ok(Vec::new())
+    }
+
+    fn get_response_header(&self, _name: &[u8]) -> Result<Option<String>, JsError> {
+        // "If this's state is unsent or opened, then return null." The header
+        // *name* still converts, which is why the argument is not dropped before
+        // this point.
+        Ok(None)
+    }
+
+    fn get_all_response_headers(&self) -> Result<Vec<u8>, JsError> {
+        // "If this's state is unsent or opened, then return the empty
+        // bytestring", as above.
+        Ok(Vec::new())
+    }
+
+    fn override_mime_type(&self, _mime: &str) -> Result<(), JsError> {
+        // The override exists to make the response body be decoded as something
+        // other than its `Content-Type` says, and this slice has neither a
+        // decoding step nor a response to decode, so there is nothing for an
+        // override to change. Refusing is the narrowing recorded in the IDL.
+        Err(JsError::dom_exception(
+            "NotSupportedError",
+            "this engine cannot override the response MIME type",
+        ))
+    }
+
+    fn response_type(&self) -> Result<XMLHttpRequestResponseType, JsError> {
+        Ok(
+            self.with_xhr(XMLHttpRequestResponseType::EmptyString, |record| {
+                record.response_type
+            }),
+        )
+    }
+
+    fn set_response_type(&self, value: XMLHttpRequestResponseType) -> Result<(), JsError> {
+        // The enumeration is the standard's, and every member of it converts;
+        // the narrowing is this engine's, so the refusal is a
+        // `NotSupportedError` and not the `TypeError` an unknown enum value
+        // would produce. `""` and `"text"` are the two the decoded-text path can
+        // serve; the rest need the response conversions b-5a2 adds.
+        match value {
+            XMLHttpRequestResponseType::EmptyString | XMLHttpRequestResponseType::Text => {
+                self.with_xhr_mut((), |record| record.response_type = value);
+                Ok(())
+            }
+            _ => Err(JsError::dom_exception(
+                "NotSupportedError",
+                "this engine can only serve a text response",
+            )),
+        }
+    }
+
+    fn response_text(&self) -> Result<String, JsError> {
+        // "If this's state is not loading or done, then return the empty
+        // string", which is every state this slice has. The state check also
+        // drops the standard's `InvalidStateError` for a non-text `responseType`,
+        // since the setter refuses every such type.
+        Ok(String::new())
+    }
+}
+
+impl XMLHttpRequestConstructor for HostObject {
+    fn construct(realm: &Realm) -> Result<Self, JsError> {
+        // The constructor's steps are "to do nothing": the state starts at
+        // `UNSENT` and every attribute at its default. The record exists for the
+        // two reasons every `TAG_HOST` wrapper needs one — it names the
+        // interface the wrapper's template comes from, and the wrapper's
+        // finalizer frees the slot through `reclaim_host_record` — and for a
+        // third that is XHR's own: the record's key is the object's event-target
+        // key, so a listener registered on one object must be keyed by a record
+        // that belongs to that object alone.
+        let ctx = realm_context(realm)?;
+        let key = ctx
+            .host_records
+            .borrow_mut()
+            .insert(HostRecord::Xhr(XhrRecord {
+                ready_state: <HostObject as XMLHttpRequestOps>::UNSENT,
+                method: None,
+                url: None,
+                timeout: 0,
+                with_credentials: false,
+                response_type: XMLHttpRequestResponseType::EmptyString,
+            }));
+        Ok(HostObject::host_record(ctx, key))
     }
 }
 

@@ -472,8 +472,13 @@ fn quickjs_pass(argument: &crate::model::Argument) -> String {
     if argument.optional {
         return match &argument.ty {
             ty if is_string(ty) => format!("{name}.0.as_deref()"),
+            // See `pass_expr` in `v8.rs`: the outer `Option` has to be borrowed by
+            // reference, or the closure returns a `&str` borrowed from its own
+            // parameter. This arm is not compiled by any gate in this repository
+            // (the `quickjs` feature does not build), so the V8 comment is where
+            // the reasoning lives and this is its mechanical counterpart.
             Type::Nullable(inner) if is_string(inner) => {
-                format!("{name}.0.map(|inner| inner.as_deref())")
+                format!("{name}.0.as_ref().map(|inner| inner.as_deref())")
             }
             _ => format!("{name}.0"),
         };
