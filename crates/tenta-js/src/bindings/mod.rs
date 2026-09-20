@@ -406,4 +406,132 @@ mod prelude_helpers {
             );
         });
     }
+
+    /// WebIDL converts a sequence with `GetMethod(V, @@iterator)` followed by
+    /// `GetIterator`, so anything iterable is a sequence and not only an array.
+    /// `new URLSearchParams(new Map([["a", "b"]]))` is the caller that needs
+    /// this; an array takes the same path, with no special case to get wrong.
+    #[test]
+    fn a_sequence_is_read_through_the_iterator_protocol() {
+        with_context(|scope| {
+            eval(scope, "globalThis.__set = new Set(['a', 'b']);");
+            let set = global(scope, "__set");
+            let items = sequence_from_v8(scope, set, |scope, item| Ok(string_from_v8(scope, item)))
+                .expect("a `Set` is iterable, so it is a sequence");
+            assert_eq!(items, ["a", "b"]);
+
+            eval(scope, "globalThis.__items = ['x'];");
+            let array = global(scope, "__items");
+            let items =
+                sequence_from_v8(scope, array, |scope, item| Ok(string_from_v8(scope, item)))
+                    .expect("an array is a sequence");
+            assert_eq!(items, ["x"]);
+        });
+    }
+
+    /// A value without a usable `@@iterator` is the `TypeError` the spec
+    /// prescribes, including a primitive, which is not an object at all.
+    #[test]
+    fn a_value_without_an_iterator_is_not_a_sequence() {
+        with_context(|scope| {
+            eval(scope, "globalThis.__plain = { a: '1' };");
+            let plain = global(scope, "__plain");
+            let error =
+                sequence_from_v8(scope, plain, |scope, item| Ok(string_from_v8(scope, item)))
+                    .expect_err("an object without `@@iterator` is not a sequence");
+            assert_eq!(error.kind(), JsErrorKind::Type);
+
+            // A primitive string *is* iterable in JavaScript, but WebIDL's
+            // conversion rejects a non-object before it ever looks for the
+            // method, so this is a `TypeError` too.
+            let value = v8_string(scope, "abc")
+                .expect("the text fits a V8 string")
+                .into();
+            let error =
+                sequence_from_v8(scope, value, |scope, item| Ok(string_from_v8(scope, item)))
+                    .expect_err("a primitive is not a sequence");
+            assert_eq!(error.kind(), JsErrorKind::Type);
+        });
+    }
+
+    /// `es-to-record` filters on the property descriptor: an own property that
+    /// is not enumerable never reaches the record, an accessor is read rather
+    /// than treated as data, and an inherited enumerable property is not an own
+    /// key at all. `headers-record.any.js` observes the descriptor half.
+    ///
+    /// The integer-like key is the one that catches the descriptor read out: a
+    /// key reported as a Number has no `Name` form, so an entry that is not
+    /// converted to its string name is dropped instead of read.
+    #[test]
+    fn a_record_reads_only_the_enumerable_own_properties() {
+        with_context(|scope| {
+            eval(
+                scope,
+                "globalThis.__source = { visible: 'v' };
+                 Object.defineProperty(__source, 'hidden', { value: 'h', enumerable: false });
+                 Object.defineProperty(__source, 'computed', { get: () => 'g', enumerable: true });
+                 globalThis.__numbered = { 0: 'zero', a: 'a' };
+                 globalThis.__inherited = Object.create({ inherited: 'i' });
+                 __inherited.own = 'o';",
+            );
+            let source = global(scope, "__source");
+            let entries =
+                record_from_v8(scope, source, |scope, item| Ok(string_from_v8(scope, item)))
+                    .expect("the source is a record");
+            assert_eq!(
+                entries,
+                [
+                    ("visible".to_string(), "v".to_string()),
+                    ("computed".to_string(), "g".to_string())
+                ],
+                "the non-enumerable own property leaked into the record"
+            );
+
+            let source = global(scope, "__numbered");
+            let entries =
+                record_from_v8(scope, source, |scope, item| Ok(string_from_v8(scope, item)))
+                    .expect("the source is a record");
+            assert_eq!(
+                entries,
+                [
+                    ("0".to_string(), "zero".to_string()),
+                    ("a".to_string(), "a".to_string())
+                ],
+                "an integer-like own key was dropped"
+            );
+
+            let source = global(scope, "__inherited");
+            let entries =
+                record_from_v8(scope, source, |scope, item| Ok(string_from_v8(scope, item)))
+                    .expect("the source is a record");
+            assert_eq!(
+                entries,
+                [("own".to_string(), "o".to_string())],
+                "an inherited enumerable property leaked into the record"
+            );
+        });
+    }
+
+    /// A `ByteString` is one code unit per byte: `0xFF` survives the round
+    /// trip, where a UTF-8 conversion would have rewritten it, and a code unit
+    /// above `0xFF` is the `TypeError` WebIDL prescribes rather than a
+    /// truncation to its low byte.
+    #[test]
+    fn a_byte_string_round_trips_isomorphically() {
+        with_context(|scope| {
+            eval(scope, "globalThis.__byte = '\\u00ff';");
+            let value = global(scope, "__byte");
+            let bytes = byte_string_from_v8(scope, value).expect("`0xFF` is a valid `ByteString`");
+            assert_eq!(bytes, [0xFF]);
+
+            let back = byte_string_to_v8(scope, &bytes).expect("the bytes fit a V8 string");
+            assert_eq!(back.to_rust_string_lossy(scope), "\u{FF}");
+
+            eval(scope, "globalThis.__too_big = '\\u0100';");
+            let value = global(scope, "__too_big");
+            let error = byte_string_from_v8(scope, value)
+                .expect_err("a code unit above `0xFF` is not a `ByteString`");
+            assert_eq!(error.kind(), JsErrorKind::Type);
+        });
+    }
 }

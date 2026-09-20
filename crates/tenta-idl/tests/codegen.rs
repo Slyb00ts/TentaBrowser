@@ -297,7 +297,7 @@ fn a_declared_member_shadows_the_generated_iterator_member() {
 /// The pair form has no array-like surface, so every member is a callback over
 /// one host snapshot rather than an intrinsic.
 #[test]
-fn a_pair_iterable_emits_three_views_over_one_host_hook() {
+fn a_pair_iterable_emits_three_views_and_a_for_each_over_one_host_hook() {
     let model = common::toy();
     let v8 = generated_file(&model, "pair_box_v8.rs");
 
@@ -342,10 +342,151 @@ fn a_pair_iterable_emits_three_views_over_one_host_hook() {
         "that one template is installed as both `entries` and `@@iterator`"
     );
 
+    // `forEach` is the fourth member and the only one that is not a view: it
+    // calls the page's callback with `(value, key, container)`, so it needs the
+    // receiver-carrying helper and a required argument, where the three views
+    // take none.
+    assert!(
+        v8.contents.contains("call_pair_box_for_each::<T>"),
+        "the pair iterator has no `forEach` member"
+    );
+    assert!(
+        v8.contents.contains("v8_string(scope, \"forEach\")?"),
+        "`forEach` is not installed under its IDL name"
+    );
+    assert!(
+        v8.contents
+            .contains("call_js_function(scope, callback, this_arg, &[value, key, container])"),
+        "`forEach` does not call the page's callback with `(value, key, container)`"
+    );
+    assert!(
+        v8.contents.matches(".length(1)").count() == 1,
+        "only `forEach` reports a required argument"
+    );
+    assert!(
+        v8.contents.matches(".length(0)").count() == 3,
+        "the three views take no arguments"
+    );
+
     let ops = generated_file(&model, "pair_box_ops.rs");
     assert!(
         ops.contents
             .contains("fn iterable_entries(&self) -> Result<Vec<(String, String)>, JsError>;")
+    );
+}
+
+/// A union arm is selected by the WebIDL conversion's own test, and the arms
+/// are tried in declaration order.
+///
+/// The shape mirrors `URLSearchParams`' constructor argument, where getting the
+/// order wrong turns an object into `"[object Object]"`: the sequence arm has to
+/// claim anything with an `@@iterator`, the record arm has to claim the plain
+/// object the sequence arm declined, and `DOMString` has to be left as the
+/// fallback. `wpt/checkout/fetch/api/headers/headers-record.any.js` observes the
+/// record half of this through `for (const [k, v] of new Headers(obj))`.
+#[test]
+fn a_union_arm_is_selected_by_its_own_test_in_declaration_order() {
+    let model = tenta_idl::parse_webidl(
+        "interface Sample {\n  \
+           undefined probe((sequence<DOMString> or record<DOMString, DOMString> or DOMString) value);\n\
+         };\n",
+    )
+    .expect("the source parses");
+    assert_eq!(model.unions.len(), 1, "the union is interned once");
+    let contents = generated_file(&model, "types.rs").contents;
+    // Slice out one impl, or the assertions below would be satisfied by the
+    // other engine's block: both impls are emitted into this one file.
+    let v8 = impl_body(&contents, &model.unions[0].name, "v8");
+
+    let sequence_at = v8
+        .find("if has_iterator(scope, value) {")
+        .expect("the sequence arm is selected by its `@@iterator`");
+    let record_at = v8
+        .find("if value.is_object() && !value.is_array() {")
+        .expect("the record arm is selected as an object that is not an array");
+    let fallback_at = v8
+        .find("Ok::<String, JsError>(string_from_v8(scope, value))")
+        .expect("the unguarded `DOMString` arm is the fallback");
+    assert!(
+        sequence_at < record_at && record_at < fallback_at,
+        "the arms are not emitted in declaration order"
+    );
+
+    // The arms are not merely guarded: each one converts through the conversion
+    // its test selects it for.
+    assert!(
+        v8.contains("sequence_from_v8(scope, value, |scope, item| Ok::<String, JsError>(string_from_v8(scope, item)))"),
+        "the sequence arm does not use the `GetIterator` conversion"
+    );
+    assert!(
+        v8.contains("record_from_v8(scope, value, |scope, item| Ok::<String, JsError>(string_from_v8(scope, item)))"),
+        "the record arm does not use the `es-to-record` conversion"
+    );
+}
+
+/// One engine's `impl` block for a union, without the other engine's.
+fn impl_body(contents: &str, name: &str, engine: &str) -> String {
+    let head = match engine {
+        "v8" => format!("#[cfg(feature = \"v8\")]\nimpl {name} {{"),
+        // The QuickJS side is a trait impl, so its header carries the trait.
+        _ => {
+            format!("#[cfg(feature = \"{engine}\")]\nimpl<'js> rquickjs::FromJs<'js> for {name} {{")
+        }
+    };
+    let start = contents
+        .find(&head)
+        .unwrap_or_else(|| panic!("{engine} has no impl for {name}"));
+    let rest = &contents[start + head.len()..];
+    let end = rest.find("#[cfg(feature = ").unwrap_or(rest.len());
+    rest[..end].to_string()
+}
+
+/// The QuickJS impl carries a record test too, because it converts every arm
+/// through the same table; its sequence arm stays an array check because
+/// `rquickjs`'s `Vec<T>: FromJs` reads an array and has no `@@iterator` step.
+#[test]
+fn the_quickjs_union_arms_carry_the_same_tests() {
+    let model = tenta_idl::parse_webidl(
+        "interface Sample {\n  \
+           undefined probe((sequence<DOMString> or record<DOMString, DOMString> or DOMString) value);\n\
+         };\n",
+    )
+    .expect("the source parses");
+    let contents = generated_file(&model, "types.rs").contents;
+    let qjs = impl_body(&contents, &model.unions[0].name, "quickjs");
+
+    assert!(
+        qjs.contains("if value.is_object() && !value.is_array() {"),
+        "the QuickJS record arm has no test"
+    );
+    assert!(
+        qjs.contains("if value.is_array() {"),
+        "the QuickJS sequence arm is still an array check"
+    );
+}
+
+/// A `ByteString` is a byte string, not text: its conversion is isomorphic, so a
+/// byte above `0x7F` survives the round trip and a code unit above `0xFF` is an
+/// error rather than a truncation. `Headers` is the first interface to make this
+/// observable (`new Headers({ "x-ÿ": "v" })`).
+#[test]
+fn a_byte_string_is_converted_isomorphically() {
+    let model =
+        tenta_idl::parse_webidl("interface Sample { ByteString probe(ByteString value); };")
+            .expect("the source parses");
+    let file = generated_file(&model, "sample_v8.rs");
+
+    assert!(
+        file.contents.contains("byte_string_from_v8(scope, raw)"),
+        "the argument does not use the isomorphic conversion"
+    );
+    assert!(
+        file.contents.contains("byte_string_to_v8(scope, &value)"),
+        "the return value does not use the isomorphic conversion"
+    );
+    assert!(
+        !file.contents.contains("from_utf8_lossy"),
+        "the `ByteString` path decoded the bytes as UTF-8"
     );
 }
 

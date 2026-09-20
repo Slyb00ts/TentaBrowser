@@ -1070,6 +1070,48 @@ pub fn string_to_v8<'s>(
     Ok(v8_string(scope, value)?.into())
 }
 
+/// WebIDL `ByteString` conversion: one code unit per byte, isomorphically.
+///
+/// WebIDL defines the conversion as `ToString` followed by isomorphic encoding,
+/// so `"\u{FF}"` is the single byte `0xFF` and not the two bytes its UTF-8 form
+/// needs. The string is therefore read through `write_v2` and each code unit is
+/// narrowed by hand: the one-byte writer would truncate a code unit above
+/// `0xFF` to its low byte, while WebIDL requires a `TypeError` for one.
+#[cfg(feature = "v8")]
+pub fn byte_string_from_v8(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<v8::Value>,
+) -> Result<Vec<u8>, JsError> {
+    let string = value
+        .to_string(scope)
+        .ok_or_else(|| JsError::type_error("the argument cannot be converted to a ByteString"))?;
+    let mut units = vec![0u16; string.length()];
+    string.write_v2(scope.as_ref(), 0, &mut units, v8::WriteFlags::empty());
+    let mut bytes = Vec::with_capacity(units.len());
+    for unit in units {
+        let byte = u8::try_from(unit).map_err(|_| {
+            JsError::type_error("the argument is not a valid ByteString: it has a code unit above 0xFF")
+        })?;
+        bytes.push(byte);
+    }
+    Ok(bytes)
+}
+
+/// Converts a WebIDL `ByteString` to a JavaScript value, isomorphically.
+///
+/// The mirror image of [`byte_string_from_v8`]: one byte per code unit, through
+/// the one-byte string constructor, so `0xFF` becomes `"\u{FF}"` rather than the
+/// replacement characters a UTF-8 round trip would produce.
+#[cfg(feature = "v8")]
+pub fn byte_string_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: &[u8],
+) -> Result<v8::Local<'s, v8::Value>, JsError> {
+    let string = v8::String::new_from_one_byte(scope, value, v8::NewStringType::Normal)
+        .ok_or_else(|| JsError::type_error("the string is too long for this isolate"))?;
+    Ok(string.into())
+}
+
 /// Converts a sequence to a JavaScript array.
 #[cfg(feature = "v8")]
 pub fn sequence_to_v8<'s, T, F>(
@@ -1263,7 +1305,15 @@ pub fn adopt_host<T: std::any::Any>(
     result
 }
 
-/// Converts a JavaScript array to a sequence.
+/// Converts a JavaScript value to a sequence through `@@iterator`.
+///
+/// WebIDL's sequence conversion is `GetMethod(V, @@iterator)` followed by
+/// `GetIterator`, not an array check: `new URLSearchParams(new Map([["a",
+/// "b"]]))` has to see the map's entries, and so does any other iterable. An
+/// array takes the same path, because `%Array.prototype[@@iterator]%` is just a
+/// method, so there is no special case to get wrong. A `value` that is not an
+/// object, or whose `@@iterator` is absent or not callable, is the `TypeError`
+/// the spec prescribes.
 #[cfg(feature = "v8")]
 pub fn sequence_from_v8<'s, T, F>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -1273,21 +1323,105 @@ pub fn sequence_from_v8<'s, T, F>(
 where
     F: FnMut(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Value>) -> Result<T, JsError>,
 {
-    let array: v8::Local<v8::Array> = value
-        .try_into()
-        .map_err(|_| JsError::type_error("expected a sequence"))?;
-    let length = array.length();
-    let mut items = Vec::with_capacity(length as usize);
-    for index in 0..length {
-        let element = array
-            .get_index(scope, index)
-            .ok_or_else(|| JsError::type_error("the sequence element cannot be read"))?;
+    let iterator = iterator_from_v8(scope, value)?
+        .ok_or_else(|| JsError::type_error("the value is not iterable, so it is not a sequence"))?;
+    let mut items = Vec::new();
+    while let Some(element) = iterator_next(scope, iterator)? {
         items.push(convert(scope, element)?);
     }
     Ok(items)
 }
 
+/// `GetMethod(value, @@iterator)` as a callable, or `None` when `value` has no
+/// usable one.
+///
+/// The `Get` is the observable one the spec performs, which is why a union arm
+/// distinguishes a sequence by probing here rather than checking `is_array`: a
+/// proxy sees the read.
+#[cfg(feature = "v8")]
+fn iteration_method<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<Option<v8::Local<'s, v8::Function>>, JsError> {
+    let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
+        return Ok(None);
+    };
+    let key = v8::Symbol::get_iterator(scope);
+    let method = object
+        .get(scope, key.into())
+        .ok_or_else(|| JsError::type_error("the `@@iterator` of the value cannot be read"))?;
+    Ok(v8::Local::<v8::Function>::try_from(method).ok())
+}
+
+/// Whether `value` has a callable `@@iterator`, which is what selects a union's
+/// `sequence<T>` arm.
+///
+/// The probe performs the `Get` the spec performs, so a proxy or an accessor
+/// observes it. An `@@iterator` that throws, or that is not callable, reads as
+/// "no iterator" — the union then tries its remaining arms, and the pending
+/// exception surfaces through one of their reads.
+#[cfg(feature = "v8")]
+pub fn has_iterator<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> bool {
+    matches!(iteration_method(scope, value), Ok(Some(_)))
+}
+
+/// `value`'s iterator object, as WebIDL's `GetIterator` obtains it.
+#[cfg(feature = "v8")]
+fn iterator_from_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<Option<v8::Local<'s, v8::Object>>, JsError> {
+    let Some(method) = iteration_method(scope, value)? else {
+        return Ok(None);
+    };
+    let iterator = call_js_function(scope, method, value, &[])?;
+    Ok(v8::Local::<v8::Object>::try_from(iterator).ok())
+}
+
+/// Advances `iterator` once and returns the yielded value; `None` ends it.
+///
+/// `next` is read on every step, the way `IteratorStep` does, so an iterator
+/// that replaces its own `next` is followed rather than captured once.
+#[cfg(feature = "v8")]
+fn iterator_next<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    iterator: v8::Local<'s, v8::Object>,
+) -> Result<Option<v8::Local<'s, v8::Value>>, JsError> {
+    let key = v8_string(scope, "next")?;
+    let next = iterator
+        .get(scope, key.into())
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+        .ok_or_else(|| JsError::type_error("the iterator has no callable `next`"))?;
+    let result = call_js_function(scope, next, iterator.into(), &[])?;
+    let result = v8::Local::<v8::Object>::try_from(result)
+        .map_err(|_| JsError::type_error("the iterator result is not an object"))?;
+    let key = v8_string(scope, "done")?;
+    if result
+        .get(scope, key.into())
+        .is_none_or(|value| value.boolean_value(scope))
+    {
+        return Ok(None);
+    }
+    let key = v8_string(scope, "value")?;
+    let value = result
+        .get(scope, key.into())
+        .ok_or_else(|| JsError::type_error("the iterator result has no value"))?;
+    Ok(Some(value))
+}
+
 /// Converts a JavaScript object to a record, in own-property order.
+///
+/// This is WebIDL's `es-to-record`: the own keys are enumerated first, then
+/// each one's property descriptor decides whether it is enumerable, and only an
+/// enumerable property is read. The descriptor read is not an optimisation — a
+/// proxy observes it and the `Get` that follows, in that order, and a
+/// non-enumerable own property has to be skipped rather than treated as data.
+///
+/// `get_own_property_names` is own-only by construction, so an inherited
+/// enumerable property never reaches this loop.
 #[cfg(feature = "v8")]
 pub fn record_from_v8<'s, V, F>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -1300,14 +1434,37 @@ where
     let object: v8::Local<v8::Object> = value
         .try_into()
         .map_err(|_| JsError::type_error("expected a record"))?;
+    let args = v8::GetPropertyNamesArgs {
+        // `[[OwnPropertyKeys]]` reports non-enumerable own properties too; the
+        // descriptor read below is what filters them out, and it is the read
+        // the spec makes. Symbol keys never reach a record: every record key
+        // type is a string type.
+        property_filter: v8::PropertyFilter::ALL_PROPERTIES
+            | v8::PropertyFilter::SKIP_SYMBOLS,
+        // An integer-like own key would otherwise be reported as a Number, and
+        // the descriptor read below needs a `Name`; without this the entry
+        // would be dropped rather than read.
+        key_conversion: v8::KeyConversionMode::ConvertToString,
+        ..Default::default()
+    };
     let names = object
-        .get_own_property_names(scope, v8::GetPropertyNamesArgs::default())
+        .get_own_property_names(scope, args)
         .ok_or_else(|| JsError::type_error("the record keys cannot be read"))?;
+    let enumerable_key = v8_string(scope, "enumerable")?;
     let mut entries = Vec::with_capacity(names.length() as usize);
     for index in 0..names.length() {
         let key = names
             .get_index(scope, index)
             .ok_or_else(|| JsError::type_error("the record key cannot be read"))?;
+        let enumerable = v8::Local::<v8::Name>::try_from(key)
+            .ok()
+            .and_then(|name| object.get_own_property_descriptor(scope, name))
+            .and_then(|descriptor| descriptor.to_object(scope))
+            .and_then(|descriptor| descriptor.get(scope, enumerable_key.into()))
+            .is_some_and(|flag| flag.boolean_value(scope));
+        if !enumerable {
+            continue;
+        }
         let entry = object
             .get(scope, key)
             .ok_or_else(|| JsError::type_error("the record value cannot be read"))?;

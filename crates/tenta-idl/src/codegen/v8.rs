@@ -63,11 +63,30 @@ const VALUE_ITERATOR_MEMBERS: [(&str, &str); 4] = [
 /// The members a pair `iterable<K, V>` declaration adds to the prototype.
 ///
 /// Unlike the value form these are not `%Array.prototype%` functions, so each
-/// one is a generated callback over the host's snapshot. `@@iterator` is not
-/// listed here — it is installed separately from the `entries` template, which
-/// is what makes it the same function object as `entries`. See
-/// `pair_iterator_install`.
-const PAIR_ITERATOR_MEMBERS: [&str; 3] = ["entries", "keys", "values"];
+/// one is a generated callback over the host's snapshot. `forEach` is the one
+/// that does not build a view: WebIDL calls the page's callback once per entry
+/// with `(value, key, container)`, which is why it takes an argument where the
+/// other three take none. `@@iterator` is not listed here — it is installed
+/// separately from the `entries` template, which is what makes it the same
+/// function object as `entries`. See `pair_iterator_install`.
+const PAIR_ITERATOR_MEMBERS: [&str; 4] = ["entries", "forEach", "keys", "values"];
+
+/// The `FunctionTemplate::length` of one pair-iterator member.
+///
+/// `length` is the member's required argument count, so `forEach` reports one
+/// (`forEach(callback, optional thisArg)`) and the three view members report
+/// none.
+fn pair_iterator_member_length(member: &str) -> usize {
+    usize::from(member == "forEach")
+}
+
+/// The per-entry body of a pair iterator's `forEach`.
+///
+/// The callback's own exception is already pending on the `scope` when
+/// `call_js_function` fails — it rethrows what the callback threw rather than a
+/// replacement — so the loop only has to stop, and the page sees its own error
+/// rather than a TypeError about the iteration.
+const FOR_EACH_CALL: &str = "        if call_js_function(scope, callback, this_arg, &[value, key, container]).is_err() {\n            return;\n        }\n";
 
 /// Generates `<snake>_v8.rs` for an interface.
 pub fn interface_v8(model: &Model, interface: &Interface) -> String {
@@ -950,31 +969,38 @@ fn indexed_getter_callback(interface: &str, operation: &Operation, bound: &str, 
 /// context, which is the identity WebIDL asks for.
 fn pair_iterator_install(interface: &str, member: &str, out: &mut String) {
     let snake = naming::snake_stem(interface);
+    // The property name is the IDL spelling (`forEach`), the Rust binding is
+    // its snake-case stem (`for_each`).
+    let stem = naming::snake_stem(member);
+    let length = pair_iterator_member_length(member);
     let _ = write!(
         out,
-        "    let iterable_{member}_key = v8_string(scope, \"{member}\")?;\n    \
+        "    let iterable_{stem}_key = v8_string(scope, \"{member}\")?;\n    \
          // A WebIDL pair iterator: `{interface}` has no array-like surface, so\n    \
          // the member reads the host's snapshot instead of an intrinsic.\n    \
-         let iterable_{member}_template = v8::FunctionTemplate::builder(call_{snake}_{member}::<T>)\n        \
+         let iterable_{stem}_template = v8::FunctionTemplate::builder(call_{snake}_{stem}::<T>)\n        \
          .signature(signature)\n        \
-         .length(0)\n        \
+         .length({length})\n        \
          .build(scope);\n    \
-         iterable_{member}_template.set_class_name(iterable_{member}_key);\n    \
+         iterable_{stem}_template.set_class_name(iterable_{stem}_key);\n    \
          prototype.set_with_attr(\n        \
-         iterable_{member}_key.into(),\n        \
-         iterable_{member}_template.into(),\n        \
+         iterable_{stem}_key.into(),\n        \
+         iterable_{stem}_template.into(),\n        \
          v8::PropertyAttribute::NONE,\n    );\n"
     );
 }
 
 /// Emits the callback behind one pair-iterator member.
 ///
-/// All three members are views over the one [`iterable_entries`] snapshot:
+/// The three view members are views over the one [`iterable_entries`] snapshot:
 /// `entries` yields `[key, value]` arrays, `keys` the keys and `values` the
 /// values. The array each one builds is handed to the shared
 /// `%Array.prototype.values%` intrinsic through the prelude's
 /// `array_iterator`, which is what turns a plain array into an Array Iterator
 /// without a per-interface iterator object.
+///
+/// `forEach` is not a view and has its own emitter; see
+/// [`pair_iterator_for_each_callback`].
 ///
 /// [`iterable_entries`]: crate::codegen::ops
 fn pair_iterator_callback(
@@ -985,7 +1011,12 @@ fn pair_iterator_callback(
     bound: &str,
     out: &mut String,
 ) {
+    if member == "forEach" {
+        pair_iterator_for_each_callback(interface, key, value, bound, out);
+        return;
+    }
     let snake = naming::snake_stem(interface);
+    let stem = naming::snake_stem(member);
     let key_ty = rust_type(key, Position::Owned);
     let value_ty = rust_type(value, Position::Owned);
     let key_value = convert::to_v8(key, "scope", "key");
@@ -1021,7 +1052,7 @@ fn pair_iterator_callback(
          /// The host hands over a snapshot, so one call sees one consistent\n\
          /// collection; the returned object is an Array Iterator, not an\n\
          /// interface-branded one.\n\
-         fn call_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+         fn call_{snake}_{stem}<'s, T: {bound} + 'static>(\n    \
          scope: &mut v8::PinScope<'s, '_>,\n    \
          args: v8::FunctionCallbackArguments<'s>,\n    \
          mut rv: v8::ReturnValue<v8::Value>,\n\
@@ -1037,6 +1068,72 @@ fn pair_iterator_callback(
          Err(error) => throw_js_error(scope, &error),\n    \
          }}\n}}\n",
         unwrap_this_block("    "),
+    );
+}
+
+/// Emits the callback behind a pair iterator's `forEach` member.
+///
+/// WebIDL's `forEach` builds no view: it calls the page's callback once per
+/// entry of the host snapshot with `(value, key, container)`, where `container`
+/// is the receiver the member was called on, and `thisArg` as the callback's
+/// `this`. `call_js_function` is what carries that receiver. The three view
+/// members share one shape; this one cannot, because it produces no iterator.
+fn pair_iterator_for_each_callback(
+    interface: &str,
+    key: &Type,
+    value: &Type,
+    bound: &str,
+    out: &mut String,
+) {
+    let snake = naming::snake_stem(interface);
+    let key_ty = rust_type(key, Position::Owned);
+    let value_ty = rust_type(value, Position::Owned);
+    let conversion = |binding: &str, expression: &str| {
+        format!(
+            "        let {binding} = match {expression} {{\n            \
+             Ok(item) => item,\n            \
+             Err(error) => {{\n                \
+             throw_js_error(scope, &error);\n                return;\n            \
+             }}\n        }};\n"
+        )
+    };
+    let _ = write!(
+        out,
+        "\n/// `{interface}.forEach`.\n\
+         ///\n\
+         /// The callback is called once per entry of one host snapshot, with the\n\
+         /// value first and the key second, as WebIDL's pair-iterator `forEach`\n\
+         /// prescribes.\n\
+         fn call_{snake}_for_each<'s, T: {bound} + 'static>(\n    \
+         scope: &mut v8::PinScope<'s, '_>,\n    \
+         args: v8::FunctionCallbackArguments<'s>,\n    \
+         mut rv: v8::ReturnValue<v8::Value>,\n\
+         ) {{\n    \
+         if args.length() < 1 {{\n        \
+         throw_type_error(\n            scope,\n            \
+         \"Failed to execute 'forEach' on '{interface}': 1 argument(s) required\",\n        );\n        \
+         return;\n    }}\n    \
+         let callback = match v8::Local::<v8::Function>::try_from(args.get(0)) {{\n        \
+         Ok(callback) => callback,\n        \
+         Err(_) => {{\n            \
+         throw_type_error(\n                scope,\n                \
+         \"Failed to execute 'forEach' on '{interface}': the callback is not a function\",\n            );\n            \
+         return;\n        }}\n    }};\n    \
+         // WebIDL defaults an absent `thisArg` to `undefined`, which is what\n    \
+         // `FunctionCallbackArguments::get` already returns out of bounds.\n    \
+         let this_arg = args.get(1);\n{}    \
+         let entries: Vec<({key_ty}, {value_ty})> = match host.iterable_entries() {{\n        \
+         Ok(value) => value,\n        \
+         Err(error) => {{\n            throw_js_error(scope, &error);\n            return;\n        }}\n    \
+         }};\n    \
+         let container: v8::Local<v8::Value> = this.into();\n    \
+         for (key, value) in entries {{\n{}\
+         {}{}    }}\n    \
+         rv.set_undefined();\n}}\n",
+        unwrap_this_block("    "),
+        conversion("key", &convert::to_v8(key, "scope", "key")),
+        conversion("value", &convert::to_v8(value, "scope", "value")),
+        FOR_EACH_CALL,
     );
 }
 
@@ -1195,6 +1292,30 @@ fn overload_dispatch(group: &OperationGroup) -> Vec<(String, usize)> {
 
 // -- fast API tables --------------------------------------------------------
 
+/// The `let` binding a fast-API one-byte string argument needs, and the
+/// expression that passes it to the trait method.
+///
+/// V8 hands a `FastOneByteString` over as a pointer, so the Rust type of the
+/// parameter decides how it is read. `DOMString` and `USVString` want a `&str`
+/// and go through the lossy UTF-8 conversion the prelude uses on the slow path
+/// too. `ByteString` wants the bytes themselves: its WebIDL conversion is
+/// isomorphic, so decoding them as UTF-8 would rewrite every byte above `0x7F`
+/// into a multi-byte sequence.
+fn fast_string_binding(ty: &Type, name: &str) -> (String, String) {
+    let read = format!(
+        "    // SAFETY: V8 passes a live `FastOneByteString` for the call.\n    \
+         let {name} = unsafe {{ &*{name} }}.as_bytes();\n"
+    );
+    if matches!(ty, Type::ByteString) {
+        (read, name.to_string())
+    } else {
+        (
+            format!("{read}    let {name} = String::from_utf8_lossy({name});\n"),
+            format!("&{name}"),
+        )
+    }
+}
+
 fn fast_accessor_tables(
     interface: &Interface,
     attribute: &Attribute,
@@ -1243,11 +1364,7 @@ fn fast_accessor_tables(
     {
         let value_type = fast_api_rust_type(&attribute.ty);
         let (binding, pass) = if is_string(&attribute.ty) {
-            (
-                "    // SAFETY: V8 passes a live `FastOneByteString` for the call.\n    let text = unsafe { &*value }.as_bytes();\n    let text = String::from_utf8_lossy(text);\n"
-                    .to_string(),
-                "&text".to_string(),
-            )
+            fast_string_binding(&attribute.ty, "value")
         } else {
             (
                 String::new(),
@@ -1297,12 +1414,9 @@ fn fast_method_table(interface: &str, group: &OperationGroup, bound: &str, out: 
         let ty = fast_api_rust_type(&argument.ty);
         parameters.push(format!("    {}: {ty},", argument.rust_name));
         if is_string(&argument.ty) {
-            let _ = write!(
-                bindings,
-                "    // SAFETY: V8 passes a live `FastOneByteString` for the call.\n    let {0} = unsafe {{ &*{0} }}.as_bytes();\n    let {0} = String::from_utf8_lossy({0});\n",
-                argument.rust_name
-            );
-            passes.push(format!("&{}", argument.rust_name));
+            let (binding, pass) = fast_string_binding(&argument.ty, &argument.rust_name);
+            bindings.push_str(&binding);
+            passes.push(pass);
         } else {
             passes.push(fast_argument_convert(
                 &argument.ty,

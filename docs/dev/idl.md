@@ -135,7 +135,35 @@ prelude's `clamp_*` helpers cannot fail.
 
 `record` maps to `Vec<(K, V)>`, not a map: WebIDL records preserve insertion
 order and allow duplicate keys on the way in, and the ordered vector is what
-the V8 and QuickJS conversions can reproduce exactly.
+the V8 and QuickJS conversions can reproduce exactly. The generated V8
+conversion ignores `K` and always produces `String` keys, so a record whose key
+type is not a string type (only `ByteString` in the current corpus) does not
+compile; no such record exists in `idl/` yet.
+
+The conversions themselves follow the WebIDL algorithms rather than the shape
+of the JavaScript value:
+
+- `sequence<T>`, `FrozenArray<T>` and `ObservableArray<T>` convert through
+  `GetMethod(V, @@iterator)` and `GetIterator`, not through an array check, so
+  any iterable is a sequence (`new URLSearchParams(new Map([["a", "b"]]))` is
+  the caller that needs it). A primitive is a `TypeError`: WebIDL rejects a
+  non-object before it looks for the method.
+- `record<K, V>` is `es-to-record`: own keys first, then each key's property
+  descriptor decides whether it is enumerable, and only then is the value read.
+  The descriptor read is observable through a proxy. Keys are read back as
+  strings, so an integer-like own key is not dropped.
+- `ByteString` is converted isomorphically: one code unit per byte, through the
+  one-byte string APIs, and a code unit above `0xFF` is a `TypeError` rather
+  than a truncation to its low byte.
+- `USVString` needs no separate conversion here. `String` on the Rust side
+  cannot hold a lone surrogate, and V8's `to_rust_string_lossy` maps an unpaired
+  surrogate to U+FFFD, which is the substitution WebIDL's scalar-value
+  conversion prescribes.
+- Each arm of a union carries its own WebIDL test — `is_object()` for the
+  object-like arms, `@@iterator` for a sequence, `is_object() && !is_array()`
+  for a record, `is_number()` for the numeric arms — and the arms are tried in
+  declaration order. The first arm with no test of its own is the fallback;
+  declaring one earlier cannot shadow a later arm of the same kind.
 
 Fast-API-eligible members return their value directly; every other member
 returns `Result<_, JsError>` so the glue can turn a failure into a JavaScript
@@ -169,9 +197,9 @@ Overloads become one method per overload, named `{base}_{arity}`. Constructors
 live in a separate `{Name}Constructor` trait so that a subclass is not forced
 to inherit its parent's constructor. An `iterable<K, V>` adds one hook,
 `fn iterable_entries(&self) -> Result<Vec<(K, V)>, JsError>`, which is the
-snapshot the three generated iterator members are views over. Doc comments
-reproduce the IDL declaration, the fast-API verdict and, for mixin members, the
-mixin name.
+snapshot the three generated iterator views and the generated `forEach` all
+read. Doc comments reproduce the IDL declaration, the fast-API verdict and, for
+mixin members, the mixin name.
 
 ### V8 glue (rusty_v8 152.x)
 
@@ -193,7 +221,9 @@ in the doc comment of the generated `install_*` function:
 - `v8::Signature::new` — the brand check that makes `unwrap_this` sound
 - `v8::FunctionCallbackArguments::{this, get, length, is_construct_call}`, `v8::ReturnValue::{set, set_bool, set_int32, set_uint32, set_double, set_null, set_undefined}`
 - `v8::fast_api::{CFunction, CFunctionInfo, CTypeInfo, Flags, Int64Representation, Type, FastApiOneByteString}`
-- `Object::{get_aligned_pointer_from_internal_field, set_aligned_pointer_in_internal_field, get, set, create_data_property, internal_field_count}`
+- `Object::{get_aligned_pointer_from_internal_field, set_aligned_pointer_in_internal_field, get, set, create_data_property, internal_field_count, get_own_property_descriptor, get_own_property_names}`
+- `v8::GetPropertyNamesArgs`, `v8::PropertyFilter`, `v8::KeyConversionMode`, `v8::WriteFlags`
+- `v8::String::{new_from_one_byte, write_v2}`
 - `v8::Global`, `v8::Local::new`, `v8::PropertyAttribute::{NONE, READ_ONLY, DONT_ENUM, DONT_DELETE}`
 - `v8::Symbol::{get_to_string_tag, get_iterator, get_unscopables}`,
   `v8::Intrinsic::{ArrayProtoEntries, ArrayProtoForEach, ArrayProtoKeys, ArrayProtoValues}`
@@ -234,6 +264,16 @@ Notes on the shape of the generated code:
   object as WebIDL requires: V8 instantiates a template once per context, so two
   properties set from it hold one function (asserted by `tenta-js`'s
   `one_template_is_one_function_object_per_context`).
+- A pair iterator also declares `forEach`. It is not a view, so it is a fourth
+  generated callback rather than an intrinsic: it takes the callback as a
+  required argument (its `FunctionTemplate::length` is 1, where the three views
+  report 0) and calls it once per entry of one hook call with `(value, key,
+  container)`, where `container` is the receiver the member was called on and
+  the optional `thisArg` becomes the callback's `this`. The prelude's
+  `call_js_function` carries that receiver and rethrows a callback's own
+  exception, so the loop stops without replacing the page's error. WebIDL
+  defines `forEach` for the pair form, and `wpt/checkout/fetch/api/headers/
+  headers-basic.any.js` exercises it on `Headers`.
 - Overloaded operations get a dispatcher that switches on `args.length()`.
 - `[Replaceable]` setters use `create_data_property`; `[PutForwards=x]`
   setters forward to the target attribute; `[LegacyUnforgeable]` members get
@@ -341,6 +381,14 @@ from the model even when no generator acts on them.
 - `tests/cli.rs` — runs the `tenta-idl` binary and compares its output with
   the library's, including the failure paths.
 
+The golden files assert the *shape* of the emitted code; the behaviour behind
+the prelude helpers is covered at runtime by `tenta-js`'s `prelude_helpers`
+module (`cargo test -p tenta-js --features v8`), which runs
+`sequence_from_v8`, `record_from_v8`, `byte_string_from_v8`/`_to_v8`,
+`array_iterator` and `call_js_function` against a real isolate. Nothing in
+`idl/` declares a sequence, a record or a `ByteString` yet, so without those
+tests the three conversions would only ever be compiled.
+
 Fixtures:
 
 - `idl/toy/Counter.webidl` — the small end-to-end fixture (enum, dictionary,
@@ -378,6 +426,10 @@ generated code:
   latent.
 - `FrozenArray` and `ObservableArray` are lowered like `sequence`; neither the
   freezing nor the change-notification semantics are generated.
+- The QuickJS arm of a union selects `sequence<T>` with `is_array()` rather
+  than with `@@iterator`, because `rquickjs`'s `Vec<T>: FromJs` reads an array
+  and has no iterator step of its own. The V8 arm probes `@@iterator` as the
+  spec requires.
 - Named property getters, setters and deleters are recorded
   (`Interface::named_getter`, `special_operations`) but only the indexed
   getter is installed as a V8 property handler.

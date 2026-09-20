@@ -668,8 +668,10 @@ pub enum AddEventListenerOptionsOrBoolean {
 impl AddEventListenerOptionsOrBoolean {
     /// Converts a JavaScript value to this union.
     ///
-    /// Arms are tried in declaration order: object-like arms first, then
-    /// the primitive arms, then a string arm as the fallback.
+    /// Arms are tried in declaration order, each one behind the WebIDL test
+    /// that selects it — a sequence by its `@@iterator`, a record by being an
+    /// object that is not an array. The first arm that has no test of its own
+    /// is the fallback.
     pub fn from_v8(
         scope: &mut v8::PinScope<'_, '_>,
         value: v8::Local<v8::Value>,
@@ -737,8 +739,10 @@ pub enum EventListenerOptionsOrBoolean {
 impl EventListenerOptionsOrBoolean {
     /// Converts a JavaScript value to this union.
     ///
-    /// Arms are tried in declaration order: object-like arms first, then
-    /// the primitive arms, then a string arm as the fallback.
+    /// Arms are tried in declaration order, each one behind the WebIDL test
+    /// that selects it — a sequence by its `@@iterator`, a record by being an
+    /// object that is not an array. The first arm that has no test of its own
+    /// is the fallback.
     pub fn from_v8(
         scope: &mut v8::PinScope<'_, '_>,
         value: v8::Local<v8::Value>,
@@ -806,8 +810,10 @@ pub enum NodeOrDomString {
 impl NodeOrDomString {
     /// Converts a JavaScript value to this union.
     ///
-    /// Arms are tried in declaration order: object-like arms first, then
-    /// the primitive arms, then a string arm as the fallback.
+    /// Arms are tried in declaration order, each one behind the WebIDL test
+    /// that selects it — a sequence by its `@@iterator`, a record by being an
+    /// object that is not an array. The first arm that has no test of its own
+    /// is the fallback.
     pub fn from_v8(
         scope: &mut v8::PinScope<'_, '_>,
         value: v8::Local<v8::Value>,

@@ -64,7 +64,7 @@ pub fn from_v8(ty: &Type, scope: &str, value: &str, mode: IntegerMode) -> String
             format!("Ok::<String, JsError>(string_from_v8({scope}, {value}))")
         }
         Type::ByteString => {
-            format!("Ok::<Vec<u8>, JsError>(string_from_v8({scope}, {value}).into_bytes())")
+            format!("byte_string_from_v8({scope}, {value})")
         }
         Type::Interface(name) => {
             format!("handle_from_v8::<{name}>({scope}, {value})")
@@ -111,9 +111,7 @@ pub fn to_v8(ty: &Type, scope: &str, value: &str) -> String {
             wrap(format!("v8::Number::new({scope}, {value} as f64).into()"))
         }
         Type::DomString | Type::UsvString => format!("string_to_v8({scope}, &{value})"),
-        Type::ByteString => {
-            format!("string_to_v8({scope}, &String::from_utf8_lossy(&{value}))")
-        }
+        Type::ByteString => format!("byte_string_to_v8({scope}, &{value})"),
         Type::Any | Type::Object | Type::Symbol => format!("value_to_v8({scope}, {value}.0)"),
         Type::Interface(name) => format!("handle_to_v8::<{name}>({scope}, {value})"),
         Type::Dictionary(_) | Type::Enum(_) | Type::Union(_) => {

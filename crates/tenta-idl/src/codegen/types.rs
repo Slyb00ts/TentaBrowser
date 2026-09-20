@@ -401,8 +401,10 @@ fn union_code(union: &Union, out: &mut String) {
         "\n#[cfg(feature = \"v8\")]\nimpl {name} {{\n    \
          /// Converts a JavaScript value to this union.\n    \
          ///\n    \
-         /// Arms are tried in declaration order: object-like arms first, then\n    \
-         /// the primitive arms, then a string arm as the fallback.\n    \
+         /// Arms are tried in declaration order, each one behind the WebIDL test\n    \
+         /// that selects it — a sequence by its `@@iterator`, a record by being an\n    \
+         /// object that is not an array. The first arm that has no test of its own\n    \
+         /// is the fallback.\n    \
          pub fn from_v8(\n        scope: &mut v8::PinScope<'_, '_>,\n        value: v8::Local<v8::Value>,\n    ) -> Result<Self, JsError> {{\n"
     );
     let mut fallback: Option<String> = None;
@@ -417,11 +419,14 @@ fn union_code(union: &Union, out: &mut String) {
                     member.rust_name
                 );
             }
+            // The fallback is the *first* arm without a test, so an arm the
+            // union declares early is never shadowed by a later one of the
+            // same kind; the last test-less member used to win instead, which
+            // left `(record<K, V> or DOMString)` stringifying every object.
             None => {
-                fallback = Some(format!(
-                    "        ({conversion}).map({name}::{})\n",
-                    member.rust_name
-                ));
+                fallback.get_or_insert_with(|| {
+                    format!("        ({conversion}).map({name}::{})\n", member.rust_name)
+                });
             }
         }
     }
@@ -464,10 +469,12 @@ fn union_code(union: &Union, out: &mut String) {
                 );
             }
             None => {
-                qjs_fallback = Some(format!(
-                    "        <{ty} as rquickjs::FromJs>::from_js(ctx, value).map({name}::{})\n",
-                    member.rust_name
-                ));
+                qjs_fallback.get_or_insert_with(|| {
+                    format!(
+                        "        <{ty} as rquickjs::FromJs>::from_js(ctx, value).map({name}::{})\n",
+                        member.rust_name
+                    )
+                });
             }
         }
     }
@@ -495,12 +502,19 @@ fn union_code(union: &Union, out: &mut String) {
 }
 
 /// The V8 predicate that selects a union arm, or `None` for the fallback arm.
+///
+/// A sequence is selected through `@@iterator`, the `Get` WebIDL's conversion
+/// performs, so any iterable and not only an array qualifies. A record is
+/// selected as the object that is left once the sequence arm has declined; the
+/// corpus declares the sequence arm first, which is the order WebIDL's own
+/// conversion algorithm uses for object values.
 fn union_test(ty: &Type) -> Option<&'static str> {
     match ty {
         Type::Interface(_) | Type::Object | Type::Dictionary(_) => Some("value.is_object()"),
         Type::Sequence(_) | Type::FrozenArray(_) | Type::ObservableArray(_) => {
-            Some("value.is_array()")
+            Some("has_iterator(scope, value)")
         }
+        Type::Record(_, _) => Some("value.is_object() && !value.is_array()"),
         Type::Boolean => Some("value.is_boolean()"),
         Type::Callback(_) | Type::CallbackInterface(_) => Some("value.is_function()"),
         Type::Symbol => Some("value.is_symbol()"),
@@ -510,12 +524,19 @@ fn union_test(ty: &Type) -> Option<&'static str> {
     }
 }
 
+/// The QuickJS predicate that selects a union arm, or `None` for the fallback.
+///
+/// The sequence arm stays an array check: `rquickjs`'s `Vec<T>: FromJs` reads an
+/// array and has no `@@iterator` step, so probing for an iterator here would
+/// select the arm only to fail the conversion. The record arm matches the V8
+/// one. Recorded as a deviation in `docs/dev/idl.md`.
 fn union_test_quickjs(ty: &Type) -> Option<&'static str> {
     match ty {
         Type::Interface(_) | Type::Object | Type::Dictionary(_) => Some("value.is_object()"),
         Type::Sequence(_) | Type::FrozenArray(_) | Type::ObservableArray(_) => {
             Some("value.is_array()")
         }
+        Type::Record(_, _) => Some("value.is_object() && !value.is_array()"),
         Type::Boolean => Some("value.is_bool()"),
         Type::Callback(_) | Type::CallbackInterface(_) => Some("value.is_function()"),
         Type::Symbol => Some("value.is_symbol()"),

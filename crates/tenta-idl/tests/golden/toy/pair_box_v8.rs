@@ -63,6 +63,19 @@ pub fn install_pair_box<T: PairBoxOps + 'static>(
         iterable_entries_template.into(),
         v8::PropertyAttribute::NONE,
     );
+    let iterable_for_each_key = v8_string(scope, "forEach")?;
+    // A WebIDL pair iterator: `PairBox` has no array-like surface, so
+    // the member reads the host's snapshot instead of an intrinsic.
+    let iterable_for_each_template = v8::FunctionTemplate::builder(call_pair_box_for_each::<T>)
+        .signature(signature)
+        .length(1)
+        .build(scope);
+    iterable_for_each_template.set_class_name(iterable_for_each_key);
+    prototype.set_with_attr(
+        iterable_for_each_key.into(),
+        iterable_for_each_template.into(),
+        v8::PropertyAttribute::NONE,
+    );
     let iterable_keys_key = v8_string(scope, "keys")?;
     // A WebIDL pair iterator: `PairBox` has no array-like surface, so
     // the member reads the host's snapshot instead of an intrinsic.
@@ -173,6 +186,77 @@ fn call_pair_box_entries<'s, T: PairBoxOps + 'static>(
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }
+}
+
+/// `PairBox.forEach`.
+///
+/// The callback is called once per entry of one host snapshot, with the
+/// value first and the key second, as WebIDL's pair-iterator `forEach`
+/// prescribes.
+fn call_pair_box_for_each<'s, T: PairBoxOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    if args.length() < 1 {
+        throw_type_error(
+            scope,
+            "Failed to execute 'forEach' on 'PairBox': 1 argument(s) required",
+        );
+        return;
+    }
+    let callback = match v8::Local::<v8::Function>::try_from(args.get(0)) {
+        Ok(callback) => callback,
+        Err(_) => {
+            throw_type_error(
+                scope,
+                "Failed to execute 'forEach' on 'PairBox': the callback is not a function",
+            );
+            return;
+        }
+    };
+    // WebIDL defaults an absent `thisArg` to `undefined`, which is what
+    // `FunctionCallbackArguments::get` already returns out of bounds.
+    let this_arg = args.get(1);
+    let this = args.this();
+    // SAFETY: the template carries the interface signature, so V8 has
+    // already checked that the receiver is an instance of it and that its
+    // host field was written by `attach_host::<T>`.
+    let host = match unsafe { unwrap_this::<T>(&this) } {
+        Ok(host) => host,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let entries: Vec<(String, String)> = match host.iterable_entries() {
+        Ok(value) => value,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let container: v8::Local<v8::Value> = this.into();
+    for (key, value) in entries {
+        let key = match string_to_v8(scope, &key) {
+            Ok(item) => item,
+            Err(error) => {
+                throw_js_error(scope, &error);
+                return;
+            }
+        };
+        let value = match string_to_v8(scope, &value) {
+            Ok(item) => item,
+            Err(error) => {
+                throw_js_error(scope, &error);
+                return;
+            }
+        };
+        if call_js_function(scope, callback, this_arg, &[value, key, container]).is_err() {
+            return;
+        }
+    }
+    rv.set_undefined();
 }
 
 /// `PairBox.keys`.
