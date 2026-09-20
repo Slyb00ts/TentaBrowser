@@ -1014,11 +1014,12 @@ impl Type {
 /// of taking a variant each, which would multiply the conversion table by
 /// thirteen without changing a line of its logic.
 ///
-/// `BigInt64Array` and `BigUint64Array` have no member here because weedle
-/// 0.13.1 has no keyword arm for them: they parse as plain identifiers and stay
-/// opaque interfaces (`Handle<BigInt64Array>`), a pre-existing gap this slice
-/// neither introduces nor closes. The runtime conversions do accept them, since
-/// both are `ArrayBufferView`s.
+/// `BigInt64Array`, `BigUint64Array` and `Float16Array` have no member here
+/// because `weedle4` 0.4.0 — the `weedle` this repository depends on — has no
+/// keyword arm for them: they parse as plain identifiers and stay opaque
+/// interfaces (`Handle<BigInt64Array>`), a pre-existing gap this slice neither
+/// introduces nor closes. The runtime conversions do accept them, since all
+/// three are `ArrayBufferView`s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferType {
     /// `ArrayBuffer`

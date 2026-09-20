@@ -35,8 +35,9 @@ use super::{
     HTMLSelectElementOps, HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps,
     Handle, HeadersConstructor, HeadersInit, HeadersOps, JsError, MouseEventConstructor,
     MouseEventInit, MouseEventOps, Node, NodeList, NodeListOps, NodeOps, Realm, SVGElementOps,
-    Text, TextOps, UIEventConstructor, UIEventInit, UIEventOps, URLConstructor, URLOps,
-    URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
+    Text, TextDecodeOptions, TextDecoderConstructor, TextDecoderOps, TextDecoderOptions,
+    TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
+    URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
 };
 use crate::dom::events::{
     CallbackRef, DispatchTarget, EventKey, EventKind, EventRecord, EventSlab, GenKey, GenSlab,
@@ -143,7 +144,8 @@ impl Default for SnapshotSlab {
 }
 
 // ---------------------------------------------------------------------------
-// Host records: URL, URLSearchParams and Headers
+// Host records: URL, URLSearchParams, Headers, AbortController, AbortSignal,
+// TextDecoder and TextEncoder
 // ---------------------------------------------------------------------------
 
 /// A key into a world's [`HostSlab`]; the payload of a [`TAG_HOST`] handle.
@@ -170,6 +172,10 @@ pub enum HostRecord {
     Controller(ControllerRecord),
     /// An `AbortSignal`.
     Signal(SignalRecord),
+    /// A `TextDecoder`.
+    TextDecoder(TextDecoderRecord),
+    /// A `TextEncoder`, which has no state at all.
+    TextEncoder,
 }
 
 impl HostRecord {
@@ -184,6 +190,8 @@ impl HostRecord {
             HostRecord::Headers(_) => "Headers",
             HostRecord::Controller(_) => "AbortController",
             HostRecord::Signal(_) => "AbortSignal",
+            HostRecord::TextDecoder(_) => "TextDecoder",
+            HostRecord::TextEncoder => "TextEncoder",
         }
     }
 }
@@ -325,6 +333,155 @@ impl HeadersGuard {
     }
 }
 
+// ---------------------------------------------------------------------------
+// TextDecoder / TextEncoder
+// ---------------------------------------------------------------------------
+
+/// The Encoding Standard's name for the one encoding the encoder writes.
+const TEXT_ENCODER_ENCODING: &str = "utf-8";
+
+/// The message of the `TypeError` a `"fatal"` decode throws when it meets a
+/// malformed sequence. The standard states the exception and no message, so the
+/// text is this engine's own.
+const TEXT_DECODER_FATAL: &str =
+    "Failed to execute 'decode' on 'TextDecoder': The encoded data was not valid.";
+
+/// A `TextDecoder` record.
+///
+/// The state is WebIDL's `[[decoder]]`/`[[I/O queue]]`/`[[BOM seen]]`/`do not
+/// flush` and the two constructor settings; there is nothing else, because the
+/// decoder instance *is* the queue's state across a `stream: true` call. The
+/// I/O queue itself is not stored: a call pushes the argument's bytes and
+/// reads them back inside one `decode`, and the only thing that has to survive
+/// the call is whatever the decoder held back.
+pub struct TextDecoderRecord {
+    /// `[[encoding]]`: the encoding the constructor's label selected. Every
+    /// attribute and every decode reads it, and the `serialize I/O queue` rule
+    /// asks whether it is UTF-8 or a UTF-16, so it is the record's own field.
+    pub encoding: &'static encoding_rs::Encoding,
+    /// `[[error mode]]` is `"fatal"`.
+    pub fatal: bool,
+    /// `ignore BOM`.
+    pub ignore_bom: bool,
+    /// `BOM seen`.
+    pub bom_seen: bool,
+    /// `[[decoder]]` — `None` until a non-`stream` decode creates it.
+    pub decoder: Option<encoding_rs::Decoder>,
+    /// `do not flush`.
+    pub do_not_flush: bool,
+}
+
+impl TextDecoderRecord {
+    /// The method's steps 1–5 for one call: create or reuse the decoder, record
+    /// whether the next call starts fresh, decode `input`, and apply the
+    /// *serialize I/O queue* BOM rule to what came out.
+    ///
+    /// Step 1 is keyed on the *previous* call's `do not flush`, and that is the
+    /// whole mechanism: a decoder object is what retains a partial multi-byte
+    /// sequence, so replacing it is what discards the retained state once a
+    /// stream has been declared finished.
+    fn decode(&mut self, input: &[u8], stream: bool) -> Result<String, JsError> {
+        if !self.do_not_flush {
+            self.decoder = Some(self.encoding.new_decoder_without_bom_handling());
+            self.bom_seen = false;
+        }
+        self.do_not_flush = stream;
+        let mut output = String::new();
+        // Step 1 created this on the first call and `do_not_flush` is only set
+        // by a call that has already been through that step, so the decoder is
+        // never absent here.
+        let decoder = self
+            .decoder
+            .as_mut()
+            .expect("a decoder exists once `do not flush` has been set");
+        let fatal = self.fatal;
+        decode_bytes(decoder, input, !stream, fatal, &mut output)?;
+        self.serialize(&mut output);
+        Ok(output)
+    }
+
+    /// The Encoding Standard's *serialize I/O queue*, which is the whole BOM
+    /// rule: for a decoder whose encoding is UTF-8, UTF-16LE or UTF-16BE, and
+    /// whose *ignore BOM* and *BOM seen* are both false, the first scalar of
+    /// the output is dropped when it is U+FEFF and *BOM seen* is set either
+    /// way. The queue is otherwise appended unchanged.
+    ///
+    /// This never re-sniffs an encoding from a BOM; the decoder was built with
+    /// `new_decoder_without_bom_handling` precisely so that the rule is the
+    /// standard's own. It also drops at most one U+FEFF, as
+    /// `encoding/remove-only-one-bom.html` requires.
+    ///
+    /// *BOM seen* is set only when a scalar was actually produced. A BOM split
+    /// across two `{stream: true}` chunks is the case that needs it: the first
+    /// chunk decodes to nothing while the decoder holds three partial bytes, so
+    /// the U+FEFF lands at the head of the *second* chunk's output, where a
+    /// flag set by the first call would have kept it.
+    fn serialize(&mut self, output: &mut String) {
+        if self.bom_seen || self.ignore_bom || !is_bom_encoding(self.encoding) || output.is_empty()
+        {
+            return;
+        }
+        self.bom_seen = true;
+        if output.starts_with('\u{FEFF}') {
+            output.drain(..'\u{FEFF}'.len_utf8());
+        }
+    }
+}
+
+/// Whether the decoder's encoding is one of the three the *serialize I/O
+/// queue* rule names, checked against the constants rather than a name because
+/// a legacy encoding's `name()` is never one of them.
+fn is_bom_encoding(encoding: &'static encoding_rs::Encoding) -> bool {
+    encoding == encoding_rs::UTF_8
+        || encoding == encoding_rs::UTF_16LE
+        || encoding == encoding_rs::UTF_16BE
+}
+
+/// Decodes one chunk of bytes into `output`, on the path the decoder's *error
+/// mode* selects.
+///
+/// `"replacement"` (the default) appends one U+FFFD per malformed sequence and
+/// carries on, exactly as WebIDL's *process an item* prescribes; `"fatal"`
+/// (`fatal`) makes the first malformed sequence the `TypeError` the member's
+/// `[Throws]` marker promises. The two come from one call —
+/// `decode_to_string_without_replacement` — so the malformed sequence is
+/// reported rather than silently replaced, and the replacement is written here.
+/// The `_without_bom_handling` decoder is the other half of the same decision:
+/// the BOM is [`TextDecoderRecord::serialize`]'s, not `encoding_rs`'s.
+fn decode_bytes(
+    decoder: &mut encoding_rs::Decoder,
+    input: &[u8],
+    last: bool,
+    fatal: bool,
+    output: &mut String,
+) -> Result<(), JsError> {
+    let mut rest = input;
+    loop {
+        // The decode stops at `OutputFull` when the destination cannot take
+        // the whole chunk, and the replacement-emitting path can need more
+        // space than `max_utf8_buffer_length_without_replacement` allows for,
+        // so the loop runs until the input is consumed rather than trusting
+        // one `reserve`.
+        let capacity = decoder
+            .max_utf8_buffer_length_without_replacement(rest.len())
+            .unwrap_or(rest.len().saturating_mul(4))
+            .max(4);
+        output.reserve(capacity);
+        let (result, read) = decoder.decode_to_string_without_replacement(rest, output, last);
+        rest = &rest[read..];
+        match result {
+            encoding_rs::DecoderResult::InputEmpty => return Ok(()),
+            encoding_rs::DecoderResult::OutputFull => continue,
+            encoding_rs::DecoderResult::Malformed(..) => {
+                if fatal {
+                    return Err(JsError::type_error(TEXT_DECODER_FATAL));
+                }
+                output.push('\u{FFFD}');
+            }
+        }
+    }
+}
+
 /// The shared host context: document, snapshots, event state and the script
 /// callback boundary for one wrapper world.
 pub struct HostContext {
@@ -336,8 +493,9 @@ pub struct HostContext {
     pub listeners: RefCell<ListenerTable>,
     /// The live event records for this world.
     pub events: RefCell<EventSlab>,
-    /// The live `URL`, `URLSearchParams`, `Headers`, `AbortController` and
-    /// `AbortSignal` records for this world. Unlike a node, a `new URL()` has no
+    /// The live `URL`, `URLSearchParams`, `Headers`, `AbortController`,
+    /// `AbortSignal`, `TextDecoder` and `TextEncoder` records for this world.
+    /// Unlike a node, a `new URL()` has no
     /// document row to live in, so the record is the whole of its state and its
     /// wrapper is its owner — the event slab's shape, not the snapshot slab's —
     /// except for the URL/query and controller/signal pairs, where one record
@@ -736,6 +894,31 @@ impl HostObject {
     fn with_signal<R>(&self, default: R, f: impl FnOnce(&SignalRecord) -> R) -> R {
         if let HostObject::Host { ctx, key } = self
             && let Some(HostRecord::Signal(record)) = ctx.host_records.borrow().get(*key)
+        {
+            return f(record);
+        }
+        default
+    }
+
+    /// Reads the `TextDecoder` this host stands for, or returns `default` when
+    /// the host is not one or its record has been reclaimed.
+    fn with_decoder<R>(&self, default: R, f: impl FnOnce(&TextDecoderRecord) -> R) -> R {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::TextDecoder(record)) = ctx.host_records.borrow().get(*key)
+        {
+            return f(record);
+        }
+        default
+    }
+
+    /// Mutates the `TextDecoder` this host stands for, or returns `default`
+    /// when the host is not one or its record has been reclaimed. A `decode`
+    /// has to write through the record, because the decoder instance and the
+    /// `do not flush`/`BOM seen` flags are what the next call reads.
+    fn with_decoder_mut<R>(&self, default: R, f: impl FnOnce(&mut TextDecoderRecord) -> R) -> R {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::TextDecoder(record)) =
+                ctx.host_records.borrow_mut().get_mut(*key)
         {
             return f(record);
         }
@@ -3353,12 +3536,15 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
         HostRecord::Url(_) | HostRecord::Headers(_) => return None,
         // Neither abort record holds a pair list, so neither owns pairs.
         HostRecord::Controller(_) | HostRecord::Signal(_) => return None,
+        // Neither encoding record holds one either.
+        HostRecord::TextDecoder(_) | HostRecord::TextEncoder => return None,
     };
     match params.url {
         Some(owner) => match slab.get(owner)? {
             HostRecord::Url(record) => Some(parse_pairs(record.url.query().unwrap_or(""))),
             HostRecord::Params(_) | HostRecord::Headers(_) => None,
             HostRecord::Controller(_) | HostRecord::Signal(_) => None,
+            HostRecord::TextDecoder(_) | HostRecord::TextEncoder => None,
         },
         None => Some(params.list.clone()),
     }
@@ -3444,6 +3630,10 @@ enum HostLink {
     /// The record is an `AbortSignal` holding its controller's key, while that
     /// controller's record lives.
     Signal(Option<HostKey>),
+    /// The record is a `TextDecoder`, which links to nothing.
+    TextDecoder,
+    /// The record is a `TextEncoder`, which links to nothing.
+    TextEncoder,
 }
 
 /// What freeing host records took out of the world: the record slots that left
@@ -3487,7 +3677,9 @@ fn free_record(slab: &mut HostSlab, key: HostKey, out: &mut ReclaimedHost) {
 /// the record that wrapper alone was keeping alive, and reports what the caller
 /// still has to give back.
 ///
-/// A `Headers` owns nothing else, so it is freed outright. Two pairs point at
+/// A `Headers` owns nothing else, so it is freed outright, and the two
+/// encoding records are the same: a `TextDecoder` owns only its own decoder
+/// state and a `TextEncoder` owns nothing at all. Two pairs point at
 /// each other. A URL and its query object: the object writes every mutation
 /// through to its URL, and the URL caches the object's key so that
 /// `url.searchParams` can return the same object twice. An `AbortController` and
@@ -3523,6 +3715,8 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         Some(HostRecord::Headers(_)) => HostLink::Headers,
         Some(HostRecord::Controller(record)) => HostLink::Controller(record.signal),
         Some(HostRecord::Signal(record)) => HostLink::Signal(record.controller),
+        Some(HostRecord::TextDecoder(_)) => HostLink::TextDecoder,
+        Some(HostRecord::TextEncoder) => HostLink::TextEncoder,
         None => return freed,
     };
     match link {
@@ -3530,8 +3724,9 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         // the wrapper's death is the record's death — freed here and nowhere
         // else, exactly once, because the world calls this once per finalized
         // wrapper and `GenSlab::remove` bumps the generation so a second call
-        // for the same key finds nothing.
-        HostLink::Headers => {
+        // for the same key finds nothing. The two encoding records are the same
+        // shape: neither holds a key and neither owns a stored value.
+        HostLink::Headers | HostLink::TextDecoder | HostLink::TextEncoder => {
             free_record(slab, key, &mut freed);
         }
         HostLink::Url(params) => {
@@ -4435,6 +4630,133 @@ impl AbortSignalOps for HostObject {
             script.throw_value(bits);
         }
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TextDecoder / TextEncoder
+// ---------------------------------------------------------------------------
+
+impl TextDecoderConstructor for HostObject {
+    fn construct(
+        realm: &Realm,
+        label: Option<&str>,
+        options: Option<TextDecoderOptions>,
+    ) -> Result<Self, JsError> {
+        // Step 1: "Let encoding be the result of getting an encoding from
+        // label." `for_label_no_replacement` is that algorithm *and* step 2's
+        // "if encoding is failure or replacement": the replacement encoding is
+        // not a decoder this interface may hand out, and every label that maps
+        // to it (`"replacement"`, `"csiso2022kr"`, `"hz-gb-2312"`,
+        // `"iso-2022-cn"`, `"iso-2022-cn-ext"`, `"iso-2022-kr"`) is a
+        // `RangeError`. `encoding/api-replacement-encodings.any.js` is that
+        // list.
+        //
+        // The lookup lowercases and strips ASCII whitespace itself, so the
+        // spec's label matching is not restated here: `"  UTF-8  "` is the
+        // same label as `"utf-8"`.
+        let label = label.unwrap_or("utf-8");
+        let encoding = encoding_rs::Encoding::for_label_no_replacement(label.as_bytes())
+            .ok_or_else(|| {
+                JsError::range_error(format!(
+                    "Failed to construct 'TextDecoder': '{label}' is not a valid encoding label."
+                ))
+            })?;
+        // Steps 3–5. `error mode` is `"fatal"` or the default `"replacement"`,
+        // and the record stores the boolean the adapter needs rather than the
+        // mode's name.
+        let options = options.unwrap_or_default();
+        let ctx = realm_context(realm)?;
+        let key = ctx
+            .host_records
+            .borrow_mut()
+            .insert(HostRecord::TextDecoder(TextDecoderRecord {
+                encoding,
+                fatal: options.fatal,
+                ignore_bom: options.ignore_bom,
+                bom_seen: false,
+                decoder: None,
+                do_not_flush: false,
+            }));
+        Ok(HostObject::host_record(ctx, key))
+    }
+}
+
+impl TextDecoderOps for HostObject {
+    fn decode(
+        &self,
+        input: Option<Vec<u8>>,
+        options: Option<TextDecodeOptions>,
+    ) -> Result<String, JsError> {
+        // The I/O queue the standard describes holds at most this one argument
+        // — a `decode` call pushes nothing else into it — and a synchronous
+        // call has no end-of-queue item to wait for, so the queue and the
+        // argument are the same slice. `input` is absent when the argument was
+        // absent or `undefined`, which pushes nothing.
+        let bytes = input.unwrap_or_default();
+        let stream = options.unwrap_or_default().stream;
+        self.with_decoder_mut(
+            // Unreachable: the template's signature brand check admits only a
+            // `TextDecoder` wrapper, and the record it was built over lives
+            // exactly as long as that wrapper does.
+            Err(JsError::type_error(
+                "decode: the receiver is not a TextDecoder",
+            )),
+            |record| record.decode(&bytes, stream),
+        )
+    }
+
+    fn encoding(&self) -> Result<String, JsError> {
+        // The standard's name is lowercased; `encoding_rs` capitalizes nearly
+        // all of them (`"Shift_JIS"`, `"UTF-16LE"`, `"ISO-8859-2"`,
+        // `"windows-1252"` being the exception that hides the rule).
+        Ok(self.with_decoder(String::new(), |record| {
+            record.encoding.name().to_ascii_lowercase()
+        }))
+    }
+
+    fn fatal(&self) -> bool {
+        self.with_decoder(false, |record| record.fatal)
+    }
+
+    fn ignore_bom(&self) -> bool {
+        self.with_decoder(false, |record| record.ignore_bom)
+    }
+}
+
+impl TextEncoderConstructor for HostObject {
+    fn construct(realm: &Realm) -> Result<Self, JsError> {
+        // The constructor's steps are "to do nothing": an encoder is stateless
+        // and its encoding is the constant UTF-8. The record exists anyway, for
+        // the two reasons every `TAG_HOST` wrapper needs one — the record names
+        // the interface the wrapper's template comes from, and the wrapper's
+        // finalizer frees the slot through `reclaim_host_record`.
+        let ctx = realm_context(realm)?;
+        let key = ctx
+            .host_records
+            .borrow_mut()
+            .insert(HostRecord::TextEncoder);
+        Ok(HostObject::host_record(ctx, key))
+    }
+}
+
+impl TextEncoderOps for HostObject {
+    fn encode(&self, input: Option<&str>) -> Result<Vec<u8>, JsError> {
+        // The standard's `encode` is a UTF-8 encode of the scalar-value queue
+        // with error mode `"fatal"`, followed by its own
+        // `Assert: result is not an error` — UTF-8 encoding cannot fail, which
+        // is why this member's `[NewObject]` is not `[Throws]`. Rust's `&str`
+        // is already a scalar-value sequence, and its UTF-8 is the encoding.
+        //
+        // An absent or `undefined` argument is the IDL default `""`, which is
+        // the empty byte sequence.
+        Ok(input.unwrap_or("").as_bytes().to_vec())
+    }
+
+    fn encoding(&self) -> Result<String, JsError> {
+        // A constant, and not a read of a record: the encoder has no encoding
+        // to vary, which is what makes the record empty.
+        Ok(String::from(TEXT_ENCODER_ENCODING))
     }
 }
 

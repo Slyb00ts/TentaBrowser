@@ -498,7 +498,11 @@ impl WrapperWorld for V8World {
             match record {
                 HostRecord::Url(url) => url.has_wrapper = true,
                 HostRecord::Signal(signal) => signal.has_wrapper = true,
-                HostRecord::Params(_) | HostRecord::Headers(_) | HostRecord::Controller(_) => {}
+                HostRecord::Params(_)
+                | HostRecord::Headers(_)
+                | HostRecord::Controller(_)
+                | HostRecord::TextDecoder(_)
+                | HostRecord::TextEncoder => {}
             }
             interface_name = record.interface_name();
             host = Box::new(HostObject::host_record(self.ctx.clone(), key));

@@ -1,5 +1,5 @@
-//! DOM binding glue generated from `idl/dom` and `idl/url` by `tenta-idl` (see
-//! `build.rs`).
+//! DOM binding glue generated from `idl/dom`, `idl/url`, `idl/fetch` and
+//! `idl/encoding` by `tenta-idl` (see `build.rs`).
 //!
 //! The engine-independent output (`prelude.rs`, `types.rs`, the `*Ops` traits
 //! and the `register_*` functions) is always compiled. The V8 glue (`*_v8.rs`)
@@ -78,6 +78,8 @@ include!(concat!(env!("OUT_DIR"), "/url_search_params_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/headers_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/abort_signal_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/abort_controller_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/text_decoder_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/text_encoder_ops.rs"));
 
 include!(concat!(env!("OUT_DIR"), "/character_data_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_register.rs"));
@@ -129,6 +131,8 @@ include!(concat!(env!("OUT_DIR"), "/url_search_params_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/headers_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/abort_signal_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/abort_controller_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/text_decoder_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/text_encoder_register.rs"));
 
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/character_data_v8.rs"));
@@ -206,6 +210,10 @@ include!(concat!(env!("OUT_DIR"), "/headers_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/abort_signal_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/abort_controller_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/text_decoder_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/text_encoder_v8.rs"));
 
 pub mod host;
 
@@ -220,7 +228,14 @@ pub mod host;
 /// template's own behaviour can be observed directly.
 #[cfg(all(test, feature = "v8"))]
 mod prelude_helpers {
+    use super::host::{HostContext, HostObject};
     use super::*;
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use crate::event_loop::{Clock, MonoTime, SharedClock};
+    use tenta_dom::Document;
 
     /// Runs `check` on a fresh isolate with one entered context.
     fn with_context(check: impl FnOnce(&mut v8::PinScope<'_, '_>)) {
@@ -1060,5 +1075,406 @@ mod prelude_helpers {
                 "a `BigInt64Array` is an `ArrayBufferView`"
             );
         });
+    }
+
+    // -----------------------------------------------------------------------
+    // `TextDecoder` and `TextEncoder`
+    // -----------------------------------------------------------------------
+
+    /// A [`Realm`] over a fresh [`HostContext`], which is all a generated
+    /// constructor needs to place a record and all a generated member needs to
+    /// reach one.
+    ///
+    /// The two encoding hosts are the first whose *algorithms* are wholly the
+    /// host's: a `TextDecoder` owns a decoder that survives from one
+    /// `{stream: true}` call to the next, and a BOM rule of its own that no
+    /// generated glue knows about. Both are observable without a wrapper world,
+    /// so they are tested here; what does need the world — the argument
+    /// conversions, `instanceof`, and the typed array `encode` hands back — is
+    /// tested in `crates/tenta-js-v8/tests/dom_encoding.rs`.
+    fn host_realm() -> Realm {
+        let document = Rc::new(RefCell::new(Document::new()));
+        let clock = SharedClock::new(Clock::virtual_at(MonoTime::ZERO));
+        let context: Realm = Rc::new(HostContext::new(document, clock));
+        context
+    }
+
+    /// A `TextDecoder` over `label`, with both options spelled out.
+    fn decoder(realm: &Realm, label: Option<&str>, fatal: bool, ignore_bom: bool) -> HostObject {
+        <HostObject as TextDecoderConstructor>::construct(
+            realm,
+            label,
+            Some(TextDecoderOptions { fatal, ignore_bom }),
+        )
+        .expect("the label names an encoding")
+    }
+
+    /// The `decode(input)` shape: no options, so not a streaming call.
+    fn decode(host: &HostObject, bytes: &[u8]) -> String {
+        host.decode(Some(bytes.to_vec()), None)
+            .expect("valid input decodes without a `fatal` error")
+    }
+
+    /// The `decode(input, options)` shape.
+    fn decode_with(host: &HostObject, bytes: &[u8], stream: bool) -> Result<String, JsError> {
+        host.decode(Some(bytes.to_vec()), Some(TextDecodeOptions { stream }))
+    }
+
+    /// A label is never kept: what the constructor resolves it to is an
+    /// encoding, and the name it reports is the standard's own, ASCII
+    /// lowercased. Whitespace around a label is part of the lookup.
+    #[test]
+    fn text_decoder_labels_resolve_to_an_encoding_name() {
+        let realm = host_realm();
+        for (label, name) in [
+            (None, "utf-8"),
+            (Some("utf-8"), "utf-8"),
+            (Some("UTF-8"), "utf-8"),
+            (Some("  utf-8  "), "utf-8"),
+            (Some("utf8"), "utf-8"),
+            (Some("utf-16le"), "utf-16le"),
+            (Some("latin1"), "windows-1252"),
+            (Some("windows-1252"), "windows-1252"),
+            (Some("iso-8859-2"), "iso-8859-2"),
+            (Some("shift_jis"), "shift_jis"),
+        ] {
+            let host = decoder(&realm, label, false, false);
+            assert_eq!(
+                <HostObject as TextDecoderOps>::encoding(&host).expect("an encoding has a name"),
+                name,
+                "label {label:?}"
+            );
+            assert!(!host.fatal(), "`fatal` defaults to false for {label:?}");
+            assert!(
+                !host.ignore_bom(),
+                "`ignoreBOM` defaults to false for {label:?}"
+            );
+        }
+    }
+
+    /// The two options are the constructor's, not the encoding's.
+    #[test]
+    fn text_decoder_reads_back_both_options() {
+        let realm = host_realm();
+        let host = decoder(&realm, Some("utf-16be"), true, true);
+        assert!(host.fatal());
+        assert!(host.ignore_bom());
+        assert_eq!(
+            <HostObject as TextDecoderOps>::encoding(&host).expect("an encoding has a name"),
+            "utf-16be"
+        );
+    }
+
+    /// A label that names no encoding is a `RangeError`. The empty label is
+    /// one of them: no encoding has the empty string as a label.
+    #[test]
+    fn text_decoder_rejects_labels_that_are_not_encodings() {
+        let realm = host_realm();
+        for label in ["no-such-encoding", "", "utf-9", "utf-8x"] {
+            let error =
+                <HostObject as TextDecoderConstructor>::construct(&realm, Some(label), None)
+                    .err()
+                    .expect("an unknown label is refused");
+            assert_eq!(error.kind(), JsErrorKind::Range, "label {label:?}");
+        }
+    }
+
+    /// The Encoding Standard's *replacement* encodings are the labels that
+    /// resolve to a decoder which swallows its whole input and emits one
+    /// replacement character. `for_label_no_replacement` — which is why the
+    /// host calls that and not `for_label` — drops them from the table, so the
+    /// constructor refuses them like any other unknown label. This is the whole
+    /// of `api-replacement-encodings.any.js`.
+    #[test]
+    fn text_decoder_rejects_the_replacement_encodings() {
+        let realm = host_realm();
+        for label in [
+            "replacement",
+            "csiso2022kr",
+            "hz-gb-2312",
+            "iso-2022-cn",
+            "iso-2022-cn-ext",
+            "iso-2022-kr",
+        ] {
+            let error =
+                <HostObject as TextDecoderConstructor>::construct(&realm, Some(label), None)
+                    .err()
+                    .expect("a replacement encoding is refused");
+            assert_eq!(error.kind(), JsErrorKind::Range, "label {label:?}");
+        }
+    }
+
+    /// The *serialize I/O queue* BOM rule. The decoder is asked not to handle
+    /// the BOM itself (`new_decoder_without_bom_handling`), so the U+FEFF is in
+    /// the output; the host removes one leading U+FEFF after the first decode
+    /// of each decoder, and only there.
+    #[test]
+    fn text_decoder_drops_one_leading_bom() {
+        let realm = host_realm();
+        let host = decoder(&realm, None, false, false);
+
+        assert_eq!(
+            decode(&host, &[]),
+            "",
+            "the empty input is the empty string"
+        );
+        assert_eq!(decode(&host, &[0xEF, 0xBB, 0xBF, 0x41]), "A");
+        assert_eq!(
+            decode(&host, &[0xEF, 0xBB, 0xBF, 0xEF, 0xBB, 0xBF, 0x41]),
+            "\u{FEFF}A",
+            "only the first of two BOMs goes"
+        );
+        assert_eq!(
+            decode(&host, &[0x41, 0xEF, 0xBB, 0xBF]),
+            "A\u{FEFF}",
+            "a BOM that is not leading is text"
+        );
+        assert_eq!(
+            decode(&host, &[0xEF, 0xBB, 0xBF, 0x42]),
+            "B",
+            "a non-streaming call replaces the decoder, so the rule applies again"
+        );
+    }
+
+    /// `ignoreBOM` keeps the character the rule would have removed.
+    #[test]
+    fn text_decoder_keeps_the_bom_when_asked_to_ignore_it() {
+        let realm = host_realm();
+        let host = decoder(&realm, None, false, true);
+        assert_eq!(decode(&host, &[0xEF, 0xBB, 0xBF, 0x41]), "\u{FEFF}A");
+        assert_eq!(
+            decode(&host, &[0xEF, 0xBB, 0xBF, 0x42]),
+            "\u{FEFF}B",
+            "and it keeps keeping it, for every decoder"
+        );
+    }
+
+    /// The rule is the standard's, not UTF-8's: it applies only to the
+    /// encodings whose BOM is a byte-order mark. Windows-1252 has no BOM, so
+    /// the same three bytes are three of its own characters and stay.
+    #[test]
+    fn text_decoder_applies_the_bom_rule_only_to_bom_encodings() {
+        let realm = host_realm();
+        let bytes = [0xEF, 0xBB, 0xBF];
+        assert_eq!(
+            decode(&decoder(&realm, Some("windows-1252"), false, false), &bytes),
+            "\u{EF}\u{BB}\u{BF}"
+        );
+        assert_eq!(
+            decode(&decoder(&realm, Some("iso-8859-2"), false, false), &bytes),
+            "\u{10F}\u{165}\u{17C}",
+            "a second single-byte encoding reads the same bytes its own way"
+        );
+        assert_eq!(
+            decode(
+                &decoder(&realm, Some("utf-16le"), false, false),
+                &[0xFF, 0xFE, 0x41, 0x00]
+            ),
+            "A",
+            "a UTF-16LE byte-order mark is one"
+        );
+        assert_eq!(
+            decode(
+                &decoder(&realm, Some("utf-16be"), false, false),
+                &[0xFE, 0xFF, 0x00, 0x41]
+            ),
+            "A",
+            "and a UTF-16BE byte-order mark is the other"
+        );
+        assert_eq!(
+            decode(
+                &decoder(&realm, Some("utf-16le"), false, true),
+                &[0xFF, 0xFE, 0x41, 0x00]
+            ),
+            "\u{FEFF}A",
+            "`ignoreBOM` reaches the UTF-16 decoders too"
+        );
+    }
+
+    /// `stream: true` keeps the decoder, and with it a partial sequence; the
+    /// next call completes it. A call that is not streaming replaces the
+    /// decoder, so whatever it held is gone.
+    #[test]
+    fn text_decoder_carries_a_partial_sequence_across_streaming_calls() {
+        let realm = host_realm();
+        let host = decoder(&realm, None, false, false);
+
+        assert_eq!(decode_with(&host, &[0xC9], true).expect("no error"), "");
+        assert_eq!(
+            decode_with(&host, &[0xA9], true).expect("no error"),
+            "\u{269}",
+            "0xA9 completed the two-byte sequence 0xC9 0xA9"
+        );
+        assert_eq!(
+            decode_with(&host, &[], false).expect("no error"),
+            "",
+            "nothing is held once the sequence is complete"
+        );
+
+        assert_eq!(decode_with(&host, &[0xC9], true).expect("no error"), "");
+        assert_eq!(
+            decode_with(&host, &[], false).expect("no error"),
+            "\u{FFFD}",
+            "a non-streaming call flushes the held byte as a replacement"
+        );
+        assert_eq!(
+            decode_with(&host, &[0xA9], false).expect("no error"),
+            "\u{FFFD}",
+            "and it replaced the decoder, so the continuation byte stands alone"
+        );
+    }
+
+    /// A four-byte sequence split across three `{stream: true}` calls decodes
+    /// to one character rather than to three replacements.
+    #[test]
+    fn text_decoder_decodes_a_split_four_byte_sequence_once() {
+        let realm = host_realm();
+        let host = decoder(&realm, None, false, false);
+
+        assert_eq!(decode_with(&host, &[0xF0], true).expect("no error"), "");
+        assert_eq!(
+            decode_with(&host, &[0x9F, 0x98], true).expect("no error"),
+            ""
+        );
+        assert_eq!(
+            decode_with(&host, &[0x80], true).expect("no error"),
+            "\u{1F600}",
+            "the fourth byte completed the character"
+        );
+        assert_eq!(decode_with(&host, &[], false).expect("no error"), "");
+    }
+
+    /// An absent input is an empty input, and an absent options dictionary is
+    /// its default — so `decode()`, `decode(undefined)`, `decode(undefined,
+    /// undefined)` and `decode(undefined, {})` all reach the host as this one
+    /// call, and all of them flush what a previous `{stream: true}` call held.
+    #[test]
+    fn text_decoder_flushes_on_an_absent_input() {
+        let realm = host_realm();
+        let host = decoder(&realm, None, false, false);
+
+        assert_eq!(decode_with(&host, &[0xC9], true).expect("no error"), "");
+        assert_eq!(
+            host.decode(None, None).expect("no error"),
+            "\u{FFFD}",
+            "an absent input still flushes the held byte"
+        );
+        assert_eq!(
+            host.decode(Some(Vec::new()), Some(Default::default()))
+                .expect("no error"),
+            "",
+            "an explicit empty input on a flushed decoder is the empty string"
+        );
+    }
+
+    /// `fatal` turns every malformed byte into a `TypeError` instead of a
+    /// replacement character — including a sequence the flush completes, which
+    /// is only malformed once it is known not to continue.
+    #[test]
+    fn text_decoder_fatal_rejects_malformed_input() {
+        let realm = host_realm();
+        let host = decoder(&realm, None, true, false);
+
+        assert_eq!(
+            host.decode(Some(vec![0xFF]), None)
+                .expect_err("0xFF opens no sequence in UTF-8")
+                .kind(),
+            JsErrorKind::Type
+        );
+        assert_eq!(
+            decode_with(&host, &[0xC9], true).expect("not malformed yet"),
+            "",
+            "an incomplete sequence is not malformed while it may still continue"
+        );
+        assert_eq!(
+            host.decode(None, None)
+                .expect_err("the flush completes a sequence that cannot")
+                .kind(),
+            JsErrorKind::Type
+        );
+        assert_eq!(
+            decode(&host, &[0x41]),
+            "A",
+            "and a `fatal` decoder still decodes well-formed input"
+        );
+    }
+
+    /// The decoder is the named encoding's, which is the point of taking
+    /// `encoding_rs` rather than hand-writing UTF-8: 0x80 is `€` in
+    /// windows-1252, and a UTF-16 pair is read in the named order.
+    #[test]
+    fn text_decoder_uses_the_named_encoding() {
+        let realm = host_realm();
+        assert_eq!(
+            decode(
+                &decoder(&realm, Some("windows-1252"), false, false),
+                &[0x80]
+            ),
+            "\u{20AC}"
+        );
+        assert_eq!(
+            decode(
+                &decoder(&realm, Some("utf-16le"), false, false),
+                &[0x41, 0x00]
+            ),
+            "A"
+        );
+        assert_eq!(
+            decode(
+                &decoder(&realm, Some("utf-16be"), false, false),
+                &[0x00, 0x41]
+            ),
+            "A"
+        );
+    }
+
+    /// The decoder and its state live in the record, so two `TextDecoder`s
+    /// built from one label hold two of them.
+    #[test]
+    fn two_text_decoders_hold_their_own_streaming_state() {
+        let realm = host_realm();
+        let first = decoder(&realm, None, false, false);
+        let second = decoder(&realm, None, false, false);
+
+        assert_eq!(decode_with(&first, &[0xC9], true).expect("no error"), "");
+        assert_eq!(
+            decode_with(&second, &[], false).expect("no error"),
+            "",
+            "the second decoder never saw the byte the first is holding"
+        );
+        assert_eq!(
+            decode_with(&first, &[0xA9], true).expect("no error"),
+            "\u{269}",
+            "and the first is still holding it"
+        );
+    }
+
+    /// `TextEncoder` is the standard's UTF-8 encoder and reports the one
+    /// encoding it can produce.
+    #[test]
+    fn text_encoder_encodes_utf8() {
+        let realm = host_realm();
+        let host = <HostObject as TextEncoderConstructor>::construct(&realm)
+            .expect("the constructor takes no arguments");
+
+        assert_eq!(
+            <HostObject as TextEncoderOps>::encoding(&host).expect("an encoding has a name"),
+            "utf-8"
+        );
+        assert_eq!(
+            host.encode(Some("A\u{E9}\u{1F600}"))
+                .expect("UTF-8 encodes"),
+            vec![0x41, 0xC3, 0xA9, 0xF0, 0x9F, 0x98, 0x80],
+            "one ASCII byte, one two-byte sequence and one four-byte sequence"
+        );
+        assert_eq!(
+            host.encode(Some("")).expect("the empty string encodes"),
+            Vec::<u8>::new()
+        );
+        assert_eq!(
+            host.encode(None)
+                .expect("an absent input is the empty string"),
+            Vec::<u8>::new()
+        );
     }
 }

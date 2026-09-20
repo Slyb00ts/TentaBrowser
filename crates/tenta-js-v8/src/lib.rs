@@ -607,6 +607,22 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the AbortController interface");
+            // The encoding pair roots at `Object` and names its constructors
+            // from the interface name alone, so its order among the JS-owned
+            // hosts does not matter. `TextDecoder`'s `decode` is the second
+            // consumer of the buffer-source conversion after the toy fixture.
+            tenta_js::bindings::install_text_encoder::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the TextEncoder interface");
+            tenta_js::bindings::install_text_decoder::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the TextDecoder interface");
         }
 
         let local = v8::Context::new(

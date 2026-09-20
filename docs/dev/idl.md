@@ -202,6 +202,35 @@ of the JavaScript value:
   return the empty byte sequence* — and
   `encoding/textdecoder-arguments.any.js` observes it from a page by handing
   `TextDecoder.decode` a detached buffer.
+- The copy is eager, and that is observable in exactly one place in the corpus.
+  `encoding/textdecoder-arguments.any.js` ends with a 10000-byte input and an
+  options dictionary whose `stream` getter detaches the input's buffer, and
+  expects `''`: WebIDL's buffer-source conversion only *references* the value,
+  and the bytes are not read until the operation consumes them, which is after
+  the whole argument list has been converted. This prelude copies during the
+  conversion, so `TextDecoder.decode` returns the 10000 bytes it already holds.
+  The deviation is recorded in `idl/encoding/TextDecoder.webidl` and pinned by
+  `tenta-js-v8`'s
+  `a_getter_that_detaches_the_input_runs_after_the_bytes_are_copied`; closing it
+  means giving the conversion a borrowing `BufferSource` representation, which
+  is the representation change the bullet above declines.
+- `BufferSource` accepts an `ArrayBufferView` over a `SharedArrayBuffer` and
+  refuses a bare `SharedArrayBuffer`. The split is in the declaration, not in
+  the conversion: `AllowSharedBufferSource` — the typedef the Encoding Standard
+  actually names, annotated `[AllowShared]` — cannot be written at all, because
+  weedle 0.4 has no `SharedArrayBuffer` keyword (it is not in
+  `weedle4::types::Type`), so the spelling would fall through to the typedef
+  resolver and become an uninhabited `Type::Interface("SharedArrayBuffer")`. The
+  consequences are spelled out in `idl/encoding/TextDecoder.webidl`: a view over
+  a `SharedArrayBuffer` converts (the brand check is on the view's class, which
+  is what `encoding/sharedarraybuffer.https.html` asserts), a bare one is a
+  `TypeError` — which `encoding/textdecoder-copy.any.js` is the only file in the
+  corpus to observe, because it passes `createBuffer(...)` itself to `decode`;
+  `encoding/textdecoder-streaming.any.js` wraps every buffer in a `Uint8Array`
+  and so sees nothing of this decision. Both obtain the constructor from
+  `new WebAssembly.Memory({shared: true})`, which is not lowered here, so
+  neither file runs in this engine regardless. Both cases are pinned by
+  `tenta-js-v8`'s `decode_rejects_a_value_that_is_not_a_buffer_source`.
 - The brand check is per type: `Value::is_data_view`, `Value::is_uint8_array` and
   their siblings for the named view types, and
   `Local::<ArrayBuffer>::try_from` for `ArrayBuffer`. So a `Uint8ClampedArray`
@@ -478,12 +507,17 @@ from the model even when no generator acts on them.
 
 The golden files assert the *shape* of the emitted code; the behaviour behind
 the prelude helpers is covered at runtime by `tenta-js`'s `prelude_helpers`
-module (`cargo test -p tenta-js --features v8`), which runs
-`sequence_from_v8`, `record_from_v8`, `byte_string_from_v8`/`_to_v8`,
+module (`cargo nextest run -p tenta-js --features v8 --tests`; the module is
+gated on the `v8` feature, so a run without it executes none of these tests),
+which runs `sequence_from_v8`, `record_from_v8`, `byte_string_from_v8`/`_to_v8`,
 `array_iterator` and `call_js_function` against a real isolate. Those tests are
 what reaches a conversion no declaration reaches — nothing in `idl/` declares a
 `ByteString` yet — and the failure paths a shipped member cannot produce, such
-as an abrupt descriptor read or a failing `done` read.
+as an abrupt descriptor read or a failing `done` read. The same module covers
+the `TextDecoder` and `TextEncoder` *algorithms*, which need a `HostContext` but
+no wrapper world; the half that does need one — installation, branding, the
+argument conversions and the typed array `encode` returns — is in
+`crates/tenta-js-v8/tests/dom_encoding.rs`.
 
 Fixtures:
 
@@ -498,6 +532,11 @@ Fixtures:
   (`EventTarget`, `Event`, `AbortSignal`, `Node`, the `ParentNode` mixin,
   `NodeList`, the `CSS` namespace), with the two deviations from the specs
   marked `ADAPTED` in the file.
+- `idl/encoding/TextDecoder.webidl` and `idl/encoding/TextEncoder.webidl` are
+  not fixtures — `tenta-js`'s build script generates them — but they are the
+  first shipped declarations to use `interface mixin` with `includes`
+  (`TextDecoderCommon`, `TextEncoderCommon`), so they are what exercises step 3
+  of the lowering above outside a fixture.
 
 ## Not implemented
 
@@ -531,6 +570,14 @@ generated code:
   getter is installed as a V8 property handler.
 - `[LegacyNullToEmptyString]`, `[LegacyLenientThis]` and the other legacy
   extended attributes are kept in the model but change no conversion.
+- `TextEncoder.encodeInto` and its `TextEncoderEncodeIntoResult` dictionary are
+  absent from `idl/encoding/TextEncoder.webidl`. The operation takes a
+  `BufferSource` it *writes* into, and a buffer source maps to an owned `Vec<u8>`
+  in the argument position, so a generated member has no way to hand the bytes
+  it wrote back to the caller's view — the generator has no out-parameter
+  mechanism at all. `TextDecoderStream` and `TextEncoderStream` are absent for a
+  different reason: they are `TransformStream` subclasses and the Streams
+  interfaces have not been lowered yet.
 
 ## References
 

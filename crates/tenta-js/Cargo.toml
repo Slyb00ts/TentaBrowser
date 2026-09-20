@@ -29,6 +29,15 @@ http = { workspace = true }
 # `application/x-www-form-urlencoded` serializer themselves; hand-writing
 # either is how the two get out of step with the rest of the browser tier.
 url = { workspace = true }
+# The `TextDecoder` host is the Encoding Standard's label lookup and its
+# decoding algorithms, and the `TextEncoder` host is that standard's UTF-8
+# encoder. The algorithms are stateful and incremental — a partial sequence
+# has to survive from one `{stream: true}` call to the next — and a second
+# implementation is how the two drift apart. `tenta-html` already depends on
+# `encoding_rs` for the parser's own decoder, so this adds no node to the
+# dependency graph; `cargo xtask lint-deps` only checks internal
+# dependencies, the same basis as the `http` and `url` entries above.
+encoding_rs = { workspace = true }
 v8 = { workspace = true, optional = true }
 
 [build-dependencies]
