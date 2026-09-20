@@ -534,4 +534,60 @@ mod prelude_helpers {
             assert_eq!(error.kind(), JsErrorKind::Type);
         });
     }
+
+    /// An abrupt `[[GetOwnProperty]]` fails the conversion instead of dropping
+    /// the key.
+    ///
+    /// `es-to-record` reads each own key's descriptor with `?`, so a proxy whose
+    /// trap throws has to fail the whole conversion. Treating the unreadable
+    /// descriptor as "not enumerable" would return an *empty* record as if the
+    /// object had had no enumerable properties, which is the wrong answer this
+    /// asserts against — the loop would otherwise `continue` past every key and
+    /// succeed.
+    #[test]
+    fn a_record_propagates_a_failing_descriptor_read() {
+        with_context(|scope| {
+            eval(
+                scope,
+                "globalThis.__trap = new Proxy({ a: '1' }, {
+                     getOwnPropertyDescriptor() { throw new Error('no descriptors'); },
+                   });",
+            );
+            let source = global(scope, "__trap");
+            let error =
+                record_from_v8(scope, source, |scope, item| Ok(string_from_v8(scope, item)))
+                    .expect_err("an abrupt descriptor read fails the conversion");
+            assert_eq!(error.kind(), JsErrorKind::Type);
+        });
+    }
+
+    /// An abrupt `done` read fails the conversion instead of ending the walk.
+    ///
+    /// `IteratorComplete` is `ToBoolean(Get(result, "done"))`, and an abrupt
+    /// `Get` propagates. Reading it as "done" would end the iteration at the
+    /// first entry and return the entries collected so far as if the iterator
+    /// had finished, so a one-entry iterator whose `done` getter throws must be
+    /// an error and not a one-entry sequence.
+    #[test]
+    fn a_sequence_propagates_a_failing_done_read() {
+        with_context(|scope| {
+            eval(
+                scope,
+                "globalThis.__iter = {
+                     [Symbol.iterator]() {
+                       return {
+                         next() {
+                           return { value: 'a', get done() { throw new Error('no done'); } };
+                         },
+                       };
+                     },
+                   };",
+            );
+            let source = global(scope, "__iter");
+            let error =
+                sequence_from_v8(scope, source, |scope, item| Ok(string_from_v8(scope, item)))
+                    .expect_err("an abrupt `done` read fails the conversion");
+            assert_eq!(error.kind(), JsErrorKind::Type);
+        });
+    }
 }

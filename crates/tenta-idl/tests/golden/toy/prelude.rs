@@ -1399,10 +1399,14 @@ fn iterator_next<'s>(
     let result = v8::Local::<v8::Object>::try_from(result)
         .map_err(|_| JsError::type_error("the iterator result is not an object"))?;
     let key = v8_string(scope, "done")?;
-    if result
+    // `IteratorComplete` is `ToBoolean(Get(result, "done"))`, and an abrupt
+    // `Get` propagates. Reading it as absent-instead-of-throwing would end the
+    // loop at the *first* entry and hand back a truncated sequence as if the
+    // iterator had finished, which is a wrong answer rather than a failure.
+    let done = result
         .get(scope, key.into())
-        .is_none_or(|value| value.boolean_value(scope))
-    {
+        .ok_or_else(|| JsError::type_error("the iterator result has no `done`"))?;
+    if done.boolean_value(scope) {
         return Ok(None);
     }
     let key = v8_string(scope, "value")?;
@@ -1456,13 +1460,23 @@ where
         let key = names
             .get_index(scope, index)
             .ok_or_else(|| JsError::type_error("the record key cannot be read"))?;
-        let enumerable = v8::Local::<v8::Name>::try_from(key)
-            .ok()
-            .and_then(|name| object.get_own_property_descriptor(scope, name))
-            .and_then(|descriptor| descriptor.to_object(scope))
-            .and_then(|descriptor| descriptor.get(scope, enumerable_key.into()))
-            .is_some_and(|flag| flag.boolean_value(scope));
-        if !enumerable {
+        // `? V.[[GetOwnProperty]](key)` — an abrupt descriptor read propagates,
+        // so a proxy that throws from its `getOwnPropertyDescriptor` trap fails
+        // the conversion instead of quietly dropping the key. Skipping is for
+        // the one case the spec skips: a descriptor that is `undefined`, which
+        // is a key a proxy's `ownKeys` reported without it being own.
+        let name = v8::Local::<v8::Name>::try_from(key)
+            .map_err(|_| JsError::type_error("the record key is not a property name"))?;
+        let descriptor = object
+            .get_own_property_descriptor(scope, name)
+            .ok_or_else(|| JsError::type_error("the record key descriptor cannot be read"))?;
+        let Some(descriptor) = descriptor.to_object(scope) else {
+            continue;
+        };
+        let enumerable = descriptor
+            .get(scope, enumerable_key.into())
+            .ok_or_else(|| JsError::type_error("the descriptor flag cannot be read"))?;
+        if !enumerable.boolean_value(scope) {
             continue;
         }
         let entry = object
