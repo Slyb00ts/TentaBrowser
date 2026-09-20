@@ -13,6 +13,7 @@ use tenta_core as _;
 
 mod host;
 mod page_engine;
+mod promise;
 mod script_host;
 mod world;
 
@@ -109,6 +110,10 @@ pub struct Engine {
 struct DomWorld {
     state: Rc<RefCell<world::WorldState>>,
     ctx: SharedContext,
+    // The promise seam's state, which lives in a context slot as well as here
+    // so `Drop` can drop its `v8::Global` handles while the isolate is alive
+    // (a context slot is not dropped until the isolate is disposed).
+    promise: Rc<promise::PromiseState>,
 }
 
 /// Callback state for the near-heap-limit hook: a thread-safe handle to
@@ -623,6 +628,16 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the TextDecoder interface");
+            // `Response` roots at `Object` too. It is installed last of the
+            // JS-owned hosts because it is the only one that *owns* another
+            // (`Response.headers`), and a `Response` constructor fills that
+            // `Headers` through the same record it hands out here.
+            tenta_js::bindings::install_response::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the Response interface");
         }
 
         let local = v8::Context::new(
@@ -662,7 +677,21 @@ impl Engine {
         }
         // The host callbacks reach this state through the context slot.
         local.set_slot::<HostState>(host.clone());
-        (v8::Global::new(scope, local), Some(DomWorld { state, ctx }))
+        // The promise seam's job table. It belongs to the context rather than to
+        // either side of the seam: a settlement runs inside a binding call and
+        // the microtask that applies it runs from V8's queue, and the context
+        // slot is the only thing both can reach (`crate::promise`). The engine
+        // keeps a clone so `Drop` can clear it while the isolate is alive.
+        let promise = promise::PromiseState::new(state.clone());
+        local.set_slot::<promise::PromiseState>(promise.clone());
+        (
+            v8::Global::new(scope, local),
+            Some(DomWorld {
+                state,
+                ctx,
+                promise,
+            }),
+        )
     }
 
     /// Sets the deadline every subsequent [`Self::run_script`] is given, or
@@ -1281,6 +1310,13 @@ impl Drop for Engine {
             // clones of the world state, so it must go before the isolate is
             // disposed and before the world is drained below.
             dom.ctx.script.borrow_mut().take();
+
+            // The promise seam's pending promises and queued settlements hold
+            // `v8::Global<PromiseResolver>` handles, and its state lives in a
+            // context slot, which V8 drops only when the isolate is disposed.
+            // Clearing the tables here drops those handles while they are still
+            // valid, the same reasoning as the timer handles cleared above.
+            dom.promise.clear();
 
             // Apply every piece of dead bookkeeping a finalizer recorded and no
             // later `wrapper` call swept: `HAS_WRAPPER` for the node wrappers it

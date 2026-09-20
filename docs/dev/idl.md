@@ -482,6 +482,76 @@ The CLI does the same thing for inspection:
 cargo run -p tenta-idl -- gen --idl idl/toy --out /tmp/generated
 ```
 
+### JS-owned host objects and the promise seam (P2)
+
+An interface whose instances are host records rather than wrapper-world nodes —
+`URL`/`URLSearchParams`, `Headers`, `AbortController`/`AbortSignal`,
+`TextEncoder`/`TextDecoder`, `Response` — uses the same generated glue as a
+node-backed interface, and differs from it in three places outside the
+generator:
+
+- the record lives in the host's slab and every wrapper for it carries
+  `TAG_HOST`, a tag shared by all of them; the `HostRecord` variant is what
+  names the interface, so `HostRecord::Response` and `HostRecord::Headers` are
+  distinguishable through one tag. A new record variant must be added to the
+  wrapper path in `crates/tenta-js-v8/src/world.rs` and to the reclaim arms in
+  `crates/tenta-js/src/bindings/host.rs` as well as to `HostRecord` itself.
+- a member that hands a JavaScript value back needs the engine, and the record
+  has no isolate. `ScriptHost` (`crates/tenta-js/src/dom/events/mod.rs`) is that
+  boundary: `build_value` interns a value and returns bits, `release_value`
+  gives the reference back, `throw_value` raises a value that is not a fresh
+  `JsError`, and `invoke_listener` runs a callback.
+- a member that has to return a promise *before* its work is done — `Body.text()`
+  and `Body.json()` are the first two — needs a promise to exist, which the host
+  cannot make either. The trait's two promise members are
+  `new_promise() -> Option<PromiseRef>` and
+  `settle_promise(resolver: u64, outcome: PromiseOutcome<'_>) -> bool`, with
+  `PromiseRef { promise: u64, resolver: u64 }`. Both halves of a `PromiseRef`
+  carry one stored reference and the *settlement* returns them, not the caller.
+
+`HostValue`, the enum of values the host asks the engine to build, is
+`Undefined`, `DomException { name, message }`, `String`, `TypeError { message }`.
+The last two arrived with `Response`: `text()` is the first member to resolve a
+promise with a string, and `consume body` rejects with a real `TypeError` —
+which `JsError::type_error` cannot produce, because it can only *throw*.
+`PromiseOutcome` is `Resolve(HostValue)`, `Reject(HostValue)` and
+`ParseJson(&[u8])`; the third is the standard's own "parse JSON from bytes"
+step, kept as one step because neither half of it is the host's to take: the
+UTF-8 decode needs the engine's decoder and the parse produces an arbitrary
+object graph. The V8 implementation (`crates/tenta-js-v8/src/promise.rs`) builds
+the settlement's value at `settle_promise` time — a scope is available then —
+stores the pointer-free job in a slot table, and enqueues a
+`v8::Function` whose *function data* is the job's index into that table with
+`Scope::enqueue_microtask`. V8's microtask queue is the page-visible one
+(`queueMicrotask` is the same call), so a settlement requested from inside a
+microtask lands in the same checkpoint pass; an immediate `resolve` would not
+be wrong, but a settlement drained once before
+`perform_microtask_checkpoint` would. The queued jobs hold
+`v8::Global<PromiseResolver>` handles, so `Engine::Drop` clears the table while
+the isolate is still alive.
+
+`Response`'s `BodyInit` is the first *shipped* union with a buffer-source arm,
+and its arm order is load-bearing: the union's first arm with no test of its own
+becomes the fallback, so `(BufferSource or USVString)` converts by
+`is_array_buffer() || is_shared_array_buffer() || is_array_buffer_view()` and
+falls back to `USVString` (`ToString`) for everything else. Only three of the
+standard's six arm types exist here — `ReadableStream`, `Blob` and `FormData` do
+not — and dropping `URLSearchParams` costs nothing observable, because it is an
+object with no buffer-source shape, so it reaches the `USVString` arm whose
+conversion calls its stringifier, which for `URLSearchParams` *is* its
+form-encoded serialization. The union is declared in
+`idl/fetch/Response.webidl`, whose header records what the interface leaves out.
+
+`Headers`' guard is part of the same slice. `HeadersGuard`
+(`crates/tenta-js/src/bindings/host.rs`) now has `None` and `Response`, split
+into the question of whether a mutator may be attempted at all
+(`permits_mutation`) and whether it may change *this* name (`permits_name`); the
+`"response"` guard rejects `Set-Cookie`/`Set-Cookie2` silently, as Fetch's
+*validate a header* step does — not with a throw. The name-level rule lives
+outside the generator, but the *fill* step a constructor runs goes through the
+same helper, so `new Response(null, {headers: {"Set-Cookie": "a=b"}})` and
+`new Headers({"Set-Cookie": "a=b"})` differ in exactly the guard they install.
+
 ## Extended attributes
 
 | Attribute | Effect |
@@ -531,7 +601,14 @@ as an abrupt descriptor read or a failing `done` read. The same module covers
 the `TextDecoder` and `TextEncoder` *algorithms*, which need a `HostContext` but
 no wrapper world; the half that does need one — installation, branding, the
 argument conversions and the typed array `encode` returns — is in
-`crates/tenta-js-v8/tests/dom_encoding.rs`.
+`crates/tenta-js-v8/tests/dom_encoding.rs`. `Response` splits the same way:
+`prelude_helpers` covers the algorithms through a recording `ScriptHost`
+(the status and status-text validation, the null body status, the `Content-Type`
+append, the forbidden-name drop under guard `"response"` and the defaults), and
+`crates/tenta-js-v8/tests/dom_response.rs` covers what only a real isolate
+shows — the promise actually settling in a microtask checkpoint, the UTF-8
+decode, the `SyntaxError` rejection, the `Uint8Array` body taken as bytes, and
+the wrapper's reclamation.
 
 Fixtures:
 
@@ -592,6 +669,21 @@ generated code:
   mechanism at all. `TextDecoderStream` and `TextEncoderStream` are absent for a
   different reason: they are `TransformStream` subclasses and the Streams
   interfaces have not been lowered yet.
+- `Response` declares the part of `Body` a constructor-built response can
+  serve — `bodyUsed`, `json()`, `text()` — and leaves out `body`,
+  `arrayBuffer()`, `blob()`, `bytes()`, `formData()` and `textStream()`, because
+  every one of them reads a `ReadableStream` (or a `Blob`/`FormData` that does
+  not exist here). `Response.body` arrives with Streams (`d-5b`). Its static
+  `error()`, `redirect()` and `json()` and its `clone()` are absent too:
+  `clone()` needs a body tee and the statics need the request and redirect
+  machinery. `Response.body`'s stand-in in the record is a `Vec<u8>`, which is
+  what makes *unusable* "the body has already been read".
+- A *throwing getter* on a dictionary member is treated as an absent member: the
+  generated `dictionary_member` maps an empty `Object::get` — the shape a throw
+  takes — to `Ok(None)` and the next member lookup then drops the pending
+  exception. An exception from the *last* member read does survive to the
+  caller. Pre-existing and interface-agnostic (`TextDecoderOptions` behaves the
+  same way); the fix belongs in `dictionary_member` and is not made here.
 
 ## References
 

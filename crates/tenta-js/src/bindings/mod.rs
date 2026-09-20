@@ -80,6 +80,7 @@ include!(concat!(env!("OUT_DIR"), "/abort_signal_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/abort_controller_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_decoder_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_encoder_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/response_ops.rs"));
 
 include!(concat!(env!("OUT_DIR"), "/character_data_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_register.rs"));
@@ -133,6 +134,7 @@ include!(concat!(env!("OUT_DIR"), "/abort_signal_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/abort_controller_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_decoder_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_encoder_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/response_register.rs"));
 
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/character_data_v8.rs"));
@@ -214,6 +216,8 @@ include!(concat!(env!("OUT_DIR"), "/abort_controller_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_decoder_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/text_encoder_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/response_v8.rs"));
 
 pub mod host;
 
@@ -228,12 +232,13 @@ pub mod host;
 /// template's own behaviour can be observed directly.
 #[cfg(all(test, feature = "v8"))]
 mod prelude_helpers {
-    use super::host::{HostContext, HostObject};
+    use super::host::{HostContext, HostObject, realm_context};
     use super::*;
 
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use crate::dom::events::{CallbackRef, HostValue, PromiseOutcome, PromiseRef, ScriptHost};
     use crate::event_loop::{Clock, MonoTime, SharedClock};
     use tenta_dom::Document;
 
@@ -1476,5 +1481,597 @@ mod prelude_helpers {
                 .expect("an absent input is the empty string"),
             Vec::<u8>::new()
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // `Response`
+    // -----------------------------------------------------------------------
+
+    /// The settlement a `Body` member asked for, in the host's own terms.
+    ///
+    /// A [`PromiseOutcome`] borrows the labels it carries and there is no
+    /// isolate here to build the value with, so the mock copies the outcome into
+    /// this owned form and compares on it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Settled {
+        Undefined,
+        String(String),
+        TypeError(String),
+        Json(Vec<u8>),
+    }
+
+    /// A [`ScriptHost`] that records what the `Body` algorithms settle.
+    ///
+    /// `consume body` ends at `settle_promise`, so this is the last point every
+    /// branch of `text()` and `json()` passes through, and recording it observes
+    /// all of them without an isolate: the resolved text, the `TypeError` a
+    /// second read rejects with, and the bytes `json()` asks the engine to parse.
+    struct RecordingHost {
+        /// How many promises have been asked for, which is also what makes the
+        /// bits distinctive.
+        made: std::cell::Cell<u64>,
+        settled: RefCell<Vec<(u64, Settled)>>,
+    }
+
+    impl RecordingHost {
+        fn new() -> Rc<Self> {
+            Rc::new(Self {
+                made: std::cell::Cell::new(0),
+                settled: RefCell::new(Vec::new()),
+            })
+        }
+
+        /// The one settlement that was requested, with the resolver whose
+        /// promise it settles.
+        fn only_settlement(&self) -> (u64, Settled) {
+            let settled = self.settled.borrow();
+            assert_eq!(settled.len(), 1, "one body read settles one promise");
+            settled[0].clone()
+        }
+    }
+
+    impl ScriptHost for RecordingHost {
+        fn invoke_listener(&self, _callback: CallbackRef, _current_target: u64, _event: u64) {
+            unreachable!("no `Body` member dispatches an event");
+        }
+
+        fn release_value(&self, _bits: u64) {}
+
+        fn build_value(&self, _value: HostValue<'_>) -> Option<u64> {
+            unreachable!("the settlement is recorded rather than built");
+        }
+
+        fn throw_value(&self, _bits: u64) {
+            unreachable!("no `Body` member throws a stored value");
+        }
+
+        /// Distinctive bits per promise, so a test can tell which member made
+        /// the promise a settlement names.
+        fn new_promise(&self) -> Option<PromiseRef> {
+            let made = self.made.get() + 1;
+            self.made.set(made);
+            Some(PromiseRef {
+                promise: made * 2,
+                resolver: made * 2 + 1,
+            })
+        }
+
+        fn settle_promise(&self, resolver: u64, outcome: PromiseOutcome<'_>) -> bool {
+            let settled = match outcome {
+                PromiseOutcome::Resolve(HostValue::Undefined) => Settled::Undefined,
+                PromiseOutcome::Resolve(HostValue::String(text)) => Settled::String(text),
+                PromiseOutcome::Reject(HostValue::TypeError { message }) => {
+                    Settled::TypeError(message.to_owned())
+                }
+                PromiseOutcome::ParseJson(bytes) => Settled::Json(bytes.to_vec()),
+                other => panic!("no `Body` member settles with {other:?}"),
+            };
+            self.settled.borrow_mut().push((resolver, settled));
+            true
+        }
+    }
+
+    /// A [`Realm`] with the recording script host installed, which is what lets
+    /// the `Body` algorithms run past their promise creation.
+    fn body_realm() -> (Realm, Rc<RecordingHost>) {
+        let realm = host_realm();
+        let host = RecordingHost::new();
+        *realm_context(&realm)
+            .expect("the realm is a host context")
+            .script
+            .borrow_mut() = Some(host.clone());
+        (realm, host)
+    }
+
+    /// `new Response(body, init)`.
+    fn response(
+        realm: &Realm,
+        body: Option<BufferSourceOrUsvString>,
+        init: ResponseInit,
+    ) -> Result<HostObject, JsError> {
+        <HostObject as ResponseConstructor>::construct(realm, Some(body), Some(init))
+    }
+
+    /// The header list the response's own `Headers` holds, read through the
+    /// `[SameObject]` getter rather than off the record, so the test observes
+    /// what script would.
+    fn response_headers(realm: &Realm, response: &HostObject) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let bits = <HostObject as ResponseOps>::headers(response)
+            .expect("a constructed response has a headers object")
+            .bits();
+        let decoded = super::host::decode(bits);
+        assert_eq!(
+            decoded.tag,
+            super::host::TAG_HOST,
+            "the handle is a JS-owned host object"
+        );
+        let headers = HostObject::host_record(
+            realm_context(realm).expect("the realm is a host context"),
+            super::host::HostKey {
+                index: decoded.node_id.0,
+                generation: decoded.generation,
+            },
+        );
+        <HostObject as HeadersOps>::iterable_entries(&headers).expect("a headers list")
+    }
+
+    /// A pair list, as `Headers`' own constructor builds one.
+    fn pairs(pairs: &[(&str, &str)]) -> HeadersInit {
+        HeadersInit::SequenceOfSequenceOfByteString(
+            pairs
+                .iter()
+                .map(|(name, value)| vec![name.as_bytes().to_vec(), value.as_bytes().to_vec()])
+                .collect(),
+        )
+    }
+
+    /// `initialize a response` steps 1 and 2, which run before anything is
+    /// inserted and which are the only two members the constructor validates
+    /// rather than converts.
+    #[test]
+    fn response_validates_the_status_and_the_status_text() {
+        let realm = host_realm();
+        let status = |status: u16| {
+            response(
+                &realm,
+                None,
+                ResponseInit {
+                    status,
+                    ..Default::default()
+                },
+            )
+            .err()
+            .map(|error| error.kind())
+        };
+
+        // The range is 200 to 599 inclusive: 199 and 600 are the two ends that
+        // fail, and the two boundaries themselves are the two that pass.
+        assert_eq!(status(199), Some(JsErrorKind::Range));
+        assert_eq!(status(600), Some(JsErrorKind::Range));
+        assert_eq!(status(200), None);
+        assert_eq!(status(599), None);
+        // The default is 200, so a dictionary that names nothing is valid.
+        assert_eq!(response(&realm, None, Default::default()).err(), None);
+
+        // The status text is a `ByteString`, so 0x80 arrives as a byte rather
+        // than as a character, and *reason-phrase* is the reason a control
+        // character or a non-ASCII byte is refused.
+        let text = |text: &[u8]| {
+            response(
+                &realm,
+                None,
+                ResponseInit {
+                    status_text: text.to_vec(),
+                    ..Default::default()
+                },
+            )
+            .err()
+            .map(|error| error.kind())
+        };
+        assert_eq!(text(b""), None, "the empty string is always allowed");
+        assert_eq!(text(b"OK"), None);
+        assert_eq!(text(b"not\tfound"), None, "HTAB is part of the production");
+        assert_eq!(text(b"a b"), None, "so is SP");
+        assert_eq!(text(&[0xFF]), None, "and so is obs-text");
+        assert_eq!(text(b"line\nbreak"), Some(JsErrorKind::Type));
+        assert_eq!(text(b"null\0byte"), Some(JsErrorKind::Type));
+        assert_eq!(text(&[0x7F]), Some(JsErrorKind::Type));
+    }
+
+    /// The constructor's steps 1 and 2 make the response and its headers object
+    /// before `initialize a response` can throw, so a straightforward reading
+    /// inserts two records for a construction that then fails. Both checks here
+    /// run before the first insert, which is what makes a rejected construction
+    /// leave the slab as it found it.
+    #[test]
+    fn a_rejected_construction_leaves_no_record_behind() {
+        let realm = host_realm();
+        let ctx = realm_context(&realm).expect("the realm is a host context");
+        let status = |status: u16| {
+            response(
+                &realm,
+                None,
+                ResponseInit {
+                    status,
+                    ..Default::default()
+                },
+            )
+            .err()
+            .expect("the status is outside the range")
+            .kind()
+        };
+        let text = |text: &[u8]| {
+            response(
+                &realm,
+                None,
+                ResponseInit {
+                    status_text: text.to_vec(),
+                    ..Default::default()
+                },
+            )
+            .err()
+            .expect("the status text is not a reason phrase")
+            .kind()
+        };
+
+        assert_eq!(status(199), JsErrorKind::Range);
+        assert_eq!(status(600), JsErrorKind::Range);
+        assert_eq!(text(b"line\nbreak"), JsErrorKind::Type);
+        assert_eq!(
+            ctx.host_records.borrow().len(),
+            0,
+            "neither the response nor its headers object was inserted"
+        );
+
+        // And a construction that gets past both is the two records it takes:
+        // the `Headers` the response owns, then the response.
+        response(&realm, None, Default::default()).expect("a valid response");
+        assert_eq!(ctx.host_records.borrow().len(), 2);
+    }
+
+    /// Step 6's body rules: a null body status cannot carry a body, a string
+    /// body contributes a `Content-Type`, and a buffer source contributes none.
+    #[test]
+    fn response_applies_the_body_rules_of_initialize_a_response() {
+        let realm = host_realm();
+        let of =
+            |body: BufferSourceOrUsvString, init: ResponseInit| response(&realm, Some(body), init);
+
+        // The five null body statuses. Two of them — 101 and 103 — are below
+        // the status range, so step 1 of *initialize a response* rejects them
+        // before step 6 ever asks about a body; the other three reach the rule
+        // this test is about.
+        for status in [101u16, 103] {
+            assert_eq!(
+                of(
+                    BufferSourceOrUsvString::UsvString("hi".to_owned()),
+                    ResponseInit {
+                        status,
+                        ..Default::default()
+                    },
+                )
+                .err()
+                .expect("the status is outside the range")
+                .kind(),
+                JsErrorKind::Range,
+                "status {status} fails the range check first"
+            );
+        }
+        for status in [204u16, 205, 304] {
+            let error = of(
+                BufferSourceOrUsvString::UsvString("hi".to_owned()),
+                ResponseInit {
+                    status,
+                    ..Default::default()
+                },
+            )
+            .err()
+            .expect("a null body status cannot have a body");
+            assert_eq!(error.kind(), JsErrorKind::Type, "status {status}");
+            // A status the range check still lets through, with no body at all:
+            // the `Some(None)` an explicit `null` argument is.
+            assert_eq!(
+                <HostObject as ResponseConstructor>::construct(
+                    &realm,
+                    Some(None),
+                    Some(ResponseInit {
+                        status,
+                        ..Default::default()
+                    }),
+                )
+                .err(),
+                None,
+                "status {status}: a null body — not an empty one — is what is allowed"
+            );
+        }
+
+        let text = of(
+            BufferSourceOrUsvString::UsvString("hi".to_owned()),
+            Default::default(),
+        )
+        .expect("the body is valid");
+        assert_eq!(
+            response_headers(&realm, &text),
+            vec![(
+                b"content-type".to_vec(),
+                b"text/plain;charset=UTF-8".to_vec()
+            )],
+            "a `USVString` body's type is appended to the header list"
+        );
+
+        let bytes = of(
+            BufferSourceOrUsvString::BufferSource(vec![b'h', b'i']),
+            Default::default(),
+        )
+        .expect("the body is valid");
+        assert_eq!(
+            response_headers(&realm, &bytes),
+            Vec::new(),
+            "a buffer source's body has no type, so nothing is appended"
+        );
+
+        // The append is skipped when the list already names `Content-Type`,
+        // whatever case the caller spelled it in.
+        let named = of(
+            BufferSourceOrUsvString::UsvString("hi".to_owned()),
+            ResponseInit {
+                headers: Some(pairs(&[("Content-Type", "text/plain")])),
+                ..Default::default()
+            },
+        )
+        .expect("the body is valid");
+        assert_eq!(
+            response_headers(&realm, &named),
+            vec![(b"content-type".to_vec(), b"text/plain".to_vec())]
+        );
+    }
+
+    /// The `"response"` guard's own rule, which is the one thing the `Response`
+    /// constructor's *fill* does that `Headers`' constructor's does not.
+    #[test]
+    fn the_response_guard_drops_the_forbidden_response_header_names() {
+        let realm = host_realm();
+        // `Set-Cookie` and `Set-Cookie2` are the response guard's forbidden
+        // names, and the drop is a *silent* return: Fetch's guarded append does
+        // not throw.
+        let with_response_guard = response(
+            &realm,
+            None,
+            ResponseInit {
+                headers: Some(pairs(&[
+                    ("Set-Cookie", "a=b"),
+                    ("set-cookie2", "c=d"),
+                    ("Set-Cookie3", "kept"),
+                    ("X-Other", "kept"),
+                ])),
+                ..Default::default()
+            },
+        )
+        .expect("a forbidden name is dropped, not thrown on");
+        assert_eq!(
+            response_headers(&realm, &with_response_guard),
+            vec![
+                (b"set-cookie3".to_vec(), b"kept".to_vec()),
+                (b"x-other".to_vec(), b"kept".to_vec()),
+            ],
+            "the two forbidden names are gone and nothing else is"
+        );
+
+        // The same names under the `Headers` constructor's guard are kept, so
+        // the assertions above are about the guard and not about the names.
+        let immutable = <HostObject as HeadersConstructor>::construct(
+            &realm,
+            Some(pairs(&[("Set-Cookie", "a=b"), ("set-cookie2", "c=d")])),
+        )
+        .expect("the `none` guard permits both names");
+        assert_eq!(
+            <HostObject as HeadersOps>::iterable_entries(&immutable).expect("a headers list"),
+            vec![
+                (b"set-cookie".to_vec(), b"a=b".to_vec()),
+                (b"set-cookie2".to_vec(), b"c=d".to_vec()),
+            ]
+        );
+
+        // The guard is the record's, so it outlives the constructor: the same
+        // *append* is dropped on the response's headers object and kept on the
+        // one the page built.
+        let built = response(&realm, None, Default::default()).expect("a usable response");
+        let bits = <HostObject as ResponseOps>::headers(&built)
+            .expect("a headers handle")
+            .bits();
+        let decoded = super::host::decode(bits);
+        let headers = HostObject::host_record(
+            realm_context(&realm).expect("the realm is a host context"),
+            super::host::HostKey {
+                index: decoded.node_id.raw(),
+                generation: decoded.generation,
+            },
+        );
+        <HostObject as HeadersOps>::append(&headers, b"Set-Cookie", b"a=b").expect("no throw");
+        <HostObject as HeadersOps>::append(&headers, b"X-Other", b"1").expect("no throw");
+        <HostObject as HeadersOps>::append(&immutable, b"Set-Cookie", b"z=z").expect("no throw");
+        assert_eq!(
+            <HostObject as HeadersOps>::iterable_entries(&headers).expect("a headers list"),
+            vec![(b"x-other".to_vec(), b"1".to_vec())],
+            "the guarded append dropped the forbidden name and kept the other"
+        );
+        assert_eq!(
+            <HostObject as HeadersOps>::iterable_entries(&immutable).expect("a headers list"),
+            vec![
+                (b"set-cookie".to_vec(), b"a=b".to_vec()),
+                // `set-cookie` is the one name the iterator does not combine,
+                // so its two values stay two pairs.
+                (b"set-cookie".to_vec(), b"z=z".to_vec()),
+                (b"set-cookie2".to_vec(), b"c=d".to_vec()),
+            ],
+            "and the unguarded one appended a second pair rather than being dropped"
+        );
+    }
+
+    /// The three `ResponseType` values a constructor-built response reports are
+    /// the standard's defaults, and `ok` is HTTP's own success range.
+    #[test]
+    fn a_constructed_response_reports_the_documented_defaults() {
+        let realm = host_realm();
+        let built = response(&realm, None, Default::default()).expect("the empty response");
+
+        assert_eq!(
+            <HostObject as ResponseOps>::r#type(&built).expect("an enumeration value"),
+            ResponseType::Default
+        );
+        assert_eq!(
+            <HostObject as ResponseOps>::url(&built).expect("a URL string"),
+            "",
+            "a constructor-built response has no URL, so `url` is the empty string"
+        );
+        assert!(!<HostObject as ResponseOps>::redirected(&built));
+        assert_eq!(<HostObject as ResponseOps>::status(&built), 200);
+        assert!(<HostObject as ResponseOps>::ok(&built));
+        assert_eq!(
+            <HostObject as ResponseOps>::status_text(&built).expect("a status text"),
+            Vec::<u8>::new()
+        );
+        assert!(!<HostObject as ResponseOps>::body_used(&built));
+
+        // `ok` is *ok status*: 200 to 299 inclusive, so the two boundaries are
+        // the ones worth reading and 300 is the first status outside it.
+        let with_status = |status: u16| {
+            response(
+                &realm,
+                None,
+                ResponseInit {
+                    status,
+                    ..Default::default()
+                },
+            )
+            .expect("a status inside the range")
+        };
+        assert!(
+            <HostObject as ResponseOps>::ok(&with_status(299)),
+            "299 is the last ok status"
+        );
+        assert!(
+            !<HostObject as ResponseOps>::ok(&with_status(300)),
+            "300 is the first status that is not ok"
+        );
+        assert_eq!(
+            <HostObject as ResponseOps>::status(&with_status(599)),
+            599,
+            "and the status is reported as it was given"
+        );
+    }
+
+    /// `[SameObject] headers`: the getter answers with the key the constructor
+    /// stored, so two reads are the same record and therefore the same wrapper.
+    #[test]
+    fn the_headers_getter_is_the_same_object_every_time() {
+        let realm = host_realm();
+        let built = response(&realm, None, Default::default()).expect("the empty response");
+        let first = <HostObject as ResponseOps>::headers(&built).expect("a headers handle");
+        let second = <HostObject as ResponseOps>::headers(&built).expect("a headers handle");
+        assert_eq!(first, second, "the two reads are the same wrapper bits");
+    }
+
+    /// `consume body`'s step 1: an object whose body has already been read is
+    /// *unusable*, and the rejection is the same whether the member is `text()`
+    /// or `json()`.
+    #[test]
+    fn a_second_body_read_is_rejected_as_unusable() {
+        let (realm, script) = body_realm();
+        let built = response(
+            &realm,
+            Some(BufferSourceOrUsvString::UsvString("hi".to_owned())),
+            Default::default(),
+        )
+        .expect("a string body");
+
+        // The first read resolves with the text and disturbs the body.
+        let promise = <HostObject as ResponseOps>::text(&built).expect("a promise");
+        assert_eq!(promise.bits(), 2, "the first promise the host made");
+        assert_eq!(
+            script.only_settlement(),
+            (3, Settled::String("hi".to_owned()))
+        );
+        assert!(
+            <HostObject as ResponseOps>::body_used(&built),
+            "the disturbance is observable synchronously, before the settlement runs"
+        );
+
+        // The second read takes step 1: it makes its own promise and rejects
+        // that one, before any conversion runs. Both halves are asserted,
+        // because a member that threw instead of rejecting would not have made
+        // a promise at all, and one that converted anyway would not have the
+        // rejection.
+        let again = <HostObject as ResponseOps>::text(&built).expect("a rejected promise");
+        assert_eq!(
+            script.made.get(),
+            2,
+            "the second read made a second promise"
+        );
+        assert_eq!(again.bits(), 4, "and returned it");
+        assert_eq!(
+            script.settled.borrow()[1],
+            (
+                5,
+                Settled::TypeError("The body has already been read".to_owned())
+            )
+        );
+        assert!(
+            <HostObject as ResponseOps>::body_used(&built),
+            "a failed read leaves the body disturbed"
+        );
+
+        // `json()` is the same algorithm and takes the same step.
+        <HostObject as ResponseOps>::json(&built).expect("a rejected promise");
+        assert_eq!(
+            script.settled.borrow()[2],
+            (
+                7,
+                Settled::TypeError("The body has already been read".to_owned())
+            )
+        );
+    }
+
+    /// A null body is the empty byte sequence, so `text()` resolves `""` and
+    /// `json()` rejects — the empty string is not JSON.
+    #[test]
+    fn a_null_body_reads_as_the_empty_byte_sequence() {
+        let (realm, script) = body_realm();
+        let built = response(&realm, None, Default::default()).expect("the empty response");
+
+        <HostObject as ResponseOps>::text(&built).expect("a promise");
+        assert_eq!(
+            script.only_settlement(),
+            (3, Settled::String(String::new()))
+        );
+        assert!(
+            !<HostObject as ResponseOps>::body_used(&built),
+            "a null body is never disturbed: `bodyUsed` is false for it however often it is read"
+        );
+
+        <HostObject as ResponseOps>::json(&built).expect("a promise that will reject");
+        assert_eq!(
+            script.settled.borrow()[1],
+            (5, Settled::Json(Vec::new())),
+            "`json()` asks the engine to parse the empty sequence, and the parse is what rejects"
+        );
+    }
+
+    /// `json()` converts bytes rather than a value, so the conversion is the
+    /// engine's and the host hands it the *body*, not a decoded string.
+    #[test]
+    fn json_hands_the_engine_the_body_bytes() {
+        let (realm, script) = body_realm();
+        let built = response(
+            &realm,
+            Some(BufferSourceOrUsvString::UsvString("{\"a\":1}".to_owned())),
+            Default::default(),
+        )
+        .expect("a JSON body");
+
+        <HostObject as ResponseOps>::json(&built).expect("a promise");
+        let (resolver, settled) = script.only_settlement();
+        assert_eq!(resolver, 3);
+        assert_eq!(settled, Settled::Json(b"{\"a\":1}".to_vec()));
     }
 }

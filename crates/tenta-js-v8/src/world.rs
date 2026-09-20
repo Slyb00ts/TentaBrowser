@@ -492,15 +492,17 @@ impl WrapperWorld for V8World {
             let mut records = self.ctx.host_records.borrow_mut();
             let record = records.get_mut(key)?;
             // A record that another record's key can point at — a URL its query
-            // object, a signal its controller — has to be told it has a wrapper
-            // again, because its record outlives its own wrapper and its
-            // reclamation frees it only once no live counterpart refers to it.
+            // object, a signal its controller, the headers a response created —
+            // has to be told it has a wrapper again, because its record
+            // outlives its own wrapper and its reclamation frees it only once no
+            // live counterpart refers to it.
             match record {
                 HostRecord::Url(url) => url.has_wrapper = true,
                 HostRecord::Signal(signal) => signal.has_wrapper = true,
+                HostRecord::Headers(headers) => headers.has_wrapper = true,
                 HostRecord::Params(_)
-                | HostRecord::Headers(_)
                 | HostRecord::Controller(_)
+                | HostRecord::Response(_)
                 | HostRecord::TextDecoder(_)
                 | HostRecord::TextEncoder => {}
             }

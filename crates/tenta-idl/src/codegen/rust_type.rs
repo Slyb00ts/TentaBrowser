@@ -74,6 +74,13 @@ pub fn default_expr(ty: &Type, default: &DefaultValue) -> String {
         DefaultValue::Float(value) => float_literal(*value),
         DefaultValue::String(value) => match ty.unwrap_nullable() {
             Type::Enum(name) => format!("{name}::{}", enum_variant(ty, value)),
+            // A `ByteString` is a `Vec<u8>` in Rust, so the string literal the
+            // IDL writes has to become its bytes. Emitting `String::from` here
+            // would produce a default of the one type the field cannot hold,
+            // which is a generator defect rather than a spelling the caller
+            // could work around (`ByteString statusText = "";` is the member
+            // that surfaced it).
+            Type::ByteString => format!("{value:?}.as_bytes().to_vec()"),
             _ => format!("String::from({value:?})"),
         },
         DefaultValue::Null => "None".to_string(),

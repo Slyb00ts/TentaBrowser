@@ -20,9 +20,10 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use tenta_js::bindings::{Event, EventTarget, Handle, handle_to_v8, value_to_v8};
-use tenta_js::dom::events::{CallbackRef, HostValue, ScriptHost};
+use tenta_js::dom::events::{CallbackRef, HostValue, PromiseOutcome, PromiseRef, ScriptHost};
 
 use crate::host::HostState;
+use crate::promise;
 use crate::world::WorldState;
 
 /// The V8 side of the script-callback boundary.
@@ -66,13 +67,23 @@ impl V8ScriptHost {
         }
     }
 
+    /// The world's value slab, for the promise seam, which stores the value a
+    /// settlement carries and gives the promise's references back through it.
+    pub(crate) fn world(&self) -> Rc<RefCell<WorldState>> {
+        self.state.clone()
+    }
+
     /// Enters this host's context on its isolate and runs `f` inside it.
     ///
     /// This is the bootstrap [`ScriptHost::invoke_listener`] documents: a
     /// [`v8::CallbackScope`] spun up from the isolate we are already inside,
     /// which is only legal because every caller is reached from a live DOM
     /// binding call on this isolate's thread.
-    fn with_context<R>(&self, f: impl FnOnce(&mut v8::PinScope<'_, '_>) -> R) -> R {
+    ///
+    /// It must not be nested: a second `CallbackScope` inside the first is not
+    /// legal, so a callee that already has a scope ([`crate::promise`]'s
+    /// settlement) takes its own path rather than calling back in here.
+    pub(crate) fn with_context<R>(&self, f: impl FnOnce(&mut v8::PinScope<'_, '_>) -> R) -> R {
         // SAFETY: the isolate address was captured by value at install time, so
         // it is stable and non-null for the engine's lifetime, and this runs on
         // that isolate's own thread inside a binding call — the sole valid use of
@@ -91,6 +102,44 @@ impl V8ScriptHost {
         v8::scope!(let scope, &mut context_scope);
         f(scope)
     }
+
+    /// Builds a [`HostValue`] in a context the caller has already entered, and
+    /// returns the bits that carry one stored reference.
+    ///
+    /// The body of [`ScriptHost::build_value`], which is this wrapped in a
+    /// context entry. It is separate because the promise settlement
+    /// ([`crate::promise`]) already runs inside a scope and may not enter a
+    /// second one.
+    pub(crate) fn build_value_in(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        value: HostValue<'_>,
+    ) -> Option<u64> {
+        match value {
+            HostValue::Undefined => {
+                if let Some(bits) = self.undefined.get() {
+                    return Some(bits);
+                }
+                let undefined = v8::undefined(scope);
+                let bits = self.state.borrow_mut().store_value(scope, undefined.into());
+                self.undefined.set(Some(bits));
+                Some(bits)
+            }
+            HostValue::DomException { name, message } => {
+                let object = dom_exception_value(scope, name, message)?;
+                Some(self.state.borrow_mut().store_value(scope, object))
+            }
+            HostValue::String(text) => {
+                let text = v8::String::new(scope, &text)?;
+                Some(self.state.borrow_mut().store_value(scope, text.into()))
+            }
+            HostValue::TypeError { message } => {
+                let message = v8::String::new(scope, message)?;
+                let object = construct_global(scope, "TypeError", &[message.into()])?;
+                Some(self.state.borrow_mut().store_value(scope, object))
+            }
+        }
+    }
 }
 
 /// Builds `new DOMException(message, name)` from the context's global and
@@ -100,21 +149,35 @@ impl V8ScriptHost {
 /// raise a `DOMException`; an abort reason and a thrown abort reason have to be
 /// the *same* object, so the object is built here once and the caller both
 /// stores and re-throws it rather than building a second one.
-fn dom_exception_value<'s>(
+pub(crate) fn dom_exception_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     name: &str,
     message: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let context = scope.get_current_context();
-    let global = context.global(scope);
-    let key = v8::String::new(scope, "DOMException")?;
-    let constructor = global.get(scope, key.into())?;
-    let constructor = v8::Local::<v8::Function>::try_from(constructor).ok()?;
     let name = v8::String::new(scope, name)?;
     let message = v8::String::new(scope, message)?;
-    let arguments = [message.into(), name.into()];
+    construct_global(scope, "DOMException", &[message.into(), name.into()])
+}
+
+/// Builds `new <name>(arguments…)` from the context's global object and returns
+/// it as a value, or `None` when the global has no such constructor or the call
+/// throws.
+///
+/// This is how every error object the host has to *settle* a promise with is
+/// built — a rejection carries a value, so `JsError::type_error` (which can only
+/// throw) is not an option.
+fn construct_global<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    name: &str,
+    arguments: &[v8::Local<'s, v8::Value>],
+) -> Option<v8::Local<'s, v8::Value>> {
+    let context = scope.get_current_context();
+    let global = context.global(scope);
+    let key = v8::String::new(scope, name)?;
+    let constructor = global.get(scope, key.into())?;
+    let constructor = v8::Local::<v8::Function>::try_from(constructor).ok()?;
     constructor
-        .new_instance(scope, &arguments)
+        .new_instance(scope, arguments)
         .map(|object| object.into())
 }
 
@@ -189,23 +252,15 @@ impl ScriptHost for V8ScriptHost {
     }
 
     fn build_value(&self, value: HostValue<'_>) -> Option<u64> {
-        match value {
-            HostValue::Undefined => {
-                if let Some(bits) = self.undefined.get() {
-                    return Some(bits);
-                }
-                let bits = self.with_context(|scope| {
-                    let undefined = v8::undefined(scope);
-                    self.state.borrow_mut().store_value(scope, undefined.into())
-                });
-                self.undefined.set(Some(bits));
-                Some(bits)
-            }
-            HostValue::DomException { name, message } => self.with_context(|scope| {
-                let object = dom_exception_value(scope, name, message)?;
-                Some(self.state.borrow_mut().store_value(scope, object))
-            }),
-        }
+        self.with_context(|scope| self.build_value_in(scope, value))
+    }
+
+    fn new_promise(&self) -> Option<PromiseRef> {
+        promise::new_promise(self)
+    }
+
+    fn settle_promise(&self, resolver: u64, outcome: PromiseOutcome<'_>) -> bool {
+        promise::settle_promise(self, resolver, outcome)
     }
 
     fn throw_value(&self, bits: u64) {

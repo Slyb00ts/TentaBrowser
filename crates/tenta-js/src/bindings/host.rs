@@ -24,24 +24,26 @@ use tenta_html::{ElementFlags, QualName, QuirksMode};
 use super::SequenceOfSequenceOfUsvStringOrRecordOfUsvStringToUsvStringOrUsvString as ParamsInit;
 use super::{
     AbortControllerConstructor, AbortControllerOps, AbortSignal, AbortSignalOps,
-    AddEventListenerOptionsOrBoolean, AnyValue, CSSStyleDeclaration, CSSStyleDeclarationOps,
-    CharacterDataOps, Comment, CommentOps, CustomEventConstructor, CustomEventInit, CustomEventOps,
-    DOMTokenList, DOMTokenListOps, DocumentFragment, DocumentFragmentOps, DocumentOps, Element,
-    ElementOps, Event, EventConstructor, EventInit, EventListener, EventListenerOptionsOrBoolean,
-    EventOps, EventTarget, EventTargetOps, HTMLAnchorElementOps, HTMLButtonElementOps,
-    HTMLCollection, HTMLCollectionOps, HTMLDivElementOps, HTMLElement, HTMLElementOps,
-    HTMLFormElementOps, HTMLIFrameElementOps, HTMLImageElementOps, HTMLInputElementOps,
-    HTMLLabelElementOps, HTMLOptionElementOps, HTMLParagraphElementOps, HTMLScriptElementOps,
-    HTMLSelectElementOps, HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps,
-    Handle, HeadersConstructor, HeadersInit, HeadersOps, JsError, MouseEventConstructor,
-    MouseEventInit, MouseEventOps, Node, NodeList, NodeListOps, NodeOps, Realm, SVGElementOps,
-    Text, TextDecodeOptions, TextDecoderConstructor, TextDecoderOps, TextDecoderOptions,
-    TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
-    URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
+    AddEventListenerOptionsOrBoolean, AnyValue, BufferSourceOrUsvString, CSSStyleDeclaration,
+    CSSStyleDeclarationOps, CharacterDataOps, Comment, CommentOps, CustomEventConstructor,
+    CustomEventInit, CustomEventOps, DOMTokenList, DOMTokenListOps, DocumentFragment,
+    DocumentFragmentOps, DocumentOps, Element, ElementOps, Event, EventConstructor, EventInit,
+    EventListener, EventListenerOptionsOrBoolean, EventOps, EventTarget, EventTargetOps,
+    HTMLAnchorElementOps, HTMLButtonElementOps, HTMLCollection, HTMLCollectionOps,
+    HTMLDivElementOps, HTMLElement, HTMLElementOps, HTMLFormElementOps, HTMLIFrameElementOps,
+    HTMLImageElementOps, HTMLInputElementOps, HTMLLabelElementOps, HTMLOptionElementOps,
+    HTMLParagraphElementOps, HTMLScriptElementOps, HTMLSelectElementOps, HTMLSpanElementOps,
+    HTMLTemplateElementOps, HTMLTextAreaElementOps, Handle, Headers, HeadersConstructor,
+    HeadersInit, HeadersOps, JsError, MouseEventConstructor, MouseEventInit, MouseEventOps, Node,
+    NodeList, NodeListOps, NodeOps, Promise, Realm, ResponseConstructor, ResponseInit, ResponseOps,
+    ResponseType, SVGElementOps, Text, TextDecodeOptions, TextDecoderConstructor, TextDecoderOps,
+    TextDecoderOptions, TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor,
+    UIEventInit, UIEventOps, URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor,
+    URLSearchParamsOps,
 };
 use crate::dom::events::{
     CallbackRef, DispatchTarget, EventKey, EventKind, EventRecord, EventSlab, GenKey, GenSlab,
-    HostValue, ListenerTable, ScriptHost, TargetKey, dispatch, dispatch_at,
+    HostValue, ListenerTable, PromiseOutcome, ScriptHost, TargetKey, dispatch, dispatch_at,
 };
 use crate::event_loop::SharedClock;
 
@@ -145,7 +147,7 @@ impl Default for SnapshotSlab {
 
 // ---------------------------------------------------------------------------
 // Host records: URL, URLSearchParams, Headers, AbortController, AbortSignal,
-// TextDecoder and TextEncoder
+// Response, TextDecoder and TextEncoder
 // ---------------------------------------------------------------------------
 
 /// A key into a world's [`HostSlab`]; the payload of a [`TAG_HOST`] handle.
@@ -172,6 +174,8 @@ pub enum HostRecord {
     Controller(ControllerRecord),
     /// An `AbortSignal`.
     Signal(SignalRecord),
+    /// A `Response`.
+    Response(ResponseRecord),
     /// A `TextDecoder`.
     TextDecoder(TextDecoderRecord),
     /// A `TextEncoder`, which has no state at all.
@@ -190,6 +194,7 @@ impl HostRecord {
             HostRecord::Headers(_) => "Headers",
             HostRecord::Controller(_) => "AbortController",
             HostRecord::Signal(_) => "AbortSignal",
+            HostRecord::Response(_) => "Response",
             HostRecord::TextDecoder(_) => "TextDecoder",
             HostRecord::TextEncoder => "TextEncoder",
         }
@@ -232,10 +237,13 @@ pub struct ParamsRecord {
 
 /// A `Headers` record.
 ///
-/// Unlike a `URL` and its query object, a `Headers` points at no second record:
-/// the wrapper is its only owner, so the world's finalizer sweep frees it the
-/// way it frees an `Event`, without the two-way bookkeeping
-/// [`reclaim_host_record`] needs for the URL pair.
+/// A `Headers` a page built points at no second record: the wrapper is its only
+/// owner, so the world's finalizer sweep frees it the way it frees an `Event`,
+/// without the two-way bookkeeping [`reclaim_host_record`] needs for the URL
+/// pair. The `Headers` a `Response` creates is the exception, and it is the
+/// `Response` record that owns it — see [`HeadersRecord::response`].
+pub type HeaderList = Vec<(Vec<u8>, Vec<u8>)>;
+
 pub struct HeadersRecord {
     /// The header list, in insertion order.
     ///
@@ -244,9 +252,96 @@ pub struct HeadersRecord {
     /// asks for its view (`sort_and_combine_headers`). A name is stored
     /// byte-lowercased and a value already normalized, so a stored pair is
     /// exactly what the spec's *header list* holds.
-    pub list: Vec<(Vec<u8>, Vec<u8>)>,
+    pub list: HeaderList,
     /// The guard the list is under.
     pub guard: HeadersGuard,
+    /// The `Response` whose header list this is, while that response's record is
+    /// alive.
+    ///
+    /// The `Response` constructor creates this object eagerly, because
+    /// `[SameObject]` makes every read of `response.headers` answer with the same
+    /// object, and the response holds the key to it. That makes the *response*
+    /// the owner of the *headers*, the `ControllerRecord`/`SignalRecord` pair
+    /// read the other way round: the headers record outlives its own wrapper
+    /// while the response that owns it lives, and is freed when the response's
+    /// wrapper is finalized unless its own wrapper is still around.
+    pub response: Option<HostKey>,
+    /// Whether this record still has a live wrapper. See
+    /// [`UrlRecord::has_wrapper`]: a headers record outlives its own wrapper
+    /// while a live response still points at it.
+    pub has_wrapper: bool,
+}
+
+/// A `Response` record.
+///
+/// The record *is* the spec's response plus the parts of the `Body` mixin this
+/// slice implements. The body is a byte sequence rather than a stream
+/// (`docs/spec/18-decisions.md`), so "the body's stream is disturbed" — the
+/// state `bodyUsed` and *unusable* are defined in — is modelled as the
+/// [`ResponseRecord::body_used`] flag: the body is read exactly once, and a
+/// second read is the spec's *unusable* case. `body()` and the stream members
+/// arrive with Streams (`d-5b`), which is when the bytes have to become a
+/// `ReadableStream` rather than stand in for one.
+pub struct ResponseRecord {
+    /// The response's *status*.
+    pub status: u16,
+    /// The response's *status message*, which `statusText` reads back.
+    ///
+    /// Kept as the `ByteString` bytes the IDL declares rather than as a `String`:
+    /// the value is checked against HTTP's *reason-phrase* production byte by
+    /// byte, and obs-text (0x80 to 0xFF) is not UTF-8.
+    pub status_text: Vec<u8>,
+    /// The response's *URL*, or `None` when it has none. The `url` getter
+    /// answers `""` for `None`, and a constructor-built response always has
+    /// `None` — only a fetch sets one (`d-4a-1`).
+    pub url: Option<String>,
+    /// The response's *type*.
+    pub response_type: ResponseType,
+    /// Whether the response was *redirected*.
+    ///
+    /// The standard defines this as "the URL list's size is greater than 1",
+    /// which is one bit of the conclusion: a constructor-built response has no
+    /// URL list, and a fetch appends to it as it follows redirects (`d-4a-1`).
+    pub redirected: bool,
+    /// The response's header list: a `Headers` record this one owns.
+    pub headers: HostKey,
+    /// The response's *body*, or `None` for a null body.
+    pub body: Option<Vec<u8>>,
+    /// Whether the body has been read — the spec's "the body's stream is
+    /// disturbed". A response with no body is never disturbed.
+    pub body_used: bool,
+}
+
+impl ResponseRecord {
+    /// Whether a status is Fetch's *null body status*: one that a response may
+    /// not carry a body with.
+    ///
+    /// `101` and `103` are on the list for their use elsewhere in the protocol,
+    /// not because a page ever sees one (`<https://fetch.spec.whatwg.org/#null-body-status>`).
+    fn is_null_body_status(status: u16) -> bool {
+        matches!(status, 101 | 103 | 204 | 205 | 304)
+    }
+
+    /// Whether a byte sequence matches HTTP's *reason-phrase* production —
+    /// `1*( HTAB / SP / VCHAR / obs-text )`, so every byte is a tab, a space, a
+    /// visible ASCII character or obs-text
+    /// (<https://httpwg.org/specs/rfc9112.html#status.line>).
+    ///
+    /// The empty string is allowed by *initialize a response* before this is
+    /// reached, so it is not allowed here: `new Response(null, {statusText: ""})`
+    /// must not throw, and the caller checks for it.
+    fn is_reason_phrase(status_text: &[u8]) -> bool {
+        !status_text.is_empty()
+            && status_text
+                .iter()
+                .all(|byte| matches!(byte, b'\t' | b' ' | 0x21..=0x7E | 0x80..=0xFF))
+    }
+
+    /// Whether this response is *unusable*: its body is non-null and has already
+    /// been read.
+    fn is_unusable(&self) -> bool {
+        self.body.is_some() && self.body_used
+    }
 }
 
 /// An `AbortController` record.
@@ -307,30 +402,62 @@ impl SignalRecord {
 ///
 /// A guard is a property of the instance, not of the list: the same header
 /// bytes are mutable on a `Headers` a page built and read-only on the
-/// `Headers` of a `Response`. The constructor here is the only way to make one
-/// in this slice, which is why `None` is the only variant — `Request` and
-/// `Response` stamp the other four on the lists they create in `d-4a`.
+/// `Headers` of a `Response`. The constructor here is the only way for script
+/// to make a mutable one, which is why `None` is the variant a page reaches;
+/// `Response` stamps `Response` on the list it creates, and `Request` and the
+/// response's other four guard values arrive with `d-4a`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeadersGuard {
     /// `"none"`: a `Headers` built by script, whose list the page owns and may
     /// therefore rewrite with `append`, `set` and `delete`.
     None,
+    /// `"response"`: the guard of the header list a `Response` was constructed
+    /// with. The mutators are attempted, but Fetch's *validate a header* step
+    /// drops a *forbidden response-header name* — silently, which is what makes
+    /// `new Response(null, {headers: {"Set-Cookie": "a=b"}}).headers.get("Set-Cookie")`
+    /// `null` rather than a `TypeError`
+    /// (`<https://fetch.spec.whatwg.org/#concept-headers-validate>`).
+    Response,
 }
 
 impl HeadersGuard {
-    /// Whether a mutating member may write to a list under this guard.
+    /// Whether a mutating member may be attempted at all under this guard.
     ///
-    /// One predicate covers all three mutators because `"none"` answers the same
-    /// way for all of them. The guards of `d-4a` do not: a mutation a guard
-    /// forbids *throws* under `"immutable"` but returns silently under
-    /// `"request"` or `"request-no-cors"`, so that slice splits this into
-    /// "may the operation be attempted at all?" (a per-member question) and
-    /// "may it change the list?".
+    /// The two guards that answer "yes" differ in what happens next: `"none"`
+    /// allows every name, and `"response"` drops two of them per name
+    /// ([`HeadersGuard::permits_name`]). This is the split the `d-4a` guards
+    /// need too — an `"immutable"` mutation *throws* here rather than returning —
+    /// so the per-name question is separate rather than folded in.
     fn permits_mutation(self) -> bool {
         match self {
-            HeadersGuard::None => true,
+            HeadersGuard::None | HeadersGuard::Response => true,
         }
     }
+
+    /// Whether a mutation may change the entry named `name` under this guard.
+    ///
+    /// `name` must already be normalized, i.e. byte-lowercased: Fetch's
+    /// *forbidden response-header name* is a byte-case-insensitive match
+    /// against two names, and the stored names are lowercase, so the comparison
+    /// is a plain equality.
+    fn permits_name(self, name: &[u8]) -> bool {
+        match self {
+            HeadersGuard::None => true,
+            HeadersGuard::Response => !is_forbidden_response_header_name(name),
+        }
+    }
+}
+
+/// Fetch's *forbidden response-header name*: `Set-Cookie` and `Set-Cookie2`,
+/// and nothing else (`<https://fetch.spec.whatwg.org/#forbidden-response-header-name>`,
+/// the "A forbidden response-header name is a header name that is a
+/// byte-case-insensitive match for one of: `Set-Cookie`, `Set-Cookie2`"
+/// definition).
+///
+/// The names are compared byte-lowercased because every caller has been through
+/// [`normalize_header_name`] first.
+fn is_forbidden_response_header_name(name: &[u8]) -> bool {
+    name == SET_COOKIE || name == b"set-cookie2"
 }
 
 // ---------------------------------------------------------------------------
@@ -862,17 +989,48 @@ impl HostObject {
         default
     }
 
-    /// Mutates the header list of the `Headers` this host stands for, if it is a
-    /// live one whose guard permits the change. A no-op for any other host.
+    /// Mutates the header list of the `Headers` this host stands for, with a
+    /// mutation of the entry named `name`. A no-op for any other host.
+    ///
+    /// Both of a guard's questions are asked here, in the order Fetch asks them.
+    /// [`HeadersGuard::permits_mutation`] decides whether the operation may be
+    /// attempted at all; [`HeadersGuard::permits_name`] decides whether *this*
+    /// name may be changed — which is what silently drops a `Set-Cookie` under
+    /// the `"response"` guard. The name is checked after the syntactic checks
+    /// the caller has already run, because Fetch validates the (name, value)
+    /// pair first and only then applies the guard: a forbidden name paired with
+    /// an invalid value is a `TypeError`, not a silent drop.
     ///
     /// A guard that forbids a mutation makes this silent rather than loud
     /// because Fetch's own steps return without touching the list in that case;
-    /// the `TypeError` an `"immutable"` guard raises is a separate step and
-    /// belongs with the guards that can raise it (`d-4a`).
-    fn with_headers_mut(&self, f: impl FnOnce(&mut HeadersRecord)) {
+    /// the `TypeError` an `"immutable"` guard raises belongs with that guard
+    /// (`d-4a`).
+    fn with_header_mut(&self, name: &[u8], f: impl FnOnce(&mut HeadersRecord)) {
         if let HostObject::Host { ctx, key } = self
             && let Some(HostRecord::Headers(record)) = ctx.host_records.borrow_mut().get_mut(*key)
             && record.guard.permits_mutation()
+            && record.guard.permits_name(name)
+        {
+            f(record);
+        }
+    }
+
+    /// Reads the `Response` this host stands for, or returns `default` when the
+    /// host is not one or its record has been reclaimed.
+    fn with_response<R>(&self, default: R, f: impl FnOnce(&ResponseRecord) -> R) -> R {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::Response(record)) = ctx.host_records.borrow().get(*key)
+        {
+            return f(record);
+        }
+        default
+    }
+
+    /// Mutates the `Response` this host stands for, if it is a live one. A
+    /// no-op for any other host.
+    fn with_response_mut(&self, f: impl FnOnce(&mut ResponseRecord)) {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::Response(record)) = ctx.host_records.borrow_mut().get_mut(*key)
         {
             f(record);
         }
@@ -2106,7 +2264,7 @@ impl DocumentOps for HostObject {
     fn document_uri(&self) -> Result<String, JsError> {
         // The same getter as `URL`
         // (https://dom.spec.whatwg.org/#dom-document-documenturi).
-        self.url()
+        DocumentOps::url(self)
     }
 
     fn character_set(&self) -> Result<String, JsError> {
@@ -3536,15 +3694,21 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
         HostRecord::Url(_) | HostRecord::Headers(_) => return None,
         // Neither abort record holds a pair list, so neither owns pairs.
         HostRecord::Controller(_) | HostRecord::Signal(_) => return None,
+        // A response holds no pair list of its own; its headers do.
+        HostRecord::Response(_) => return None,
         // Neither encoding record holds one either.
         HostRecord::TextDecoder(_) | HostRecord::TextEncoder => return None,
     };
     match params.url {
         Some(owner) => match slab.get(owner)? {
             HostRecord::Url(record) => Some(parse_pairs(record.url.query().unwrap_or(""))),
-            HostRecord::Params(_) | HostRecord::Headers(_) => None,
-            HostRecord::Controller(_) | HostRecord::Signal(_) => None,
-            HostRecord::TextDecoder(_) | HostRecord::TextEncoder => None,
+            HostRecord::Params(_)
+            | HostRecord::Headers(_)
+            | HostRecord::Controller(_)
+            | HostRecord::Signal(_)
+            | HostRecord::Response(_)
+            | HostRecord::TextDecoder(_)
+            | HostRecord::TextEncoder => None,
         },
         None => Some(params.list.clone()),
     }
@@ -3623,13 +3787,16 @@ enum HostLink {
     Url(Option<HostKey>),
     /// The record is a query object holding the key of its URL, if any.
     Params(Option<HostKey>),
-    /// The record is a `Headers`, which links to nothing.
-    Headers,
+    /// The record is a `Headers` holding the key of the `Response` that owns it,
+    /// if one does.
+    Headers(Option<HostKey>),
     /// The record is an `AbortController` holding its signal's key, always.
     Controller(HostKey),
     /// The record is an `AbortSignal` holding its controller's key, while that
     /// controller's record lives.
     Signal(Option<HostKey>),
+    /// The record is a `Response` holding its headers' key, always.
+    Response(HostKey),
     /// The record is a `TextDecoder`, which links to nothing.
     TextDecoder,
     /// The record is a `TextEncoder`, which links to nothing.
@@ -3677,15 +3844,17 @@ fn free_record(slab: &mut HostSlab, key: HostKey, out: &mut ReclaimedHost) {
 /// the record that wrapper alone was keeping alive, and reports what the caller
 /// still has to give back.
 ///
-/// A `Headers` owns nothing else, so it is freed outright, and the two
-/// encoding records are the same: a `TextDecoder` owns only its own decoder
+/// A `Headers` a page built owns nothing else, so it is freed outright, and the
+/// two encoding records are the same: a `TextDecoder` owns only its own decoder
 /// state and a `TextEncoder` owns nothing at all. Two pairs point at
 /// each other. A URL and its query object: the object writes every mutation
 /// through to its URL, and the URL caches the object's key so that
 /// `url.searchParams` can return the same object twice. An `AbortController` and
 /// its signal: `[SameObject]` makes every read of `controller.signal` answer
 /// with the object the constructor made, so the signal record has to outlive its
-/// own wrapper for as long as the controller's record does.
+/// own wrapper for as long as the controller's record does. A `Response` and the
+/// `Headers` it created are the same shape read the other way round: the response
+/// *owns* the headers, which every read of `response.headers` answers with.
 ///
 /// Either wrapper of a pair may be collected first, so this clears the link that
 /// pointed at the dying record and frees a record only once nothing else refers
@@ -3699,7 +3868,11 @@ fn free_record(slab: &mut HostSlab, key: HostKey, out: &mut ReclaimedHost) {
 ///    points at it, and is freed at once otherwise;
 ///  - the controller's wrapper dies: the controller's record goes (nothing else
 ///    can reach it), and the signal goes with it unless the signal's own wrapper
-///    is still alive.
+///    is still alive;
+///  - the headers' wrapper dies: the headers stay while the response that owns
+///    them lives, and are freed at once for a headers a page built;
+///  - the response's wrapper dies: the response's record goes, and its headers
+///    go with them unless the headers' own wrapper is still alive.
 ///
 /// Freeing a record that is still pointed at would be observable — the object
 /// would write into a recycled slot, or a second `abort()` would reach a signal
@@ -3712,22 +3885,50 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
     let link = match slab.get(key) {
         Some(HostRecord::Url(record)) => HostLink::Url(record.params),
         Some(HostRecord::Params(record)) => HostLink::Params(record.url),
-        Some(HostRecord::Headers(_)) => HostLink::Headers,
+        Some(HostRecord::Headers(record)) => HostLink::Headers(record.response),
         Some(HostRecord::Controller(record)) => HostLink::Controller(record.signal),
         Some(HostRecord::Signal(record)) => HostLink::Signal(record.controller),
+        Some(HostRecord::Response(record)) => HostLink::Response(record.headers),
         Some(HostRecord::TextDecoder(_)) => HostLink::TextDecoder,
         Some(HostRecord::TextEncoder) => HostLink::TextEncoder,
         None => return freed,
     };
     match link {
-        // A `Headers` has no counterpart to keep alive or to clear a key on, so
-        // the wrapper's death is the record's death — freed here and nowhere
-        // else, exactly once, because the world calls this once per finalized
-        // wrapper and `GenSlab::remove` bumps the generation so a second call
-        // for the same key finds nothing. The two encoding records are the same
-        // shape: neither holds a key and neither owns a stored value.
-        HostLink::Headers | HostLink::TextDecoder | HostLink::TextEncoder => {
+        // The two encoding records hold no key and own no stored value, so a
+        // wrapper's death is the record's death — freed here and nowhere else,
+        // exactly once, because the world calls this once per finalized wrapper
+        // and `GenSlab::remove` bumps the generation so a second call for the
+        // same key finds nothing.
+        HostLink::TextDecoder | HostLink::TextEncoder => {
             free_record(slab, key, &mut freed);
+        }
+        // The headers record a response owns outlives its own wrapper, because
+        // `[SameObject]` requires the next read of `response.headers` to answer
+        // with the same object: the record goes only when the response that owns
+        // it is gone too. A standalone `Headers` has no owner and is freed here.
+        HostLink::Headers(response) => {
+            if let Some(HostRecord::Headers(record)) = slab.get_mut(key) {
+                record.has_wrapper = false;
+            }
+            let still_owned = response.is_some_and(|response| slab.get(response).is_some());
+            if !still_owned {
+                free_record(slab, key, &mut freed);
+            }
+        }
+        // The response's record has no second referent — nothing script can
+        // reach leads to it but its own wrapper — so its wrapper's death is its
+        // record's death. The headers it created become free with it, unless
+        // their own wrapper is still alive, in which case script may still hold
+        // that object and `headers.get` has to keep working.
+        HostLink::Response(headers) => {
+            free_record(slab, key, &mut freed);
+            if let Some(HostRecord::Headers(record)) = slab.get_mut(headers) {
+                record.response = None;
+            }
+            if matches!(slab.get(headers), Some(HostRecord::Headers(record)) if !record.has_wrapper)
+            {
+                free_record(slab, headers, &mut freed);
+            }
         }
         HostLink::Url(params) => {
             if let Some(HostRecord::Url(record)) = slab.get_mut(key) {
@@ -4239,8 +4440,9 @@ fn checked_header(context: &str, name: &[u8], value: &[u8]) -> Result<(Vec<u8>, 
     Ok((name, value))
 }
 
-/// The name `getSetCookie` reads and the one name the iteration view does not
-/// combine.
+/// The name `getSetCookie` reads, the one name the iteration view does not
+/// combine, and one of the two *forbidden response-header names*
+/// ([`is_forbidden_response_header_name`]).
 const SET_COOKIE: &[u8] = b"set-cookie";
 
 /// Fetch's *get a header name*: the values of every header of `list` whose name
@@ -4281,7 +4483,7 @@ fn combined_header_value(list: &[(Vec<u8>, Vec<u8>)], name: &[u8]) -> Option<Vec
 /// values becomes its own pair, because a value formed by joining two
 /// `Set-Cookie` fields is a cookie header no client could parse back. Fetch's
 /// `getSetCookie` and this carve-out are two halves of the same decision.
-fn sort_and_combine_headers(list: &[(Vec<u8>, Vec<u8>)]) -> Vec<(Vec<u8>, Vec<u8>)> {
+fn sort_and_combine_headers(list: &[(Vec<u8>, Vec<u8>)]) -> HeaderList {
     let mut names: Vec<&[u8]> = list.iter().map(|(name, _)| name.as_slice()).collect();
     names.sort_unstable();
     names.dedup();
@@ -4309,7 +4511,16 @@ impl HeadersOps for HostObject {
     fn append(&self, name: &[u8], value: &[u8]) -> Result<(), JsError> {
         let context = "Failed to execute 'append' on 'Headers'";
         let (name, value) = checked_header(context, name, value)?;
-        self.with_headers_mut(|record| record.list.push((name, value)));
+        // The pair is moved into the list rather than handed to a closure, which
+        // is why the guard checks are spelled out here: a `FnOnce` capturing an
+        // owned name could not also be borrowing it as the lookup key.
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::Headers(record)) = ctx.host_records.borrow_mut().get_mut(*key)
+            && record.guard.permits_mutation()
+            && record.guard.permits_name(&name)
+        {
+            record.list.push((name, value));
+        }
         Ok(())
     }
 
@@ -4319,7 +4530,7 @@ impl HeadersOps for HostObject {
         // must, or `headers.delete({})` would be the one member that silently
         // accepted a value WebIDL's `ByteString` conversion let through.
         let name = normalize_header_name(context, name)?;
-        self.with_headers_mut(|record| {
+        self.with_header_mut(&name, |record| {
             record.list.retain(|(pair_name, _)| pair_name != &name);
         });
         Ok(())
@@ -4357,7 +4568,7 @@ impl HeadersOps for HostObject {
     fn set(&self, name: &[u8], value: &[u8]) -> Result<(), JsError> {
         let context = "Failed to execute 'set' on 'Headers'";
         let (name, value) = checked_header(context, name, value)?;
-        self.with_headers_mut(|record| {
+        self.with_header_mut(&name, |record| {
             // The first pair with the name takes the new value where it stands;
             // the rest are removed, and a name that matched nothing is appended.
             // Insertion order therefore survives a `set`, which is what the
@@ -4382,7 +4593,7 @@ impl HeadersOps for HostObject {
         Ok(())
     }
 
-    fn iterable_entries(&self) -> Result<Vec<(Vec<u8>, Vec<u8>)>, JsError> {
+    fn iterable_entries(&self) -> Result<HeaderList, JsError> {
         // Every pair view the standard defines is produced here: the generated
         // glue builds `keys`, `values`, `entries`, the spread operator and
         // `@@iterator` from this one hook, and `@@iterator` is the very same
@@ -4392,38 +4603,68 @@ impl HeadersOps for HostObject {
     }
 }
 
-impl HeadersConstructor for HostObject {
-    fn construct(realm: &Realm, init: Option<HeadersInit>) -> Result<Self, JsError> {
-        let context = "Failed to construct 'Headers'";
-        // The list is built locally and installed only once every pair has
-        // passed, which is Fetch's own order — the constructor's last step sets
-        // the instance's header list — and what makes a throw here leave nothing
-        // half-built behind.
-        let mut list = Vec::new();
-        match init {
-            None => {}
-            Some(HeadersInit::SequenceOfSequenceOfByteString(pairs)) => {
-                for pair in pairs {
-                    // Fetch throws when an inner sequence does not hold exactly
-                    // two items. The generated union converter collects any
-                    // length, so the check belongs here.
-                    let [name, value] = pair.as_slice() else {
-                        return Err(JsError::type_error(
-                            "Failed to construct 'Headers': each item must be a pair",
-                        ));
-                    };
-                    list.push(checked_header(context, name, value)?);
-                }
-            }
-            // The record arm arrives with its keys already read through the
-            // declared `ByteString` key type, which is what turns a key above
-            // `0xFF` into a `TypeError` before this code is reached.
-            Some(HeadersInit::RecordOfByteStringToByteString(pairs)) => {
-                for (name, value) in pairs {
-                    list.push(checked_header(context, &name, &value)?);
+/// Fetch's *fill a Headers object*: the list `init` builds, under `guard`.
+///
+/// Both callers of the standard's fill use this one helper. `Headers`'s
+/// constructor fills a list under guard `"none"`, and the `Response`
+/// constructor's *initialize a response* step 5 is literally "fill response's
+/// headers with `init["headers"]`", under guard `"response"`. The standard's
+/// fill appends *to the Headers object* — the guarded append, not a bare list
+/// append — so the guard's per-name rule applies on both paths, and a second
+/// copy of the loop is exactly where the two would drift.
+///
+/// The list is built locally and returned only once every pair has passed,
+/// which is what makes a throw leave nothing half-built behind: the caller
+/// installs it in a record afterwards.
+///
+/// `context` names the caller in the error message, because the same failure
+/// (`each item must be a pair`) is reported against whichever interface script
+/// called.
+fn fill_header_list(
+    context: &str,
+    init: HeadersInit,
+    guard: HeadersGuard,
+) -> Result<HeaderList, JsError> {
+    let mut list = Vec::new();
+    match init {
+        HeadersInit::SequenceOfSequenceOfByteString(pairs) => {
+            for pair in pairs {
+                // Fetch throws when an inner sequence does not hold exactly
+                // two items. The generated union converter collects any
+                // length, so the check belongs here.
+                let [name, value] = pair.as_slice() else {
+                    return Err(JsError::type_error(format!(
+                        "{context}: each item must be a pair"
+                    )));
+                };
+                let (name, value) = checked_header(context, name, value)?;
+                if guard.permits_name(&name) {
+                    list.push((name, value));
                 }
             }
         }
+        // The record arm arrives with its keys already read through the
+        // declared `ByteString` key type, which is what turns a key above
+        // `0xFF` into a `TypeError` before this code is reached.
+        HeadersInit::RecordOfByteStringToByteString(pairs) => {
+            for (name, value) in pairs {
+                let (name, value) = checked_header(context, &name, &value)?;
+                if guard.permits_name(&name) {
+                    list.push((name, value));
+                }
+            }
+        }
+    }
+    Ok(list)
+}
+
+impl HeadersConstructor for HostObject {
+    fn construct(realm: &Realm, init: Option<HeadersInit>) -> Result<Self, JsError> {
+        let context = "Failed to construct 'Headers'";
+        let list = match init {
+            Some(init) => fill_header_list(context, init, HeadersGuard::None)?,
+            None => Vec::new(),
+        };
         let ctx = realm_context(realm)?;
         let key = ctx
             .host_records
@@ -4431,6 +4672,8 @@ impl HeadersConstructor for HostObject {
             .insert(HostRecord::Headers(HeadersRecord {
                 list,
                 guard: HeadersGuard::None,
+                response: None,
+                has_wrapper: false,
             }));
         Ok(HostObject::host_record(ctx, key))
     }
@@ -4630,6 +4873,301 @@ impl AbortSignalOps for HostObject {
             script.throw_value(bits);
         }
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Response
+// ---------------------------------------------------------------------------
+
+/// The header name *initialize a response* looks for before appending the type
+/// of a body taken from a `USVString`.
+const CONTENT_TYPE: &[u8] = b"content-type";
+
+/// The `TypeError` message a `Body` reader rejects with when its object is
+/// *unusable*. The standard states the exception and no message, so this text is
+/// the engine's own.
+const BODY_UNUSABLE: &str = "The body has already been read";
+
+/// The type *extract a body with type* gives a `USVString`
+/// (`<https://fetch.spec.whatwg.org/#concept-bodyinit-extract>`): the UTF-8
+/// encoding of the string, with this type. A buffer source contributes its bytes
+/// and no type at all, which is why only the string arm reaches
+/// [`CONTENT_TYPE`].
+const TEXT_PLAIN_UTF8: &str = "text/plain;charset=UTF-8";
+
+/// The Encoding Standard's *UTF-8 decode* as this engine models it: the bytes
+/// read as UTF-8 with U+FFFD for every malformed sequence, and a leading U+FEFF
+/// dropped.
+///
+/// Both halves are the standard's. "UTF-8 decode" is a lossy decode — that is
+/// what makes it a *decode* rather than a parse — and it begins by reading a BOM
+/// if there is one. The BOM rule is the same one [`TextDecoderRecord::serialize`]
+/// applies by default ("*ignore BOM* and *BOM seen* are both false, so the first
+/// scalar of the output is dropped when it is U+FEFF"), restated only because
+/// that rule lives on the decoder record and a `Body` reader has none.
+///
+/// The two `Body` readers both need it: `text()` resolves with its result, and
+/// `json()` parses it, because the standard's "parse JSON from bytes" is a UTF-8
+/// decode followed by a parse.
+pub fn utf8_decode(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    match text.strip_prefix('\u{FEFF}') {
+        Some(text) => text.to_owned(),
+        None => text.into_owned(),
+    }
+}
+
+impl ResponseConstructor for HostObject {
+    fn construct(
+        realm: &Realm,
+        body: Option<Option<BufferSourceOrUsvString>>,
+        init: Option<ResponseInit>,
+    ) -> Result<Self, JsError> {
+        let context = "Failed to construct 'Response'";
+        let ResponseInit {
+            status,
+            status_text,
+            headers,
+        } = init.unwrap_or_default();
+
+        // The constructor's steps 1 and 2 make the response and its headers
+        // object before `initialize a response` can throw, but neither is
+        // observable once the construction has failed: the object under
+        // construction is discarded, and its headers object was reachable only
+        // through it. Every check therefore runs before the first record is
+        // inserted, so a rejected construction leaves the slab exactly as it
+        // found it instead of leaking an ownerless record.
+        //
+        // Step 1 of *initialize a response*.
+        if !(200..=599).contains(&status) {
+            return Err(JsError::range_error(format!(
+                "{context}: the status provided ({status}) is outside the range [200, 599]"
+            )));
+        }
+        // Step 2. The empty string is allowed; anything else has to be a
+        // *reason-phrase*.
+        if !status_text.is_empty() && !ResponseRecord::is_reason_phrase(&status_text) {
+            return Err(JsError::type_error(format!(
+                "{context}: the status text is not a reason phrase"
+            )));
+        }
+
+        // Step 4 of the constructor: *extract a body with type*. The outer
+        // `None` is a missing argument and the inner one the IDL's nullable
+        // `body`; both are the null body step 3 of the constructor keeps.
+        let body = match body {
+            Some(Some(BufferSourceOrUsvString::BufferSource(bytes))) => Some((bytes, None)),
+            Some(Some(BufferSourceOrUsvString::UsvString(text))) => {
+                Some((text.into_bytes(), Some(TEXT_PLAIN_UTF8)))
+            }
+            Some(None) | None => None,
+        };
+
+        // Step 5: "fill response's headers with init["headers"]", which is the
+        // same fill `Headers`'s constructor runs — guard rule included, so a
+        // `Set-Cookie` here is dropped exactly as `headers.append` drops one.
+        let mut list = match headers {
+            Some(headers) => fill_header_list(context, headers, HeadersGuard::Response)?,
+            None => Vec::new(),
+        };
+
+        // Step 6.
+        let mut body_bytes = None;
+        if let Some((bytes, body_type)) = body {
+            if ResponseRecord::is_null_body_status(status) {
+                return Err(JsError::type_error(format!(
+                    "{context}: a response with a null body status cannot have a body"
+                )));
+            }
+            if let Some(body_type) = body_type
+                && !list.iter().any(|(name, _)| name.as_slice() == CONTENT_TYPE)
+            {
+                // A list append, not a guarded one: the standard appends this
+                // pair to the *header list* directly.
+                list.push((CONTENT_TYPE.to_vec(), body_type.as_bytes().to_vec()));
+            }
+            body_bytes = Some(bytes);
+        }
+
+        // Steps 1 and 2 of the constructor, once nothing can throw: the headers
+        // object is created first, because the response holds its key.
+        let ctx = realm_context(realm)?;
+        let mut records = ctx.host_records.borrow_mut();
+        let headers = records.insert(HostRecord::Headers(HeadersRecord {
+            list,
+            guard: HeadersGuard::Response,
+            response: None,
+            has_wrapper: false,
+        }));
+        let key = records.insert(HostRecord::Response(ResponseRecord {
+            status,
+            status_text,
+            // A constructor-built response has no URL and no URL list, so `url`
+            // is the empty string and `redirected` is false. `type` is
+            // `"default"`; the other five values name responses only a fetch
+            // produces.
+            url: None,
+            response_type: ResponseType::Default,
+            redirected: false,
+            headers,
+            body: body_bytes,
+            body_used: false,
+        }));
+        // The link runs both ways: the response finds its headers to read, and
+        // reclamation finds the response that keeps a headers record alive.
+        if let Some(HostRecord::Headers(record)) = records.get_mut(headers) {
+            record.response = Some(key);
+        }
+        drop(records);
+        Ok(HostObject::host_record(ctx, key))
+    }
+}
+
+impl HostObject {
+    /// The script host of this world, which is what can make a promise.
+    ///
+    /// A promise needs an isolate, and a host record has none; the callback
+    /// boundary is the only route, exactly as it is for a listener's invocation
+    /// or a value the host has to settle a promise with.
+    fn script_host(&self) -> Result<Rc<dyn ScriptHost>, JsError> {
+        self.context()
+            .script
+            .borrow()
+            .as_ref()
+            .map(Rc::clone)
+            .ok_or_else(|| JsError::type_error("consume body: this world has no script host"))
+    }
+
+    /// Fetch's *consume body* for a `Body` member, up to but not including
+    /// `convertBytesToJSValue`: the body bytes the member should convert, or the
+    /// message its promise must be rejected with.
+    ///
+    /// An `Err` is step 1 of *consume body*: the object is *unusable* — its body
+    /// is non-null and already read — and the promise is rejected before any
+    /// conversion runs. Marking the body read and reading it happen under one
+    /// borrow, so the second call of a member cannot observe a state the first
+    /// did not leave: the disturbance *is* synchronously observable through
+    /// `bodyUsed` as soon as a read returns, which is what
+    /// `Promise.resolve().then(() => r.text())` relies on.
+    ///
+    /// Steps 5 and 6 are the same statement here. The standard's "fully read
+    /// object's body" is asynchronous only because a stream is; the body is
+    /// bytes, so a non-null body is already read and a null one is the empty
+    /// byte sequence successSteps is run with.
+    fn take_body(&self) -> Result<Vec<u8>, &'static str> {
+        let mut body = None;
+        let mut unusable = false;
+        self.with_response_mut(|record| {
+            if record.is_unusable() {
+                unusable = true;
+                return;
+            }
+            if record.body.is_some() {
+                record.body_used = true;
+            }
+            body = record.body.clone();
+        });
+        if unusable {
+            return Err(BODY_UNUSABLE);
+        }
+        Ok(body.unwrap_or_default())
+    }
+
+    /// Creates the promise a `Body` member returns and settles it with the
+    /// member's own conversion, which is *consume body*'s step 4.
+    ///
+    /// Every `Body` member is the same algorithm with a different
+    /// `convertBytesToJSValue`, and this is that difference: the conversion is
+    /// handed the bytes — the body, `take_body`'s empty sequence for a null body,
+    /// or nothing at all when the object is unusable. `None` is step 1, the
+    /// `TypeError` rejection.
+    fn consume_body<T>(
+        &self,
+        convert: impl FnOnce(&[u8]) -> Result<PromiseOutcome<'_>, ()>,
+    ) -> Result<Promise<T>, JsError> {
+        let script = self.script_host()?;
+        let promise = script
+            .new_promise()
+            .ok_or_else(|| JsError::type_error("consume body: the promise could not be created"))?;
+        // The body is bound before the match so the outcome may borrow it: a
+        // conversion that borrows the bytes — `json()`'s does — has to name a
+        // local that outlives the outcome, and a match scrutinee temporary does
+        // not.
+        let body = self.take_body();
+        let outcome = match &body {
+            Ok(bytes) => convert(bytes).unwrap_or(PromiseOutcome::Reject(HostValue::TypeError {
+                message: BODY_UNUSABLE,
+            })),
+            Err(message) => PromiseOutcome::Reject(HostValue::TypeError { message }),
+        };
+        script.settle_promise(promise.resolver, outcome);
+        Ok(Promise::from_bits(promise.promise))
+    }
+}
+
+impl ResponseOps for HostObject {
+    fn r#type(&self) -> Result<ResponseType, JsError> {
+        Ok(self.with_response(ResponseType::Default, |record| record.response_type))
+    }
+
+    fn url(&self) -> Result<String, JsError> {
+        // "the empty string if this's response's URL is null": a
+        // constructor-built response has none.
+        Ok(self.with_response(String::new(), |record| {
+            record.url.clone().unwrap_or_default()
+        }))
+    }
+
+    fn redirected(&self) -> bool {
+        self.with_response(false, |record| record.redirected)
+    }
+
+    fn status(&self) -> u16 {
+        // The brand check makes the default unreachable: only a `Response`
+        // wrapper can reach this getter, and its record lives exactly as long as
+        // that wrapper does.
+        self.with_response(200, |record| record.status)
+    }
+
+    fn ok(&self) -> bool {
+        // Fetch's *ok status* is 200 to 299 inclusive, which is HTTP's own
+        // definition of a successful status.
+        self.with_response(false, |record| (200..=299).contains(&record.status))
+    }
+
+    fn status_text(&self) -> Result<Vec<u8>, JsError> {
+        Ok(self.with_response(Vec::new(), |record| record.status_text.clone()))
+    }
+
+    fn headers(&self) -> Result<Handle<Headers>, JsError> {
+        // `[SameObject]`: the key was stored by the constructor, so every read
+        // answers with the record the first read did — and the wrapper world
+        // revives the same wrapper for it while that wrapper lives.
+        self.with_response(None, |record| Some(record.headers))
+            .map(|headers| Handle::from_bits(encode_host(headers)))
+            .ok_or_else(|| JsError::type_error("headers: the receiver is not a Response"))
+    }
+
+    fn body_used(&self) -> bool {
+        self.with_response(false, |record| record.body.is_some() && record.body_used)
+    }
+
+    fn json(&self) -> Result<Promise<AnyValue>, JsError> {
+        // "consume body with this and parse JSON from bytes". The parse is the
+        // *settlement's* work rather than the host's: it needs the isolate, and
+        // its result is an arbitrary object graph, so it is the one conversion
+        // that cannot be expressed as a `HostValue`.
+        self.consume_body(|bytes| Ok(PromiseOutcome::ParseJson(bytes)))
+    }
+
+    fn text(&self) -> Result<Promise<String>, JsError> {
+        // "consume body with this and UTF-8 decode".
+        self.consume_body(|bytes| {
+            Ok(PromiseOutcome::Resolve(HostValue::String(utf8_decode(
+                bytes,
+            ))))
+        })
     }
 }
 

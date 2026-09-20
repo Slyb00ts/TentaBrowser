@@ -42,6 +42,39 @@ mod tests;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct CallbackRef(pub u64);
 
+/// An opaque reference to a pending JS promise, in the same bits-only style as
+/// [`CallbackRef`]: the promise the host hands back to script, and the resolver
+/// that settles it. Both `u64`s are stored references of the wrapper world, one
+/// owned reference each, and [`ScriptHost::settle_promise`] gives both back.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct PromiseRef {
+    /// The bits of the promise object, which is what the glue turns back into
+    /// the value the member returns.
+    pub promise: u64,
+    /// The bits of the resolver, which is what settles the promise.
+    pub resolver: u64,
+}
+
+/// How a promise settles: the Fetch Standard's *consume body* resolves its
+/// promise with a converted value and rejects it with an error, and `json()`
+/// converts a byte sequence rather than a value.
+///
+/// The two are distinct steps in the standard and stay distinct here because
+/// the host can do neither: it holds no isolate, so it cannot build a
+/// JavaScript value, and it cannot run `JSON.parse`, whose result is an
+/// arbitrary object graph.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PromiseOutcome<'a> {
+    /// Resolve the promise with this value.
+    Resolve(HostValue<'a>),
+    /// Reject the promise with this value.
+    Reject(HostValue<'a>),
+    /// Resolve with the JavaScript value `JSON.parse` of these bytes, or reject
+    /// with a `SyntaxError` if they do not parse — the standard's "parse JSON
+    /// from bytes", one step.
+    ParseJson(&'a [u8]),
+}
+
 /// The engine's callback boundary. The event dispatcher calls into script only
 /// through this trait, so the dispatch algorithm stays engine-independent and
 /// unit-testable with a recording mock.
@@ -94,11 +127,47 @@ pub trait ScriptHost {
     /// holds an identity for, which `assert_throws_exactly` compares by
     /// identity.
     fn throw_value(&self, bits: u64);
+
+    /// Creates a pending JavaScript promise, for a member that has to return one
+    /// before its work is done — `Body.text()` and `Body.json()` are the first
+    /// two.
+    ///
+    /// # Ownership
+    ///
+    /// Both `u64`s of the returned [`PromiseRef`] carry one stored reference,
+    /// exactly as `WrapperWorld::store_value` returns them. They are given back
+    /// by the settlement, not by the caller: [`Self::settle_promise`] releases
+    /// the resolver's reference, and the promise's too, because by the time a
+    /// settlement runs the glue has already handed the promise object to script
+    /// and the world's own hold on it is over. A promise that is created and
+    /// never settled therefore leaks both slots — every producer in this slice
+    /// settles the promise it makes, and the one place that could not
+    /// (`fetch()`, `d-4a-1`) has no caller yet.
+    ///
+    /// `None` when this world cannot build one.
+    fn new_promise(&self) -> Option<PromiseRef>;
+
+    /// Settles the promise whose resolver holds the bits `resolver`, reporting
+    /// whether a settlement was queued.
+    ///
+    /// The settlement is queued as a microtask rather than run in place, which
+    /// is what keeps the standard's ordering: a settlement requested from inside
+    /// a microtask — `Promise.resolve().then(() => r.text().then(f))` — has to
+    /// call `f` in the same checkpoint pass, and a settlement applied before the
+    /// pass would push it a whole checkpoint later.
+    ///
+    /// Returns `false` when no settlement was queued: a resolver whose promise
+    /// has already been settled, or one this world does not know. A caller
+    /// inside script always has a scope to build the value in; the no-scope path
+    /// (a network completion arriving on a `spawn_local` task, `d-4a-1`) is not
+    /// built yet and will need a drain in the engine's checkpoint plus a
+    /// settlement table to read.
+    fn settle_promise(&self, resolver: u64, outcome: PromiseOutcome<'_>) -> bool;
 }
 
 /// A JavaScript value the host needs the engine to build, because the host
 /// holds no isolate of its own (`docs/spec/05-javascript.md` §3).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostValue<'a> {
     /// The JavaScript `undefined`, interned once per world so every read of an
     /// unset `any` is the same value.
@@ -109,6 +178,24 @@ pub enum HostValue<'a> {
         /// The `DOMException.name` of the new object, e.g. `"AbortError"`.
         name: &'a str,
         /// The `DOMException.message` of the new object.
+        message: &'a str,
+    },
+    /// A JavaScript string. This is how a body read resolves: `text()` settles
+    /// its promise with the decoded bytes.
+    ///
+    /// The text is owned rather than borrowed because it is *converted* data:
+    /// decoding a body produces a fresh `String`, and a promise outcome that
+    /// borrowed it would have to name a temporary that lives no longer than the
+    /// conversion step that made it.
+    String(String),
+    /// A fresh `TypeError` built as `new TypeError(message)` from the context's
+    /// global object.
+    ///
+    /// Fetch rejects with a `TypeError` in several places — a body read twice,
+    /// a body on a null-body status — and `JsError::type_error` can only
+    /// *throw*, which would break the promise contract those steps have.
+    TypeError {
+        /// The `TypeError.message` of the new object.
         message: &'a str,
     },
 }

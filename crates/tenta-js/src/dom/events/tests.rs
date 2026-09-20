@@ -62,6 +62,12 @@ const MOCK_UNDEFINED: u64 = AnyValue::NULL.0 - 1;
 /// value `throwIfAborted` throws are the same by identity.
 const MOCK_DOM_EXCEPTION: u64 = AnyValue::NULL.0 - 2;
 
+/// The bits the mock hands back for a JavaScript string.
+const MOCK_STRING: u64 = AnyValue::NULL.0 - 3;
+
+/// The bits the mock hands back for a `TypeError`.
+const MOCK_TYPE_ERROR: u64 = AnyValue::NULL.0 - 4;
+
 impl MockHost {
     fn new() -> Rc<Self> {
         Rc::new(Self {
@@ -159,6 +165,8 @@ impl ScriptHost for MockHost {
             HostValue::DomException { name, message } => {
                 (MOCK_DOM_EXCEPTION, format!("{name}: {message}"))
             }
+            HostValue::String(text) => (MOCK_STRING, format!("string:{text}")),
+            HostValue::TypeError { message } => (MOCK_TYPE_ERROR, format!("TypeError: {message}")),
         };
         self.built.borrow_mut().push((bits, description));
         Some(bits)
@@ -166,6 +174,19 @@ impl ScriptHost for MockHost {
 
     fn throw_value(&self, bits: u64) {
         self.thrown.borrow_mut().push(bits);
+    }
+
+    /// The dispatcher never asks for a promise — its only members are listener
+    /// invocation, and a listener's `return` value is discarded — so this mock
+    /// models a world that cannot build one, which is the contract's `None`.
+    fn new_promise(&self) -> Option<PromiseRef> {
+        None
+    }
+
+    /// Unreachable for the same reason: nothing in this fixture can hold a
+    /// [`PromiseRef`] to settle.
+    fn settle_promise(&self, _resolver: u64, _outcome: PromiseOutcome<'_>) -> bool {
+        false
     }
 }
 
@@ -852,6 +873,8 @@ fn host_key(ctx: &HostContext) -> HostKey {
             crate::bindings::host::HeadersRecord {
                 list: Vec::new(),
                 guard: crate::bindings::host::HeadersGuard::None,
+                response: None,
+                has_wrapper: false,
             },
         ))
 }
