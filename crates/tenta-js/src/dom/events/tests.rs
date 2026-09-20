@@ -306,6 +306,48 @@ fn add(ctx: &HostContext, target: NodeRef, type_: &str, cb: u64, capture: bool) 
         .expect("listener added")
 }
 
+/// The kind is what picks the wrapper prototype, so every kind reports its own
+/// interface name and no two share one.
+#[test]
+fn each_event_kind_reports_its_interface_name() {
+    let mouse = EventKind::Mouse {
+        detail: 0,
+        screen_x: 0,
+        screen_y: 0,
+        client_x: 0,
+        client_y: 0,
+        ctrl: false,
+        shift: false,
+        alt: false,
+        meta: false,
+        button: 0,
+        buttons: 0,
+        related_target: None,
+    };
+    let cases = [
+        (EventKind::Plain, "Event"),
+        (EventKind::Custom { detail: None }, "CustomEvent"),
+        (EventKind::Ui { detail: 0 }, "UIEvent"),
+        (mouse, "MouseEvent"),
+        (
+            EventKind::Progress {
+                length_computable: false,
+                loaded: 0.0,
+                total: 0.0,
+            },
+            "ProgressEvent",
+        ),
+    ];
+    for (kind, name) in &cases {
+        assert_eq!(kind.interface_name(), *name);
+    }
+    let mut names: Vec<&str> = cases.iter().map(|(_, name)| *name).collect();
+    names.sort_unstable();
+    let count = names.len();
+    names.dedup();
+    assert_eq!(names.len(), count, "two kinds would pick one prototype");
+}
+
 #[test]
 fn capture_then_bubble_order_and_phases() {
     let f = fixture();

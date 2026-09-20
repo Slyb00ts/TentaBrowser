@@ -612,6 +612,13 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the MouseEvent interface");
+            // ProgressEvent's prototype chain also roots at Event.
+            tenta_js::bindings::install_progress_event::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the ProgressEvent interface");
             // `URL` and `URLSearchParams` carry no parent chain of their own;
             // their order among themselves does not matter, but
             // `URLSearchParams` must precede no one either — `URL.searchParams`

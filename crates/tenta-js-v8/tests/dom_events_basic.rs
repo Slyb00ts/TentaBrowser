@@ -267,19 +267,24 @@ fn dispatching_uninitialized_event_throws_invalid_state() {
 }
 
 #[test]
-fn create_event_rejects_unknown_interface() {
+fn create_event_rejects_names_outside_the_legacy_table() {
+    // `ProgressEvent` is the discriminating case: the tree implements the
+    // interface, but the standard's `createEvent` table does not list it, so
+    // only the constructor can reach it.
     assert_eq!(
         eval(
             r#"
-            try {
-                document.createEvent('NoSuchEvent');
-                'no throw';
-            } catch (e) {
-                (e instanceof DOMException) + '/' + e.name;
-            }
+            ['NoSuchEvent', 'ProgressEvent'].map((name) => {
+                try {
+                    document.createEvent(name);
+                    return 'no throw';
+                } catch (e) {
+                    return (e instanceof DOMException) + '/' + e.name;
+                }
+            }).join(' ');
         "#
         ),
-        "true/NotSupportedError"
+        "true/NotSupportedError true/NotSupportedError"
     );
 }
 

@@ -37,11 +37,12 @@ use super::{
     HTMLOptionElementOps, HTMLParagraphElementOps, HTMLScriptElementOps, HTMLSelectElementOps,
     HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps, Handle, Headers,
     HeadersConstructor, HeadersInit, HeadersOps, JsError, MouseEventConstructor, MouseEventInit,
-    MouseEventOps, Node, NodeList, NodeListOps, NodeOps, Promise, Realm, ResponseConstructor,
-    ResponseInit, ResponseOps, ResponseType, SVGElementOps, Text, TextDecodeOptions,
-    TextDecoderConstructor, TextDecoderOps, TextDecoderOptions, TextEncoderConstructor,
-    TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps, URLConstructor, URLOps,
-    URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
+    MouseEventOps, Node, NodeList, NodeListOps, NodeOps, ProgressEventConstructor,
+    ProgressEventInit, ProgressEventOps, Promise, Realm, ResponseConstructor, ResponseInit,
+    ResponseOps, ResponseType, SVGElementOps, Text, TextDecodeOptions, TextDecoderConstructor,
+    TextDecoderOps, TextDecoderOptions, TextEncoderConstructor, TextEncoderOps, TextOps,
+    UIEventConstructor, UIEventInit, UIEventOps, URLConstructor, URLOps, URLSearchParams,
+    URLSearchParamsConstructor, URLSearchParamsOps,
 };
 use crate::dom::events::{
     CallbackRef, DispatchTarget, EventHandlerName, EventKey, EventKind, EventRecord, EventSlab,
@@ -2204,6 +2205,10 @@ impl DocumentOps for HostObject {
         // Legacy `createEvent` interface aliases (https://dom.spec.whatwg.org/#dom-document-createevent).
         // The Event/CustomEvent families arrived in 3a/3c; UIEvent/MouseEvent
         // in 3d. Each returns a record whose `kind` picks the wrapper prototype.
+        //
+        // The table is closed and short: the standard lists no `progressevent`,
+        // so ProgressEvent is reachable only through its constructor, and
+        // `createEvent('ProgressEvent')` throws here as it does in a browser.
         let kind = match interface.to_ascii_lowercase().as_str() {
             "event" | "events" | "htmlevents" => EventKind::Plain,
             "customevent" => EventKind::Custom { detail: None },
@@ -3390,6 +3395,62 @@ impl MouseEventOps for HostObject {
             EventKind::Mouse { related_target, .. } => related_target.map(Handle::from_bits),
             _ => None,
         }))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ProgressEvent (constructor, getters)
+// ---------------------------------------------------------------------------
+
+impl ProgressEventConstructor for HostObject {
+    fn construct(
+        realm: &Realm,
+        r#type: &str,
+        event_init_dict: Option<ProgressEventInit>,
+    ) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        let init = event_init_dict.unwrap_or_default();
+        // The three members are stored as initialized. `lengthComputable` is
+        // *not* derived from `total`: the XHR getter steps return the values
+        // the record was constructed with, so a non-zero `total` under the init
+        // default still answers `false`.
+        Ok(new_event(
+            &ctx,
+            r#type,
+            init.bubbles,
+            init.cancelable,
+            init.composed,
+            EventKind::Progress {
+                length_computable: init.length_computable,
+                loaded: init.loaded,
+                total: init.total,
+            },
+        ))
+    }
+}
+
+impl ProgressEventOps for HostObject {
+    fn length_computable(&self) -> bool {
+        self.with_event(false, |r| match r.kind {
+            EventKind::Progress {
+                length_computable, ..
+            } => length_computable,
+            _ => false,
+        })
+    }
+
+    fn loaded(&self) -> f64 {
+        self.with_event(0.0, |r| match r.kind {
+            EventKind::Progress { loaded, .. } => loaded,
+            _ => 0.0,
+        })
+    }
+
+    fn total(&self) -> f64 {
+        self.with_event(0.0, |r| match r.kind {
+            EventKind::Progress { total, .. } => total,
+            _ => 0.0,
+        })
     }
 }
 

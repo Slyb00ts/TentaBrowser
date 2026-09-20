@@ -122,3 +122,21 @@ interface MouseEvent : UIEvent {
   readonly attribute unsigned short buttons;
   readonly attribute EventTarget? relatedTarget;
 };
+
+// XHR Standard. The record already carries the Progress payload (dom/events
+// EventKind); this interface exposes it and adds the constructor. The three
+// members are independent: the getter steps "return the value they were
+// initialized to", so `lengthComputable` is not derived from `total`.
+dictionary ProgressEventInit : EventInit {
+  boolean lengthComputable = false;
+  double loaded = 0;
+  double total = 0;
+};
+
+[Exposed=Window]
+interface ProgressEvent : Event {
+  constructor(DOMString type, optional ProgressEventInit eventInitDict = {});
+  readonly attribute boolean lengthComputable;
+  readonly attribute double loaded;
+  readonly attribute double total;
+};

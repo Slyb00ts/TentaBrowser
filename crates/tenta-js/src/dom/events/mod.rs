@@ -395,6 +395,25 @@ pub enum EventKind {
         /// The related target handle bits, if any.
         related_target: Option<u64>,
     },
+    /// A `ProgressEvent`.
+    ///
+    /// The three fields are independent, as the XHR standard's getter steps say
+    /// ("return the value they were initialized to"): `length_computable` is
+    /// *not* derived from `total`, so a non-zero `total` with the init default
+    /// answers `false`. The platform's rule for *firing* one — `lengthComputable`
+    /// true and `total` set only when the length is not zero — lives with the
+    /// firing code, not here.
+    ///
+    /// Unlike `Custom`'s `detail`, nothing here is a stored JS value, so no
+    /// record-reclamation path has anything to release.
+    Progress {
+        /// `ProgressEvent.lengthComputable`.
+        length_computable: bool,
+        /// `ProgressEvent.loaded`.
+        loaded: f64,
+        /// `ProgressEvent.total`.
+        total: f64,
+    },
 }
 
 impl EventKind {
@@ -406,6 +425,7 @@ impl EventKind {
             EventKind::Custom { .. } => "CustomEvent",
             EventKind::Ui { .. } => "UIEvent",
             EventKind::Mouse { .. } => "MouseEvent",
+            EventKind::Progress { .. } => "ProgressEvent",
         }
     }
 }
