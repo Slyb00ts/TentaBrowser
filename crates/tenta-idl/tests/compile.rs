@@ -16,6 +16,8 @@ mod toy_bindings {
     include!("golden/toy/types.rs");
     include!("golden/toy/counter_ops.rs");
     include!("golden/toy/counter_register.rs");
+    include!("golden/toy/pair_box_ops.rs");
+    include!("golden/toy/pair_box_register.rs");
     include!("golden/toy/timed_counter_ops.rs");
     include!("golden/toy/timed_counter_register.rs");
 }

@@ -167,8 +167,11 @@ chain. Constants become associated consts with their IDL value. Attributes
 become `fn name(&self)` plus `fn set_name(&self, value)` when writable.
 Overloads become one method per overload, named `{base}_{arity}`. Constructors
 live in a separate `{Name}Constructor` trait so that a subclass is not forced
-to inherit its parent's constructor. Doc comments reproduce the IDL
-declaration, the fast-API verdict and, for mixin members, the mixin name.
+to inherit its parent's constructor. An `iterable<K, V>` adds one hook,
+`fn iterable_entries(&self) -> Result<Vec<(K, V)>, JsError>`, which is the
+snapshot the three generated iterator members are views over. Doc comments
+reproduce the IDL declaration, the fast-API verdict and, for mixin members, the
+mixin name.
 
 ### V8 glue (rusty_v8 152.x)
 
@@ -192,7 +195,8 @@ in the doc comment of the generated `install_*` function:
 - `v8::fast_api::{CFunction, CFunctionInfo, CTypeInfo, Flags, Int64Representation, Type, FastApiOneByteString}`
 - `Object::{get_aligned_pointer_from_internal_field, set_aligned_pointer_in_internal_field, get, set, create_data_property, internal_field_count}`
 - `v8::Global`, `v8::Local::new`, `v8::PropertyAttribute::{NONE, READ_ONLY, DONT_ENUM, DONT_DELETE}`
-- `v8::Symbol::{get_to_string_tag, get_iterator, get_unscopables}`, `v8::Intrinsic::ArrayProtoValues`
+- `v8::Symbol::{get_to_string_tag, get_iterator, get_unscopables}`,
+  `v8::Intrinsic::{ArrayProtoEntries, ArrayProtoForEach, ArrayProtoKeys, ArrayProtoValues}`
 - `v8::Exception::{type_error, range_error, syntax_error}`, `PinScope::throw_exception`
 
 Notes on the shape of the generated code:
@@ -206,9 +210,30 @@ Notes on the shape of the generated code:
   a matching `CTypeInfo` list. V8's fast C types are 32-bit or wider, so a
   `[Clamp] octet` argument is narrowed inside the fast callback with the
   prelude's `clamp_octet`.
-- A value iterator (`iterable<V>`) is installed as
-  `set_intrinsic_data_property(@@iterator, Intrinsic::ArrayProtoValues)`,
-  which is exactly what the WebIDL value-iterator definition asks for.
+- A value iterator (`iterable<V>`) is installed as the five members the WebIDL
+  value-iterator definition names: `entries`, `forEach`, `keys` and `values`
+  as `set_intrinsic_data_property` with the matching
+  `v8::Intrinsic::ArrayProto*`, and `@@iterator` as
+  `v8::Intrinsic::ArrayProtoValues` again. Using the intrinsics is what makes
+  each member *the same function object* as `%Array.prototype%`'s, which is
+  what the spec asks for; `@@iterator` is therefore also identical to `values`.
+  All five are `DONT_ENUM`, and a member the interface declares itself wins.
+  The members read the receiver through `length` and the indexed getter on
+  every call, so they are live rather than snapshots.
+- A pair iterator (`iterable<K, V>`) has no `length` and no indexed getter to
+  drive an iterator from, so it cannot use the intrinsics. Instead the `*Ops`
+  trait gains one hook, `fn iterable_entries(&self) -> Result<Vec<(K, V)>,
+  JsError>`, and the generated `entries`, `keys` and `values` members each
+  build a plain array from one call to it and hand that array to the prelude's
+  `array_iterator`, which calls the captured `%Array.prototype.values%` on it.
+  One hook call feeds all three, so a collection mutated between two of them
+  cannot be observed half-way. The returned object is an Array Iterator, not an
+  interface-branded one: `Object.prototype.toString.call(box.entries())` is
+  `"[object Array Iterator]"`. `@@iterator` is installed from the *same*
+  `FunctionTemplate` as `entries`, which is what makes the two the same function
+  object as WebIDL requires: V8 instantiates a template once per context, so two
+  properties set from it hold one function (asserted by `tenta-js`'s
+  `one_template_is_one_function_object_per_context`).
 - Overloaded operations get a dispatcher that switches on `args.length()`.
 - `[Replaceable]` setters use `create_data_property`; `[PutForwards=x]`
   setters forward to the target attribute; `[LegacyUnforgeable]` members get
@@ -320,6 +345,10 @@ Fixtures:
 
 - `idl/toy/Counter.webidl` — the small end-to-end fixture (enum, dictionary,
   mixin, inheritance, constants, an optional argument).
+- `idl/toy/PairBox.webidl` — the pair-iterator fixture: `iterable<DOMString,
+  DOMString>` on an interface with neither `length` nor an indexed getter,
+  which is the shape `Headers` and `URLSearchParams` have and the only one that
+  exercises the host hook instead of the `%Array.prototype%` intrinsics.
 - `crates/tenta-idl/tests/fixtures/dom-excerpt.webidl` — verbatim excerpts of
   the DOM, HTML, CSSOM, CSSOM View and High Resolution Time specifications
   (`EventTarget`, `Event`, `AbortSignal`, `Node`, the `ParentNode` mixin,
@@ -335,6 +364,18 @@ generated code:
 - `maplike` and `setlike` declarations (`Error::Unsupported`).
 - `async iterable` — parsed and stored in `Iterable::is_async`, but no async
   iterator prototype is generated.
+- The QuickJS glue generates no iterator members for either form of
+  `iterable<>`: `{name}_qjs.rs` installs the class and prototype plumbing and
+  nothing else. Only the V8 glue implements them.
+- An interface that declares the member `@@iterator` has to be identical to
+  itself is not honoured. WebIDL defines `@@iterator` as the same function
+  object as `values` (value form) or `entries` (pair form); when the interface
+  declares that member instead of taking the generated one, the value form still
+  installs `%Array.prototype.values%` as `@@iterator` and the pair form installs
+  no `@@iterator` at all, because the declared member's template is scoped to its
+  own block and a generated second function would merely behave alike. No
+  interface in the corpus declares `entries`, `keys` or `values`, so this is
+  latent.
 - `FrozenArray` and `ObservableArray` are lowered like `sequence`; neither the
   freezing nor the change-notification semantics are generated.
 - Named property getters, setters and deleters are recorded

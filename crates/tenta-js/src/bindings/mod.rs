@@ -187,3 +187,223 @@ include!(concat!(env!("OUT_DIR"), "/node_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_v8.rs"));
 
 pub mod host;
+
+/// Runtime coverage for the mechanisms the generated pair-iterator glue rests
+/// on: the two prelude helpers a `iterable<K, V>` declaration is built from,
+/// and the V8 template behaviour that makes `@@iterator` identical to
+/// `entries`.
+///
+/// The generated `entries`/`keys`/`values` callbacks need an interface with a
+/// host behind it, and nothing wires a pair-iterable interface up yet, so these
+/// tests reach the helpers directly. Without them `array_iterator` and the
+/// rethrow contract of `call_js_function` would only ever be compiled, never
+/// run.
+#[cfg(all(test, feature = "v8"))]
+mod prelude_helpers {
+    use super::*;
+
+    /// Runs `check` on a fresh isolate with one entered context.
+    fn with_context(check: impl FnOnce(&mut v8::PinScope<'_, '_>)) {
+        // The V8 platform is process-global and may be initialised only once.
+        static PLATFORM: std::sync::Once = std::sync::Once::new();
+        PLATFORM.call_once(|| {
+            let platform = v8::new_default_platform(0, false).make_shared();
+            v8::V8::initialize_platform(platform);
+            v8::V8::initialize();
+        });
+
+        let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+        v8::scope!(let handle_scope, &mut isolate);
+        let context = v8::Context::new(handle_scope, Default::default());
+        let mut context_scope = v8::ContextScope::new(handle_scope, context);
+        v8::scope!(let scope, &mut context_scope);
+        check(scope);
+    }
+
+    /// Two properties set from one `FunctionTemplate` hold *one* function
+    /// object, which is how the generated pair iterator makes `@@iterator` the
+    /// same function object as `entries` without giving up the template API for
+    /// the other three members.
+    ///
+    /// WebIDL asks for that identity, and `docs/dev/idl.md` records it as
+    /// satisfied. If a future V8 stops instantiating a template once per
+    /// context, that record is what has to change, so this asserts both halves:
+    /// one template is one function, two templates are two.
+    #[test]
+    fn one_template_is_one_function_object_per_context() {
+        with_context(|scope| {
+            let prototype = v8::ObjectTemplate::new(scope);
+            let shared = v8::FunctionTemplate::builder(
+                |_: &mut v8::PinScope<'_, '_>,
+                 _: v8::FunctionCallbackArguments<'_>,
+                 _: v8::ReturnValue<v8::Value>| {},
+            )
+            .length(0)
+            .build(scope);
+            let other = v8::FunctionTemplate::builder(
+                |_: &mut v8::PinScope<'_, '_>,
+                 _: v8::FunctionCallbackArguments<'_>,
+                 _: v8::ReturnValue<v8::Value>| {},
+            )
+            .length(1)
+            .build(scope);
+            for (name, template) in [("entries", shared), ("keys", shared), ("values", other)] {
+                let key = v8_string(scope, name).expect("the name fits a V8 string");
+                prototype.set_with_attr(key.into(), template.into(), v8::PropertyAttribute::NONE);
+            }
+            let iterator = v8::Symbol::get_iterator(scope);
+            prototype.set_with_attr(
+                iterator.into(),
+                shared.into(),
+                v8::PropertyAttribute::DONT_ENUM,
+            );
+
+            let instance = prototype
+                .new_instance(scope)
+                .expect("the template instantiates");
+            let entries_key = v8_string(scope, "entries").expect("a V8 string");
+            let keys_key = v8_string(scope, "keys").expect("a V8 string");
+            let values_key = v8_string(scope, "values").expect("a V8 string");
+            let entries = instance.get(scope, entries_key.into()).expect("set");
+            let keys = instance.get(scope, keys_key.into()).expect("set");
+            let values = instance.get(scope, values_key.into()).expect("set");
+            let symbol = instance.get(scope, iterator.into()).expect("set");
+
+            assert!(entries.strict_equals(keys), "one template, one function");
+            assert!(
+                entries.strict_equals(symbol),
+                "`@@iterator` is `entries`, not a copy of it"
+            );
+            assert!(
+                !entries.strict_equals(values),
+                "a second template is a second function, so the asserts above are not vacuous"
+            );
+        });
+    }
+
+    /// Evaluates `source` in the entered context and returns its result as a
+    /// string.
+    fn eval(scope: &mut v8::PinScope<'_, '_>, source: &str) -> String {
+        let source = v8_string(scope, source).expect("the source fits a V8 string");
+        let script = v8::Script::compile(scope, source, None).expect("the source compiles");
+        script
+            .run(scope)
+            .expect("the source runs without throwing")
+            .to_rust_string_lossy(scope)
+    }
+
+    /// Reads a global by name.
+    fn global<'s>(scope: &mut v8::PinScope<'s, '_>, name: &str) -> v8::Local<'s, v8::Value> {
+        let key = v8_string(scope, name).expect("the name fits a V8 string");
+        scope
+            .get_current_context()
+            .global(scope)
+            .get(scope, key.into())
+            .unwrap_or_else(|| panic!("`{name}` is a global"))
+    }
+
+    /// Reads a global that holds a function.
+    fn global_function<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        name: &str,
+    ) -> v8::Local<'s, v8::Function> {
+        v8::Local::<v8::Function>::try_from(global(scope, name))
+            .unwrap_or_else(|_| panic!("`{name}` is a function"))
+    }
+
+    #[test]
+    fn array_iterator_yields_the_arrays_values() {
+        with_context(|scope| {
+            let mut items: Vec<v8::Local<v8::Value>> = Vec::new();
+            for item in ["a", "b", "c"] {
+                items.push(
+                    v8_string(scope, item)
+                        .expect("the item fits a V8 string")
+                        .into(),
+                );
+            }
+            let array = v8::Array::new_with_elements(scope, &items);
+            let iterator = array_iterator(scope, array).expect("the iterator is built");
+
+            // `%Array.prototype.values%` is cached in an isolate slot the first
+            // time, so a second call exercises the cached path.
+            let empty = v8::Array::new(scope, 0);
+            let cached = array_iterator(scope, empty).expect("the cached intrinsic still works");
+
+            let global = scope.get_current_context().global(scope);
+            for (name, value) in [("__iterator", iterator), ("__cached", cached)] {
+                let key = v8_string(scope, name).expect("the name fits a V8 string");
+                global.set(scope, key.into(), value);
+            }
+
+            // An Array Iterator, not an interface-branded one.
+            assert_eq!(
+                eval(
+                    scope,
+                    "{
+                        const seen = [...__iterator];
+                        [Object.prototype.toString.call(__iterator),
+                         seen.join(','), seen.length].join('|');
+                    }"
+                ),
+                "[object Array Iterator]|a,b,c|3"
+            );
+            assert_eq!(
+                eval(scope, "[...__cached].length.toString()"),
+                "0",
+                "an empty array still yields an Array Iterator"
+            );
+        });
+    }
+
+    #[test]
+    fn call_js_function_passes_the_receiver_as_this() {
+        with_context(|scope| {
+            eval(
+                scope,
+                "globalThis.__holder = { label: 'ctx', read: function () { return this.label; } };",
+            );
+            let holder = global(scope, "__holder");
+            let key = v8_string(scope, "read").expect("the key fits a V8 string");
+            let read = v8::Local::<v8::Object>::try_from(holder)
+                .ok()
+                .and_then(|object| object.get(scope, key.into()))
+                .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+                .expect("`read` is a function");
+
+            let value = call_js_function(scope, read, holder, &[]).expect("the call succeeds");
+            assert_eq!(value.to_rust_string_lossy(scope), "ctx");
+        });
+    }
+
+    /// The helper must rethrow, not merely report: an exception that reaches
+    /// only the returned `JsError` would be lost to the page. Relying on the
+    /// `TryCatch` destructor would swallow it instead, which is what the
+    /// event-listener path in `tenta-js-v8` wants and therefore what this
+    /// helper may not depend on.
+    #[test]
+    fn call_js_function_rethrows_into_the_enclosing_try_catch() {
+        with_context(|scope| {
+            eval(
+                scope,
+                "globalThis.__boom = function () { throw new RangeError('boom'); };",
+            );
+            let boom = global_function(scope, "__boom");
+
+            v8::tc_scope!(let tc, scope);
+            let receiver = v8::undefined(tc).into();
+            let message = match call_js_function(tc, boom, receiver, &[]) {
+                Ok(_) => panic!("the call throws"),
+                Err(error) => {
+                    assert_eq!(error.kind(), JsErrorKind::Type);
+                    error.message().to_owned()
+                }
+            };
+            assert!(message.contains("boom"), "unexpected message: {message}");
+            assert!(
+                tc.has_caught(),
+                "the exception never reached the enclosing `TryCatch`"
+            );
+        });
+    }
+}

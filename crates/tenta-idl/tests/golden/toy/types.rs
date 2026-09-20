@@ -12,6 +12,13 @@ impl InterfaceMarker for Counter {
     const INTERFACE_NAME: &'static str = "Counter";
 }
 
+/// Marker for the WebIDL interface `PairBox` (defined in this module).
+pub enum PairBox {}
+
+impl InterfaceMarker for PairBox {
+    const INTERFACE_NAME: &'static str = "PairBox";
+}
+
 /// Marker for the WebIDL interface `TimedCounter` (defined in this module).
 pub enum TimedCounter {}
 

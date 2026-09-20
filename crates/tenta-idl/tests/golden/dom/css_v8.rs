@@ -28,7 +28,8 @@
 /// - `v8::Global`, `v8::Local::new`
 /// - `v8::PropertyAttribute::{NONE, READ_ONLY, DONT_ENUM, DONT_DELETE}`
 /// - `v8::Symbol::{get_to_string_tag, get_iterator, get_unscopables}`,
-///   `v8::Intrinsic::ArrayProtoValues`
+///   `v8::Intrinsic::{ArrayProtoEntries, ArrayProtoForEach, ArrayProtoKeys,
+///   ArrayProtoValues}`
 /// - `v8::Value::{to_uint32, int32_value, number_value, boolean_value,
 ///   to_rust_string_lossy, is_null_or_undefined}` (through the prelude)
 /// - `v8::Exception::{type_error, range_error, syntax_error}` and

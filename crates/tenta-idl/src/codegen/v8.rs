@@ -37,12 +37,37 @@ const API_NOTE: &str = "\
 /// - `v8::Global`, `v8::Local::new`
 /// - `v8::PropertyAttribute::{NONE, READ_ONLY, DONT_ENUM, DONT_DELETE}`
 /// - `v8::Symbol::{get_to_string_tag, get_iterator, get_unscopables}`,
-///   `v8::Intrinsic::ArrayProtoValues`
+///   `v8::Intrinsic::{ArrayProtoEntries, ArrayProtoForEach, ArrayProtoKeys,
+///   ArrayProtoValues}`
 /// - `v8::Value::{to_uint32, int32_value, number_value, boolean_value,
 ///   to_rust_string_lossy, is_null_or_undefined}` (through the prelude)
 /// - `v8::Exception::{type_error, range_error, syntax_error}` and
 ///   `PinScope::throw_exception` (through the prelude)
 ";
+
+/// The members a value `iterable<V>` declaration adds to the prototype, with
+/// the `%Array.prototype%` intrinsic each one is.
+///
+/// A value iterator *is* an array-like view, so V8's own `%Array.prototype%`
+/// functions are exactly the WebIDL definitions: `%Array.prototype.forEach%`
+/// already calls back with `(value, index, receiver)`, and `entries`/`keys`
+/// already yield `[index, value]` and `index`. `values` and `@@iterator` share
+/// one intrinsic, which is what makes them the same function object.
+const VALUE_ITERATOR_MEMBERS: [(&str, &str); 4] = [
+    ("entries", "ArrayProtoEntries"),
+    ("forEach", "ArrayProtoForEach"),
+    ("keys", "ArrayProtoKeys"),
+    ("values", "ArrayProtoValues"),
+];
+
+/// The members a pair `iterable<K, V>` declaration adds to the prototype.
+///
+/// Unlike the value form these are not `%Array.prototype%` functions, so each
+/// one is a generated callback over the host's snapshot. `@@iterator` is not
+/// listed here — it is installed separately from the `entries` template, which
+/// is what makes it the same function object as `entries`. See
+/// `pair_iterator_install`.
+const PAIR_ITERATOR_MEMBERS: [&str; 3] = ["entries", "keys", "values"];
 
 /// Generates `<snake>_v8.rs` for an interface.
 pub fn interface_v8(model: &Model, interface: &Interface) -> String {
@@ -81,6 +106,24 @@ pub fn interface_v8(model: &Model, interface: &Interface) -> String {
             .or_else(|| interface.special_operations.first())
     }) {
         indexed_getter_callback(&interface.name, operation, &bound, &mut out);
+    }
+    if let Some(iterable) = &interface.iterable
+        && let Some(key) = &iterable.key
+        && !iterable.is_async
+    {
+        for member in PAIR_ITERATOR_MEMBERS {
+            if interface.member(member).is_some() {
+                continue;
+            }
+            pair_iterator_callback(
+                &interface.name,
+                member,
+                key,
+                &iterable.value,
+                &bound,
+                &mut out,
+            );
+        }
     }
     let _ = snake;
     out
@@ -302,12 +345,50 @@ fn install_function(model: &Model, interface: &Interface, bound: &str, out: &mut
     }
 
     if let Some(iterable) = &interface.iterable
-        && iterable.key.is_none()
         && !iterable.is_async
     {
-        out.push_str(
-            "    {\n        // A WebIDL value iterator exposes `%Array.prototype.values%`.\n        let key = v8::Symbol::get_iterator(scope);\n        prototype.set_intrinsic_data_property(\n            key.into(),\n            v8::Intrinsic::ArrayProtoValues,\n            v8::PropertyAttribute::DONT_ENUM,\n        );\n    }\n",
-        );
+        if iterable.key.is_some() {
+            // A pair iterator has no intrinsic to lean on: each member is its
+            // own callback over the host's snapshot. `entries` and `@@iterator`
+            // are installed from the *one* `FunctionTemplate` bound for
+            // `entries` — V8 instantiates a template once per context, so the
+            // two properties really do hold the same function object.
+            for member in PAIR_ITERATOR_MEMBERS {
+                if interface.member(member).is_some() {
+                    continue;
+                }
+                pair_iterator_install(name, member, out);
+            }
+            if interface.member("entries").is_none() {
+                out.push_str(
+                    "    {\n        // `@@iterator` is `entries`, as WebIDL requires.\n        let key = v8::Symbol::get_iterator(scope);\n        prototype.set_with_attr(\n            key.into(),\n            iterable_entries_template.into(),\n            v8::PropertyAttribute::DONT_ENUM,\n        );\n    }\n",
+                );
+            }
+        } else {
+            // A WebIDL value iterator exposes the `%Array.prototype%` members
+            // themselves; `<name>[@@iterator]` is the same intrinsic as
+            // `<name>.values`, so the two are the same function object. A
+            // member the interface declares itself wins, as WebIDL requires.
+            for (member, intrinsic) in VALUE_ITERATOR_MEMBERS {
+                if interface.member(member).is_some() {
+                    continue;
+                }
+                let _ = write!(
+                    out,
+                    "    {{\n        \
+                     // A WebIDL value iterator exposes `%Array.prototype.{member}%`.\n        \
+                     let key = v8_string(scope, \"{member}\")?;\n        \
+                     prototype.set_intrinsic_data_property(\n            \
+                     key.into(),\n            \
+                     v8::Intrinsic::{intrinsic},\n            \
+                     v8::PropertyAttribute::DONT_ENUM,\n        );\n    \
+                     }}\n"
+                );
+            }
+            out.push_str(
+                "    {\n        // `@@iterator` is the same intrinsic as `values`.\n        let key = v8::Symbol::get_iterator(scope);\n        prototype.set_intrinsic_data_property(\n            key.into(),\n            v8::Intrinsic::ArrayProtoValues,\n            v8::PropertyAttribute::DONT_ENUM,\n        );\n    }\n",
+            );
+        }
     }
 
     let _ = write!(
@@ -859,6 +940,104 @@ fn indexed_getter_callback(interface: &str, operation: &Operation, bound: &str, 
             "    match {conversion} {{\n        Ok(value) => rv.set(value),\n        Err(error) => throw_js_error(scope, &error),\n    }}\n    v8::Intercepted::kYes\n}}\n"
         );
     }
+}
+
+/// Installs one generated pair-iterator member on the prototype.
+///
+/// Each template is bound at function scope rather than inside its own block,
+/// because `@@iterator` has to be installed from the `entries` binding: two
+/// properties set from one `FunctionTemplate` are one function object in a
+/// context, which is the identity WebIDL asks for.
+fn pair_iterator_install(interface: &str, member: &str, out: &mut String) {
+    let snake = naming::snake_stem(interface);
+    let _ = write!(
+        out,
+        "    let iterable_{member}_key = v8_string(scope, \"{member}\")?;\n    \
+         // A WebIDL pair iterator: `{interface}` has no array-like surface, so\n    \
+         // the member reads the host's snapshot instead of an intrinsic.\n    \
+         let iterable_{member}_template = v8::FunctionTemplate::builder(call_{snake}_{member}::<T>)\n        \
+         .signature(signature)\n        \
+         .length(0)\n        \
+         .build(scope);\n    \
+         iterable_{member}_template.set_class_name(iterable_{member}_key);\n    \
+         prototype.set_with_attr(\n        \
+         iterable_{member}_key.into(),\n        \
+         iterable_{member}_template.into(),\n        \
+         v8::PropertyAttribute::NONE,\n    );\n"
+    );
+}
+
+/// Emits the callback behind one pair-iterator member.
+///
+/// All three members are views over the one [`iterable_entries`] snapshot:
+/// `entries` yields `[key, value]` arrays, `keys` the keys and `values` the
+/// values. The array each one builds is handed to the shared
+/// `%Array.prototype.values%` intrinsic through the prelude's
+/// `array_iterator`, which is what turns a plain array into an Array Iterator
+/// without a per-interface iterator object.
+///
+/// [`iterable_entries`]: crate::codegen::ops
+fn pair_iterator_callback(
+    interface: &str,
+    member: &str,
+    key: &Type,
+    value: &Type,
+    bound: &str,
+    out: &mut String,
+) {
+    let snake = naming::snake_stem(interface);
+    let key_ty = rust_type(key, Position::Owned);
+    let value_ty = rust_type(value, Position::Owned);
+    let key_value = convert::to_v8(key, "scope", "key");
+    let value_value = convert::to_v8(value, "scope", "value");
+    let conversion = |binding: &str, expression: &str| {
+        format!(
+            "        let {binding} = match {expression} {{\n            \
+             Ok(item) => item,\n            \
+             Err(error) => {{\n                \
+             throw_js_error(scope, &error);\n                return;\n            \
+             }}\n        }};\n"
+        )
+    };
+    let loop_body = match member {
+        "keys" => format!(
+            "    for (key, _value) in entries {{\n{}        items.push(item);\n    }}\n",
+            conversion("item", &key_value)
+        ),
+        "values" => format!(
+            "    for (_key, value) in entries {{\n{}        items.push(item);\n    }}\n",
+            conversion("item", &value_value)
+        ),
+        _ => format!(
+            "    for (key, value) in entries {{\n{}{}        items.push(v8::Array::new_with_elements(scope, &[key, value]).into());\n    }}\n",
+            conversion("key", &key_value),
+            conversion("value", &value_value),
+        ),
+    };
+    let _ = write!(
+        out,
+        "\n/// `{interface}.{member}`.\n\
+         ///\n\
+         /// The host hands over a snapshot, so one call sees one consistent\n\
+         /// collection; the returned object is an Array Iterator, not an\n\
+         /// interface-branded one.\n\
+         fn call_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+         scope: &mut v8::PinScope<'s, '_>,\n    \
+         args: v8::FunctionCallbackArguments<'s>,\n    \
+         mut rv: v8::ReturnValue<v8::Value>,\n\
+         ) {{\n{}    \
+         let entries: Vec<({key_ty}, {value_ty})> = match host.iterable_entries() {{\n        \
+         Ok(value) => value,\n        \
+         Err(error) => {{\n            throw_js_error(scope, &error);\n            return;\n        }}\n    \
+         }};\n    \
+         let mut items: Vec<v8::Local<v8::Value>> = Vec::with_capacity(entries.len());\n{loop_body}    \
+         let array = v8::Array::new_with_elements(scope, &items);\n    \
+         match array_iterator(scope, array) {{\n        \
+         Ok(value) => rv.set(value),\n        \
+         Err(error) => throw_js_error(scope, &error),\n    \
+         }}\n}}\n",
+        unwrap_this_block("    "),
+    );
 }
 
 fn unwrap_this_block(indent: &str) -> String {

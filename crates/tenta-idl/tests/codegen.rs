@@ -9,6 +9,13 @@ use std::path::{Path, PathBuf};
 
 use tenta_idl::{GeneratedFile, Model};
 
+fn generated_file(model: &Model, name: &str) -> GeneratedFile {
+    tenta_idl::generate(model)
+        .into_iter()
+        .find(|file| file.name == name)
+        .unwrap_or_else(|| panic!("{name} is generated"))
+}
+
 fn golden_dir(fixture: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden")
@@ -160,6 +167,7 @@ fn the_v8_glue_names_the_engine_items_it_uses() {
         "v8::FunctionTemplate::builder",
         "v8::fast_api::{CFunction, CFunctionInfo, CTypeInfo, Flags,",
         "v8::PropertyAttribute::{NONE, READ_ONLY, DONT_ENUM, DONT_DELETE}",
+        "v8::Intrinsic::{ArrayProtoEntries, ArrayProtoForEach, ArrayProtoKeys,",
     ] {
         assert!(file.contents.contains(item), "the API note omits {item}");
     }
@@ -211,6 +219,134 @@ fn the_quickjs_glue_names_the_engine_items_it_uses() {
             "node_qjs.rs never calls {call}"
         );
     }
+}
+
+/// The generator's own view of a value iterator: `%Array.prototype%` provides
+/// all four members, and `@@iterator` is the same intrinsic as `values`.
+#[test]
+fn a_value_iterable_exposes_the_array_prototype_members() {
+    let file = generated_file(&common::dom(), "node_list_v8.rs");
+
+    for (member, intrinsic) in [
+        ("entries", "ArrayProtoEntries"),
+        ("forEach", "ArrayProtoForEach"),
+        ("keys", "ArrayProtoKeys"),
+        ("values", "ArrayProtoValues"),
+    ] {
+        assert!(
+            file.contents
+                .contains(&format!("v8_string(scope, \"{member}\")?")),
+            "node_list_v8.rs never defines `{member}`"
+        );
+        assert!(
+            file.contents
+                .contains(&format!("v8::Intrinsic::{intrinsic}")),
+            "node_list_v8.rs never uses {intrinsic}"
+        );
+    }
+    assert!(
+        file.contents.contains("v8::Symbol::get_iterator(scope)"),
+        "`@@iterator` is missing"
+    );
+    assert_eq!(
+        file.contents
+            .matches("prototype.set_intrinsic_data_property(")
+            .count(),
+        5,
+        "the four members and `@@iterator` are all intrinsic data properties"
+    );
+    assert_eq!(
+        file.contents.matches("ArrayProtoValues,").count(),
+        2,
+        "`values` and `@@iterator` are the same intrinsic"
+    );
+}
+
+/// A member the interface declares itself wins, as WebIDL requires.
+///
+/// `@@iterator` is the one exception: it stays `%Array.prototype.values%`, so it
+/// is no longer the same function object as the declared `values`. Recorded as
+/// a latent deviation in `docs/dev/idl.md`; no interface in the corpus declares
+/// `values`.
+#[test]
+fn a_declared_member_shadows_the_generated_iterator_member() {
+    let model =
+        tenta_idl::parse_webidl("interface Sample { iterable<DOMString>; DOMString values(); };")
+            .expect("the source parses");
+    let file = generated_file(&model, "sample_v8.rs");
+
+    // `values` is installed as the interface's own operation ...
+    assert!(file.contents.contains("call_sample_values"));
+    // ... so it is not also installed as the intrinsic, and only `@@iterator`
+    // still refers to `%Array.prototype.values%`.
+    assert_eq!(
+        file.contents
+            .matches("v8::Intrinsic::ArrayProtoValues")
+            .count(),
+        1
+    );
+    for member in ["entries", "keys", "forEach"] {
+        assert!(
+            file.contents
+                .contains(&format!("v8_string(scope, \"{member}\")?")),
+            "the undeclared member `{member}` was dropped too"
+        );
+    }
+}
+
+/// The pair form has no array-like surface, so every member is a callback over
+/// one host snapshot rather than an intrinsic.
+#[test]
+fn a_pair_iterable_emits_three_views_over_one_host_hook() {
+    let model = common::toy();
+    let v8 = generated_file(&model, "pair_box_v8.rs");
+
+    for member in ["entries", "keys", "values"] {
+        assert!(
+            v8.contents
+                .contains(&format!("call_pair_box_{member}::<T>"))
+        );
+        assert!(
+            v8.contents
+                .contains(&format!("v8_string(scope, \"{member}\")?"))
+        );
+    }
+    assert!(v8.contents.contains("host.iterable_entries()"));
+    assert!(v8.contents.contains("array_iterator(scope, array)"));
+    assert!(
+        !v8.contents
+            .contains("prototype.set_intrinsic_data_property"),
+        "a pair iterator must not reuse a `%Array.prototype%` intrinsic"
+    );
+    // `@@iterator` is `entries`: both properties are installed from the one
+    // template bound for `entries`, and V8 makes one function object out of it
+    // per context — which is the identity WebIDL asks for. The runtime half of
+    // that claim is asserted by
+    // `tenta-js-v8`'s `one_template_is_one_function_object_per_context`.
+    assert!(
+        v8.contents.contains("v8::Symbol::get_iterator(scope)"),
+        "`@@iterator` is missing"
+    );
+    assert_eq!(
+        v8.contents
+            .matches("let iterable_entries_template = ")
+            .count(),
+        1,
+        "`entries` gets one template binding"
+    );
+    assert_eq!(
+        v8.contents
+            .matches("iterable_entries_template.into(),")
+            .count(),
+        2,
+        "that one template is installed as both `entries` and `@@iterator`"
+    );
+
+    let ops = generated_file(&model, "pair_box_ops.rs");
+    assert!(
+        ops.contents
+            .contains("fn iterable_entries(&self) -> Result<Vec<(String, String)>, JsError>;")
+    );
 }
 
 #[test]

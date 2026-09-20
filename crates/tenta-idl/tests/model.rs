@@ -40,7 +40,7 @@ fn operation<'a>(
 fn toy_model_has_the_expected_shape() {
     let model = common::toy();
 
-    assert_eq!(model.interfaces.len(), 2);
+    assert_eq!(model.interfaces.len(), 3);
     assert_eq!(model.dictionaries.len(), 1);
     assert_eq!(model.enums.len(), 1);
     assert!(model.namespaces.is_empty());
@@ -66,6 +66,22 @@ fn toy_model_has_the_expected_shape() {
     assert_eq!(timed.parent.as_deref(), Some("Counter"));
     assert_eq!(timed.members.len(), 3);
     assert!(timed.constructors.is_empty());
+
+    let pair_box = interface(&model, "PairBox");
+    assert_eq!(pair_box.parent, None);
+    assert!(pair_box.members.is_empty());
+    assert!(pair_box.constructors.is_empty());
+    assert_eq!(
+        pair_box.indexed_getter, None,
+        "the pair form must exercise the host hook, not an array-like surface"
+    );
+    let iterable = pair_box
+        .iterable
+        .as_ref()
+        .expect("iterable<DOMString, DOMString>");
+    assert_eq!(iterable.key, Some(Type::DomString));
+    assert_eq!(iterable.value, Type::DomString);
+    assert!(!iterable.is_async);
 }
 
 #[test]

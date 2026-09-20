@@ -175,6 +175,120 @@ fn an_unsupported_index_is_absent_while_item_still_returns_null() {
     );
 }
 
+/// The indexed getter is installed without a `query` callback, so V8 answers
+/// `HasProperty` from the getter alone: a value the getter returns is present,
+/// a declined one (`Intercepted::kNo`) falls through to absent. That is what
+/// makes `%Array.prototype%`'s `forEach` and the array iterators visit exactly
+/// the in-range indices of a collection.
+#[test]
+fn an_in_range_index_is_present_to_the_in_operator() {
+    assert_eq!(
+        eval(
+            r#"
+            document.body.innerHTML = '<p id="a"></p><p id="b"></p>';
+            const list = document.querySelectorAll('p');
+            [
+                0 in list,
+                1 in list,
+                typeof list[0],
+                list[0].id,
+                2 in list,
+                99 in list,
+            ].join('|');
+        "#
+        ),
+        "true|true|object|a|false|false"
+    );
+}
+
+/// A value iterator's `entries`, `keys`, `values` and `forEach` are
+/// `%Array.prototype%`'s own function objects, installed non-enumerable, and
+/// `@@iterator` is *the same function object* as `values`.
+#[test]
+fn a_value_iterable_installs_the_array_prototype_members() {
+    assert_eq!(
+        eval(
+            r#"
+            const list = document.querySelectorAll('p');
+            const prototype = Object.getPrototypeOf(list);
+            const nonEnumerable = (name) =>
+                !Object.prototype.propertyIsEnumerable.call(prototype, name);
+            [
+                list.entries === Array.prototype.entries,
+                list.keys === Array.prototype.keys,
+                list.values === Array.prototype.values,
+                list.forEach === Array.prototype.forEach,
+                list[Symbol.iterator] === list.values,
+                ['entries', 'keys', 'values', 'forEach'].every(nonEnumerable),
+            ].join('|');
+        "#
+        ),
+        "true|true|true|true|true|true"
+    );
+}
+
+#[test]
+fn for_each_visits_every_item_with_its_index_and_the_collection() {
+    // `%Array.prototype.forEach%` receives the collection as its receiver and
+    // passes it back as the callback's third argument.
+    assert_eq!(
+        eval(
+            r#"
+            document.body.innerHTML = '<p id="a"></p><p id="b"></p><p id="c"></p>';
+            const list = document.querySelectorAll('p');
+            const seen = [];
+            let receiver = null;
+            list.forEach(function (value, index, collection) {
+                seen.push(index + ':' + value.id);
+                receiver = collection;
+            });
+            [seen.join(','), receiver === list].join('|');
+        "#
+        ),
+        "0:a,1:b,2:c|true"
+    );
+}
+
+#[test]
+fn keys_and_entries_yield_indices_and_pairs() {
+    assert_eq!(
+        eval(
+            r#"
+            document.body.innerHTML = '<p id="a"></p><p id="b"></p>';
+            const list = document.querySelectorAll('p');
+            const keyed = [...list.keys()].join(',');
+            const paired = [...list.entries()]
+                .map(([index, node]) => index + ':' + node.id)
+                .join(',');
+            [keyed, paired].join('|');
+        "#
+        ),
+        "0,1|0:a,1:b"
+    );
+}
+
+#[test]
+fn the_generated_collection_members_read_the_live_collection() {
+    // The members are `%Array.prototype%` functions, so they read `length` and
+    // the indexed properties on every call instead of snapshotting: a mutation
+    // between two calls is observed by the second one.
+    assert_eq!(
+        eval(
+            r#"
+            document.body.innerHTML = '<span id="a"></span>';
+            const children = document.body.children;
+            const before = [...children.values()].map((child) => child.id);
+            document.body.appendChild(document.createElement('span')).id = 'b';
+            [
+                before.join(','),
+                [...children.values()].map((child) => child.id).join(','),
+            ].join('|');
+        "#
+        ),
+        "a|a,b"
+    );
+}
+
 #[test]
 fn a_token_list_is_iterable_and_indexable() {
     assert_eq!(

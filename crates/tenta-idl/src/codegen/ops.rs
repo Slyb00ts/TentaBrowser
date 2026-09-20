@@ -80,6 +80,13 @@ pub fn interface_ops(model: &Model, interface: &Interface) -> String {
         };
         operation_item(&group, overload, &mut out);
     }
+    if let Some(iterable) = &interface.iterable
+        && let Some(key) = &iterable.key
+        && !iterable.is_async
+    {
+        separate(&mut out, &mut first);
+        pair_iterator_item(key, &iterable.value, &mut out);
+    }
     out.push_str("}\n");
 
     if !interface.constructors.is_empty() {
@@ -267,6 +274,24 @@ fn operation_item(group: &OperationGroup, operation: &Operation, out: &mut Strin
         "    fn {}({}){return_clause};",
         operation.rust_name,
         parameters.join(", ")
+    );
+}
+
+/// The single host hook a pair iterator needs.
+///
+/// `iterable<K, V>` has no indexed accessor to drive an iterator from — the
+/// spec gives neither `Headers` nor `URLSearchParams` a `length` — so the host
+/// hands over a snapshot of the whole collection instead. Each of the three
+/// generated members (`entries`, `keys`, `values`) is a view over that one
+/// snapshot, which is what keeps the type atomic across a live collection.
+fn pair_iterator_item(key: &Type, value: &Type, out: &mut String) {
+    let key_type = rust_type(key, Position::Owned);
+    let value_type = rust_type(value, Position::Owned);
+    let _ = write!(
+        out,
+        "    /// `iterable<{}, {}>;`\n    ///\n    /// A snapshot of the entries, in iteration order. The generated\n    /// `entries`, `keys` and `values` members are views over one call, so a\n    /// collection mutated between two of them cannot be observed half-way.\n    fn iterable_entries(&self) -> Result<Vec<({key_type}, {value_type})>, JsError>;\n",
+        key.idl_name(),
+        value.idl_name(),
     );
 }
 

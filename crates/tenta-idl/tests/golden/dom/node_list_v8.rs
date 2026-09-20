@@ -32,7 +32,8 @@
 /// - `v8::Global`, `v8::Local::new`
 /// - `v8::PropertyAttribute::{NONE, READ_ONLY, DONT_ENUM, DONT_DELETE}`
 /// - `v8::Symbol::{get_to_string_tag, get_iterator, get_unscopables}`,
-///   `v8::Intrinsic::ArrayProtoValues`
+///   `v8::Intrinsic::{ArrayProtoEntries, ArrayProtoForEach, ArrayProtoKeys,
+///   ArrayProtoValues}`
 /// - `v8::Value::{to_uint32, int32_value, number_value, boolean_value,
 ///   to_rust_string_lossy, is_null_or_undefined}` (through the prelude)
 /// - `v8::Exception::{type_error, range_error, syntax_error}` and
@@ -70,7 +71,43 @@ pub fn install_node_list<T: NodeListOps + 'static>(
         v8::IndexedPropertyHandlerConfiguration::new().getter(indexed_get_node_list::<T>),
     );
     {
+        // A WebIDL value iterator exposes `%Array.prototype.entries%`.
+        let key = v8_string(scope, "entries")?;
+        prototype.set_intrinsic_data_property(
+            key.into(),
+            v8::Intrinsic::ArrayProtoEntries,
+            v8::PropertyAttribute::DONT_ENUM,
+        );
+    }
+    {
+        // A WebIDL value iterator exposes `%Array.prototype.forEach%`.
+        let key = v8_string(scope, "forEach")?;
+        prototype.set_intrinsic_data_property(
+            key.into(),
+            v8::Intrinsic::ArrayProtoForEach,
+            v8::PropertyAttribute::DONT_ENUM,
+        );
+    }
+    {
+        // A WebIDL value iterator exposes `%Array.prototype.keys%`.
+        let key = v8_string(scope, "keys")?;
+        prototype.set_intrinsic_data_property(
+            key.into(),
+            v8::Intrinsic::ArrayProtoKeys,
+            v8::PropertyAttribute::DONT_ENUM,
+        );
+    }
+    {
         // A WebIDL value iterator exposes `%Array.prototype.values%`.
+        let key = v8_string(scope, "values")?;
+        prototype.set_intrinsic_data_property(
+            key.into(),
+            v8::Intrinsic::ArrayProtoValues,
+            v8::PropertyAttribute::DONT_ENUM,
+        );
+    }
+    {
+        // `@@iterator` is the same intrinsic as `values`.
         let key = v8::Symbol::get_iterator(scope);
         prototype.set_intrinsic_data_property(
             key.into(),

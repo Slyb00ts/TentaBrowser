@@ -1108,6 +1108,97 @@ where
     Ok(object.into())
 }
 
+/// The isolate slot holding the captured `%Array.prototype.values%`.
+#[cfg(feature = "v8")]
+struct ArrayValuesSlot(v8::Global<v8::Function>);
+
+/// Returns `array` as an Array Iterator.
+///
+/// This is the whole of WebIDL's `iterable<K, V>` machinery for a collection
+/// the host can only hand over as a whole. A pair iterator has no `length` and
+/// no indexed accessor to drive an iterator from, so the generated `entries`,
+/// `keys` and `values` members each build a plain array from one snapshot and
+/// hand it here; one intrinsic serves all three, and no per-interface iterator
+/// object has to exist.
+///
+/// The returned object is an Array Iterator, not an interface-branded one:
+/// `Object.prototype.toString.call(it)` is `"[object Array Iterator]"`, and it
+/// is not an `instanceof` any DOM interface.
+#[cfg(feature = "v8")]
+pub fn array_iterator<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    array: v8::Local<'s, v8::Array>,
+) -> Result<v8::Local<'s, v8::Value>, JsError> {
+    let values = array_values(scope)?;
+    call_js_function(scope, values, array.into(), &[])
+}
+
+/// This isolate's `%Array.prototype.values%`, captured on first use.
+#[cfg(feature = "v8")]
+fn array_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Result<v8::Local<'s, v8::Function>, JsError> {
+    if let Some(slot) = scope.get_slot::<ArrayValuesSlot>() {
+        return Ok(v8::Local::new(scope, &slot.0));
+    }
+    let values = array_prototype_values(scope)?;
+    scope.set_slot(ArrayValuesSlot(v8::Global::new(scope.as_ref(), values)));
+    Ok(values)
+}
+
+/// Reads `Array.prototype.values` out of the current context.
+#[cfg(feature = "v8")]
+fn array_prototype_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Result<v8::Local<'s, v8::Function>, JsError> {
+    let context = scope.get_current_context();
+    let global = context.global(scope);
+    let key = v8_string(scope, "Array")?;
+    let array = global
+        .get(scope, key.into())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .ok_or_else(|| JsError::type_error("the context has no `Array` global"))?;
+    let key = v8_string(scope, "prototype")?;
+    let prototype = array
+        .get(scope, key.into())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .ok_or_else(|| JsError::type_error("`Array.prototype` is not an object"))?;
+    let key = v8_string(scope, "values")?;
+    prototype
+        .get(scope, key.into())
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+        .ok_or_else(|| JsError::type_error("`Array.prototype.values` is not callable"))
+}
+
+/// Calls `function` with `receiver` as its `this` and `arguments` as its
+/// argument list.
+///
+/// An exception the call throws is rethrown into `scope`, so it propagates out
+/// of the binding on its own; the returned error only carries the message for
+/// the caller's report. Relying on the `TryCatch` destructor instead would
+/// swallow the exception — the opposite of what the event-listener path in
+/// `tenta-js-v8` wants, and therefore not a contract this helper may lean on.
+#[cfg(feature = "v8")]
+pub fn call_js_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    function: v8::Local<'s, v8::Function>,
+    receiver: v8::Local<'s, v8::Value>,
+    arguments: &[v8::Local<'s, v8::Value>],
+) -> Result<v8::Local<'s, v8::Value>, JsError> {
+    v8::tc_scope!(let tc, scope);
+    match function.call(tc, receiver, arguments) {
+        Some(value) => Ok(value),
+        None => {
+            let message = tc
+                .message()
+                .map(|message| message.get(tc).to_rust_string_lossy(tc))
+                .unwrap_or_else(|| "the JavaScript call threw".to_string());
+            tc.rethrow();
+            Err(JsError::type_error(message))
+        }
+    }
+}
+
 /// Stores an arbitrary JavaScript value in the world's value table.
 #[cfg(feature = "v8")]
 pub fn value_from_v8(
