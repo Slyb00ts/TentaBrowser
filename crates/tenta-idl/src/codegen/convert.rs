@@ -5,7 +5,11 @@
 //! the callback bodies have one shape.
 
 use crate::codegen::rust_type::{Position, integer_suffix, rust_type};
-use crate::model::{Argument, Type};
+use crate::model::{Argument, Model, Type};
+
+/// The extended attribute WebIDL gives its loose callback conversion to; see
+/// [`from_v8_for_attribute_setter`].
+const LEGACY_TREAT_NON_OBJECT_AS_NULL: &str = "LegacyTreatNonObjectAsNull";
 
 /// `[Clamp]` / `[EnforceRange]` state of an integer conversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -79,9 +83,26 @@ pub fn from_v8(ty: &Type, scope: &str, value: &str, mode: IntegerMode) -> String
         Type::Dictionary(name) | Type::Enum(name) | Type::Union(name) => {
             format!("{name}::from_v8({scope}, {value})")
         }
-        Type::Callback(name) | Type::CallbackInterface(name) => {
-            format!("value_from_v8({scope}, {value}).map({name}::from_bits)")
-        }
+        // A callback interface converts as an object and nothing more: the
+        // whole algorithm is "if V is not an Object, throw a TypeError"
+        // (callback interface types, §3.2.16). Whether the object is callable
+        // is deliberately not asked here — that is the `handleEvent` lookup at
+        // *invocation* time, which the bindings already perform.
+        Type::CallbackInterface(name) => format!(
+            "if {value}.is_object() {{ value_from_v8({scope}, {value}).map({name}::from_bits) }} \
+             else {{ Err::<{name}, JsError>(JsError::type_error(\"the value is not an object, so it is not an `{name}`\")) }}"
+        ),
+        // A callback function converts as a callable: the conversion throws
+        // unless `IsCallable(V)` (callback function types, §3.2.19).
+        // `is_function` is that test — a callable `Proxy` passes it, where the
+        // stricter `TryFrom<Local<Function>>` would not. The one escape,
+        // `[LegacyTreatNonObjectAsNull]`, is a property of the *assignment* and
+        // not of the type, so it is applied by
+        // [`from_v8_for_attribute_setter`] and never here.
+        Type::Callback(name) => format!(
+            "if {value}.is_function() {{ value_from_v8({scope}, {value}).map({name}::from_bits) }} \
+             else {{ Err::<{name}, JsError>(JsError::type_error(\"the value is not callable, so it is not an `{name}`\")) }}"
+        ),
         Type::Promise(_) => format!("value_from_v8({scope}, {value}).map(Promise::from_bits)"),
         Type::Sequence(inner) | Type::FrozenArray(inner) | Type::ObservableArray(inner) => {
             let element = from_v8(inner, "scope", "item", IntegerMode::Modulo);
@@ -100,6 +121,50 @@ pub fn from_v8(ty: &Type, scope: &str, value: &str, mode: IntegerMode) -> String
         }
         other => unreachable!("integer type {other:?} is handled by the guarded arm above"),
     }
+}
+
+/// Builds the expression converting a value that is being **assigned to an
+/// attribute**.
+///
+/// This is the one conversion position where `[LegacyTreatNonObjectAsNull]`
+/// applies, and every one of the rule's conditions is about that position: the
+/// value must be assigned to an *attribute*, the attribute's type must be a
+/// *nullable* callback function, and the callback must carry the annotation
+/// (§3.4.8; the escape clause in §3.2.19 step 1 and the early return in
+/// §3.2.20 step 1 both restate all three).
+///
+/// Anywhere else — an operation argument, a dictionary member, an optional
+/// argument — [`from_v8`]'s strict gate is what WebIDL asks for, so the plain
+/// entry point keeps it.
+///
+/// The annotation is looked up on the *lowered* callback the nullable wraps,
+/// which is what makes both spellings reach it: `attribute ErrorHandler?
+/// handler2;` names the annotated callback directly, and the HTML Standard's
+/// `typedef EventHandlerNonNull? EventHandler;` resolves through the typedef to
+/// the same `Nullable(Callback(..))` shape.
+pub fn from_v8_for_attribute_setter(
+    model: &Model,
+    ty: &Type,
+    scope: &str,
+    value: &str,
+    mode: IntegerMode,
+) -> String {
+    if let Type::Nullable(inner) = ty
+        && let Type::Callback(name) = inner.as_ref()
+        && model
+            .callback(name)
+            .is_some_and(|callback| callback.attrs.has(LEGACY_TREAT_NON_OBJECT_AS_NULL))
+    {
+        // The loose path is the nullable conversion with a wider early return:
+        // a non-object — `null` and `undefined` included — becomes `null`, and
+        // **any** object is stored as itself, callable or not, so the inner
+        // conversion is the plain reference with no callable gate.
+        let reference = format!("value_from_v8({scope}, {value}).map({name}::from_bits)");
+        return format!(
+            "if !{value}.is_object() {{ Ok(None) }} else {{ ({reference}).map(Some) }}"
+        );
+    }
+    from_v8(ty, scope, value, mode)
 }
 
 /// Builds an expression of type `Result<v8::Local<v8::Value>, JsError>` that
@@ -231,7 +296,163 @@ pub fn return_value_cast(ty: &Type) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::BufferType;
+    use crate::model::{BufferType, Member};
+
+    /// The WebIDL §3.4.8 contrastive pair: one nullable callback attribute
+    /// whose callback is unannotated, one whose callback carries
+    /// `[LegacyTreatNonObjectAsNull]`.
+    fn handlers() -> Model {
+        crate::parse_webidl(
+            "callback OccurrenceHandler = undefined (DOMString details);\n\
+             [LegacyTreatNonObjectAsNull]\n\
+             callback ErrorHandler = undefined (DOMString details);\n\
+             interface Manager {\n  \
+             attribute OccurrenceHandler? handler1;\n  \
+             attribute ErrorHandler? handler2;\n\
+             };\n",
+        )
+        .expect("the snippet parses")
+    }
+
+    /// The lowered type of one attribute, which is what the conversion sees.
+    fn attribute_type(model: &Model, interface_name: &str, name: &str) -> Type {
+        let interface = model.interface(interface_name).expect("the interface");
+        match interface.member(name) {
+            Some(Member::Attribute(attribute)) => attribute.ty.clone(),
+            other => panic!("`{interface_name}.{name}` is an attribute, not {other:?}"),
+        }
+    }
+
+    /// The expression for one attribute's setter on `model`.
+    fn setter_conversion(model: &Model, interface_name: &str, name: &str) -> String {
+        from_v8_for_attribute_setter(
+            model,
+            &attribute_type(model, interface_name, name),
+            "scope",
+            "raw",
+            IntegerMode::Modulo,
+        )
+    }
+
+    /// A callback interface converts as an object — no callable test, because
+    /// `handleEvent` is looked up when the callback is *invoked*.
+    #[test]
+    fn a_callback_interface_is_gated_on_being_an_object() {
+        assert_eq!(
+            from_v8(
+                &Type::CallbackInterface("EventListener".to_string()),
+                "scope",
+                "raw",
+                IntegerMode::Modulo
+            ),
+            "if raw.is_object() { value_from_v8(scope, raw).map(EventListener::from_bits) } \
+             else { Err::<EventListener, JsError>(JsError::type_error(\"the value is not an object, so it is not an `EventListener`\")) }"
+        );
+    }
+
+    /// A callback function converts as a callable. This is the arm every
+    /// position other than an attribute setter gets, and it is deliberately
+    /// blind to `[LegacyTreatNonObjectAsNull]`: the annotation escapes the gate
+    /// only for an attribute assignment, never for an argument.
+    #[test]
+    fn a_callback_function_is_gated_on_being_callable() {
+        let strict = "if raw.is_function() { value_from_v8(scope, raw).map(OccurrenceHandler::from_bits) } \
+             else { Err::<OccurrenceHandler, JsError>(JsError::type_error(\"the value is not callable, so it is not an `OccurrenceHandler`\")) }";
+        assert_eq!(
+            from_v8(
+                &Type::Callback("OccurrenceHandler".to_string()),
+                "scope",
+                "raw",
+                IntegerMode::Modulo
+            ),
+            strict
+        );
+
+        // Even the annotated callback keeps the strict gate where the
+        // conversion is not an attribute assignment.
+        assert_eq!(
+            from_v8(
+                &Type::Callback("ErrorHandler".to_string()),
+                "scope",
+                "raw",
+                IntegerMode::Modulo
+            ),
+            "if raw.is_function() { value_from_v8(scope, raw).map(ErrorHandler::from_bits) } \
+             else { Err::<ErrorHandler, JsError>(JsError::type_error(\"the value is not callable, so it is not an `ErrorHandler`\")) }"
+        );
+    }
+
+    /// An unannotated nullable callback attribute keeps the strict gate, which
+    /// the nullable wrapper now carries into its non-null branch. Assigning it
+    /// `123` or `{}` throws, as §3.4.8's `handler1` does.
+    #[test]
+    fn an_unannotated_nullable_callback_attribute_keeps_the_strict_gate() {
+        let model = handlers();
+        assert_eq!(
+            setter_conversion(&model, "Manager", "handler1"),
+            "if raw.is_null_or_undefined() { Ok(None) } else { (if raw.is_function() { value_from_v8(scope, raw).map(OccurrenceHandler::from_bits) } else { Err::<OccurrenceHandler, JsError>(JsError::type_error(\"the value is not callable, so it is not an `OccurrenceHandler`\")) }).map(Some) }"
+        );
+    }
+
+    /// An annotated nullable callback attribute converts loosely: a non-object
+    /// becomes `null`, and **any** object is stored as itself — there is no
+    /// callable test on that branch, so `handler2 = {}` keeps the object.
+    #[test]
+    fn an_annotated_nullable_callback_attribute_takes_the_loose_conversion() {
+        let model = handlers();
+        assert_eq!(
+            setter_conversion(&model, "Manager", "handler2"),
+            "if !raw.is_object() { Ok(None) } else { (value_from_v8(scope, raw).map(ErrorHandler::from_bits)).map(Some) }"
+        );
+    }
+
+    /// The rule needs all three conditions, so dropping the nullability drops
+    /// the loose path: a non-nullable annotated callback attribute throws on a
+    /// non-callable exactly as an argument does.
+    #[test]
+    fn a_non_nullable_annotated_callback_attribute_keeps_the_strict_gate() {
+        let model = crate::parse_webidl(
+            "[LegacyTreatNonObjectAsNull]\n\
+             callback ErrorHandler = undefined (DOMString details);\n\
+             interface Manager { attribute ErrorHandler handler; };\n",
+        )
+        .expect("the snippet parses");
+        assert_eq!(
+            setter_conversion(&model, "Manager", "handler"),
+            from_v8(
+                &Type::Callback("ErrorHandler".to_string()),
+                "scope",
+                "raw",
+                IntegerMode::Modulo
+            )
+        );
+    }
+
+    /// The annotation is read off the *lowered* callback, so a typedef over the
+    /// callback reaches the loose rule exactly as naming it under `?` does. The
+    /// HTML Standard's `typedef EventHandlerNonNull? EventHandler;` is the
+    /// spelling this pins.
+    #[test]
+    fn an_annotated_nullable_attribute_reaches_the_loose_rule_through_a_typedef() {
+        let direct = handlers();
+        let via_typedef = crate::parse_webidl(
+            "[LegacyTreatNonObjectAsNull]\n\
+             callback ErrorHandler = undefined (DOMString details);\n\
+             typedef ErrorHandler? Handler;\n\
+             interface Manager { attribute Handler handler; };\n",
+        )
+        .expect("the snippet parses");
+
+        assert_eq!(
+            attribute_type(&via_typedef, "Manager", "handler"),
+            Type::Nullable(Box::new(Type::Callback("ErrorHandler".to_string()))),
+            "the typedef is substituted, so the attribute's type is the nullable callback"
+        );
+        assert_eq!(
+            setter_conversion(&via_typedef, "Manager", "handler"),
+            setter_conversion(&direct, "Manager", "handler2")
+        );
+    }
 
     /// A buffer source is converted by its bytes. `Handle<T>` is what the
     /// previous lowering produced, and it is what a native V8 typed array can

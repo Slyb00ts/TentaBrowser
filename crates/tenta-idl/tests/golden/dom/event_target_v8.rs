@@ -160,7 +160,7 @@ fn call_event_target_add_event_listener<'s, T: EventTargetOps + EventTargetConst
     };
     let callback = {
         let raw = args.get(1);
-        match if raw.is_null_or_undefined() { Ok(None) } else { (value_from_v8(scope, raw).map(EventListener::from_bits)).map(Some) } {
+        match if raw.is_null_or_undefined() { Ok(None) } else { (if raw.is_object() { value_from_v8(scope, raw).map(EventListener::from_bits) } else { Err::<EventListener, JsError>(JsError::type_error("the value is not an object, so it is not an `EventListener`")) }).map(Some) } {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -227,7 +227,7 @@ fn call_event_target_remove_event_listener<'s, T: EventTargetOps + EventTargetCo
     };
     let callback = {
         let raw = args.get(1);
-        match if raw.is_null_or_undefined() { Ok(None) } else { (value_from_v8(scope, raw).map(EventListener::from_bits)).map(Some) } {
+        match if raw.is_null_or_undefined() { Ok(None) } else { (if raw.is_object() { value_from_v8(scope, raw).map(EventListener::from_bits) } else { Err::<EventListener, JsError>(JsError::type_error("the value is not an object, so it is not an `EventListener`")) }).map(Some) } {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);

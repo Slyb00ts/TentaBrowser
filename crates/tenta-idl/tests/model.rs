@@ -316,11 +316,12 @@ fn fast_api_classification_follows_the_spec_rules() {
 fn dom_model_counts_every_definition() {
     let model = common::dom();
 
-    assert_eq!(model.interfaces.len(), 5);
+    assert_eq!(model.interfaces.len(), 6);
     assert_eq!(model.namespaces.len(), 1);
     assert_eq!(model.dictionaries.len(), 5);
     assert_eq!(model.enums.len(), 1);
-    assert_eq!(model.callbacks.len(), 1);
+    // `EventHandlerNonNull` (HTML) plus the WebIDL standard's §3.4.8 pair.
+    assert_eq!(model.callbacks.len(), 3);
     assert_eq!(model.callback_interfaces.len(), 1);
     assert_eq!(model.typedefs.len(), 4);
     assert_eq!(model.unions.len(), 3);
@@ -357,6 +358,7 @@ fn dom_model_counts_every_definition() {
             ("AbortSignal", 0, 7, 5),
             ("Node", 18, 46, 65),
             ("NodeList", 0, 2, 3),
+            ("Manager", 0, 2, 3),
         ]
     );
 
@@ -593,6 +595,54 @@ fn extended_attributes_survive_lowering() {
         operation(&model, "Node", "cloneNode").overloads[0]
             .attrs
             .has("NewObject")
+    );
+}
+
+/// `[LegacyTreatNonObjectAsNull]` decides the callback conversion the generator
+/// emits, so it has to survive the front end for the generator to see it at
+/// all. The HTML Standard carries it on `EventHandlerNonNull`; the WebIDL
+/// standard's §3.4.8 pair contrasts it against an unannotated callback.
+#[test]
+fn the_legacy_treat_non_object_as_null_annotation_survives_lowering() {
+    let model = common::dom();
+
+    assert!(
+        model
+            .callback("EventHandlerNonNull")
+            .expect("the callback")
+            .attrs
+            .has("LegacyTreatNonObjectAsNull"),
+        "the HTML Standard's annotation was dropped"
+    );
+    assert!(
+        model
+            .callback("ErrorHandler")
+            .expect("the callback")
+            .attrs
+            .has("LegacyTreatNonObjectAsNull")
+    );
+    assert!(
+        !model
+            .callback("OccurrenceHandler")
+            .expect("the callback")
+            .attrs
+            .has("LegacyTreatNonObjectAsNull"),
+        "the unannotated half of the contrastive pair gained the annotation"
+    );
+
+    // The annotated callback is reached through a typedef on one attribute and
+    // directly under `?` on the other; both lower to the same shape.
+    assert_eq!(
+        attribute(&model, "AbortSignal", "onabort").ty,
+        Type::Nullable(Box::new(Type::Callback("EventHandlerNonNull".to_string())))
+    );
+    assert_eq!(
+        attribute(&model, "Manager", "handler2").ty,
+        Type::Nullable(Box::new(Type::Callback("ErrorHandler".to_string())))
+    );
+    assert_eq!(
+        attribute(&model, "Manager", "handler1").ty,
+        Type::Nullable(Box::new(Type::Callback("OccurrenceHandler".to_string())))
     );
 }
 

@@ -42,6 +42,8 @@ mod dom_bindings {
     include!("golden/dom/node_list_register.rs");
     include!("golden/dom/css_ops.rs");
     include!("golden/dom/css_register.rs");
+    include!("golden/dom/manager_ops.rs");
+    include!("golden/dom/manager_register.rs");
 }
 
 use std::cell::Cell;

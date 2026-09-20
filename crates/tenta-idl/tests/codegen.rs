@@ -678,6 +678,52 @@ fn every_buffer_type_has_the_conversion_the_generator_calls() {
     }
 }
 
+/// `[LegacyTreatNonObjectAsNull]` widens the conversion of a **nullable**
+/// callback attribute and nothing else. The HTML Standard reaches the loose
+/// rule through `typedef EventHandlerNonNull? EventHandler`, the WebIDL
+/// standard's §3.4.8 pair names the annotated callback directly under `?` next
+/// to an unannotated one, and every other callback position keeps its gate.
+#[test]
+fn a_nullable_callback_attribute_converts_loosely_only_when_annotated() {
+    let model = common::dom();
+
+    // The annotated attribute, reached through the HTML Standard's typedef.
+    let onabort = generated_file(&model, "abort_signal_v8.rs").contents;
+    assert!(
+        onabort.contains(
+            "if !raw.is_object() { Ok(None) } else { (value_from_v8(scope, raw).map(EventHandlerNonNull::from_bits)).map(Some) }"
+        ),
+        "the annotated nullable callback attribute does not take the loose conversion"
+    );
+
+    // The WebIDL standard's pair: `handler2` annotated, `handler1` not. The
+    // unannotated one keeps the strict gate inside its nullable wrapper.
+    let manager = generated_file(&model, "manager_v8.rs").contents;
+    assert!(
+        manager.contains(
+            "if !raw.is_object() { Ok(None) } else { (value_from_v8(scope, raw).map(ErrorHandler::from_bits)).map(Some) }"
+        ),
+        "`Manager.handler2` does not take the loose conversion"
+    );
+    assert!(
+        manager.contains(
+            "if raw.is_null_or_undefined() { Ok(None) } else { (if raw.is_function() { value_from_v8(scope, raw).map(OccurrenceHandler::from_bits) } else { Err::<OccurrenceHandler, JsError>(JsError::type_error(\"the value is not callable, so it is not an `OccurrenceHandler`\")) }).map(Some) }"
+        ),
+        "`Manager.handler1` did not keep the strict gate"
+    );
+
+    // A callback interface in an argument position is gated on being an
+    // object; there is no callable test, because `handleEvent` is looked up
+    // when the callback is invoked.
+    let event_target = generated_file(&model, "event_target_v8.rs").contents;
+    assert!(
+        event_target.contains(
+            "if raw.is_object() { value_from_v8(scope, raw).map(EventListener::from_bits) } else { Err::<EventListener, JsError>(JsError::type_error(\"the value is not an object, so it is not an `EventListener`\")) }"
+        ),
+        "the callback interface conversion has no object gate"
+    );
+}
+
 #[test]
 fn the_registry_entry_point_carries_the_interface_description() {
     let model = common::dom();

@@ -107,7 +107,7 @@ pub fn interface_v8(model: &Model, interface: &Interface) -> String {
     for member in &interface.members {
         match member {
             Member::Attribute(attribute) => {
-                attribute_callbacks(interface, attribute, &bound, &mut out);
+                attribute_callbacks(model, interface, attribute, &bound, &mut out);
             }
             Member::Operation(group) => {
                 operation_callbacks(&interface.name, group, &bound, &mut out);
@@ -149,7 +149,7 @@ pub fn interface_v8(model: &Model, interface: &Interface) -> String {
 }
 
 /// Generates `<snake>_v8.rs` for a namespace.
-pub fn namespace_v8(_model: &Model, namespace: &Namespace) -> String {
+pub fn namespace_v8(model: &Model, namespace: &Namespace) -> String {
     let name = &namespace.name;
     let snake = naming::snake_stem(name);
     let bound = format!("{name}Ops");
@@ -203,7 +203,7 @@ pub fn namespace_v8(_model: &Model, namespace: &Namespace) -> String {
     for member in &namespace.members {
         match member {
             Member::Attribute(attribute) => {
-                attribute_callbacks_static(name, attribute, &bound, &mut out);
+                attribute_callbacks_static(model, name, attribute, &bound, &mut out);
             }
             Member::Operation(group) => {
                 operation_callbacks(name, group, &bound, &mut out);
@@ -625,13 +625,14 @@ fn constructor_callback(interface: &Interface, bound: &str, out: &mut String) {
 }
 
 fn attribute_callbacks(
+    model: &Model,
     interface: &Interface,
     attribute: &Attribute,
     bound: &str,
     out: &mut String,
 ) {
     if attribute.is_static {
-        attribute_callbacks_static(&interface.name, attribute, bound, out);
+        attribute_callbacks_static(model, &interface.name, attribute, bound, out);
         return;
     }
     let name = &interface.name;
@@ -737,7 +738,13 @@ fn attribute_callbacks(
         attribute.name,
         unwrap_this_block("    ")
     );
-    let conversion = convert::from_v8(&attribute.ty, "scope", "raw", IntegerMode::Modulo);
+    let conversion = convert::from_v8_for_attribute_setter(
+        model,
+        &attribute.ty,
+        "scope",
+        "raw",
+        IntegerMode::Modulo,
+    );
     let _ = write!(
         out,
         "    let raw = args.get(0);\n    \
@@ -758,6 +765,7 @@ fn attribute_callbacks(
 }
 
 fn attribute_callbacks_static(
+    model: &Model,
     interface: &str,
     attribute: &Attribute,
     bound: &str,
@@ -783,7 +791,13 @@ fn attribute_callbacks_static(
         "    match {conversion} {{\n        Ok(value) => rv.set(value),\n        Err(error) => throw_js_error(scope, &error),\n    }}\n}}\n"
     );
     if let Some(setter_name) = &attribute.setter_name {
-        let conversion = convert::from_v8(&attribute.ty, "scope", "raw", IntegerMode::Modulo);
+        let conversion = convert::from_v8_for_attribute_setter(
+            model,
+            &attribute.ty,
+            "scope",
+            "raw",
+            IntegerMode::Modulo,
+        );
         let pass = borrow_expr(&attribute.ty, "value");
         let _ = write!(
             out,

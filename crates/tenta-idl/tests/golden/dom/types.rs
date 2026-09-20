@@ -61,6 +61,13 @@ impl InterfaceMarker for HTMLCollection {
     const INTERFACE_NAME: &'static str = "HTMLCollection";
 }
 
+/// Marker for the WebIDL interface `Manager` (defined in this module).
+pub enum Manager {}
+
+impl InterfaceMarker for Manager {
+    const INTERFACE_NAME: &'static str = "Manager";
+}
+
 /// Marker for the WebIDL interface `Node` (defined in this module).
 pub enum Node {}
 
@@ -867,6 +874,12 @@ impl<'js> rquickjs::IntoJs<'js> for NodeOrDomString {
 
 /// `callback EventHandlerNonNull = any (Event event);`
 pub type EventHandlerNonNull = Callback<(Handle<Event>,), AnyValue>;
+
+/// `callback OccurrenceHandler = undefined (DOMString details);`
+pub type OccurrenceHandler = Callback<(String,), ()>;
+
+/// `callback ErrorHandler = undefined (DOMString details);`
+pub type ErrorHandler = Callback<(String,), ()>;
 
 /// `callback interface EventListener` with the single operation `handleEvent`.
 pub type EventListener = Callback<(Handle<Event>,), ()>;

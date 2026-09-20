@@ -415,7 +415,7 @@ fn set_abort_signal_onabort<'s, T: AbortSignalOps + EventTargetOps + EventTarget
         }
     };
     let raw = args.get(0);
-    let value = match if raw.is_null_or_undefined() { Ok(None) } else { (value_from_v8(scope, raw).map(EventHandlerNonNull::from_bits)).map(Some) } {
+    let value = match if !raw.is_object() { Ok(None) } else { (value_from_v8(scope, raw).map(EventHandlerNonNull::from_bits)).map(Some) } {
         Ok(value) => value,
         Err(error) => {
             throw_js_error(scope, &error);

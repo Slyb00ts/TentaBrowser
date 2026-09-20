@@ -56,6 +56,9 @@ mod dom_bindings {
     include!("golden/dom/css_ops.rs");
     include!("golden/dom/css_register.rs");
     include!("golden/dom/css_v8.rs");
+    include!("golden/dom/manager_ops.rs");
+    include!("golden/dom/manager_register.rs");
+    include!("golden/dom/manager_v8.rs");
 }
 
 // A trivial reference so the modules are considered used even if a future

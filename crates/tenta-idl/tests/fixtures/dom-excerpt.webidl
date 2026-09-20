@@ -8,6 +8,7 @@
 //   CSSOM View Module            https://drafts.csswg.org/cssom-view/
 //   CSS Object Model             https://drafts.csswg.org/cssom/
 //   High Resolution Time         https://w3c.github.io/hr-time/
+//   WebIDL Standard              https://webidl.spec.whatwg.org/
 //
 // Interfaces referenced but not defined here (Document, Element,
 // HTMLCollection, DOMTokenList, GetRootNodeOptions) resolve to opaque
@@ -22,7 +23,10 @@ typedef DOMString CSSOMString;
 // DOM Standard
 typedef (Node or DOMString) NodeOrString;
 
-// HTML Standard
+// HTML Standard. The annotation is the standard's own: it carries
+// `[LegacyTreatNonObjectAsNull]` on `EventHandlerNonNull`, which is what makes
+// `xhr.onload = 5` read back as `null` rather than throw.
+[LegacyTreatNonObjectAsNull]
 callback EventHandlerNonNull = any (Event event);
 typedef EventHandlerNonNull? EventHandler;
 
@@ -232,4 +236,22 @@ namespace CSS {
 
 partial namespace CSS {
   CSSOMString escape(CSSOMString ident);
+};
+
+// WebIDL Standard, §3.4.8 `[LegacyTreatNonObjectAsNull]`, copied verbatim. It
+// is the contrastive pair the two callback conversions exist for: `handler1`
+// is a nullable callback *without* the annotation, so a non-callable is
+// rejected, while `handler2`'s callback carries it, so a non-object becomes
+// `null` and any object is stored as itself. `ErrorHandler?` reaches the loose
+// rule directly under `?`, where the HTML Standard block above reaches it
+// through a typedef over the same lowered `Nullable(Callback(..))`.
+callback OccurrenceHandler = undefined (DOMString details);
+
+[LegacyTreatNonObjectAsNull]
+callback ErrorHandler = undefined (DOMString details);
+
+[Exposed=Window]
+interface Manager {
+  attribute OccurrenceHandler? handler1;
+  attribute ErrorHandler? handler2;
 };
