@@ -170,6 +170,22 @@ unsafe extern "C" fn on_gc_epilogue(
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// How one call of a queued handler ended, which is what a pump needs to know
+/// before it may run the next one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CallOutcome {
+    /// The timer was cancelled between its firing and its call, so no script
+    /// ran. HTML aborts such a timer and script relies on it: the debounce
+    /// idiom cancels a pending callback from another callback that came due in
+    /// the same sweep.
+    Cancelled,
+    /// The callback ran and returned.
+    Completed,
+    /// A termination stopped it, so this pump's deadline has already fired and
+    /// will not fire again for this entry.
+    Terminated,
+}
+
 impl Engine {
     /// Builds an isolate with one fresh context and no heap cap.
     pub fn new() -> Self {
@@ -907,9 +923,23 @@ impl Engine {
         self.host.microtasks_pending.set(false);
     }
 
-    /// Invokes up to `budget` handlers from the ready queue, each followed by a
-    /// microtask checkpoint, and returns how many ran. Handlers past the budget
-    /// stay queued in order for the next drive.
+    /// Invokes up to `budget` handlers from the ready queue and returns how many
+    /// ran. Handlers past the budget stay queued in order for the next drive.
+    ///
+    /// A callback that runs to its own end is followed by a microtask checkpoint.
+    /// A callback the watchdog terminated is counted as run — it did enter
+    /// script, and was stopped inside it — but is not followed by a checkpoint,
+    /// and ends this pump: the single arm the caller holds over this entry has
+    /// already fired and will not fire again, so a later callback of the same
+    /// sweep would be a runaway nothing could stop. Returning lets the caller arm
+    /// a fresh deadline for the next entry; the handlers left queued are what
+    /// keeps [`Self::next_wakeup`] reporting "now", so it does arm one.
+    ///
+    /// The checkpoint that would have followed costs nothing to skip. The
+    /// `TryCatch` has just unwound a termination, but the `host.enter_script` in
+    /// [`Self::invoke_handler`] already set `microtasks_pending`, so the debt
+    /// stays visible through `next_wakeup` and the next pump's leading
+    /// checkpoint pays it.
     fn invoke_ready(&mut self, budget: usize) -> usize {
         let mut run = 0;
         let mut taken = 0;
@@ -920,9 +950,16 @@ impl Engine {
             // flood of cancelled timers must not let one drive run unbounded.
             // It runs no script, so it is owed no checkpoint and is not counted.
             taken += 1;
-            if self.invoke_timer(&ready) {
-                self.checkpoint();
-                run += 1;
+            match self.invoke_timer(&ready) {
+                CallOutcome::Cancelled => {}
+                CallOutcome::Completed => {
+                    self.checkpoint();
+                    run += 1;
+                }
+                CallOutcome::Terminated => {
+                    run += 1;
+                    break;
+                }
             }
         }
         run
@@ -988,7 +1025,11 @@ impl Engine {
     ///
     /// It runs script only through `invoke_handler`, which clears a stray
     /// termination before each callback; the checkpoint that follows is behind
-    /// them, so this entry does not clear one itself.
+    /// them, so this entry does not clear one itself. A callback the watchdog
+    /// terminated ends the opportunity — its deadline is spent, as in
+    /// [`Self::invoke_ready`] — and the callbacks after it stay queued, so the
+    /// next `run_animation_frame`, entered on `next_wakeup`'s word, runs them
+    /// under an arm of its own.
     pub fn run_animation_frame(&mut self) {
         // Moves each due callback's handle onto the ready-frame queue.
         self.event_loop.run_animation_frame();
@@ -1002,15 +1043,21 @@ impl Engine {
     /// spin.
     pub fn tick_frame(&mut self) {
         self.event_loop.tick_frame();
-        // Timers that came due this frame run as tasks, each with a checkpoint.
-        // Through `invoke_ready` like every other drive path, so a panicking
-        // handler cannot take the rest of the queue down with it.
+        // Timers that came due this frame run as tasks, a checkpoint behind each
+        // that runs to its own end. Through `invoke_ready` like every other drive
+        // path, so a panicking handler cannot take the rest of the queue down
+        // with it.
         self.invoke_ready(usize::MAX);
         self.drain_ready_frames();
     }
 
     /// Invokes every animation-frame callback whose frame has come, each with
-    /// its timestamp, followed by a microtask checkpoint.
+    /// its timestamp and followed by a microtask checkpoint — until one is
+    /// terminated, which ends the drain for the same reason it ends
+    /// [`Self::invoke_ready`]: the deadline that killed it is spent, and this
+    /// entry has to return before another callback can be run under a new one.
+    /// The callbacks that did not run stay queued, in order, which is what makes
+    /// the deferred work visible to [`Self::next_wakeup`].
     fn drain_ready_frames(&mut self) {
         // Popped one at a time for the same reason as the timer ready queue: a
         // local batch would be dropped by an unwind, losing every callback that
@@ -1022,7 +1069,9 @@ impl Engine {
             let Some((handler, timestamp)) = next else {
                 break;
             };
-            self.invoke_handler(&handler, Some(timestamp));
+            if self.invoke_handler(&handler, Some(timestamp)) == CallOutcome::Terminated {
+                break;
+            }
             self.checkpoint();
         }
     }
@@ -1035,7 +1084,11 @@ impl Engine {
     /// a `setTimeout(f, 0)` chain would be scheduled from depth 1 every time
     /// and never reach the clamp, and every timer-scheduled task would look
     /// like top-level work to the settle machine.
-    fn invoke_timer(&mut self, ready: &ReadyHandler) -> bool {
+    ///
+    /// The outcome is [`Self::invoke_handler`]'s, except for the timer that was
+    /// cancelled in the window between its firing and this call: it ran no
+    /// script, so it is [`CallOutcome::Cancelled`] rather than completed.
+    fn invoke_timer(&mut self, ready: &ReadyHandler) -> CallOutcome {
         let scheduler = self.host.scheduler.clone();
         // The claim both spends the firing and hands back the count it holds.
         // The guard releases it when it drops, after the call below - and on
@@ -1051,16 +1104,15 @@ impl Engine {
             // idiom cancels a pending callback from another callback that came
             // due in the same sweep. The cancel already released the firing's
             // count, so nothing is owed here.
-            return false;
+            return CallOutcome::Cancelled;
         }
         let _release = firing.map(|firing| FiringRelease::new(&scheduler, firing));
         let origin = ready.origin;
         let nesting = ready.nesting;
         let handler = &ready.handler;
         scheduler.with_nesting(nesting, || {
-            scheduler.with_origin(origin, || self.invoke_handler(handler, None));
-        });
-        true
+            scheduler.with_origin(origin, || self.invoke_handler(handler, None))
+        })
     }
 
     /// Calls one handler in this engine's context, passing `timestamp` as the
@@ -1071,6 +1123,13 @@ impl Engine {
     /// runs. Surfacing the exception to the error console lands with the
     /// reporting work package.
     ///
+    /// It reports how the call ended, because a caller about to run a *second*
+    /// callback needs to know a termination is what stopped the first. A
+    /// termination is not merely an error like the exceptions the `TryCatch`
+    /// contains: it means a watchdog's deadline fired, and that deadline covered
+    /// this whole entry. The pump's caller knows that, and returns so a fresh one
+    /// can be armed; see [`Self::invoke_ready`].
+    ///
     /// This is the third way script is entered and so the third start-of-entry
     /// clear (`discard_stray_termination`): every timer and animation-frame
     /// callback in the crate reaches V8 through here, which is what makes
@@ -1078,12 +1137,16 @@ impl Engine {
     /// without each clearing on its own — `run_animation_frame` runs its
     /// callbacks before its first checkpoint, so a clear there would come too
     /// late for the first one.
-    fn invoke_handler(&mut self, handler: &v8::Global<v8::Function>, timestamp: Option<f64>) {
+    fn invoke_handler(
+        &mut self,
+        handler: &v8::Global<v8::Function>,
+        timestamp: Option<f64>,
+    ) -> CallOutcome {
         self.discard_stray_termination();
         // A timer or animation-frame callback is a script activation too: an
         // event it dispatches must not checkpoint microtasks between listeners.
         self.host.enter_script();
-        {
+        let terminated = {
             v8::scope!(let handle_scope, &mut self.isolate);
             let context = v8::Local::new(handle_scope, &self.context);
             let mut context_scope = v8::ContextScope::new(handle_scope, context);
@@ -1100,8 +1163,14 @@ impl Engine {
                     let _ = function.call(tc, recv, &[]);
                 }
             }
-        }
+            tc.has_terminated()
+        };
         self.host.exit_script();
+        if terminated {
+            CallOutcome::Terminated
+        } else {
+            CallOutcome::Completed
+        }
     }
 }
 

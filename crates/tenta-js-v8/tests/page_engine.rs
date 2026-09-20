@@ -508,6 +508,211 @@ fn a_terminate_during_a_timer_callback_stops_that_callback_and_no_later_script()
 }
 
 #[test]
+fn a_terminated_timer_callback_ends_the_pump_before_the_next_runaway() {
+    // The hole this pins: a page arms one watchdog deadline over one
+    // `pump_due_timers` entry, and the pump used to run every callback that came
+    // due in that sweep under it. The first callback's termination was consumed
+    // by the call itself, the second callback's own start-of-entry clear wiped
+    // the spent request, and the deadline that was meant to stop it had already
+    // fired and could not fire again — so the second runaway was unkillable.
+    //
+    // Both callbacks therefore run a loop that is finite and seconds long rather
+    // than `while (1)`: with the fix absent the second one still *returns*, and
+    // the assertions below report it, instead of leaving a leaked worker thread
+    // spinning where only `run_bounded`'s 30 s bound could notice.
+    let (
+        pumped,
+        elapsed,
+        first_entered,
+        second_entered,
+        second_completed,
+        pumped2,
+        second_entered_later,
+        second_completed_later,
+    ) = run_bounded(|| {
+        let (document, _target) = test_document();
+        let mut engine = engine_over(&document);
+        engine
+            .run_script(
+                "setTimeout(() => { \
+                     document.body.classList.add('first-entered'); \
+                     let s = 0; \
+                     for (let i = 0; i < 2_000_000_000; i++) { s += i; } \
+                 }, 0); \
+                 setTimeout(() => { \
+                     document.body.classList.add('second-entered'); \
+                     let s = 0; \
+                     for (let i = 0; i < 2_000_000_000; i++) { s += i; } \
+                     document.body.classList.add('second-completed'); \
+                 }, 0);",
+                ScriptKind::Classic,
+            )
+            .expect("the scheduling script runs");
+
+        // The deadline both callbacks of the sweep were meant to share.
+        let watchdog = engine.watchdog().expect("a V8 isolate can be interrupted");
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            watchdog.terminate();
+        });
+
+        let started = Instant::now();
+        let pumped = engine.pump_due_timers(10);
+        let elapsed = started.elapsed();
+        let first_entered = body_has_class(&document, "first-entered");
+        let second_entered = body_has_class(&document, "second-entered");
+        let second_completed = body_has_class(&document, "second-completed");
+
+        // Phase two: the terminated callback ended the pump, so the second one
+        // is still queued, and a fresh arm and a fresh pump reach it. Under the
+        // old behaviour there was nothing left to reach — the callback ran in
+        // phase one, past the only deadline there was.
+        let watchdog = engine.watchdog().expect("a V8 isolate can be interrupted");
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            watchdog.terminate();
+        });
+        let pumped2 = engine.pump_due_timers(10);
+        (
+            pumped,
+            elapsed,
+            first_entered,
+            second_entered,
+            second_completed,
+            pumped2,
+            body_has_class(&document, "second-entered"),
+            body_has_class(&document, "second-completed"),
+        )
+    });
+
+    assert_eq!(
+        pumped, 1,
+        "the pump entered the terminated callback once and stopped: \
+         elapsed={elapsed:?}, first_entered={first_entered}, \
+         second_entered={second_entered}, second_completed={second_completed}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "the pump stopped at the deadline, not after the second runaway finished: {elapsed:?}"
+    );
+    assert!(
+        first_entered,
+        "the terminated callback did enter script before the deadline stopped it"
+    );
+    assert!(
+        !second_entered,
+        "the second callback of the same pump was not entered"
+    );
+    assert!(
+        !second_completed,
+        "the second callback of the same pump did not reach its end"
+    );
+    assert_eq!(
+        pumped2, 1,
+        "the deferred callback stayed queued and the next pump reached it"
+    );
+    assert!(
+        second_entered_later,
+        "the second callback was deferred, not dropped"
+    );
+    assert!(
+        !second_completed_later,
+        "and that pump's fresh deadline stopped it too"
+    );
+}
+
+#[test]
+fn a_terminated_frame_callback_ends_the_opportunity_before_the_next_runaway() {
+    // The same hole on the rendering-opportunity side: `run_animation_frame` is
+    // the entry a page arms, both callbacks registered before the frame come due
+    // in that one call, and only the first of them was covered by the arm.
+    let (
+        elapsed,
+        first_entered,
+        second_entered,
+        second_completed,
+        second_entered_later,
+        second_completed_later,
+    ) = run_bounded(|| {
+        let (document, _target) = test_document();
+        let mut engine = engine_over(&document);
+        engine
+            .run_script(
+                "requestAnimationFrame(() => { \
+                     document.body.classList.add('first-frame-entered'); \
+                     let s = 0; \
+                     for (let i = 0; i < 2_000_000_000; i++) { s += i; } \
+                 }); \
+                 requestAnimationFrame(() => { \
+                     document.body.classList.add('second-frame-entered'); \
+                     let s = 0; \
+                     for (let i = 0; i < 2_000_000_000; i++) { s += i; } \
+                     document.body.classList.add('second-frame-completed'); \
+                 });",
+                ScriptKind::Classic,
+            )
+            .expect("the registering script runs");
+
+        let watchdog = engine.watchdog().expect("a V8 isolate can be interrupted");
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            watchdog.terminate();
+        });
+
+        let started = Instant::now();
+        engine.run_animation_frame();
+        let elapsed = started.elapsed();
+        let first_entered = body_has_class(&document, "first-frame-entered");
+        let second_entered = body_has_class(&document, "second-frame-entered");
+        let second_completed = body_has_class(&document, "second-frame-completed");
+
+        // The callback the terminated one displaced stays on the ready-frame
+        // queue, and the next opportunity runs it — under an arm of its own.
+        let watchdog = engine.watchdog().expect("a V8 isolate can be interrupted");
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            watchdog.terminate();
+        });
+        engine.run_animation_frame();
+        (
+            elapsed,
+            first_entered,
+            second_entered,
+            second_completed,
+            body_has_class(&document, "second-frame-entered"),
+            body_has_class(&document, "second-frame-completed"),
+        )
+    });
+
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "the opportunity stopped at the deadline, not after the second runaway finished: \
+         elapsed={elapsed:?}, first_entered={first_entered}, \
+         second_entered={second_entered}, second_completed={second_completed}"
+    );
+    assert!(
+        first_entered,
+        "the terminated frame callback did enter script before the deadline stopped it"
+    );
+    assert!(
+        !second_entered,
+        "the second callback of the same frame was not entered"
+    );
+    assert!(
+        !second_completed,
+        "the second callback of the same frame did not reach its end"
+    );
+    assert!(
+        second_entered_later,
+        "the second callback was deferred to the next frame, not dropped"
+    );
+    assert!(
+        !second_completed_later,
+        "and that frame's fresh deadline stopped it too"
+    );
+}
+
+#[test]
 fn the_factory_refuses_a_timezone_it_cannot_apply() {
     // A per-page timezone needs process-global ICU configuration V8 only
     // accepts before the platform is initialised, so the honest answer is an
