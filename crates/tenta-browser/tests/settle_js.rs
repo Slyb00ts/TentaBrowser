@@ -14,7 +14,7 @@ use std::time::Duration;
 use tenta_browser::{
     ContextOptions, Document, Engine, Goto, PageOptions, Settle, SettleConfig, SettleState,
 };
-use tenta_core::{Budgets, Tier};
+use tenta_core::{Budgets, Error, Tier};
 use tenta_testutil::{FixtureServer, FixtureServerConfig, TempDir};
 
 /// An engine whose ceiling reaches Tier 2, so a page may ask for JavaScript.
@@ -158,6 +158,69 @@ async fn a_runaway_timer_callback_does_not_hang_the_navigation() {
         text_of(&document, "#tail"),
         "reached",
         "the runaway callback ran and mutated the tree before it was terminated"
+    );
+    engine.close();
+}
+
+/// The other half of the pair with the runaway-timer test above.
+///
+/// Under the default 60 s script budget a terminated runaway is survivable:
+/// termination is how the page survives it (the test above). A page whose
+/// *cumulative* script budget is reached has not made progress, and that is a
+/// crash (`docs/spec/05-javascript.md` §11). Here `script_cpu` is set equal to
+/// the per-entry `evaluate_time`, so the one `while (true) {}` that the engine's
+/// own deadline terminates is itself the crossing — a terminated entry is not a
+/// crash by itself; spending the budget is.
+///
+/// `tokio::time::timeout` turns a regression into a failure rather than a hung
+/// suite, as it does in the sibling test.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_page_that_reaches_its_script_budget_is_crashed() {
+    let (server, _temp) = serve(
+        "<!doctype html><html><head></head><body>\
+         <script>while (true) {}</script>\
+         <p id=\"tail\">the rest of the parse</p>\
+         </body></html>",
+    )
+    .await;
+    let engine = js_engine(SettleConfig::library());
+    // `script_cpu` equals `evaluate_time`, so the single terminated entry is the
+    // crossing.
+    let context = engine
+        .new_context(ContextOptions {
+            allow_private_network: true,
+            budgets: Some(
+                Budgets::desktop()
+                    .evaluate_time(Duration::from_millis(100))
+                    .script_cpu(Duration::from_millis(100)),
+            ),
+            ..ContextOptions::default()
+        })
+        .expect("context");
+    let page = context
+        .new_page(PageOptions::default())
+        .await
+        .expect("a JavaScript page");
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(10),
+        page.goto(&server.url("/index.html"), Goto::default()),
+    )
+    .await
+    .expect("the navigation returned instead of hanging on the runaway script")
+    .expect_err("a page that spends its whole script budget is crashed");
+    match &error {
+        Error::Crashed { reason } => {
+            assert!(
+                reason.contains("script"),
+                "the reason names the budget: {reason}"
+            );
+        }
+        other => panic!("expected Crashed, got {other:?}"),
+    }
+    assert!(
+        page.crash_reason().is_some(),
+        "the page is marked crashed, not merely a failed navigation"
     );
     engine.close();
 }

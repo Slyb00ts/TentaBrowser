@@ -236,32 +236,42 @@ impl Record {
 /// spin: a page whose deadline is not enforced fails the test's patience
 /// instead of burning a core, which is what makes the hang observable rather
 /// than a wedged suite.
+///
+/// The count is monotonic, not a one-shot flag. V8's termination request is per
+/// entry, and after stage (a) each entry can be terminated again, so a second
+/// `block` in the same page must still be observable: a latch would make a
+/// second wait return instantly, on the first termination, and the test would
+/// lie about when the second entry was cut short. `terminate` therefore
+/// increments, and `wait` waits for a later increment than the one it saw.
 #[derive(Default)]
 struct Termination {
-    fired: Mutex<bool>,
+    releases: Mutex<usize>,
     released: Condvar,
 }
 
 impl Termination {
-    /// Releases every waiter. Idempotent, like the real `terminate_execution`.
+    /// Releases every waiter. A later `wait` still blocks until a *further*
+    /// terminate, exactly as a fresh termination request does.
     fn terminate(&self) {
-        *self
-            .fired
+        let mut releases = self
+            .releases
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *releases += 1;
         self.released.notify_all();
     }
 
-    /// Blocks the page thread until a terminate arrives.
+    /// Blocks the page thread until a terminate arrives after this call.
     fn wait(&self) {
-        let mut fired = self
-            .fired
+        let mut releases = self
+            .releases
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        while !*fired {
-            fired = self
+        let seen = *releases;
+        while *releases <= seen {
+            releases = self
                 .released
-                .wait(fired)
+                .wait(releases)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
         }
     }
@@ -544,6 +554,7 @@ impl ProvenanceSink for RecordingSink {
 /// detach <id>
 /// gc
 /// block
+/// spin <ms>
 /// setTimeout <command…> <ms>
 /// setInterval <command…> <ms>
 /// raf <command…>
@@ -607,6 +618,21 @@ fn run_command(command: &str, context: &Rc<ScriptContext>) {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .blocked = true;
             context.termination.wait();
+        }
+        // Busy-waits on the page thread for that many milliseconds and always
+        // returns. It spends real time inside an engine entry *without* needing
+        // the entry killed, which is what makes the page-lifetime script budget
+        // test deterministic: the charge it produces is a fact of the command,
+        // not of the watchdog thread's timing.
+        "spin" => {
+            let ms: u64 = rest
+                .first()
+                .and_then(|token| token.parse().ok())
+                .unwrap_or(0);
+            let until = Instant::now() + Duration::from_millis(ms);
+            while Instant::now() < until {
+                std::hint::spin_loop();
+            }
         }
         "setTimeout" | "setInterval" | "loop-forever" => {
             // The delay of a scheduled command is its last token; everything

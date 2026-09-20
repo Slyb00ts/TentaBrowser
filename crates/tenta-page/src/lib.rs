@@ -13,6 +13,9 @@ pub mod page;
 // Private: the runtime is page-thread-local state the page owns, not an API
 // (`crates/tenta-page/src/runtime.rs`).
 mod runtime;
+// Private: the page's cumulative script budget is page-thread state the page
+// owns, not an API (`crates/tenta-page/src/script_cpu.rs`).
+mod script_cpu;
 pub mod settle;
 pub mod task;
 pub mod thread;

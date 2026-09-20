@@ -118,6 +118,14 @@ impl ProvenanceSink for SettleBridge {
 /// is spread over thousands of mutations instead of punctuating every render.
 const MUTATIONS_PER_SWEEP: u64 = 4096;
 
+/// Where one navigation's runtime reports the script time it spent.
+///
+/// The runtime itself is rebuilt per navigation, so it cannot own the total —
+/// see `crate::script_cpu`. It reports, the page accumulates and decides.
+pub(crate) trait ScriptBudget: Send + Sync {
+    fn charge(&self, elapsed: Duration);
+}
+
 /// One engine and the document it is bound to, on the page thread.
 pub(crate) struct PageRuntime {
     page: PageId,
@@ -157,6 +165,11 @@ pub(crate) struct PageRuntime {
     /// already-elapsed budget is a pre-entry failure, not a terminate
     /// ([`PageRuntime::bounded`]).
     script_timeout: Duration,
+    /// Where the page accumulates the script time this runtime spends.
+    ///
+    /// The runtime reports into it but does not own it: the total is the page's
+    /// and outlives this navigation (`crate::script_cpu`).
+    script_budget: Arc<dyn ScriptBudget>,
 }
 
 impl PageRuntime {
@@ -166,6 +179,7 @@ impl PageRuntime {
         document: SharedDocument,
         config: &PageConfig,
         tracker: Rc<RefCell<SettleTracker>>,
+        script_budget: Arc<dyn ScriptBudget>,
     ) -> Result<PageRuntime, String> {
         let factory = config
             .engine
@@ -206,6 +220,7 @@ impl PageRuntime {
             last_gc_epoch,
             watchdog,
             script_timeout,
+            script_budget,
         })
     }
 
@@ -240,7 +255,8 @@ impl PageRuntime {
     }
 
     /// Runs one engine entry under the page's per-entry script deadline, when
-    /// the engine offers a watchdog to enforce it.
+    /// the engine offers a watchdog to enforce it, and charges the page's
+    /// cumulative script budget for whatever the entry spends either way.
     ///
     /// `run_script` bounds itself, by a private per-run thread inside the
     /// backend, and is deliberately not armed here — arming it too would put a
@@ -256,18 +272,29 @@ impl PageRuntime {
     /// `d1ee1d9`). A deadline that has already passed at arming time is a
     /// pre-entry failure, not a terminate: the entry's clear would swallow it
     /// and the entry would run unbounded, so nothing is armed when the page has
-    /// no time left. Deciding what that failure does is the page's script-CPU
-    /// budget work, not this stage's.
+    /// no time left; what such an entry spends is still charged below.
+    ///
+    /// The *charge* is unconditional, unlike the arm: the page's cumulative
+    /// script budget is a fact about the entry however the entry was bounded,
+    /// so an engine with no watchdog and a zero per-entry timeout are still
+    /// accounted for (`crate::script_cpu`).
     fn bounded<R>(&mut self, entry: &'static str, run: impl FnOnce(&mut dyn PageEngine) -> R) -> R {
-        let Some(handle) = self.watchdog.clone() else {
-            return run(&mut *self.engine);
+        let started = Instant::now();
+        // The deadline is armed only when there is something to arm it through
+        // and a non-zero timeout to enforce; the decision that used to be two
+        // early returns is now local to the arm.
+        let arm = match &self.watchdog {
+            Some(handle) if !self.script_timeout.is_zero() => Some(crate::watchdog::arm(
+                Arc::clone(handle),
+                started + self.script_timeout,
+            )),
+            _ => None,
         };
-        if self.script_timeout.is_zero() {
-            return run(&mut *self.engine);
-        }
-        let arm = crate::watchdog::arm(handle, Instant::now() + self.script_timeout);
         let outcome = run(&mut *self.engine);
-        if arm.fired() {
+        self.script_budget.charge(started.elapsed());
+        if let Some(arm) = &arm
+            && arm.fired()
+        {
             tracing::warn!(
                 page = ?self.page,
                 entry,
@@ -444,6 +471,11 @@ impl PageRuntime {
     /// forbids *freeing nodes* while a parser is in flight, and the reclaim
     /// guard is on `turn`, which this never reaches.
     pub(crate) fn run_source(&mut self, source: &str) {
+        // `run_script` bounds itself, with a private per-run thread inside the
+        // backend, so it is not wrapped in `bounded` — but its time is still
+        // the page's script time and is charged here. Charging only the
+        // microtask checkpoint below would miss the script itself.
+        let started = Instant::now();
         if let Err(error) = self.engine.run_script(source, ScriptKind::Classic) {
             tracing::warn!(
                 page = ?self.page,
@@ -452,6 +484,7 @@ impl PageRuntime {
                 "a script did not run to completion"
             );
         }
+        self.script_budget.charge(started.elapsed());
         // The script's own checkpoints are owed even when it threw, and the
         // checkpoint runs callback script the engine does not bound itself.
         self.bounded("microtasks", |engine| engine.run_microtasks());
@@ -600,6 +633,7 @@ pub(crate) fn ensure_runtime(
     document: SharedDocument,
     config: &PageConfig,
     tracker: Rc<RefCell<SettleTracker>>,
+    script_budget: Arc<dyn ScriptBudget>,
 ) {
     let existing = RUNTIMES.with(|cell| {
         cell.borrow()
@@ -621,7 +655,7 @@ pub(crate) fn ensure_runtime(
         }
         None => {}
     }
-    match PageRuntime::create(page, document, config, tracker) {
+    match PageRuntime::create(page, document, config, tracker, script_budget) {
         Ok(runtime) => {
             RUNTIMES.with(|cell| {
                 cell.borrow_mut().insert(page, runtime);
@@ -665,9 +699,16 @@ pub(crate) async fn run_pending_script(
     config: &PageConfig,
     tracker: &Rc<RefCell<SettleTracker>>,
     meta: &ScriptMeta,
+    script_budget: Arc<dyn ScriptBudget>,
 ) -> Result<Option<DeferredTiming>, Error> {
     let page = config.id;
-    ensure_runtime(page, document.clone(), config, Rc::clone(tracker));
+    ensure_runtime(
+        page,
+        document.clone(),
+        config,
+        Rc::clone(tracker),
+        Arc::clone(&script_budget),
+    );
     let Some(step) = with_runtime_for(page, document, |runtime| {
         runtime.run_pending_script(parser, &meta.base)
     }) else {
@@ -944,6 +985,14 @@ mod tests {
         }
     }
 
+    /// A budget that ignores what it is charged: the tests here drive `turn`
+    /// for the reclaim guard, not for the page's script accounting.
+    struct NullBudget;
+
+    impl ScriptBudget for NullBudget {
+        fn charge(&self, _elapsed: Duration) {}
+    }
+
     /// A runtime over an empty document and a recording engine, with
     /// `parse_in_flight` as the test sets it. The fields are this module's, so
     /// the test builds the state directly rather than driving a parse into it —
@@ -968,6 +1017,7 @@ mod tests {
             last_gc_epoch: 0,
             watchdog: None,
             script_timeout: Duration::from_secs(30),
+            script_budget: Arc::new(NullBudget),
         };
         (runtime, trims, epoch)
     }

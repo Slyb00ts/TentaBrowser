@@ -32,6 +32,8 @@ use crate::error_page::error_document;
 use crate::event::{EVENT_BUFFER, PageEvent, PageEvents};
 use crate::fetch_policy::{FetchPolicy, RecordedHint};
 use crate::runtime;
+use crate::runtime::ScriptBudget;
+use crate::script_cpu::ScriptCpu;
 use crate::settle::{
     Origin, PendingScripts, RequestClass, Settle, SettleConfig, SettleState, SettleTracker,
 };
@@ -287,6 +289,10 @@ struct PageInner {
     // Notified when the generation changes (cancelled by goto or close).
     // Wakes settle waiters so they check the generation immediately (B-R3-1).
     generation_changed: Notify,
+    /// The page's cumulative script time. It lives here, not on a runtime,
+    /// because a runtime is rebuilt for every navigation and the budget is a
+    /// property of the page (`crate::script_cpu`).
+    script_cpu: ScriptCpu,
 }
 
 impl PageInner {
@@ -298,15 +304,54 @@ impl PageInner {
         }
     }
 
+    fn crash_reason(&self) -> Option<String> {
+        self.state.lock().crashed.clone()
+    }
+
     fn mark_crashed(&self, reason: &str) {
         {
             let mut state = self.state.lock();
             state.crashed = Some(reason.to_owned());
             state.document = None;
+            // A crash is raised on the page thread while the navigation that
+            // caused it is parked in `settle_loop`, waiting on
+            // `generation_changed`. The settled pattern in this file is
+            // "register, then re-check": bumping here is what a waiter that has
+            // not yet re-checked sees as a generation change, and it re-checks
+            // and finds the crash; the notification below wakes one already
+            // parked. Without both, a crash inside an engine turn would leave
+            // the navigation waiting for a deadline that `evaluate_time` may
+            // place far away.
+            state.navigation_generation = state.navigation_generation.wrapping_add(1);
         }
+        self.generation_changed.notify_waiters();
         self.emit(PageEvent::Crashed {
             reason: reason.to_owned(),
         });
+    }
+}
+
+/// The page is where script time accumulates: the runtime reports what one
+/// entry spent, [`ScriptCpu`] holds the total, and this is the one place the
+/// two meet.
+///
+/// Only the first crossing crashes the page. A terminated entry — the outcome
+/// of the per-entry deadline — is deliberately *not* a crash: termination is
+/// how a page survives a runaway, and only burning the cumulative budget is
+/// the fact that the page has not made progress (`docs/spec/05-javascript.md`
+/// §11). This is called from the page thread, inside the engine entry, so the
+/// crash lands while the navigation driving that entry is parked.
+impl ScriptBudget for PageInner {
+    fn charge(&self, elapsed: Duration) {
+        if !self.script_cpu.charge(elapsed) {
+            return;
+        }
+        let reason = format!(
+            "the page ran out of script time: {} ms spent of a {} ms budget",
+            self.script_cpu.spent().as_millis(),
+            self.script_cpu.budget().as_millis(),
+        );
+        self.mark_crashed(&reason);
     }
 }
 
@@ -347,6 +392,7 @@ impl Page {
                 events: Mutex::new(None),
                 // Notified when generation changes (B-R3-1)
                 generation_changed: Notify::new(),
+                script_cpu: ScriptCpu::new(config.budgets.script_cpu),
                 config,
             }),
         }
@@ -394,7 +440,7 @@ impl Page {
 
     /// The reason this page crashed, if it did.
     pub fn crash_reason(&self) -> Option<String> {
-        self.inner.state.lock().crashed.clone()
+        self.inner.crash_reason()
     }
 
     pub fn is_closed(&self) -> bool {
@@ -513,6 +559,15 @@ impl Page {
                             Err(Error::Crashed { reason })
                         }
                     };
+                // A crash that `navigate` returned as an ordinary error — a page
+                // that burned its script budget — is normalized here: the page's
+                // own reason is the truth, and the aborted navigation it caused
+                // (an `Aborted` net error, or the `Crashed` the checks inside
+                // produced) must not mask it.
+                let result = match (result, reporter.crash_reason()) {
+                    (Err(_), Some(reason)) => Err(Error::Crashed { reason }),
+                    (result, _) => result,
+                };
                 let _ = reply.send(result);
             })
         }))?;
@@ -1479,8 +1534,25 @@ async fn drive_parse(
             document_url: final_url.clone(),
             deadline,
         };
-        let deferred =
-            runtime::run_pending_script(parser, document, config, &jobs.tracker, &meta).await?;
+        let deferred = runtime::run_pending_script(
+            parser,
+            document,
+            config,
+            &jobs.tracker,
+            &meta,
+            Arc::clone(inner) as Arc<dyn ScriptBudget>,
+        )
+        .await?;
+        // A script that ran inside `run_pending_script` may have burned the
+        // page's script budget, which crashes the page from inside that entry.
+        // The parse must not carry on with a page that is gone. Returning here
+        // drops `deferred` and `pending` on the way out, and that is complete:
+        // `deferred` holds only the URL of a script whose fetch has not been
+        // started, and `PendingScripts` releases its hold in its own `Drop`, so
+        // nothing is left in flight.
+        if let Some(reason) = inner.crash_reason() {
+            return Err(Error::Crashed { reason });
+        }
         // Handing a script out makes the document's encoding certain, so this
         // is the encoding the script's bytes are decoded with — including for a
         // parallel fetch, whose decoding happens after the pause is over.
@@ -1918,6 +1990,12 @@ async fn settle_loop(
         generation_notified.as_mut().enable();
         {
             let state = inner.state.lock();
+            // A crash wins over the generation check: a crashed page is not
+            // merely "a new navigation started", and the generation it bumped
+            // on the way here must not be reported as an abort.
+            if let Some(reason) = state.crashed.clone() {
+                return Err(Error::Crashed { reason });
+            }
             if state.navigation_generation != initial_generation || state.closed {
                 return Err(Error::Net {
                     code: ErrorName::Aborted.as_str().to_string(),
@@ -1939,6 +2017,14 @@ async fn settle_loop(
                 runtime::with_runtime_for(page, document, |runtime| runtime.turn(TIMERS_PER_TURN))
             })
             .flatten();
+        // A crash is raised *inside* that turn — the page's script-CPU budget
+        // accumulates while the entry runs and `mark_crashed` fires there — so
+        // nothing else notices it until the loop is checked again. Checking here
+        // rather than only at the top of the loop ends the settle at once
+        // instead of after another park.
+        if let Some(reason) = inner.crash_reason() {
+            return Err(Error::Crashed { reason });
+        }
         let mutated = with_document(inner, deferred, |document| document.mutation_generation());
         if mutated != mutation_generation {
             mutation_generation = mutated;

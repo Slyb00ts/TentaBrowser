@@ -114,6 +114,11 @@ impl Budgets {
         self
     }
 
+    pub fn script_cpu(mut self, d: Duration) -> Self {
+        self.script_cpu = d;
+        self
+    }
+
     pub fn evaluate_time(mut self, d: Duration) -> Self {
         self.evaluate_time = d;
         self
@@ -153,5 +158,19 @@ mod tests {
         assert_eq!(effective.page_memory_mb, 128);
         assert_eq!(effective.worker_threads, 8);
         assert!(Budgets::mobile().page_memory_mb < Budgets::desktop().page_memory_mb);
+    }
+
+    #[test]
+    fn the_script_cpu_builder_sets_the_field_and_clamps() {
+        let lowered = Budgets::desktop().script_cpu(Duration::from_millis(250));
+        assert_eq!(lowered.script_cpu, Duration::from_millis(250));
+
+        let engine = Budgets::desktop();
+        let page = Budgets::desktop().script_cpu(Duration::from_secs(600));
+        assert_eq!(
+            page.clamped_to(&engine).script_cpu,
+            engine.script_cpu,
+            "a page may lower the engine's budget but never raise it"
+        );
     }
 }

@@ -16,7 +16,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use support::{Harness, URL};
-use tenta_core::Budgets;
+use tenta_core::{Budgets, Error};
+use tenta_page::PageEvent;
 use tenta_page::page::{Goto, Navigation};
 use tenta_page::settle::Settle;
 
@@ -70,6 +71,21 @@ fn await_goto(rx: &mpsc::Receiver<tenta_core::Result<Navigation>>) -> Navigation
     match rx.recv_timeout(PATIENCE) {
         Ok(Ok(navigation)) => navigation,
         Ok(Err(error)) => panic!("the navigation failed: {error:?}"),
+        Err(_) => panic!(
+            "the page thread never returned: a callback that does not return was \
+             never terminated"
+        ),
+    }
+}
+
+/// Waits for one navigation and returns whatever it produced — including the
+/// error a crash leaves behind — rather than panicking on an error. Still fails
+/// the test, rather than hanging, when the page never returns.
+fn await_goto_result(
+    rx: &mpsc::Receiver<tenta_core::Result<Navigation>>,
+) -> tenta_core::Result<Navigation> {
+    match rx.recv_timeout(PATIENCE) {
+        Ok(result) => result,
         Err(_) => panic!(
             "the page thread never returned: a callback that does not return was \
              never terminated"
@@ -212,5 +228,143 @@ fn an_engine_without_a_watchdog_arms_nothing_and_does_not_panic() {
     assert_eq!(
         record.terminations, 0,
         "there is no handle to arm, so no terminate can be asked for"
+    );
+}
+
+/// A page whose cumulative script time reaches its budget is *crashed*, and the
+/// navigation that crossed it fails with `Error::Crashed` rather than
+/// succeeding or hanging.
+///
+/// The budget is set equal to the per-entry deadline, so one terminated entry —
+/// a `block` callback cut short at `evaluate_time` — is itself the crossing.
+/// Termination is not the crash; spending the budget is, which is why the same
+/// terminated entry is survivable under the default 60 s budget
+/// (`a_timer_that_never_returns_is_terminated_and_the_page_returns`).
+#[test]
+fn a_page_that_burns_its_script_budget_crashes() {
+    let harness = Harness::builder(
+        "<!doctype html><html><body>\
+         <script>setTimeout(block, 0)</script>\
+         </body></html>",
+    )
+    .watchdog(true)
+    .budgets(Budgets::default().evaluate_time(BUDGET).script_cpu(BUDGET))
+    .build();
+    let mut events = harness.page.events();
+
+    let outcome = await_goto_result(&start_goto(&harness));
+    match outcome {
+        Err(Error::Crashed { reason }) => {
+            assert!(
+                reason.contains("script"),
+                "the reason names the budget: {reason}"
+            );
+        }
+        other => panic!("expected the navigation to crash, got {other:?}"),
+    }
+    let reason = harness.page.crash_reason().expect("the page crashed");
+    assert!(
+        reason.contains("script"),
+        "the reason names the budget: {reason}"
+    );
+    assert!(
+        events
+            .drain()
+            .iter()
+            .any(|event| matches!(event, PageEvent::Crashed { .. })),
+        "the crash is reported as an event"
+    );
+
+    // A crashed page is terminal: a second `goto` is refused before it can post
+    // a job, so it runs no script and reports the same crash.
+    let scripts_before = harness.record.lock().unwrap().scripts.len();
+    let again = await_goto_result(&start_goto(&harness));
+    assert!(matches!(again, Err(Error::Crashed { .. })), "{again:?}");
+    assert_eq!(
+        harness.record.lock().unwrap().scripts.len(),
+        scripts_before,
+        "a crashed page runs no further script"
+    );
+}
+
+/// A guard, not new coverage: a page that stays inside its budget across several
+/// navigations and turns is never crashed, and its `crash_reason` stays `None`.
+///
+/// It is here so a botched crash check — one that fires on any charge, or on a
+/// terminated-but-survivable entry — can never make every page crash. The
+/// coverage it protects lives in the tests below and in
+/// `crates/tenta-browser/tests/settle_js.rs`.
+#[test]
+fn a_page_inside_its_budget_is_not_crashed() {
+    let harness = Harness::builder(
+        "<!doctype html><html><body>\
+         <script>setTimeout(mutate tick, 0)</script>\
+         </body></html>",
+    )
+    .watchdog(true)
+    .budgets(Budgets::default().script_cpu(Duration::from_secs(60)))
+    .build();
+
+    for _ in 0..3 {
+        let navigation = await_goto(&start_goto(&harness));
+        assert!(navigation.error.is_none(), "{navigation:?}");
+    }
+    assert_eq!(
+        harness.page.crash_reason(),
+        None,
+        "a page inside its budget stays alive across navigations"
+    );
+}
+
+/// The budget is the page's, not the navigation's.
+///
+/// Two navigations that each spend well under the budget together cross it, so
+/// the second crashes. A per-navigation accumulator would restart the second
+/// navigation at zero and never trip; this test is what catches that
+/// regression. `spin` spends the time without ever needing the entry killed, so
+/// nothing here depends on the watchdog thread's timing — the evidence is the
+/// observable behaviour, not a terminate count.
+#[test]
+fn the_script_budget_spans_navigations() {
+    let harness = Harness::builder(
+        "<!doctype html><html><body>\
+         <script>spin 100</script>\
+         </body></html>",
+    )
+    // No watchdog: a `spin` always returns, so no entry needs terminating.
+    .budgets(Budgets::default().script_cpu(Duration::from_millis(150)))
+    .build();
+
+    let first = await_goto(&start_goto(&harness));
+    assert!(
+        first.error.is_none(),
+        "the first navigation is under the budget: {first:?}"
+    );
+    assert_eq!(
+        harness.page.crash_reason(),
+        None,
+        "one navigation's worth of script is not the page's budget"
+    );
+
+    let second = await_goto_result(&start_goto(&harness));
+    match second {
+        Err(Error::Crashed { reason }) => {
+            assert!(
+                reason.contains("script"),
+                "the reason names the budget: {reason}"
+            );
+        }
+        other => panic!("expected the second navigation to crash, got {other:?}"),
+    }
+    let reason = harness.page.crash_reason().expect("the page crashed");
+    let spent: u64 = reason
+        .split(" ms spent")
+        .next()
+        .and_then(|head| head.rsplit(' ').next())
+        .and_then(|millis| millis.parse().ok())
+        .unwrap_or_else(|| panic!("the reason names the spent total: {reason}"));
+    assert!(
+        spent >= 150,
+        "the accumulated total is past the 150 ms budget: {reason}"
     );
 }
