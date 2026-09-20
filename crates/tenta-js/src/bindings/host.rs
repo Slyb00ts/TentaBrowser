@@ -46,6 +46,7 @@ use crate::dom::events::{
     HostValue, ListenerTable, PromiseOutcome, ScriptHost, TargetKey, dispatch, dispatch_at,
 };
 use crate::event_loop::SharedClock;
+use crate::fetch::FetchedResponse;
 
 /// A document shared between the host objects of one world and the engine that
 /// drives it. Every `HostObject` for the document holds one of these clones, so
@@ -4918,6 +4919,122 @@ pub fn utf8_decode(bytes: &[u8]) -> String {
     }
 }
 
+/// The `Response` record's own fields, before the headers record it owns exists.
+///
+/// A parts struct rather than a longer argument list so that the insert
+/// sequence below is shared by both builders: the `Response` constructor and a
+/// completed fetch differ only in these values.
+struct NewResponse {
+    status: u16,
+    status_text: Vec<u8>,
+    /// `None` for a constructor-built response, which has no URL.
+    url: Option<String>,
+    response_type: ResponseType,
+    redirected: bool,
+    body: Option<Vec<u8>>,
+}
+
+/// Inserts the headers record, then the response record that owns it, links the
+/// two both ways, and returns the response's key.
+///
+/// This is the one place the pair is created. A second copy of the sequence is
+/// where the two-way link or the `has_wrapper` flag would drift, and the link is
+/// what reclamation reads: the response finds its headers to read, and
+/// [`reclaim_host_record`] finds the response that keeps a headers record alive.
+fn insert_response(ctx: &SharedContext, list: HeaderList, parts: NewResponse) -> HostKey {
+    let mut records = ctx.host_records.borrow_mut();
+    let headers = records.insert(HostRecord::Headers(HeadersRecord {
+        list,
+        guard: HeadersGuard::Response,
+        response: None,
+        has_wrapper: false,
+    }));
+    let key = records.insert(HostRecord::Response(ResponseRecord {
+        status: parts.status,
+        status_text: parts.status_text,
+        url: parts.url,
+        response_type: parts.response_type,
+        redirected: parts.redirected,
+        headers,
+        body: parts.body,
+        body_used: false,
+    }));
+    if let Some(HostRecord::Headers(record)) = records.get_mut(headers) {
+        record.response = Some(key);
+    }
+    key
+}
+
+/// Inserts the `Response` record a completed fetch delivers, returning its key.
+///
+/// It lives here rather than beside the driver's own types because the record
+/// is `tenta-js`'s: the driver hands over plain data
+/// ([`FetchedResponse`]) and never names a host record.
+///
+/// # Deliberate limits
+///
+/// - The response is a *basic* response. A cross-origin request is refused
+///   before it is sent (`docs/dev/idl.md` records the deviation and the slice
+///   that removes it), so there is no filtered header list to model and no
+///   reason to report a type other than the truthful one.
+/// - `status_text` is [`http::StatusCode::canonical_reason`]'s text, not the
+///   reason phrase the server sent: `tenta-net`'s response carries no
+///   reason-phrase field, so the wire's is not available at this boundary. A
+///   status with no canonical reason reads back as the empty string.
+/// - A header pair is **dropped** rather than faulted when it cannot be
+///   delivered: a name Fetch calls a *forbidden response-header name*
+///   (`Set-Cookie`, `Set-Cookie2`), a name that is not an HTTP field name, and a
+///   value holding a NUL, CR or LF. The constructor path drops the first of
+///   those three through the guard and *throws* for the other two, because a
+///   page wrote them; a fetched header was written by a server, and failing the
+///   whole response over one malformed pair would turn a header into a rejected
+///   promise.
+pub fn insert_fetched_response(ctx: &SharedContext, data: FetchedResponse) -> HostKey {
+    let context = "fetch";
+    let FetchedResponse {
+        url,
+        status,
+        redirected,
+        headers,
+        body,
+    } = data;
+
+    let status_text = http::StatusCode::from_u16(status)
+        .ok()
+        .and_then(|status| status.canonical_reason())
+        .map_or_else(Vec::new, |reason| reason.as_bytes().to_vec());
+
+    let list: HeaderList = headers
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let (name, value) = checked_header(context, name.as_bytes(), &value).ok()?;
+            (!is_forbidden_response_header_name(&name)).then_some((name, value))
+        })
+        .collect();
+
+    // A null-body status carries no body. Fetch enforces this when it creates
+    // the response, so a driver that hands one over anyway is corrected here
+    // rather than trusted — and `body_used` stays false for it, which is what
+    // makes `bodyUsed` false and `text()` resolve with the empty string.
+    let body = match ResponseRecord::is_null_body_status(status) {
+        true => None,
+        false => body,
+    };
+
+    insert_response(
+        ctx,
+        list,
+        NewResponse {
+            status,
+            status_text,
+            url: Some(url),
+            response_type: ResponseType::Basic,
+            redirected,
+            body,
+        },
+    )
+}
+
 impl ResponseConstructor for HostObject {
     fn construct(
         realm: &Realm,
@@ -4993,33 +5110,22 @@ impl ResponseConstructor for HostObject {
         // Steps 1 and 2 of the constructor, once nothing can throw: the headers
         // object is created first, because the response holds its key.
         let ctx = realm_context(realm)?;
-        let mut records = ctx.host_records.borrow_mut();
-        let headers = records.insert(HostRecord::Headers(HeadersRecord {
+        let key = insert_response(
+            &ctx,
             list,
-            guard: HeadersGuard::Response,
-            response: None,
-            has_wrapper: false,
-        }));
-        let key = records.insert(HostRecord::Response(ResponseRecord {
-            status,
-            status_text,
-            // A constructor-built response has no URL and no URL list, so `url`
-            // is the empty string and `redirected` is false. `type` is
-            // `"default"`; the other five values name responses only a fetch
-            // produces.
-            url: None,
-            response_type: ResponseType::Default,
-            redirected: false,
-            headers,
-            body: body_bytes,
-            body_used: false,
-        }));
-        // The link runs both ways: the response finds its headers to read, and
-        // reclamation finds the response that keeps a headers record alive.
-        if let Some(HostRecord::Headers(record)) = records.get_mut(headers) {
-            record.response = Some(key);
-        }
-        drop(records);
+            NewResponse {
+                status,
+                status_text,
+                // A constructor-built response has no URL and no URL list, so
+                // `url` is the empty string and `redirected` is false. `type` is
+                // `"default"`; the other five values name responses only a fetch
+                // produces.
+                url: None,
+                response_type: ResponseType::Default,
+                redirected: false,
+                body: body_bytes,
+            },
+        );
         Ok(HostObject::host_record(ctx, key))
     }
 }

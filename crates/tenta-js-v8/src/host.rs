@@ -28,9 +28,11 @@ use tenta_js::bindings::host::{HostObject, realm_context};
 use tenta_js::bindings::{
     AddEventListenerOptionsOrBoolean, Event, EventListener, EventListenerOptionsOrBoolean,
     EventTargetOps, JsError, string_from_v8, throw_js_error, throw_type_error, value_from_v8,
-    world_realm,
+    value_to_v8, world_realm,
 };
+use tenta_js::dom::events::{HostValue, PromiseOutcome, PromiseRef, ScriptHost};
 use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId};
+use tenta_js::fetch::{FetchDriver, FetchRequest};
 
 /// Timer functions whose deadline has passed, in fire order, waiting for the
 /// engine to invoke them with the isolate in hand.
@@ -84,6 +86,15 @@ pub struct HostState {
     /// `.then` after a script entry would sit unrun for as long as the page
     /// happened to have no timer scheduled.
     pub microtasks_pending: std::cell::Cell<bool>,
+    /// The driver `fetch()` hands its requests to, or `None` before one is
+    /// installed.
+    ///
+    /// It lives here rather than on the engine because the `fetch` callback's
+    /// only handle on the world is this state, reached through the context slot
+    /// ([`host_state`]) — and because [`install`], which defines `fetch`, runs
+    /// before the page has a driver to give. A `RefCell` and not a `Cell`: the
+    /// driver is an `Rc<dyn FetchDriver>`, which is not `Copy`.
+    pub fetch_driver: RefCell<Option<Rc<dyn FetchDriver>>>,
 }
 
 impl HostState {
@@ -95,6 +106,7 @@ impl HostState {
             ready_frames: Rc::new(RefCell::new(VecDeque::new())),
             script_depth: std::cell::Cell::new(0),
             microtasks_pending: std::cell::Cell::new(false),
+            fetch_driver: RefCell::new(None),
         })
     }
 
@@ -112,6 +124,22 @@ impl HostState {
     pub fn exit_script(&self) {
         self.script_depth
             .set(self.script_depth.get().saturating_sub(1));
+    }
+
+    /// Installs the driver `fetch()` hands its requests to, replacing any driver
+    /// installed before.
+    ///
+    /// One driver per navigation, because the completions it leaves behind
+    /// belong to the document that is current when they are drained
+    /// (`tenta_js::engine::PageEngine::set_fetch_driver`).
+    pub fn set_fetch_driver(&self, driver: Rc<dyn FetchDriver>) {
+        *self.fetch_driver.borrow_mut() = Some(driver);
+    }
+
+    /// The installed `fetch` driver, if there is one. See [`Self::set_fetch_driver`]
+    /// for why a page may not have installed one yet.
+    pub fn fetch_driver(&self) -> Option<Rc<dyn FetchDriver>> {
+        self.fetch_driver.borrow().clone()
     }
 }
 
@@ -133,6 +161,10 @@ pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>, time_o
     define(scope, global, "setInterval", set_interval);
     define(scope, global, "clearInterval", clear_interval);
     define(scope, global, "queueMicrotask", queue_microtask);
+    // `fetch` is defined here, before any driver exists: the global has to be
+    // present from the moment script can run, and a call made before a driver is
+    // installed rejects rather than throwing a `ReferenceError`.
+    define(scope, global, "fetch", fetch);
     define(
         scope,
         global,
@@ -671,6 +703,172 @@ fn queue_microtask(
     if let Ok(callback) = v8::Local::<v8::Function>::try_from(args.get(0)) {
         scope.enqueue_microtask(callback);
     }
+}
+
+// ---------------------------------------------------------------------------
+// fetch
+// ---------------------------------------------------------------------------
+
+/// `fetch(input, init)`: creates the promise, resolves `input` against the
+/// document, and hands the request to the installed driver.
+///
+/// Everything after the argument conversion is a *rejection*, not a throw: the
+/// Fetch Standard's own `fetch()` wraps its steps in a promise so that a failed
+/// call is a settled promise rather than an abrupt completion. The two things
+/// that do throw are the dictionary conversion this engine refuses (§ the
+/// initializer below) and the absence of a world to create the promise in.
+fn fetch(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let Some(state) = host_state(scope) else {
+        return;
+    };
+    let input = string_from_v8(scope, args.get(0));
+
+    // `RequestInfo` is `(Request or USVString)`; only the second arm is
+    // reachable, because `Request` is not a global this engine installs.
+    if let Some(reason) = unsupported_init(scope, args.get(1)) {
+        throw_type_error(scope, &format!("Failed to execute 'fetch': {reason}"));
+        return;
+    }
+
+    let realm = match world_realm(scope) {
+        Ok(realm) => realm,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let ctx = match realm_context(&realm) {
+        Ok(ctx) => ctx,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let script = ctx.script.borrow().as_ref().map(Rc::clone);
+    let Some(script) = script else {
+        throw_type_error(
+            scope,
+            "Failed to execute 'fetch': this world has no script host",
+        );
+        return;
+    };
+    let Some(promise) = script.new_promise() else {
+        throw_type_error(
+            scope,
+            "Failed to execute 'fetch': the promise could not be created",
+        );
+        return;
+    };
+
+    // The promise exists before the URL is resolved so that every step from here
+    // on can reject. The document borrow ends with this block: nothing below may
+    // hold it, because the engine re-enters Rust on the way out of a settlement
+    // (`tenta_js::engine`, boundary rule 1).
+    let resolved = {
+        let doc = ctx.doc.borrow();
+        doc.resolve_url(&input).map(|url| (url, doc.url().cloned()))
+    };
+    let Some((url, document_url)) = resolved else {
+        let message = format!("Failed to parse URL from {input}");
+        reject_promise(scope, &mut retval, &script, promise, &message);
+        return;
+    };
+
+    // The document's URL, or the request's when the document has none: a
+    // document built without one reports the empty string, and an empty
+    // initiator is not a URL a driver could send.
+    let initiator = document_url.unwrap_or_else(|| url.clone());
+    let request = FetchRequest::get(url, initiator, state.scheduler.current_origin());
+
+    // No driver is a state a page can be in — `fetch` is installed before the
+    // page has one — so it is a rejection rather than a panic. Once 4a-1b lands,
+    // a page always has one.
+    let Some(driver) = state.fetch_driver() else {
+        let message = "fetch is not available";
+        reject_promise(scope, &mut retval, &script, promise, message);
+        return;
+    };
+    match driver.start(request, promise.resolver) {
+        // A refusal rejects the promise rather than throwing: the promise exists
+        // precisely so a failure the driver reports reaches script as one.
+        Err(error) => reject_promise(scope, &mut retval, &script, promise, error.message()),
+        Ok(()) => return_promise(scope, &mut retval, promise),
+    }
+}
+
+/// Hands `promise` to script as the call's return value.
+fn return_promise(scope: &mut v8::PinScope, retval: &mut v8::ReturnValue, promise: PromiseRef) {
+    // The promise's reference is *not* released here: the settlement releases
+    // it, because by then script has the object and the world's own hold on it
+    // is over (`tenta_js::dom::events::ScriptHost::new_promise`).
+    if let Ok(value) = value_to_v8(scope, promise.promise) {
+        retval.set(value);
+    }
+}
+
+/// Rejects `promise` with a `TypeError` carrying `message`, and returns the
+/// promise to script. A settlement that could not be queued leaves the promise
+/// pending, which is the one outcome worse than a rejection and the one this
+/// cannot report.
+fn reject_promise(
+    scope: &mut v8::PinScope,
+    retval: &mut v8::ReturnValue,
+    script: &Rc<dyn ScriptHost>,
+    promise: PromiseRef,
+    message: &str,
+) {
+    script.settle_promise(
+        promise.resolver,
+        PromiseOutcome::Reject(HostValue::TypeError { message }),
+    );
+    return_promise(scope, retval, promise);
+}
+
+/// Why the second argument cannot be honoured, or `None` when it can.
+///
+/// `RequestInit` is declared as nothing and refused when present: ignoring
+/// `{method: "POST"}` would send a *different request than the page asked for*,
+/// silently, and a declared-but-unimplemented member is the bug class this
+/// engine does not ship. The slice that implements the member removes the
+/// refusal.
+///
+/// A WebIDL dictionary conversion is what decides which second arguments are
+/// even a `RequestInit`: `null` and `undefined` are the empty dictionary, an
+/// object's own **enumerable** keys are its members — inherited ones are not —
+/// and anything that is not an object at all throws. All three cases are handled
+/// here, so `fetch(url)`, `fetch(url, undefined)`, `fetch(url, null)` and
+/// `fetch(url, {})` are all a `GET`.
+fn unsupported_init(scope: &mut v8::PinScope, value: v8::Local<v8::Value>) -> Option<String> {
+    if value.is_null_or_undefined() {
+        return None;
+    }
+    let object = match v8::Local::<v8::Object>::try_from(value) {
+        Ok(object) => object,
+        Err(_) => return Some("the provided value is not of type 'RequestInit'".to_owned()),
+    };
+    let args = v8::GetPropertyNamesArgs {
+        // Symbol keys are never dictionary members, and a non-enumerable own
+        // property is not a member either — which is exactly this filter.
+        property_filter: v8::PropertyFilter::ONLY_ENUMERABLE | v8::PropertyFilter::SKIP_SYMBOLS,
+        ..Default::default()
+    };
+    let names = object.get_own_property_names(scope, args)?;
+    // An empty dictionary is the empty `RequestInit`, and there is no member to
+    // name. The length is checked rather than the first element: V8's
+    // `get_index` out of range hands back `undefined` instead of failing, so
+    // reading index 0 off `{}` would name a member called "undefined".
+    if names.length() == 0 {
+        return None;
+    }
+    let first = names.get_index(scope, 0)?;
+    Some(format!(
+        "the RequestInit member '{}' is not implemented",
+        string_from_v8(scope, first)
+    ))
 }
 
 /// `requestAnimationFrame(callback)`: registers `callback` for the next

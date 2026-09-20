@@ -35,6 +35,7 @@ use tenta_dom::{SharedDocument, SharedSink};
 use tenta_html::{Encoding, Parser};
 use tenta_js::engine::{EngineClock, EngineWatchdog, PageEngine, PageEngineConfig, ScriptKind};
 use tenta_js::event_loop::ProvenanceSink;
+use tenta_js::fetch::FetchCompletions;
 use tenta_net::policy::cookies::Site;
 use tenta_net::{Client, NetError, Request, ResourceType};
 use url::Url;
@@ -170,6 +171,15 @@ pub(crate) struct PageRuntime {
     /// The runtime reports into it but does not own it: the total is the page's
     /// and outlives this navigation (`crate::script_cpu`).
     script_budget: Arc<dyn ScriptBudget>,
+    /// The completions this navigation's fetch driver has left for the page to
+    /// settle.
+    ///
+    /// One table per navigation, like the runtime itself: a completion names a
+    /// resolver of the engine that is current, and a table that outlived its
+    /// engine would hold bits no engine can settle. The driver holds a handle to
+    /// it (`tenta_js::fetch::FetchDriver`), so it is shared rather than owned
+    /// outright.
+    fetches: Rc<FetchCompletions>,
 }
 
 impl PageRuntime {
@@ -209,6 +219,11 @@ impl PageRuntime {
             );
         }
         let script_timeout = engine_config.script_timeout.unwrap_or_default();
+        // The table belongs to the navigation and the driver gets a handle to
+        // it. This slice installs no driver — that is 4a-1b's — so the table
+        // stays empty and `turn`'s drain costs nothing, while `fetch` rejects
+        // because a page with no driver cannot answer one.
+        let fetches = Rc::new(FetchCompletions::new());
         Ok(PageRuntime {
             page,
             engine,
@@ -221,6 +236,7 @@ impl PageRuntime {
             watchdog,
             script_timeout,
             script_budget,
+            fetches,
         })
     }
 
@@ -244,6 +260,28 @@ impl PageRuntime {
     pub(crate) fn turn(&mut self, budget: usize) -> Option<Duration> {
         if !self.parse_in_flight && self.should_reclaim_detached() {
             self.reclaim_detached();
+        }
+        // The fetch drain comes *before* the timers, because HTML's order is
+        // "run a task, then perform a microtask checkpoint": the drain is the
+        // task a driver's completion belongs to, and `pump_due_timers`' leading
+        // checkpoint runs the reactions it queued in the same turn, so the debt
+        // is paid at once rather than through another turn
+        // (`crates/tenta-js-v8/src/lib.rs`, `pump_due_timers`).
+        //
+        // This is also where a completion that arrived off the engine's call
+        // stack becomes observable. The page thread is a single-threaded
+        // `LocalSet` and the settle loop's `select!` is its only await point, so
+        // a task can only run while the loop is parked — and when it wakes, the
+        // loop restarts and calls `turn` before `evaluate`. A completion such a
+        // task pushed is therefore always drained before the settle can be
+        // judged finished, which is what makes the driver's push-then-wake order
+        // a contract rather than a courtesy (`tenta_js::fetch::FetchDriver`).
+        //
+        // One entry for the whole batch: one watchdog arm, one context entry,
+        // one stray-termination clear. An empty table costs no entry at all.
+        let completions = self.fetches.take_all();
+        if !completions.is_empty() {
+            self.bounded("fetch", |engine| engine.settle_fetches(completions));
         }
         // Both entries below run callback script the engine does not bound
         // itself, so each is armed around its call (`PageRuntime::bounded`).
@@ -929,6 +967,7 @@ mod tests {
     use tenta_core::TimerRule;
     use tenta_dom::Document;
     use tenta_js::engine::{EngineWatchdog, ScriptError, ScriptKind};
+    use tenta_js::fetch::{FetchCompletion, FetchDriver, FetchOutcome};
 
     /// An engine that records whether the page trimmed it and does nothing
     /// else: what the guard under test decides is whether the page enters the
@@ -940,6 +979,11 @@ mod tests {
         /// backend — the property that makes reading the epoch *after* the trim
         /// different from reading it before.
         epoch: Rc<Cell<u64>>,
+        /// Every batch of fetch completions the page handed over, in call order.
+        /// One entry per `settle_fetches` call, so a test can tell "the page
+        /// drained two completions in one entry" from "the page made two
+        /// entries".
+        settled: Rc<RefCell<Vec<Vec<FetchCompletion>>>>,
     }
 
     impl PageEngine for RecordingEngine {
@@ -954,6 +998,12 @@ mod tests {
         fn set_timer_rule(&mut self, _rule: TimerRule) {}
 
         fn set_provenance_sink(&mut self, _sink: Rc<dyn ProvenanceSink>) {}
+
+        fn set_fetch_driver(&mut self, _driver: Rc<dyn FetchDriver>) {}
+
+        fn settle_fetches(&mut self, completions: Vec<FetchCompletion>) {
+            self.settled.borrow_mut().push(completions);
+        }
 
         fn next_wakeup(&self) -> Option<Duration> {
             None
@@ -986,40 +1036,80 @@ mod tests {
     }
 
     /// A budget that ignores what it is charged: the tests here drive `turn`
-    /// for the reclaim guard, not for the page's script accounting.
+    /// for the reclaim guard and the fetch drain, not for the page's own script
+    /// accounting.
     struct NullBudget;
 
     impl ScriptBudget for NullBudget {
         fn charge(&self, _elapsed: Duration) {}
     }
 
-    /// A runtime over an empty document and a recording engine, with
-    /// `parse_in_flight` as the test sets it. The fields are this module's, so
-    /// the test builds the state directly rather than driving a parse into it —
-    /// which it has to, because the guard is unreachable from a page test
-    /// (`turn` is called only from the settle loop, and the parse is always over
-    /// by then).
-    fn runtime(parse_in_flight: bool) -> (PageRuntime, Rc<Cell<usize>>, Rc<Cell<u64>>) {
-        let document: SharedDocument = Rc::new(RefCell::new(Document::new()));
-        let trims = Rc::new(Cell::new(0));
-        let epoch = Rc::new(Cell::new(0));
-        let engine = RecordingEngine {
-            document: Rc::clone(&document),
-            trims: Rc::clone(&trims),
-            epoch: Rc::clone(&epoch),
-        };
-        let runtime = PageRuntime {
-            page: PageId(1),
-            engine: Box::new(engine),
-            document,
-            parse_in_flight,
-            bridge: Rc::new(SettleBridge::new()),
-            last_gc_epoch: 0,
-            watchdog: None,
-            script_timeout: Duration::from_secs(30),
-            script_budget: Arc::new(NullBudget),
-        };
-        (runtime, trims, epoch)
+    /// A runtime over an empty document and a recording engine, plus the handles
+    /// a test reads it through. The fields are this module's, so the test builds
+    /// the state directly rather than driving a parse into it — which it has to,
+    /// because the guard is unreachable from a page test (`turn` is called only
+    /// from the settle loop, and the parse is always over by then).
+    struct Harness {
+        runtime: PageRuntime,
+        trims: Rc<Cell<usize>>,
+        epoch: Rc<Cell<u64>>,
+        settled: Rc<RefCell<Vec<Vec<FetchCompletion>>>>,
+        /// The runtime's own table, which is the handle a driver is given. A
+        /// test pushes into it in the driver's place.
+        fetches: Rc<FetchCompletions>,
+    }
+
+    impl Harness {
+        fn new(parse_in_flight: bool) -> Harness {
+            let document: SharedDocument = Rc::new(RefCell::new(Document::new()));
+            let trims = Rc::new(Cell::new(0));
+            let epoch = Rc::new(Cell::new(0));
+            let settled = Rc::new(RefCell::new(Vec::new()));
+            let fetches = Rc::new(FetchCompletions::new());
+            let engine = RecordingEngine {
+                document: Rc::clone(&document),
+                trims: Rc::clone(&trims),
+                epoch: Rc::clone(&epoch),
+                settled: Rc::clone(&settled),
+            };
+            let runtime = PageRuntime {
+                page: PageId(1),
+                engine: Box::new(engine),
+                document,
+                parse_in_flight,
+                bridge: Rc::new(SettleBridge::new()),
+                last_gc_epoch: 0,
+                watchdog: None,
+                script_timeout: Duration::from_secs(30),
+                script_budget: Arc::new(NullBudget),
+                fetches: Rc::clone(&fetches),
+            };
+            Harness {
+                runtime,
+                trims,
+                epoch,
+                settled,
+                fetches,
+            }
+        }
+
+        /// Records a completion the way a driver would: pushes it, and nothing
+        /// else. The wake is the driver's other half and has no meaning here,
+        /// where the test drives `turn` itself.
+        fn complete(&self, resolver: u64, message: &str) {
+            self.fetches
+                .push(resolver, FetchOutcome::Failed(message.to_owned()));
+        }
+
+        /// The resolvers of every completion the page has handed the engine, one
+        /// inner list per entry.
+        fn batches(&self) -> Vec<Vec<u64>> {
+            self.settled
+                .borrow()
+                .iter()
+                .map(|batch| batch.iter().map(|done| done.resolver).collect())
+                .collect()
+        }
     }
 
     /// The engine boundary's third rule: nothing may free nodes while a parser
@@ -1028,16 +1118,16 @@ mod tests {
     /// engine.
     #[test]
     fn a_turn_reclaims_nothing_while_a_parser_is_in_flight() {
-        let (mut runtime, trims, epoch) = runtime(true);
-        epoch.set(1);
+        let mut harness = Harness::new(true);
+        harness.epoch.set(1);
 
-        assert!(runtime.turn(1).is_none());
+        assert!(harness.runtime.turn(1).is_none());
         assert_eq!(
-            trims.get(),
+            harness.trims.get(),
             0,
             "the engine is never entered with a parse in flight"
         );
-        assert_eq!(runtime.document.borrow().mutations_since_sweep(), 0);
+        assert_eq!(harness.runtime.document.borrow().mutations_since_sweep(), 0);
     }
 
     /// Once the parse is over the same state reclaims, and the epoch it records
@@ -1046,17 +1136,87 @@ mod tests {
     /// again after that.
     #[test]
     fn a_turn_reclaims_once_the_parse_is_over_and_not_on_every_turn_after() {
-        let (mut runtime, trims, epoch) = runtime(false);
-        epoch.set(1);
+        let mut harness = Harness::new(false);
+        harness.epoch.set(1);
 
-        assert!(runtime.turn(1).is_none());
-        assert_eq!(trims.get(), 1, "the epoch moved, so one reclaim was owed");
-
-        assert!(runtime.turn(1).is_none());
+        assert!(harness.runtime.turn(1).is_none());
         assert_eq!(
-            trims.get(),
+            harness.trims.get(),
+            1,
+            "the epoch moved, so one reclaim was owed"
+        );
+
+        assert!(harness.runtime.turn(1).is_none());
+        assert_eq!(
+            harness.trims.get(),
             1,
             "the epoch was recorded after the trim, not before it"
         );
+    }
+
+    /// One drain is one engine entry, however many completions are waiting: the
+    /// page pays one watchdog arm, one context entry and one stray-termination
+    /// clear for the batch, not one each.
+    #[test]
+    fn a_turn_drains_the_fetch_table_into_one_batch() {
+        let mut harness = Harness::new(true);
+        harness.complete(7, "first");
+        harness.complete(9, "second");
+
+        assert!(harness.runtime.turn(1).is_none());
+        assert_eq!(
+            harness.batches(),
+            vec![vec![7, 9]],
+            "one entry, in push order"
+        );
+        assert!(
+            harness.fetches.take_all().is_empty(),
+            "the table is drained, not read"
+        );
+
+        assert!(harness.runtime.turn(1).is_none());
+        assert_eq!(
+            harness.batches(),
+            vec![vec![7, 9]],
+            "a turn with nothing waiting makes no entry"
+        );
+    }
+
+    /// An empty table costs no engine entry at all: a page that never called
+    /// `fetch` must not pay a watchdog arm and a context entry every turn for a
+    /// drain that settles nothing.
+    #[test]
+    fn an_empty_fetch_table_costs_no_engine_entry() {
+        let mut harness = Harness::new(true);
+
+        assert!(harness.runtime.turn(1).is_none());
+        assert!(
+            harness.batches().is_empty(),
+            "settle_fetches was not called"
+        );
+    }
+
+    /// A completion pushed after a turn returns is not delivered by that turn:
+    /// the drain is a boundary, and what a driver pushes once the entry has
+    /// returned waits for the next one. This is why a driver has to *wake* the
+    /// loop as well as push — the push alone leaves the promise pending until
+    /// something else wakes the page.
+    #[test]
+    fn a_completion_pushed_after_a_turn_waits_for_the_next_one() {
+        let mut harness = Harness::new(true);
+        harness.complete(1, "before");
+
+        assert!(harness.runtime.turn(1).is_none());
+        assert_eq!(harness.batches(), vec![vec![1]]);
+
+        harness.complete(2, "after");
+        assert_eq!(
+            harness.batches(),
+            vec![vec![1]],
+            "the turn that returned cannot see what arrived after it"
+        );
+
+        assert!(harness.runtime.turn(1).is_none());
+        assert_eq!(harness.batches(), vec![vec![1], vec![2]]);
     }
 }

@@ -165,8 +165,10 @@ pub(crate) fn dom_exception_value<'s>(
 ///
 /// This is how every error object the host has to *settle* a promise with is
 /// built — a rejection carries a value, so `JsError::type_error` (which can only
-/// throw) is not an option.
-fn construct_global<'s>(
+/// throw) is not an option. `pub(crate)` because the engine's fetch drain builds
+/// its `TypeError` the same way, in a scope of its own rather than through
+/// [`V8ScriptHost::build_value_in`] (`crate::Engine::settle_fetches`).
+pub(crate) fn construct_global<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     name: &str,
     arguments: &[v8::Local<'s, v8::Value>],

@@ -22,13 +22,17 @@ use std::rc::Rc;
 use std::sync::Once;
 
 use tenta_js::bindings::WrapperWorld;
-use tenta_js::bindings::host::{HostContext, HostObject, SharedContext, SharedDocument};
+use tenta_js::bindings::host::{
+    HostContext, HostObject, SharedContext, SharedDocument, encode_host, insert_fetched_response,
+};
+use tenta_js::bindings::{Handle, handle_to_v8};
 use tenta_js::dom::events::ScriptHost;
 use tenta_js::engine::ScriptErrorKind;
 use tenta_js::event_loop::{Clock, EventLoop, FiringRelease, MonoTime};
+use tenta_js::fetch::{FetchCompletion, FetchOutcome};
 
 use host::{HostState, ReadyHandler};
-use script_host::V8ScriptHost;
+use script_host::{V8ScriptHost, construct_global};
 
 pub use page_engine::V8EngineFactory;
 
@@ -1029,6 +1033,78 @@ impl Engine {
         self.host.microtasks_pending.set(false);
     }
 
+    /// Settles the promises a batch of fetch completions names, entering the
+    /// context to build each value and queueing each settlement as a microtask.
+    ///
+    /// This is the one engine entry a *network* completion needs, and it is the
+    /// only one that is not reachable from script: a driver pushes its answer
+    /// into the page's table from whatever task it completes on, and the page
+    /// drains that table into here (`tenta_page::runtime`). The entry enters the
+    /// context the way [`Self::run_inner`] does — a plain `HandleScope` on the
+    /// isolate — because there is no V8 callback on the stack to bootstrap a
+    /// `CallbackScope` from
+    /// ([`v8::CallbackScope`]'s own doc calls a callback the only valid use of
+    /// it), so [`tenta_js::dom::events::ScriptHost::settle_promise`] cannot be
+    /// used here.
+    ///
+    /// Three points are decisions rather than style:
+    ///
+    /// - An empty batch returns before anything else: an entry that settles
+    ///   nothing must not arm the watchdog or charge the script budget.
+    /// - `microtasks_pending` is set only when a settlement was actually queued.
+    ///   A spurious flag spins the page loop one turn for nothing and would mask
+    ///   a genuine "nothing owed".
+    /// - The settlement stays a *microtask*; nothing here resolves a promise in
+    ///   place. Resolving here would enqueue the reactions at call time and
+    ///   break the ordering of a settlement requested from inside a microtask,
+    ///   which [`promise`]'s module doc explains and `tests/dom_response.rs`
+    ///   pins.
+    pub fn settle_fetches(&mut self, completions: Vec<FetchCompletion>) {
+        if completions.is_empty() {
+            return;
+        }
+        // This entry can settle a promise a terminated script left behind, and
+        // the microtask it queues runs script, so it starts with nothing
+        // pending, like every other way in.
+        self.discard_stray_termination();
+        let Some(dom) = &self.dom else {
+            return;
+        };
+        let mut queued = false;
+        {
+            v8::scope!(let handle_scope, &mut self.isolate);
+            let context = v8::Local::new(handle_scope, &self.context);
+            let mut context_scope = v8::ContextScope::new(handle_scope, context);
+            v8::scope!(let scope, &mut context_scope);
+            let Some(state) = promise::state_of(scope) else {
+                return;
+            };
+            for completion in completions {
+                // A completion whose value cannot be built is skipped rather
+                // than aborting the batch: the promises after it in the batch
+                // did nothing wrong.
+                let Some((value, rejected)) = build_completion(dom, scope, completion.outcome)
+                else {
+                    continue;
+                };
+                queued |= promise::queue_settlement(
+                    &state,
+                    scope,
+                    completion.resolver,
+                    value,
+                    // Both values are stored fresh here, so the settlement owns
+                    // them. The world's interned `undefined` is the only case
+                    // that is not owned, and this entry never builds it.
+                    true,
+                    rejected,
+                );
+            }
+        }
+        if queued {
+            self.host.microtasks_pending.set(true);
+        }
+    }
+
     /// Invokes up to `budget` handlers from the ready queue and returns how many
     /// ran. Handlers past the budget stay queued in order for the next drive.
     ///
@@ -1448,6 +1524,40 @@ fn install_dom_exception(scope: &mut v8::PinScope) {
     script
         .run(scope)
         .expect("the DOMException bootstrap runs without throwing");
+}
+
+/// The value a fetch completion settles its promise with, stored in the world,
+/// paired with whether the settlement rejects.
+///
+/// The `Response` arm inserts the host record and builds its wrapper — the
+/// driver delivers bytes and fields, never a V8 value, which is what keeps
+/// `tenta-net` out of this crate's dependency list. The failure arm builds the
+/// `TypeError` the Fetch Standard rejects a network error with.
+///
+/// `None` when the value cannot be built, which leaves that one promise
+/// unsettled rather than failing the batch: a response this engine cannot
+/// represent is not a reason to drop the completions behind it.
+fn build_completion(
+    dom: &DomWorld,
+    scope: &mut v8::PinScope<'_, '_>,
+    outcome: FetchOutcome,
+) -> Option<(u64, bool)> {
+    match outcome {
+        FetchOutcome::Response(data) => {
+            let key = insert_fetched_response(&dom.ctx, data);
+            let wrapper = handle_to_v8::<tenta_js::bindings::Response>(
+                scope,
+                Handle::from_bits(encode_host(key)),
+            )
+            .ok()?;
+            Some((dom.state.borrow_mut().store_value(scope, wrapper), false))
+        }
+        FetchOutcome::Failed(message) => {
+            let message = v8::String::new(scope, &message)?;
+            let error = construct_global(scope, "TypeError", &[message.into()])?;
+            Some((dom.state.borrow_mut().store_value(scope, error), true))
+        }
+    }
 }
 
 fn compile_and_run(

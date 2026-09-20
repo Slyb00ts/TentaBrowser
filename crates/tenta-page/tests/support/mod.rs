@@ -25,6 +25,7 @@ use tenta_js::engine::{
     EngineWatchdog, PageEngine, PageEngineConfig, PageEngineFactory, ScriptError, ScriptKind,
 };
 use tenta_js::event_loop::{Clock, EventLoop, ProvenanceSink, Scheduler};
+use tenta_js::fetch::{FetchCompletion, FetchDriver};
 use tenta_net::hooks::{BoxFuture, FulfilledResponse, Hooks, Interception, Interceptor};
 use tenta_net::policy::private_network::DestinationPolicy;
 use tenta_net::{ClientConfig, ErrorName, NetError, NetRuntime};
@@ -447,6 +448,21 @@ impl PageEngine for StubEngine {
                 record: Arc::clone(&self.context.record),
                 inner: sink,
             }));
+    }
+
+    /// The stub page has no network: a driver installed here is accepted and
+    /// never called, because these tests exercise the parse and the settle, not
+    /// `fetch` (`d-4a-1b` is where a real driver arrives).
+    fn set_fetch_driver(&mut self, _driver: Rc<dyn FetchDriver>) {}
+
+    /// Nothing installs a driver, so nothing can complete a fetch and the page's
+    /// table is always empty — a batch reaching here would mean the drain ran
+    /// for a page that made no request.
+    fn settle_fetches(&mut self, completions: Vec<FetchCompletion>) {
+        assert!(
+            completions.is_empty(),
+            "the stub page never starts a fetch, so no completion can arrive"
+        );
     }
 
     fn next_wakeup(&self) -> Option<Duration> {

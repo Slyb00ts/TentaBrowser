@@ -552,6 +552,66 @@ outside the generator, but the *fill* step a constructor runs goes through the
 same helper, so `new Response(null, {headers: {"Set-Cookie": "a=b"}})` and
 `new Headers({"Set-Cookie": "a=b"})` differ in exactly the guard they install.
 
+### The `fetch()` delivery seam (P2 slice 4a-1a)
+
+`fetch` is the first *global function*, so it is hand-written
+(`crates/tenta-js-v8/src/host.rs`, installed by `install` beside
+`requestAnimationFrame`) rather than generated: the global object is the window,
+and no generated glue serves it. It creates the promise before it resolves the
+URL or looks for a driver, so everything from that point on is a rejection
+rather than an abrupt completion — which is the Fetch Standard's own shape.
+
+The seam between the page and a network driver is `tenta_js::fetch`:
+`FetchRequest` (resolved URL, method, headers, body, initiator, provenance),
+`FetchOutcome::{Response, Failed}`, `FetchedResponse`, `FetchCompletion`,
+the `FetchDriver` trait, the `FetchCompletions` table and `FetchStartError`.
+A driver holds no engine and a host record holds no isolate, so the two meet
+over owned data and `resolver: u64` stays opaque bits for the same layering
+reason `PromiseRef` does. `PageEngine::set_fetch_driver` installs one driver per
+navigation and `PageEngine::settle_fetches` applies a batch of completions;
+`tenta_page::runtime`'s `turn` drains `FetchCompletions` into the latter before
+it pumps timers, and since the loop's `select!` is its only await point, a
+completion a task pushes is always drained by the next turn. The settlement is
+queued as a microtask (never applied where it is handed over), so the drain sets
+`microtasks_pending` and `next_wakeup` then reports zero.
+
+Deliberate deviations in this slice, each with the slice that removes it:
+
+- `RequestInfo`'s first arm is not implemented: `Request` is not a global, so the
+  argument is always read through the `USVString` arm. That arm's conversion is
+  lossy rather than checked, which makes two inputs *reject* where the standard
+  throws a `TypeError` before the body runs — `fetch()` with no argument
+  (stringified to `"undefined"`) and `fetch({})` (stringified to
+  `"[object Object]"`), both of which then fail URL resolution. The difference is
+  a synchronous throw versus a rejected promise, so a page wrapping the call in
+  `try`/`catch` sees it differently. `Request` arrives with the request-body
+  work.
+- `RequestInit` is declared as nothing and refused rather than ignored: a second
+  argument that is not an object throws, and an object with any own
+  *enumerable* member (read with the `ONLY_ENUMERABLE | SKIP_SYMBOLS` filter, so
+  an inherited or non-enumerable property is not a member) throws naming that
+  member. `fetch(url)`, `fetch(url, undefined)`, `fetch(url, null)` and
+  `fetch(url, {})` are all the empty dictionary and all a `GET`. Silently
+  dropping `{method: "POST"}` would send a different request than the page asked
+  for; `method`, `headers`, `body` and `signal` (with the `AbortSignal` slice)
+  each remove the refusal.
+- With no driver installed, `fetch` rejects with
+  `TypeError: fetch is not available` instead of throwing or leaving the promise
+  pending. A page that has loaded always has a driver once the `tenta-net`
+  driver lands (`4a-1b`).
+- A fetched response's `statusText` is derived from the status
+  (`http::StatusCode::canonical_reason()`), not taken from the wire; a status
+  with no canonical reason gives the empty string. Reason phrases as bytes, and
+  the standard's rule that a reason phrase is not a status, arrive with the
+  driver.
+- `insert_fetched_response` drops `Set-Cookie`/`Set-Cookie2` before the header
+  record exists, and corrects the body of a null-body status (101/103/204/205/
+  304) to `None`. Both are the Fetch rules applied at the boundary, so a driver
+  cannot get them wrong.
+- A response's `url` and `redirected` are the driver's report; nothing here
+  follows a redirect, and CORS, `Response.type` other than `basic`, and the
+  forbidden request-header names are all absent.
+
 ## Extended attributes
 
 | Attribute | Effect |
@@ -608,7 +668,14 @@ append, the forbidden-name drop under guard `"response"` and the defaults), and
 `crates/tenta-js-v8/tests/dom_response.rs` covers what only a real isolate
 shows — the promise actually settling in a microtask checkpoint, the UTF-8
 decode, the `SyntaxError` rejection, the `Uint8Array` body taken as bytes, and
-the wrapper's reclamation.
+the wrapper's reclamation. The `fetch()` seam splits the same way: the table's
+push/drain contract is a unit test module in `crates/tenta-js/src/fetch.rs`,
+the page layer's drain is `crates/tenta-page/src/runtime.rs`'s test module
+(which drives a recording engine, so no isolate is involved), and
+`crates/tenta-js-v8/tests/dom_fetch.rs` runs a recording `FetchDriver` against a
+real isolate to show the resolved URL, the microtask-ordered settlement, the
+`Response` a resolution carries, the null-body status, and both failure shapes —
+a rejection rather than a throw.
 
 Fixtures:
 

@@ -140,9 +140,12 @@ pub trait ScriptHost {
     /// the resolver's reference, and the promise's too, because by the time a
     /// settlement runs the glue has already handed the promise object to script
     /// and the world's own hold on it is over. A promise that is created and
-    /// never settled therefore leaks both slots — every producer in this slice
-    /// settles the promise it makes, and the one place that could not
-    /// (`fetch()`, `d-4a-1`) has no caller yet.
+    /// never settled therefore leaks both slots. Every producer settles the
+    /// promise it makes, but `fetch()` is the one whose settlement arrives
+    /// *outside* the call that made it: the engine queues it when the driver's
+    /// completion is drained (`crate::engine::PageEngine::settle_fetches`), so a
+    /// request no driver ever completes leaves its pair behind until the engine
+    /// is dropped.
     ///
     /// `None` when this world cannot build one.
     fn new_promise(&self) -> Option<PromiseRef>;
@@ -158,10 +161,11 @@ pub trait ScriptHost {
     ///
     /// Returns `false` when no settlement was queued: a resolver whose promise
     /// has already been settled, or one this world does not know. A caller
-    /// inside script always has a scope to build the value in; the no-scope path
-    /// (a network completion arriving on a `spawn_local` task, `d-4a-1`) is not
-    /// built yet and will need a drain in the engine's checkpoint plus a
-    /// settlement table to read.
+    /// inside script always has a scope to build the value in. A completion that
+    /// arrives with no script on the stack does not come through here at all —
+    /// it is left in a table for the engine to drain (`d-4a-1`'s
+    /// `PageEngine::settle_fetches`), which builds the value in a scope of its
+    /// own and queues the settlement directly.
     fn settle_promise(&self, resolver: u64, outcome: PromiseOutcome<'_>) -> bool;
 }
 

@@ -15,6 +15,7 @@ use tenta_js::engine::{
     ScriptErrorKind, ScriptKind,
 };
 use tenta_js::event_loop::ProvenanceSink;
+use tenta_js::fetch::{FetchCompletion, FetchDriver, FetchOutcome, FetchRequest, FetchStartError};
 
 /// Records what it was asked to do, so a test can assert the page's calls
 /// arrive with the arguments the page meant.
@@ -24,6 +25,8 @@ struct Recorder {
     timer_rule: Option<TimerRule>,
     trims: usize,
     terminated: bool,
+    /// How many completions the page handed the engine to settle.
+    settled: usize,
 }
 
 /// The factory is shared across page threads while the engines it builds stay
@@ -71,6 +74,12 @@ impl PageEngine for StubEngine {
         sink.task_finished(Origin::Tracked);
     }
 
+    fn set_fetch_driver(&mut self, _driver: Rc<dyn FetchDriver>) {}
+
+    fn settle_fetches(&mut self, completions: Vec<FetchCompletion>) {
+        self.recorder.lock().unwrap().settled += completions.len();
+    }
+
     fn next_wakeup(&self) -> Option<Duration> {
         Some(Duration::ZERO)
     }
@@ -108,6 +117,16 @@ struct StubWatchdog {
 impl EngineWatchdog for StubWatchdog {
     fn terminate(&self) {
         self.recorder.lock().unwrap().terminated = true;
+    }
+}
+
+/// Takes every request and never answers it: the stub engine stores the driver
+/// without calling it, so this only has to be nameable and installable.
+struct StubDriver;
+
+impl FetchDriver for StubDriver {
+    fn start(&self, _request: FetchRequest, _resolver: u64) -> Result<(), FetchStartError> {
+        Ok(())
     }
 }
 
@@ -173,6 +192,21 @@ fn a_page_drives_an_engine_through_the_trait_object_alone() {
 
     engine.trim_memory();
     assert_eq!(recorder.lock().unwrap().trims, 1);
+
+    // The fetch seam is reachable the same way: a driver is installed through
+    // the trait object, and a batch of completions is handed over to settle.
+    engine.set_fetch_driver(Rc::new(StubDriver));
+    engine.settle_fetches(vec![
+        FetchCompletion {
+            resolver: 1,
+            outcome: FetchOutcome::Failed("stub".to_string()),
+        },
+        FetchCompletion {
+            resolver: 2,
+            outcome: FetchOutcome::Failed("stub".to_string()),
+        },
+    ]);
+    assert_eq!(recorder.lock().unwrap().settled, 2);
 
     let watchdog = engine.watchdog().expect("the stub can be interrupted");
     watchdog.terminate();

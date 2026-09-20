@@ -30,6 +30,7 @@ use tenta_js::engine::{
     ScriptErrorKind, ScriptKind,
 };
 use tenta_js::event_loop::{Clock, MonoTime, ProvenanceSink};
+use tenta_js::fetch::{FetchCompletion, FetchDriver};
 
 use crate::{Engine, world};
 
@@ -127,6 +128,25 @@ impl PageEngine for Engine {
         // are the same `TaskSink`, so installing the observer here covers both
         // the tasks a callback queues and the ones the loop queues itself.
         self.event_loop.task_sink().set_provenance_sink(sink);
+    }
+
+    /// Installs the driver the engine's `fetch` global hands its requests to.
+    ///
+    /// The write lands in a slot on this engine's [`HostState`] rather than in a
+    /// field of its own because a V8 callback reaches only the context slot
+    /// ([`crate::host::host_state`]), and because `fetch` is defined by
+    /// `host::install` before any driver exists. See
+    /// [`crate::host::HostState::set_fetch_driver`].
+    ///
+    /// [`HostState`]: crate::host::HostState
+    fn set_fetch_driver(&mut self, driver: Rc<dyn FetchDriver>) {
+        self.host.set_fetch_driver(driver);
+    }
+
+    /// Named explicitly so the inherent method is what runs and a later trait
+    /// default cannot shadow it.
+    fn settle_fetches(&mut self, completions: Vec<FetchCompletion>) {
+        Engine::settle_fetches(self, completions);
     }
 
     fn next_wakeup(&self) -> Option<Duration> {

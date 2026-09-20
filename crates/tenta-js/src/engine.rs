@@ -43,6 +43,7 @@ use tenta_core::TimerRule;
 
 use crate::bindings::host::SharedDocument;
 use crate::event_loop::ProvenanceSink;
+use crate::fetch::{FetchCompletion, FetchDriver};
 
 /// How a script was delivered to the document.
 ///
@@ -141,6 +142,28 @@ pub trait PageEngine {
     /// navigation rather than once at creation (an engine outlives the settle
     /// that observed its first navigation).
     fn set_provenance_sink(&mut self, sink: Rc<dyn ProvenanceSink>);
+
+    /// Points the engine's `fetch` global at the driver that answers its
+    /// requests, replacing any driver installed before.
+    ///
+    /// Like [`PageEngine::set_provenance_sink`], this is called per navigation
+    /// rather than once at creation: a driver's completions belong to the
+    /// document that is current, and the table it leaves them in is the page's,
+    /// one per navigation. An engine created without a driver still has a
+    /// `fetch`; calling it rejects, because a promise the engine cannot keep is
+    /// worse than a loud refusal.
+    fn set_fetch_driver(&mut self, driver: Rc<dyn FetchDriver>);
+
+    /// Settles the promises this batch of completions names, as one entry: the
+    /// values are built, the settlements queued as microtasks, and the engine
+    /// records that a checkpoint is owed.
+    ///
+    /// The batch is passed in rather than drained from a table the engine owns
+    /// because the table's owner is the page: the page is what decides when a
+    /// completion becomes visible, and it is the page's turn that makes it so
+    /// (`tenta_page::runtime`). An empty batch settles nothing and must not be
+    /// entered at all.
+    fn settle_fetches(&mut self, completions: Vec<FetchCompletion>);
 
     /// How long until the engine next has work of its own to do, as a delay
     /// from now. `None` means nothing is scheduled; `Some(Duration::ZERO)`

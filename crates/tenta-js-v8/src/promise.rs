@@ -62,9 +62,12 @@
 //!  - a value the settlement did not build — the world-wide interned
 //!    `undefined` — is *not* released, because that slot belongs to the world.
 //!
-//! The one way to leak is to create a promise and never settle it: the
-//! registration and the two slots then all stay. Nothing in this slice does
-//! that; `d-4a-1`'s network completion is where the possibility returns.
+//! The one way to leak is to leave a promise unsettled. A settlement that is
+//! queued always runs, so the producer to watch is `fetch()`: a request whose
+//! driver never answers leaves its promise pending, and the registration and
+//! both slots stay with it. That is bounded to one navigation —
+//! [`PromiseState::clear`] drops the registrations and the queued jobs while the
+//! isolate is still alive, and `Engine::Drop` calls it.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -219,6 +222,26 @@ impl PromiseState {
     fn take(&self, resolver: u64) -> Option<Pending> {
         self.pending.borrow_mut().remove(&resolver)
     }
+
+    /// Gives back a value that was built for a settlement that cannot happen.
+    ///
+    /// `owns_value` is false for the world's interned `undefined`, whose slot
+    /// belongs to the world and not to a producer.
+    fn release_orphan_value(&self, value: u64, owns_value: bool) {
+        if owns_value {
+            self.world.borrow_mut().release_value(value);
+        }
+    }
+}
+
+/// The promise state of the context currently entered, if it has one.
+///
+/// A free function rather than a method because it is the entry point both
+/// callers share: `settle_promise` runs inside a binding call, and the engine's
+/// fetch drain runs from its own scope (`Engine::settle_fetches`), and neither
+/// is a method on the state it reaches.
+pub(crate) fn state_of(scope: &v8::PinScope<'_, '_>) -> Option<Rc<PromiseState>> {
+    PromiseState::of(scope)
 }
 
 /// Creates the promise pair, stores both halves and registers the promise under
@@ -263,7 +286,7 @@ fn settle_in(
     resolver: u64,
     outcome: PromiseOutcome<'_>,
 ) -> Option<bool> {
-    let state = PromiseState::of(scope)?;
+    let state = state_of(scope)?;
 
     // The outcome is built before the registration is taken: a failure here
     // must not consume it, or the promise would be left pending with no route
@@ -303,9 +326,46 @@ fn settle_in(
         },
     };
 
+    Some(queue_settlement(
+        &state, scope, resolver, value, owns_value, rejected,
+    ))
+}
+
+/// Queues the settlement of the promise `resolver` names, with the value that
+/// has already been built and stored at `value`.
+///
+/// This is the **only** place a [`Settlement`] is created, so the double-settle
+/// guard and the reference accounting cannot drift between the two callers:
+/// [`settle_in`], which builds the value from an outcome inside a binding call,
+/// and the engine's fetch drain, which has the value in hand because it built it
+/// in its own scope (`Engine::settle_fetches`).
+///
+/// # Ownership
+///
+/// The call takes `value` in every case, so the caller never releases it, and
+/// `false` never means "the caller still owns it". The two outcomes differ in
+/// who releases it:
+///
+/// - the promise was already settled, so no job was made: there is nothing left
+///   to release `value`, and the call releases it itself (`owns_value` false
+///   marks the world-wide interned `undefined`, whose slot no producer owns);
+/// - V8 refused the microtask function: the job was already stored and keeps
+///   `value`, so the slot is released only if something drains that job, and
+///   [`PromiseState::clear`] does not — see the comment at that arm.
+pub(crate) fn queue_settlement(
+    state: &PromiseState,
+    scope: &mut v8::PinScope<'_, '_>,
+    resolver: u64,
+    value: u64,
+    owns_value: bool,
+    rejected: bool,
+) -> bool {
     // A resolver whose promise has already been settled names nothing, so this
     // is also the double-settle guard.
-    let pending = state.take(resolver)?;
+    let Some(pending) = state.take(resolver) else {
+        state.release_orphan_value(value, owns_value);
+        return false;
+    };
     let index = state.jobs.push(Settlement {
         resolver: pending.resolver,
         resolver_bits: resolver,
@@ -317,11 +377,20 @@ fn settle_in(
     // The index travels as the function's data, which is what lets the microtask
     // find its own job without a pointer and without `unsafe`.
     let data = v8::Integer::new(scope, index as i32);
-    let callback = v8::Function::builder(promise_microtask)
+    let Some(callback) = v8::Function::builder(promise_microtask)
         .data(data.into())
-        .build(scope)?;
+        .build(scope)
+    else {
+        // The job is already in the table, so it keeps `value`. Unreachable
+        // short of V8 failing to allocate a function, and the leak it leaves is
+        // the bounded one the module doc names: `clear` drops the job, which
+        // releases the resolver's `Global`, but the three world slots the job
+        // names are released by the microtask and by nothing else, so they stay
+        // until the isolate goes.
+        return false;
+    };
     scope.enqueue_microtask(callback);
-    Some(true)
+    true
 }
 
 /// The `JSON.parse` of `bytes`, or `None` when they are not valid JSON.
