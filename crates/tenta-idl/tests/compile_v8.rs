@@ -29,6 +29,9 @@ mod toy_bindings {
     include!("golden/toy/byte_box_ops.rs");
     include!("golden/toy/byte_box_register.rs");
     include!("golden/toy/byte_box_v8.rs");
+    include!("golden/toy/payload_box_ops.rs");
+    include!("golden/toy/payload_box_register.rs");
+    include!("golden/toy/payload_box_v8.rs");
 }
 
 #[allow(dead_code)]

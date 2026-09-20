@@ -174,9 +174,10 @@ of the JavaScript value:
   conversion prescribes.
 - Each arm of a union carries its own WebIDL test — `is_object()` for the
   object-like arms, `@@iterator` for a sequence, `is_object() && !is_array()`
-  for a record, `is_number()` for the numeric arms — and the arms are tried in
-  declaration order. The first arm with no test of its own is the fallback;
-  declaring one earlier cannot shadow a later arm of the same kind.
+  for a record, `is_number()` for the numeric arms, and the buffer-source
+  predicates below — and the arms are tried in declaration order. The first arm
+  with no test of its own is the fallback; declaring one earlier cannot shadow a
+  later arm of the same kind.
 - A buffer source is converted by its bytes, and it maps to `Vec<u8>` in *both*
   positions. Reading one always allocates: the bytes have to be copied out of
   the engine's own storage before the host may look at them, so a borrowed
@@ -277,11 +278,24 @@ of the JavaScript value:
   build against (its `cargo` feature is `quickjs = []`), and no `idl/`
   declaration names a buffer source. A QuickJS host that needed one would need
   the byte conversions written for it.
-- A union with a buffer member has no `is_…` test in `union_test`, so such a
-  union falls back exactly as a `DOMString`/`ByteString` member already does.
-  No declaration in `idl/` has one; a buffer source is not distinguishable from
-  an arbitrary object by a cheap test, which is why the arm is left out rather
-  than guessed at.
+- A union with a buffer source member carries its own test too, because an arm
+  with none is the union's fallback: the shape is
+  `typedef (BufferSource or USVString) BodyInit;`, and without the test the
+  buffer arm is dropped and the argument is stringified through the `USVString`
+  arm instead of being read as bytes. The view types are tested per class —
+  WebIDL selects the `Uint8Array` arm only for an object whose
+  `[[TypedArrayName]]` is `"Uint8Array"` — `ArrayBufferView` is
+  `is_array_buffer_view()`, and `ArrayBuffer` and `BufferSource` admit a
+  `SharedArrayBuffer`, because WebIDL's `ArrayBuffer` type *is* the
+  `[[ArrayBufferData]]` internal slot a shared buffer also has. That term does
+  not soften the conversion, which still refuses a bare `SharedArrayBuffer` with
+  a `TypeError`; it is what turns that refusal into a thrown exception instead
+  of a `"[object SharedArrayBuffer]"` body. The QuickJS arm is `is_object()`:
+  every buffer source is an object, and the feature has no `rquickjs` to check a
+  narrower predicate against. `idl/toy/PayloadBox.webidl` is the fixture for
+  the `BufferSource` arm; the twelve others are pinned by
+  `every_buffer_union_arm_is_guarded_by_the_class_it_converts` rather than by a
+  declaration.
 
 Fast-API-eligible members return their value directly; every other member
 returns `Result<_, JsError>` so the glue can turn a failure into a JavaScript

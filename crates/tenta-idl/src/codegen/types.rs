@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 
 use crate::codegen::convert::{self, IntegerMode};
 use crate::codegen::rust_type::{Position, default_expr, rust_type};
-use crate::model::{Dictionary, DictionaryMember, Enum, Model, Type, Union};
+use crate::model::{BufferType, Dictionary, DictionaryMember, Enum, Model, Type, Union};
 
 /// Generates `types.rs`.
 pub fn types(model: &Model) -> String {
@@ -508,7 +508,8 @@ fn union_code(union: &Union, out: &mut String) {
 /// performs, so any iterable and not only an array qualifies. A record is
 /// selected as the object that is left once the sequence arm has declined; the
 /// corpus declares the sequence arm first, which is the order WebIDL's own
-/// conversion algorithm uses for object values.
+/// conversion algorithm uses for object values. A buffer source is selected by
+/// the class the runtime conversion brand-checks; see `buffer_union_test`.
 fn union_test(ty: &Type) -> Option<&'static str> {
     match ty {
         Type::Interface(_) | Type::Object | Type::Dictionary(_) => Some("value.is_object()"),
@@ -521,12 +522,55 @@ fn union_test(ty: &Type) -> Option<&'static str> {
             Some("value.is_object() && has_iterator(scope, value)")
         }
         Type::Record(_, _) => Some("value.is_object() && !value.is_array()"),
+        Type::Buffer(kind) => Some(buffer_union_test(*kind)),
         Type::Boolean => Some("value.is_boolean()"),
         Type::Callback(_) | Type::CallbackInterface(_) => Some("value.is_function()"),
         Type::Symbol => Some("value.is_symbol()"),
         ty if ty.is_integer() => Some("value.is_number()"),
         Type::Float { .. } | Type::Double { .. } => Some("value.is_number()"),
         _ => None,
+    }
+}
+
+/// The V8 predicate that selects a buffer source union arm.
+///
+/// The test names the class the runtime conversion brand-checks. Without it the
+/// arm has no discriminating test at all, which makes it the union's fallback or
+/// drops it: `typedef (BufferSource or USVString) BodyInit;` would convert every
+/// argument through the `USVString` arm and stringify a typed array to `"1,2"`
+/// instead of taking its bytes.
+///
+/// `ArrayBuffer` and `BufferSource` admit a `SharedArrayBuffer`, because
+/// WebIDL's `ArrayBuffer` type is an object with an `[[ArrayBufferData]]`
+/// internal slot and a `SharedArrayBuffer` has that slot too — WebIDL tells the
+/// two apart only through its `[AllowShared]` extended attribute, which no
+/// declaration here can carry: weedle 0.4 has no `SharedArrayBuffer` keyword, so
+/// `AllowSharedBufferSource` is unwritable (`docs/dev/idl.md`). The runtime
+/// conversions brand-check the class and refuse a bare `SharedArrayBuffer` with
+/// a `TypeError`; selecting the arm for one keeps that `TypeError` instead of
+/// letting the value fall past the arm and be silently stringified.
+///
+/// The typed arrays are matched per class rather than through
+/// `is_array_buffer_view()`: WebIDL selects the `Uint8Array` arm only for an
+/// object whose `[[TypedArrayName]]` is `"Uint8Array"`, so the specific
+/// predicate is the faithful one.
+fn buffer_union_test(kind: BufferType) -> &'static str {
+    match kind {
+        BufferType::ArrayBuffer => "value.is_array_buffer() || value.is_shared_array_buffer()",
+        BufferType::DataView => "value.is_data_view()",
+        BufferType::Int8Array => "value.is_int8_array()",
+        BufferType::Int16Array => "value.is_int16_array()",
+        BufferType::Int32Array => "value.is_int32_array()",
+        BufferType::Uint8Array => "value.is_uint8_array()",
+        BufferType::Uint16Array => "value.is_uint16_array()",
+        BufferType::Uint32Array => "value.is_uint32_array()",
+        BufferType::Uint8ClampedArray => "value.is_uint8_clamped_array()",
+        BufferType::Float32Array => "value.is_float32_array()",
+        BufferType::Float64Array => "value.is_float64_array()",
+        BufferType::ArrayBufferView => "value.is_array_buffer_view()",
+        BufferType::BufferSource => {
+            "value.is_array_buffer() || value.is_shared_array_buffer() || value.is_array_buffer_view()"
+        }
     }
 }
 
@@ -543,6 +587,15 @@ fn union_test_quickjs(ty: &Type) -> Option<&'static str> {
             Some("value.is_array()")
         }
         Type::Record(_, _) => Some("value.is_object() && !value.is_array()"),
+        // Every buffer source is an object, so this test cannot send one to the
+        // fallback, which is a `DOMString`-like primitive. It is deliberately
+        // broad — an object that is not a buffer source is selected here and
+        // then fails in the conversion — rather than read off `rquickjs`, whose
+        // predicate for a buffer is unverifiable in this repository: the
+        // `quickjs` feature has no `rquickjs` dependency to compile against, so
+        // an invented name would be a guess pinned only by the golden file
+        // (`docs/dev/idl.md`).
+        Type::Buffer(_) => Some("value.is_object()"),
         Type::Boolean => Some("value.is_bool()"),
         Type::Callback(_) | Type::CallbackInterface(_) => Some("value.is_function()"),
         Type::Symbol => Some("value.is_symbol()"),

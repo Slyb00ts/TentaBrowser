@@ -465,6 +465,89 @@ fn the_quickjs_union_arms_carry_the_same_tests() {
     );
 }
 
+/// Every buffer source arm of a union is guarded by the test its conversion
+/// brand-checks, for all thirteen `BufferType` members and not only the
+/// `BufferSource` arm the fixture declares.
+///
+/// The typed arrays are matched per class — WebIDL selects the `Uint8Array` arm
+/// only for an object whose `[[TypedArrayName]]` is `"Uint8Array"` — and the
+/// two spellings that name an `ArrayBuffer` admit a `SharedArrayBuffer`, which
+/// has the `[[ArrayBufferData]]` slot WebIDL's `ArrayBuffer` type is. An arm
+/// with no test becomes the union's fallback, which is how
+/// `typedef (BufferSource or USVString) BodyInit;` used to stringify a typed
+/// array instead of taking its bytes.
+#[test]
+fn every_buffer_union_arm_is_guarded_by_the_class_it_converts() {
+    let cases = [
+        (
+            BufferType::ArrayBuffer,
+            "value.is_array_buffer() || value.is_shared_array_buffer()",
+        ),
+        (BufferType::DataView, "value.is_data_view()"),
+        (BufferType::Int8Array, "value.is_int8_array()"),
+        (BufferType::Int16Array, "value.is_int16_array()"),
+        (BufferType::Int32Array, "value.is_int32_array()"),
+        (BufferType::Uint8Array, "value.is_uint8_array()"),
+        (BufferType::Uint16Array, "value.is_uint16_array()"),
+        (BufferType::Uint32Array, "value.is_uint32_array()"),
+        (
+            BufferType::Uint8ClampedArray,
+            "value.is_uint8_clamped_array()",
+        ),
+        (BufferType::Float32Array, "value.is_float32_array()"),
+        (BufferType::Float64Array, "value.is_float64_array()"),
+        (BufferType::ArrayBufferView, "value.is_array_buffer_view()"),
+        (
+            BufferType::BufferSource,
+            "value.is_array_buffer() || value.is_shared_array_buffer() || value.is_array_buffer_view()",
+        ),
+    ];
+
+    for (kind, test) in cases {
+        let name = kind.idl_name();
+        let model = tenta_idl::parse_webidl(&format!(
+            "interface Sample {{ undefined probe(({name} or USVString) value); }};\n"
+        ))
+        .expect("the source parses");
+        let contents = generated_file(&model, "types.rs").contents;
+        let union = &model.unions[0].name;
+
+        let v8 = impl_body(&contents, union, "v8");
+        assert!(
+            v8.contains(&format!("if {test} {{")),
+            "the `{name}` arm is not selected by `{test}`"
+        );
+        let arm_at = v8
+            .find(&format!(
+                "{}_from_v8(scope, value)",
+                kind.conversion_suffix()
+            ))
+            .unwrap_or_else(|| panic!("the `{name}` arm does not use its own conversion"));
+        let fallback_at = v8
+            .find("Ok::<String, JsError>(string_from_v8(scope, value))")
+            .expect("the unguarded `USVString` arm is the fallback");
+        assert!(
+            arm_at < fallback_at,
+            "the `{name}` arm is emitted after the string fallback, which shadows it"
+        );
+
+        // The QuickJS arm is broad — every buffer source is an object, and the
+        // `rquickjs` predicate for one cannot be compiled here — but it still
+        // has to be a test, so that the string arm stays the fallback.
+        let qjs = impl_body(&contents, union, "quickjs");
+        let qjs_arm_at = qjs
+            .find("if value.is_object() {")
+            .unwrap_or_else(|| panic!("the QuickJS `{name}` arm has no test"));
+        let qjs_fallback_at = qjs
+            .find("<String as rquickjs::FromJs>")
+            .expect("the unguarded QuickJS `USVString` arm is the fallback");
+        assert!(
+            qjs_arm_at < qjs_fallback_at,
+            "the QuickJS `{name}` arm is emitted after the string fallback"
+        );
+    }
+}
+
 /// A `ByteString` is a byte string, not text: its conversion is isomorphic, so a
 /// byte above `0x7F` survives the round trip and a code unit above `0xFF` is an
 /// error rather than a truncation. `Headers` is the first interface to make this

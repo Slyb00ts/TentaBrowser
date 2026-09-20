@@ -40,12 +40,15 @@ fn operation<'a>(
 fn toy_model_has_the_expected_shape() {
     let model = common::toy();
 
-    assert_eq!(model.interfaces.len(), 4);
+    assert_eq!(model.interfaces.len(), 5);
     assert_eq!(model.dictionaries.len(), 1);
     assert_eq!(model.enums.len(), 1);
     assert!(model.namespaces.is_empty());
-    assert!(model.unions.is_empty());
-    assert!(model.typedefs.is_empty());
+    // Both come from `PayloadBox.webidl`, the only fixture with a union.
+    assert_eq!(model.unions.len(), 1);
+    assert_eq!(model.unions[0].name, "BufferSourceOrUsvString");
+    assert_eq!(model.typedefs.len(), 1);
+    assert_eq!(model.typedefs[0].name, "PayloadSource");
     assert!(model.opaque_interfaces.is_empty());
 
     let counter = interface(&model, "Counter");
@@ -122,6 +125,41 @@ fn the_buffer_source_names_lower_to_the_buffer_types() {
         decode.overloads[0].arguments[0].ty,
         Type::Buffer(BufferType::BufferSource),
         "the `BufferSource` typedef reached the model as something else"
+    );
+}
+
+/// A union that contains a buffer source, with the buffer arm declared first.
+///
+/// The order is the whole point of the fixture: the generated `from_v8` tries
+/// the arms in declaration order and the string arm is the fallback, so a
+/// buffer source declared after it would never reach its own arm.
+#[test]
+fn a_union_keeps_its_buffer_arm_in_declaration_order() {
+    let model = common::toy();
+    let union = model
+        .unions
+        .iter()
+        .find(|union| union.name == "BufferSourceOrUsvString")
+        .expect("the fixture declares exactly this union");
+    assert_eq!(
+        union
+            .members
+            .iter()
+            .map(|member| member.ty.clone())
+            .collect::<Vec<_>>(),
+        [Type::Buffer(BufferType::BufferSource), Type::UsvString]
+    );
+
+    let send = operation(&model, "PayloadBox", "send");
+    assert_eq!(
+        send.overloads[0].arguments[0].ty,
+        Type::Union("BufferSourceOrUsvString".to_string())
+    );
+
+    let bytes = operation(&model, "PayloadBox", "bytes");
+    assert_eq!(
+        bytes.overloads[0].return_type,
+        Type::Sequence(Box::new(Type::Octet))
     );
 }
 

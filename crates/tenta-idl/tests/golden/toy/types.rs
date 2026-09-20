@@ -26,12 +26,25 @@ impl InterfaceMarker for PairBox {
     const INTERFACE_NAME: &'static str = "PairBox";
 }
 
+/// Marker for the WebIDL interface `PayloadBox` (defined in this module).
+pub enum PayloadBox {}
+
+impl InterfaceMarker for PayloadBox {
+    const INTERFACE_NAME: &'static str = "PayloadBox";
+}
+
 /// Marker for the WebIDL interface `TimedCounter` (defined in this module).
 pub enum TimedCounter {}
 
 impl InterfaceMarker for TimedCounter {
     const INTERFACE_NAME: &'static str = "TimedCounter";
 }
+
+// Typedef aliases. The alias uses the owned spelling of the type; an
+// argument position uses `&str` where the alias says `String`.
+
+/// `typedef BufferSourceOrUsvString PayloadSource;`
+pub type PayloadSource = BufferSourceOrUsvString;
 
 /// WebIDL `enum CounterState`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -217,5 +230,70 @@ impl<'js> rquickjs::IntoJs<'js> for CounterOptions {
         object.set("label", self.label)?;
         object.set("autoStart", self.auto_start)?;
         Ok(object.into_value())
+    }
+}
+
+/// WebIDL `(BufferSource or USVString)`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BufferSourceOrUsvString {
+    /// `BufferSource`
+    BufferSource(Vec<u8>),
+    /// `USVString`
+    UsvString(String),
+}
+
+#[cfg(feature = "v8")]
+impl BufferSourceOrUsvString {
+    /// Converts a JavaScript value to this union.
+    ///
+    /// Arms are tried in declaration order, each one behind the WebIDL test
+    /// that selects it — a sequence by its `@@iterator`, a record by being an
+    /// object that is not an array. The first arm that has no test of its own
+    /// is the fallback.
+    pub fn from_v8<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+    ) -> Result<Self, JsError> {
+        if value.is_array_buffer() || value.is_shared_array_buffer() || value.is_array_buffer_view() {
+            return (buffer_source_from_v8(scope, value)).map(BufferSourceOrUsvString::BufferSource);
+        }
+        (Ok::<String, JsError>(string_from_v8(scope, value))).map(BufferSourceOrUsvString::UsvString)
+    }
+
+    /// Converts this union to a JavaScript value.
+    pub fn to_v8<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Result<v8::Local<'s, v8::Value>, JsError> {
+        match self {
+            BufferSourceOrUsvString::BufferSource(inner) => {
+                let value = inner.clone();
+                buffer_source_to_v8(scope, value)
+            }
+            BufferSourceOrUsvString::UsvString(inner) => {
+                let value = inner.clone();
+                string_to_v8(scope, &value)
+            }
+        }
+    }
+}
+
+#[cfg(feature = "quickjs")]
+impl<'js> rquickjs::FromJs<'js> for BufferSourceOrUsvString {
+    fn from_js(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {
+        if value.is_object() {
+            return <Vec<u8> as rquickjs::FromJs>::from_js(ctx, value).map(BufferSourceOrUsvString::BufferSource);
+        }
+        <String as rquickjs::FromJs>::from_js(ctx, value).map(BufferSourceOrUsvString::UsvString)
+    }
+}
+
+#[cfg(feature = "quickjs")]
+impl<'js> rquickjs::IntoJs<'js> for BufferSourceOrUsvString {
+    fn into_js(self, ctx: &rquickjs::Ctx<'js>) -> rquickjs::Result<rquickjs::Value<'js>> {
+        match self {
+            BufferSourceOrUsvString::BufferSource(inner) => rquickjs::IntoJs::into_js(inner, ctx),
+            BufferSourceOrUsvString::UsvString(inner) => rquickjs::IntoJs::into_js(inner, ctx),
+        }
     }
 }
