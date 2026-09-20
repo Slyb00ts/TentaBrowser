@@ -483,9 +483,13 @@ mod prelude_helpers {
                  __inherited.own = 'o';",
             );
             let source = global(scope, "__source");
-            let entries =
-                record_from_v8(scope, source, |scope, item| Ok(string_from_v8(scope, item)))
-                    .expect("the source is a record");
+            let entries = record_from_v8(
+                scope,
+                source,
+                |scope, key| Ok::<String, JsError>(string_from_v8(scope, key)),
+                |scope, item| Ok(string_from_v8(scope, item)),
+            )
+            .expect("the source is a record");
             assert_eq!(
                 entries,
                 [
@@ -496,9 +500,13 @@ mod prelude_helpers {
             );
 
             let source = global(scope, "__numbered");
-            let entries =
-                record_from_v8(scope, source, |scope, item| Ok(string_from_v8(scope, item)))
-                    .expect("the source is a record");
+            let entries = record_from_v8(
+                scope,
+                source,
+                |scope, key| Ok::<String, JsError>(string_from_v8(scope, key)),
+                |scope, item| Ok(string_from_v8(scope, item)),
+            )
+            .expect("the source is a record");
             assert_eq!(
                 entries,
                 [
@@ -509,9 +517,13 @@ mod prelude_helpers {
             );
 
             let source = global(scope, "__inherited");
-            let entries =
-                record_from_v8(scope, source, |scope, item| Ok(string_from_v8(scope, item)))
-                    .expect("the source is a record");
+            let entries = record_from_v8(
+                scope,
+                source,
+                |scope, key| Ok::<String, JsError>(string_from_v8(scope, key)),
+                |scope, item| Ok(string_from_v8(scope, item)),
+            )
+            .expect("the source is a record");
             assert_eq!(
                 entries,
                 [("own".to_string(), "o".to_string())],
@@ -562,10 +574,114 @@ mod prelude_helpers {
                    });",
             );
             let source = global(scope, "__trap");
-            let error =
-                record_from_v8(scope, source, |scope, item| Ok(string_from_v8(scope, item)))
-                    .expect_err("an abrupt descriptor read fails the conversion");
+            let error = record_from_v8(
+                scope,
+                source,
+                |scope, key| Ok::<String, JsError>(string_from_v8(scope, key)),
+                |scope, item| Ok(string_from_v8(scope, item)),
+            )
+            .expect_err("an abrupt descriptor read fails the conversion");
             assert_eq!(error.kind(), JsErrorKind::Type);
+        });
+    }
+
+    /// `es-to-record` applies the *declared* key type's conversion to each own
+    /// enumerable key, so a `ByteString`-keyed record reads every key as one
+    /// code unit per byte: `'é'` (U+00E9) is the single byte `0xE9`, and a code
+    /// unit above `0xFF` — `'€'` (U+20AC) — is the `TypeError` WebIDL
+    /// prescribes rather than a truncation to its low byte.
+    ///
+    /// The enumeration rules are key-independent, so the `ByteString` key
+    /// conversion has to skip a non-enumerable own property and never see an
+    /// inherited one, exactly as the string-keyed record does.
+    #[test]
+    fn a_record_reads_its_keys_through_the_declared_key_type() {
+        with_context(|scope| {
+            eval(
+                scope,
+                "globalThis.__bytes = { '\\u00e9': 'v' };
+                 Object.defineProperty(__bytes, 'hidden', { value: 'h', enumerable: false });
+                 globalThis.__inherited_bytes = Object.create({ inherited: 'i' });
+                 __inherited_bytes.own = 'o';
+                 globalThis.__wide = { '\\u20ac': 'v' };",
+            );
+
+            let source = global(scope, "__bytes");
+            let entries = record_from_v8(scope, source, byte_string_from_v8, |scope, item| {
+                Ok(string_from_v8(scope, item))
+            })
+            .expect("a Latin-1 key is a valid `ByteString`");
+            assert_eq!(
+                entries,
+                [(vec![0xE9], "v".to_string())],
+                "the U+00E9 key is not its single byte `0xE9`"
+            );
+
+            let source = global(scope, "__inherited_bytes");
+            let entries = record_from_v8(scope, source, byte_string_from_v8, |scope, item| {
+                Ok(string_from_v8(scope, item))
+            })
+            .expect("the own key is a valid `ByteString`");
+            assert_eq!(
+                entries,
+                [(b"own".to_vec(), "o".to_string())],
+                "an inherited enumerable property leaked into a `ByteString`-keyed record"
+            );
+
+            let source = global(scope, "__wide");
+            let error = record_from_v8(scope, source, byte_string_from_v8, |scope, item| {
+                Ok(string_from_v8(scope, item))
+            })
+            .expect_err("a code unit above `0xFF` is not a `ByteString` key");
+            assert_eq!(error.kind(), JsErrorKind::Type);
+        });
+    }
+
+    /// The write direction keys the same way: a `ByteString` key of `0xE9`
+    /// reaches script as the one-code-unit name `'é'`, where a `USVString` key
+    /// of `'\u{FF}'` reaches it unchanged. The two key conversions are what
+    /// `record_to_v8` is asked for, and neither is the other.
+    #[test]
+    fn a_record_writes_its_keys_through_the_declared_key_type() {
+        with_context(|scope| {
+            let bytes = record_to_v8(
+                scope,
+                vec![(vec![0xE9u8], "v".to_string())],
+                |scope, key| byte_string_to_v8(scope, &key),
+                |scope, item| string_to_v8(scope, &item),
+            )
+            .expect("the byte fits a V8 string");
+            let text = record_to_v8(
+                scope,
+                vec![("\u{FF}".to_string(), "v".to_string())],
+                |scope, key| string_to_v8(scope, &key),
+                |scope, item| string_to_v8(scope, &item),
+            )
+            .expect("the string fits a V8 string");
+            let global_object = scope.get_current_context().global(scope);
+            for (name, object) in [("__bytes", bytes), ("__text", text)] {
+                let key = v8_string(scope, name).expect("the name fits a V8 string");
+                global_object.set(scope, key.into(), object);
+            }
+
+            assert_eq!(
+                eval(
+                    scope,
+                    "{ const keys = Object.keys(__bytes);
+                       [keys.length, keys[0].charCodeAt(0), __bytes[keys[0]]].join('|'); }"
+                ),
+                "1|233|v",
+                "the byte key did not reach script as the one-code-unit name"
+            );
+            assert_eq!(
+                eval(
+                    scope,
+                    "{ const keys = Object.keys(__text);
+                       [keys.length, keys[0].charCodeAt(0)].join('|'); }"
+                ),
+                "1|255",
+                "a string key was rewritten on the way out"
+            );
         });
     }
 

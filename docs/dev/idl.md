@@ -135,10 +135,12 @@ prelude's `clamp_*` helpers cannot fail.
 
 `record` maps to `Vec<(K, V)>`, not a map: WebIDL records preserve insertion
 order and allow duplicate keys on the way in, and the ordered vector is what
-the V8 and QuickJS conversions can reproduce exactly. The generated V8
-conversion ignores `K` and always produces `String` keys, so a record whose key
-type is not a string type (only `ByteString` in the current corpus) does not
-compile; no such record exists in `idl/` yet.
+the V8 and QuickJS conversions can reproduce exactly. Both directions convert
+each key through the *declared* key type rather than through a lossy `String`,
+so the key type the conversion produces is the one the table's `rust_type`
+spelling names. A key type outside `ByteString`, `DOMString` and `USVString` is
+not valid WebIDL and is emitted as a `TypeError`, not converted as some other
+type; no such declaration exists in `idl/`.
 
 The conversions themselves follow the WebIDL algorithms rather than the shape
 of the JavaScript value:
@@ -150,8 +152,11 @@ of the JavaScript value:
   non-object before it looks for the method.
 - `record<K, V>` is `es-to-record`: own keys first, then each key's property
   descriptor decides whether it is enumerable, and only then is the value read.
-  The descriptor read is observable through a proxy. Keys are read back as
-  strings, so an integer-like own key is not dropped.
+  The descriptor read is observable through a proxy. Each key is then converted
+  through `K` — `ConvertByType(key, K)` runs before `ConvertByType(value, V)`,
+  and a `ByteString` key is one code unit per byte, so a key above `0xFF` is the
+  same `TypeError` there as anywhere else. An integer-like own key is read back
+  as its string name, so it is not dropped.
 - `ByteString` is converted isomorphically: one code unit per byte, through the
   one-byte string APIs, and a code unit above `0xFF` is a `TypeError` rather
   than a truncation to its low byte.
@@ -385,9 +390,10 @@ The golden files assert the *shape* of the emitted code; the behaviour behind
 the prelude helpers is covered at runtime by `tenta-js`'s `prelude_helpers`
 module (`cargo test -p tenta-js --features v8`), which runs
 `sequence_from_v8`, `record_from_v8`, `byte_string_from_v8`/`_to_v8`,
-`array_iterator` and `call_js_function` against a real isolate. Nothing in
-`idl/` declares a sequence, a record or a `ByteString` yet, so without those
-tests the three conversions would only ever be compiled.
+`array_iterator` and `call_js_function` against a real isolate. Those tests are
+what reaches a conversion no declaration reaches — nothing in `idl/` declares a
+`ByteString` yet — and the failure paths a shipped member cannot produce, such
+as an abrupt descriptor read or a failing `done` read.
 
 Fixtures:
 

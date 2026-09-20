@@ -2312,7 +2312,7 @@ fn call_node_attribute_map<'s, T: NodeOps + EventTargetOps + EventTargetConstruc
             return;
         }
     };
-    match record_to_v8(scope, value, |scope, item| string_to_v8(scope, &item)) {
+    match record_to_v8(scope, value, |scope, key| string_to_v8(scope, &key), |scope, item| string_to_v8(scope, &item)) {
         Ok(value) => rv.set(value),
         Err(error) => throw_js_error(scope, &error),
     }

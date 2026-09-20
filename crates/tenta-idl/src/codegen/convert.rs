@@ -4,7 +4,7 @@
 //! binding and propagate the error. Conversions are uniformly fallible so that
 //! the callback bodies have one shape.
 
-use crate::codegen::rust_type::integer_suffix;
+use crate::codegen::rust_type::{Position, integer_suffix, rust_type};
 use crate::model::{Argument, Type};
 
 /// `[Clamp]` / `[EnforceRange]` state of an integer conversion.
@@ -80,9 +80,10 @@ pub fn from_v8(ty: &Type, scope: &str, value: &str, mode: IntegerMode) -> String
             let element = from_v8(inner, "scope", "item", IntegerMode::Modulo);
             format!("sequence_from_v8({scope}, {value}, |scope, item| {element})")
         }
-        Type::Record(_, inner) => {
+        Type::Record(key, inner) => {
+            let key = record_key_from_v8(key);
             let element = from_v8(inner, "scope", "item", IntegerMode::Modulo);
-            format!("record_from_v8({scope}, {value}, |scope, item| {element})")
+            format!("record_from_v8({scope}, {value}, {key}, |scope, item| {element})")
         }
         Type::Nullable(inner) => {
             let inner_expr = from_v8(inner, scope, value, mode);
@@ -124,9 +125,10 @@ pub fn to_v8(ty: &Type, scope: &str, value: &str) -> String {
             let element = to_v8(inner, "scope", "item");
             format!("sequence_to_v8({scope}, {value}, |scope, item| {element})")
         }
-        Type::Record(_, inner) => {
+        Type::Record(key, inner) => {
+            let key = record_key_to_v8(key);
             let element = to_v8(inner, "scope", "item");
-            format!("record_to_v8({scope}, {value}, |scope, item| {element})")
+            format!("record_to_v8({scope}, {value}, {key}, |scope, item| {element})")
         }
         Type::Nullable(inner) => {
             let inner_expr = to_v8(inner, scope, "inner");
@@ -134,6 +136,61 @@ pub fn to_v8(ty: &Type, scope: &str, value: &str) -> String {
                 "match {value} {{ Some(inner) => {inner_expr}, None => Ok(v8::null({scope}).into()) }}"
             )
         }
+    }
+}
+
+/// The message the generated key converter raises for a key type WebIDL does
+/// not admit.
+const RECORD_KEY_TYPE_ERROR: &str = "a record key must be a string type";
+
+/// The converter for a record's declared key type, reading one JavaScript
+/// property name into the key type's Rust form.
+///
+/// WebIDL's `es-to-record` applies the *declared* key type's conversion to each
+/// own enumerable key, so which converter runs is decided by `record`'s key type
+/// and not by the Rust type the key happens to have. Only `ByteString`,
+/// `DOMString` and `USVString` are legal key types, and the prelude has the
+/// conversion for each: `string_from_v8` for the two string types, and
+/// `byte_string_from_v8` for `ByteString`, which reads one code unit per byte
+/// and rejects a code unit above `0xFF` instead of truncating it.
+///
+/// `ByteString` names that helper directly rather than wrapping it in a
+/// closure, so the emitted call site does not read as a `redundant_closure`.
+///
+/// Any other key type is not valid WebIDL and has no key conversion to apply,
+/// so the emitted converter fails with a `TypeError` rather than quietly
+/// reusing the type's ordinary conversion — the record would then be keyed by
+/// something the declaration does not name. No such declaration exists in the
+/// corpus; this arm is what keeps one from passing silently if it appears.
+fn record_key_from_v8(ty: &Type) -> String {
+    match ty {
+        Type::DomString | Type::UsvString => {
+            format!(
+                "|scope, key| {}",
+                from_v8(ty, "scope", "key", IntegerMode::Modulo)
+            )
+        }
+        Type::ByteString => "byte_string_from_v8".to_string(),
+        other => format!(
+            "|_scope, _key| Err::<{}, JsError>(JsError::type_error(\"{RECORD_KEY_TYPE_ERROR}\"))",
+            rust_type(other, Position::Owned)
+        ),
+    }
+}
+
+/// The converter for a record's declared key type, writing the key type's Rust
+/// form back to the property name it is defined under.
+///
+/// The mirror image of [`record_key_from_v8`], with the same three legal key
+/// types and the same refusal for every other one.
+fn record_key_to_v8(ty: &Type) -> String {
+    match ty {
+        Type::DomString | Type::UsvString | Type::ByteString => {
+            format!("|scope, key| {}", to_v8(ty, "scope", "key"))
+        }
+        _ => format!(
+            "|_scope, _key| Err::<v8::Local<v8::Value>, JsError>(JsError::type_error(\"{RECORD_KEY_TYPE_ERROR}\"))"
+        ),
     }
 }
 
@@ -160,5 +217,67 @@ pub fn return_value_cast(ty: &Type) -> &'static str {
             " as f64"
         }
         _ => "",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A record whose value type is the string one, so the emitted text differs
+    /// only in the key converter under test.
+    fn record(key: Type) -> Type {
+        Type::Record(Box::new(key), Box::new(Type::DomString))
+    }
+
+    /// The converter's key type must be the type `rust_type` names, or the
+    /// generated `*Ops`/`*V8` glue does not compile — which is what happened
+    /// for `record<ByteString, _>` before the key type reached the conversion.
+    #[test]
+    fn a_byte_string_record_converts_its_keys_as_bytes() {
+        assert_eq!(
+            from_v8(
+                &record(Type::ByteString),
+                "scope",
+                "value",
+                IntegerMode::Modulo
+            ),
+            "record_from_v8(scope, value, byte_string_from_v8, |scope, item| Ok::<String, JsError>(string_from_v8(scope, item)))"
+        );
+        assert_eq!(
+            to_v8(&record(Type::ByteString), "scope", "value"),
+            "record_to_v8(scope, value, |scope, key| byte_string_to_v8(scope, &key), |scope, item| string_to_v8(scope, &item))"
+        );
+    }
+
+    /// `URLSearchParams` ships on this one, so it is pinned: the key conversion
+    /// is the string key's own, and the value conversion is unchanged by it.
+    #[test]
+    fn a_string_record_converts_its_keys_as_strings() {
+        for key in [Type::DomString, Type::UsvString] {
+            assert_eq!(
+                from_v8(&record(key), "scope", "value", IntegerMode::Modulo),
+                "record_from_v8(scope, value, |scope, key| Ok::<String, JsError>(string_from_v8(scope, key)), |scope, item| Ok::<String, JsError>(string_from_v8(scope, item)))"
+            );
+        }
+        assert_eq!(
+            to_v8(&record(Type::DomString), "scope", "value"),
+            "record_to_v8(scope, value, |scope, key| string_to_v8(scope, &key), |scope, item| string_to_v8(scope, &item))"
+        );
+    }
+
+    /// WebIDL admits only the three string key types, so a key of any other
+    /// type has no conversion. Emitting a failure is what keeps such a
+    /// declaration from being keyed by a conversion it never asked for.
+    #[test]
+    fn a_non_string_record_key_has_no_conversion() {
+        assert_eq!(
+            from_v8(&record(Type::Long), "scope", "value", IntegerMode::Modulo),
+            "record_from_v8(scope, value, |_scope, _key| Err::<i32, JsError>(JsError::type_error(\"a record key must be a string type\")), |scope, item| Ok::<String, JsError>(string_from_v8(scope, item)))"
+        );
+        assert_eq!(
+            to_v8(&record(Type::Long), "scope", "value"),
+            "record_to_v8(scope, value, |_scope, _key| Err::<v8::Local<v8::Value>, JsError>(JsError::type_error(\"a record key must be a string type\")), |scope, item| string_to_v8(scope, &item))"
+        );
     }
 }

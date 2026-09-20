@@ -1130,21 +1130,28 @@ where
 }
 
 /// Converts a record to a JavaScript object with own data properties.
+///
+/// `key` is the *declared* key type's conversion and `convert` the value
+/// type's, so a record's key type is as faithful here as it is on the way in.
+/// A `ByteString` key of `0xE9` is therefore defined under the one-code-unit
+/// name `"\u{E9}"`, not the two characters its UTF-8 form would spell.
 #[cfg(feature = "v8")]
-pub fn record_to_v8<'s, V, F>(
+pub fn record_to_v8<'s, K, V, F, G>(
     scope: &mut v8::PinScope<'s, '_>,
-    entries: Vec<(String, V)>,
+    entries: Vec<(K, V)>,
+    mut key: G,
     mut convert: F,
 ) -> Result<v8::Local<'s, v8::Value>, JsError>
 where
+    G: FnMut(&mut v8::PinScope<'s, '_>, K) -> Result<v8::Local<'s, v8::Value>, JsError>,
     F: FnMut(&mut v8::PinScope<'s, '_>, V) -> Result<v8::Local<'s, v8::Value>, JsError>,
 {
     let object = v8::Object::new(scope);
-    for (key, value) in entries {
-        let key = v8_string(scope, &key)?;
+    for (entry, value) in entries {
+        let key = key(scope, entry)?;
         let value = convert(scope, value)?;
         object
-            .set(scope, key.into(), value)
+            .set(scope, key, value)
             .ok_or_else(|| JsError::type_error("the record entry cannot be defined"))?;
     }
     Ok(object.into())
@@ -1424,15 +1431,26 @@ fn iterator_next<'s>(
 /// proxy observes it and the `Get` that follows, in that order, and a
 /// non-enumerable own property has to be skipped rather than treated as data.
 ///
+/// `key` is the *declared* key type's conversion and `convert` the value
+/// type's, and they run in that order — `ConvertByType(key, K)` before
+/// `ConvertByType(value, V)`, which is observable because either can throw. The
+/// key conversion is handed the key as `[[OwnPropertyKeys]]` reported it rather
+/// than a lossy `String` of it. A `ByteString` key is the clearest case: read
+/// through a Rust `String` first, the legal key `0xFF` would become the two
+/// characters of its UTF-8 form, and the code unit above `0xFF` that the key
+/// conversion is what rejects would become an ordinary two-byte key.
+///
 /// `get_own_property_names` is own-only by construction, so an inherited
 /// enumerable property never reaches this loop.
 #[cfg(feature = "v8")]
-pub fn record_from_v8<'s, V, F>(
+pub fn record_from_v8<'s, K, V, F, G>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
+    mut key: G,
     mut convert: F,
-) -> Result<Vec<(String, V)>, JsError>
+) -> Result<Vec<(K, V)>, JsError>
 where
+    G: FnMut(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Value>) -> Result<K, JsError>,
     F: FnMut(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Value>) -> Result<V, JsError>,
 {
     let object: v8::Local<v8::Object> = value
@@ -1457,7 +1475,7 @@ where
     let enumerable_key = v8_string(scope, "enumerable")?;
     let mut entries = Vec::with_capacity(names.length() as usize);
     for index in 0..names.length() {
-        let key = names
+        let property = names
             .get_index(scope, index)
             .ok_or_else(|| JsError::type_error("the record key cannot be read"))?;
         // `? V.[[GetOwnProperty]](key)` — an abrupt descriptor read propagates,
@@ -1465,7 +1483,7 @@ where
         // the conversion instead of quietly dropping the key. Skipping is for
         // the one case the spec skips: a descriptor that is `undefined`, which
         // is a key a proxy's `ownKeys` reported without it being own.
-        let name = v8::Local::<v8::Name>::try_from(key)
+        let name = v8::Local::<v8::Name>::try_from(property)
             .map_err(|_| JsError::type_error("the record key is not a property name"))?;
         let descriptor = object
             .get_own_property_descriptor(scope, name)
@@ -1480,10 +1498,10 @@ where
             continue;
         }
         let entry = object
-            .get(scope, key)
+            .get(scope, property)
             .ok_or_else(|| JsError::type_error("the record value cannot be read"))?;
-        let name = key.to_rust_string_lossy(scope.as_ref());
-        entries.push((name, convert(scope, entry)?));
+        let key = key(scope, property)?;
+        entries.push((key, convert(scope, entry)?));
     }
     Ok(entries)
 }

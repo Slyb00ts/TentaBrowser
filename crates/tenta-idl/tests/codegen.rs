@@ -419,7 +419,7 @@ fn a_union_arm_is_selected_by_its_own_test_in_declaration_order() {
         "the sequence arm does not use the `GetIterator` conversion"
     );
     assert!(
-        v8.contains("record_from_v8(scope, value, |scope, item| Ok::<String, JsError>(string_from_v8(scope, item)))"),
+        v8.contains("record_from_v8(scope, value, |scope, key| Ok::<String, JsError>(string_from_v8(scope, key)), |scope, item| Ok::<String, JsError>(string_from_v8(scope, item)))"),
         "the record arm does not use the `es-to-record` conversion"
     );
 }
