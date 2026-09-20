@@ -369,10 +369,9 @@ fn a_pair_iterable_emits_three_views_and_a_for_each_over_one_host_hook() {
     );
 
     let ops = generated_file(&model, "pair_box_ops.rs");
-    assert!(
-        ops.contents
-            .contains("fn iterable_entries(&self) -> Result<Vec<(String, String)>, JsError>;")
-    );
+    assert!(ops.contents.contains(
+        "fn iterable_entries(&self) -> Result<IterableEntries<String, String>, JsError>;"
+    ));
 }
 
 /// A union arm is selected by the WebIDL conversion's own test, and the arms

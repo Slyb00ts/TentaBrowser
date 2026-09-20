@@ -14,5 +14,5 @@ pub trait PairBoxOps {
     /// A snapshot of the entries, in iteration order. The generated
     /// `entries`, `keys` and `values` members are views over one call, so a
     /// collection mutated between two of them cannot be observed half-way.
-    fn iterable_entries(&self) -> Result<Vec<(String, String)>, JsError>;
+    fn iterable_entries(&self) -> Result<IterableEntries<String, String>, JsError>;
 }

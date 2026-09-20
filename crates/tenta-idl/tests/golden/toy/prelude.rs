@@ -134,6 +134,20 @@ impl<T> core::fmt::Debug for Promise<T> {
     }
 }
 
+/// The entries a pair iterator's host hook hands over.
+///
+/// `iterable<K, V>` has no indexed accessor to drive an iterator from — the
+/// spec gives neither `Headers` nor `URLSearchParams` a `length` — so the host
+/// returns the whole collection at once, and the three generated members
+/// (`entries`, `keys`, `values`) are views over that one snapshot.
+///
+/// The alias exists because a pair's Rust spelling can itself be a container:
+/// an `iterable<ByteString, ByteString>` is a `Vec` of `(Vec<u8>, Vec<u8>)`,
+/// which every signature would otherwise repeat and which reads as an
+/// unreviewable blob of nesting. Naming it here says what the hook returns
+/// once, for every interface that has a pair iterator.
+pub type IterableEntries<K, V> = Vec<(K, V)>;
+
 /// A JavaScript callable the host holds on behalf of the page.
 ///
 /// `Args` is a tuple of the argument types and `Ret` the return type, both in

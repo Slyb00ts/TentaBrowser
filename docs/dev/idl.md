@@ -201,9 +201,12 @@ become `fn name(&self)` plus `fn set_name(&self, value)` when writable.
 Overloads become one method per overload, named `{base}_{arity}`. Constructors
 live in a separate `{Name}Constructor` trait so that a subclass is not forced
 to inherit its parent's constructor. An `iterable<K, V>` adds one hook,
-`fn iterable_entries(&self) -> Result<Vec<(K, V)>, JsError>`, which is the
-snapshot the three generated iterator views and the generated `forEach` all
-read. Doc comments reproduce the IDL declaration, the fast-API verdict and, for
+`fn iterable_entries(&self) -> Result<IterableEntries<K, V>, JsError>`, which is
+the snapshot the three generated iterator views and the generated `forEach` all
+read. `IterableEntries<K, V>` is the prelude's name for the `Vec<(K, V)>` it
+returns, so the spelling stays short when a pair is itself a container: an
+`iterable<ByteString, ByteString>` is a `Vec` of `(Vec<u8>, Vec<u8>)`. Doc
+comments reproduce the IDL declaration, the fast-API verdict and, for
 mixin members, the mixin name.
 
 ### V8 glue (rusty_v8 152.x)
@@ -257,8 +260,8 @@ Notes on the shape of the generated code:
   every call, so they are live rather than snapshots.
 - A pair iterator (`iterable<K, V>`) has no `length` and no indexed getter to
   drive an iterator from, so it cannot use the intrinsics. Instead the `*Ops`
-  trait gains one hook, `fn iterable_entries(&self) -> Result<Vec<(K, V)>,
-  JsError>`, and the generated `entries`, `keys` and `values` members each
+  trait gains one hook, `fn iterable_entries(&self) -> Result<IterableEntries<K,
+  V>, JsError>`, and the generated `entries`, `keys` and `values` members each
   build a plain array from one call to it and hand that array to the prelude's
   `array_iterator`, which calls the captured `%Array.prototype.values%` on it.
   One hook call feeds all three, so a collection mutated between two of them

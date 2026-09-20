@@ -575,6 +575,8 @@ impl Engine {
             // their order among themselves does not matter, but
             // `URLSearchParams` must precede no one either — `URL.searchParams`
             // resolves the template through the isolate's cache at call time.
+            // `Headers` roots at `Object` too, and names its constructor from
+            // the interface name alone.
             tenta_js::bindings::install_url_search_params::<HostObject>(
                 scope,
                 global_template,
@@ -583,6 +585,12 @@ impl Engine {
             .expect("install the URLSearchParams interface");
             tenta_js::bindings::install_url::<HostObject>(scope, global_template, &mut registry)
                 .expect("install the URL interface");
+            tenta_js::bindings::install_headers::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the Headers interface");
         }
 
         let local = v8::Context::new(
@@ -669,6 +677,29 @@ impl Engine {
         self.dom
             .as_ref()
             .map(|dom| dom.state.borrow().value_count())
+            .unwrap_or(0)
+    }
+
+    /// Drains host-object wrappers a finalizer has collected, freeing their
+    /// slab records (test-only; the same sweep runs lazily at the head of
+    /// `wrapper`). Call after [`Engine::low_memory_gc`] to make reclamation
+    /// observable without waiting for the next wrapper.
+    pub fn reclaim_dead_hosts(&mut self) {
+        if let Some(dom) = &self.dom {
+            let dead = dom.state.borrow_mut().take_dead_hosts();
+            let mut state = dom.state.borrow_mut();
+            world::reclaim_dead_hosts(&mut state, &dom.ctx.host_records, dead);
+        }
+    }
+
+    /// The number of live `URL`, `URLSearchParams` and `Headers` records in
+    /// this engine's world (test-only): a record whose wrapper has been
+    /// collected is still counted until [`Engine::reclaim_dead_hosts`] drains
+    /// it, which is what makes the finalizer path observable.
+    pub fn host_record_count(&self) -> usize {
+        self.dom
+            .as_ref()
+            .map(|dom| dom.ctx.host_records.borrow().len())
             .unwrap_or(0)
     }
 

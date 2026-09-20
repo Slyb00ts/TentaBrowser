@@ -2391,6 +2391,7 @@ dependencies = [
 name = "tenta-js"
 version = "0.0.1"
 dependencies = [
+ "http",
  "tenta-core",
  "tenta-css",
  "tenta-dom",

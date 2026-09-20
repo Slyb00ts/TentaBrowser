@@ -32,10 +32,10 @@ use super::{
     HTMLFormElementOps, HTMLIFrameElementOps, HTMLImageElementOps, HTMLInputElementOps,
     HTMLLabelElementOps, HTMLOptionElementOps, HTMLParagraphElementOps, HTMLScriptElementOps,
     HTMLSelectElementOps, HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps,
-    Handle, JsError, MouseEventConstructor, MouseEventInit, MouseEventOps, Node, NodeList,
-    NodeListOps, NodeOps, Realm, SVGElementOps, Text, TextOps, UIEventConstructor, UIEventInit,
-    UIEventOps, URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor,
-    URLSearchParamsOps,
+    Handle, HeadersConstructor, HeadersInit, HeadersOps, JsError, MouseEventConstructor,
+    MouseEventInit, MouseEventOps, Node, NodeList, NodeListOps, NodeOps, Realm, SVGElementOps,
+    Text, TextOps, UIEventConstructor, UIEventInit, UIEventOps, URLConstructor, URLOps,
+    URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
 };
 use crate::dom::events::{
     CallbackRef, DispatchTarget, EventKey, EventKind, EventRecord, EventSlab, GenKey, GenSlab,
@@ -142,14 +142,14 @@ impl Default for SnapshotSlab {
 }
 
 // ---------------------------------------------------------------------------
-// Host records: URL and URLSearchParams
+// Host records: URL, URLSearchParams and Headers
 // ---------------------------------------------------------------------------
 
 /// A key into a world's [`HostSlab`]; the payload of a [`TAG_HOST`] handle.
 pub type HostKey = GenKey;
 
-/// The generational slab of live `URL` and `URLSearchParams` records for one
-/// world.
+/// The generational slab of live `URL`, `URLSearchParams` and `Headers` records
+/// for one world.
 ///
 /// It is a [`GenSlab`] rather than a [`SnapshotSlab`] because a host record has
 /// no document row to live in and no other referent: the wrapper is its owner,
@@ -163,17 +163,20 @@ pub enum HostRecord {
     Url(UrlRecord),
     /// A `URLSearchParams`.
     Params(ParamsRecord),
+    /// A `Headers`.
+    Headers(HeadersRecord),
 }
 
 impl HostRecord {
     /// The WebIDL interface this record's wrapper carries, which is the name the
     /// wrapper world instantiates a template for. The handle tag cannot say it:
-    /// `URL` and `URLSearchParams` share [`TAG_HOST`], because a tag is eight
-    /// bits of a handle and there is no room for one per class.
+    /// `URL`, `URLSearchParams` and `Headers` share [`TAG_HOST`], because a tag
+    /// is eight bits of a handle and there is no room for one per class.
     pub fn interface_name(&self) -> &'static str {
         match self {
             HostRecord::Url(_) => "URL",
             HostRecord::Params(_) => "URLSearchParams",
+            HostRecord::Headers(_) => "Headers",
         }
     }
 }
@@ -210,6 +213,55 @@ pub struct ParamsRecord {
     /// `url.searchParams`. The reference is the spec's own: the query object
     /// keeps its URL alive, and every mutation writes back through it.
     pub url: Option<HostKey>,
+}
+
+/// A `Headers` record.
+///
+/// Unlike a `URL` and its query object, a `Headers` points at no second record:
+/// the wrapper is its only owner, so the world's finalizer sweep frees it the
+/// way it frees an `Event`, without the two-way bookkeeping
+/// [`reclaim_host_record`] needs for the URL pair.
+pub struct HeadersRecord {
+    /// The header list, in insertion order.
+    ///
+    /// Insertion order is what `getSetCookie` and every mutation work on, and
+    /// what the spec's *sort and combine* is applied to when a pair iterator
+    /// asks for its view (`sort_and_combine_headers`). A name is stored
+    /// byte-lowercased and a value already normalized, so a stored pair is
+    /// exactly what the spec's *header list* holds.
+    pub list: Vec<(Vec<u8>, Vec<u8>)>,
+    /// The guard the list is under.
+    pub guard: HeadersGuard,
+}
+
+/// The Fetch Standard's *guard* for a header list.
+///
+/// A guard is a property of the instance, not of the list: the same header
+/// bytes are mutable on a `Headers` a page built and read-only on the
+/// `Headers` of a `Response`. The constructor here is the only way to make one
+/// in this slice, which is why `None` is the only variant — `Request` and
+/// `Response` stamp the other four on the lists they create in `d-4a`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeadersGuard {
+    /// `"none"`: a `Headers` built by script, whose list the page owns and may
+    /// therefore rewrite with `append`, `set` and `delete`.
+    None,
+}
+
+impl HeadersGuard {
+    /// Whether a mutating member may write to a list under this guard.
+    ///
+    /// One predicate covers all three mutators because `"none"` answers the same
+    /// way for all of them. The guards of `d-4a` do not: a mutation a guard
+    /// forbids *throws* under `"immutable"` but returns silently under
+    /// `"request"` or `"request-no-cors"`, so that slice splits this into
+    /// "may the operation be attempted at all?" (a per-member question) and
+    /// "may it change the list?".
+    fn permits_mutation(self) -> bool {
+        match self {
+            HeadersGuard::None => true,
+        }
+    }
 }
 
 /// The shared host context: document, snapshots, event state and the script
@@ -387,7 +439,8 @@ pub enum HostObject {
         /// The context whose browsing context this is.
         ctx: SharedContext,
     },
-    /// A JS-owned object with no document row: an `URL` or a `URLSearchParams`.
+    /// A JS-owned object with no document row: a `URL`, a `URLSearchParams` or
+    /// a `Headers`.
     ///
     /// Its whole state is the slab record, and its wrapper is its only owner, so
     /// the world reclaims the record when the wrapper is finalized — the `Event`
@@ -446,7 +499,8 @@ impl HostObject {
         Self::Window { ctx }
     }
 
-    /// Builds the host for the `URL` or `URLSearchParams` record at `key`.
+    /// Builds the host for the `URL`, `URLSearchParams` or `Headers` record at
+    /// `key`.
     pub fn host_record(ctx: SharedContext, key: HostKey) -> Self {
         Self::Host { ctx, key }
     }
@@ -533,6 +587,33 @@ impl HostObject {
     fn with_params_mut(&self, f: impl FnOnce(&mut Vec<(String, String)>)) {
         if let HostObject::Host { ctx, key } = self {
             mutate_pairs(&mut ctx.host_records.borrow_mut(), *key, f);
+        }
+    }
+
+    /// Reads the `Headers` this host stands for, or returns `default` when the
+    /// host is not one or its record has been reclaimed.
+    fn with_headers<R>(&self, default: R, f: impl FnOnce(&HeadersRecord) -> R) -> R {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::Headers(record)) = ctx.host_records.borrow().get(*key)
+        {
+            return f(record);
+        }
+        default
+    }
+
+    /// Mutates the header list of the `Headers` this host stands for, if it is a
+    /// live one whose guard permits the change. A no-op for any other host.
+    ///
+    /// A guard that forbids a mutation makes this silent rather than loud
+    /// because Fetch's own steps return without touching the list in that case;
+    /// the `TypeError` an `"immutable"` guard raises is a separate step and
+    /// belongs with the guards that can raise it (`d-4a`).
+    fn with_headers_mut(&self, f: impl FnOnce(&mut HeadersRecord)) {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::Headers(record)) = ctx.host_records.borrow_mut().get_mut(*key)
+            && record.guard.permits_mutation()
+        {
+            f(record);
         }
     }
 
@@ -3121,12 +3202,12 @@ fn serialize_pairs(list: &[(String, String)]) -> String {
 fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
     let params = match slab.get(key)? {
         HostRecord::Params(params) => params,
-        HostRecord::Url(_) => return None,
+        HostRecord::Url(_) | HostRecord::Headers(_) => return None,
     };
     match params.url {
         Some(owner) => match slab.get(owner)? {
             HostRecord::Url(record) => Some(parse_pairs(record.url.query().unwrap_or(""))),
-            HostRecord::Params(_) => None,
+            HostRecord::Params(_) | HostRecord::Headers(_) => None,
         },
         None => Some(params.list.clone()),
     }
@@ -3205,12 +3286,15 @@ enum HostLink {
     Url(Option<HostKey>),
     /// The record is a query object holding the key of its URL, if any.
     Params(Option<HostKey>),
+    /// The record is a `Headers`, which links to nothing.
+    Headers,
 }
 
 /// Frees the host record of a wrapper that has just been finalized, along with
 /// the record that wrapper alone was keeping alive.
 ///
-/// A URL and its query object point at each other: the object writes every
+/// A `Headers` owns nothing else, so it is freed outright. A URL and its query
+/// object point at each other: the object writes every
 /// mutation through to its URL, and the URL caches the object's key so that
 /// `url.searchParams` can return the same object twice. Either wrapper may be
 /// collected first, so this clears *both* links and frees a record only once
@@ -3231,9 +3315,18 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) {
     let link = match slab.get(key) {
         Some(HostRecord::Url(record)) => HostLink::Url(record.params),
         Some(HostRecord::Params(record)) => HostLink::Params(record.url),
+        Some(HostRecord::Headers(_)) => HostLink::Headers,
         None => return,
     };
     match link {
+        // A `Headers` has no counterpart to keep alive or to clear a key on, so
+        // the wrapper's death is the record's death — freed here and nowhere
+        // else, exactly once, because the world calls this once per finalized
+        // wrapper and `GenSlab::remove` bumps the generation so a second call
+        // for the same key finds nothing.
+        HostLink::Headers => {
+            slab.remove(key);
+        }
         HostLink::Url(params) => {
             if let Some(HostRecord::Url(record)) = slab.get_mut(key) {
                 record.has_wrapper = false;
@@ -3612,6 +3705,291 @@ impl URLSearchParamsConstructor for HostObject {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Headers
+// ---------------------------------------------------------------------------
+
+/// The Fetch Standard's *HTTP whitespace* bytes: exactly the ones its
+/// *normalize* step strips from the ends of a header value, and the only bytes
+/// that may not sit at either end of one.
+fn is_http_whitespace(byte: u8) -> bool {
+    matches!(byte, b'\t' | b'\n' | b'\r' | b' ')
+}
+
+/// Fetch's *normalize*: the value without its leading and trailing HTTP
+/// whitespace.
+///
+/// A form feed or a no-break space is *not* HTTP whitespace and survives, which
+/// is why this cannot be `str::trim` — that would strip a `\x0C` the standard
+/// keeps, and would strip by `char` where the standard strips by byte.
+fn strip_http_whitespace(value: &[u8]) -> &[u8] {
+    let start = value
+        .iter()
+        .position(|byte| !is_http_whitespace(*byte))
+        .unwrap_or(value.len());
+    let end = value
+        .iter()
+        .rposition(|byte| !is_http_whitespace(*byte))
+        .map_or(start, |index| index + 1);
+    &value[start..end]
+}
+
+/// The bytes Fetch's *header value* definition forbids anywhere in a value:
+/// NUL and the two HTTP newline bytes, CR and LF.
+///
+/// Nothing else is out of bounds once the value has been normalized, so this is
+/// deliberately not `http::HeaderValue::from_bytes`: that function also rejects
+/// every other control byte and `0x7F`, all of which a page is allowed to send
+/// and a WPT test asserts survive. Reusing it would turn a legal header into a
+/// `TypeError`.
+fn is_forbidden_header_value_byte(byte: u8) -> bool {
+    matches!(byte, 0x00 | b'\n' | b'\r')
+}
+
+/// Validates a name as Fetch's *header name* and byte-lowercases it.
+///
+/// `http::HeaderName::from_bytes` is exactly RFC 9110's field-name `token`
+/// production plus the byte-lowercasing Fetch asks for, so the character table
+/// is not restated here. Everything that is Fetch's and not HTTP's is done
+/// around it: the error is mapped to a `TypeError`, because that is the only
+/// exception the standard raises and the `http` crate's own error type must
+/// never reach script. `tenta-net` already depends on this crate, so the
+/// validation costs the graph nothing.
+fn normalize_header_name(context: &str, name: &[u8]) -> Result<Vec<u8>, JsError> {
+    match http::HeaderName::from_bytes(name) {
+        Ok(name) => Ok(name.as_str().as_bytes().to_vec()),
+        Err(_) => Err(JsError::type_error(format!(
+            "{context}: Invalid header name"
+        ))),
+    }
+}
+
+/// Fetch's *header value* check, applied to the value Fetch's *normalize* step
+/// has already produced: the leading and trailing HTTP whitespace is stripped,
+/// and what remains may not hold a NUL, CR or LF.
+fn normalize_header_value(context: &str, value: &[u8]) -> Result<Vec<u8>, JsError> {
+    let value = strip_http_whitespace(value);
+    if value
+        .iter()
+        .any(|byte| is_forbidden_header_value_byte(*byte))
+    {
+        return Err(JsError::type_error(format!(
+            "{context}: Invalid header value"
+        )));
+    }
+    Ok(value.to_vec())
+}
+
+/// Normalizes and validates the two halves of one header, in the order Fetch
+/// checks them: the name first, so a bad name is reported even when the value is
+/// bad too.
+///
+/// Nothing is written to a header list until both halves have passed, which is
+/// what keeps a rejected pair from partially mutating anything — a `set` whose
+/// value holds an LF leaves the pair it was about to replace exactly as it was.
+fn checked_header(context: &str, name: &[u8], value: &[u8]) -> Result<(Vec<u8>, Vec<u8>), JsError> {
+    let name = normalize_header_name(context, name)?;
+    let value = normalize_header_value(context, value)?;
+    Ok((name, value))
+}
+
+/// The name `getSetCookie` reads and the one name the iteration view does not
+/// combine.
+const SET_COOKIE: &[u8] = b"set-cookie";
+
+/// Fetch's *get a header name*: the values of every header of `list` whose name
+/// is `name`, joined with `", "`, or `None` when the list holds no such header.
+///
+/// The comparison is a plain equality rather than a case-insensitive one
+/// because both sides are byte-lowercase by the time either reaches here:
+/// `name` has been through [`normalize_header_name`], and so has every stored
+/// name, which is what makes Fetch's *byte-case-insensitive match* the same
+/// thing as `==`.
+fn combined_header_value(list: &[(Vec<u8>, Vec<u8>)], name: &[u8]) -> Option<Vec<u8>> {
+    let mut combined: Option<Vec<u8>> = None;
+    for (pair_name, value) in list {
+        if pair_name.as_slice() != name {
+            continue;
+        }
+        match &mut combined {
+            Some(combined) => {
+                combined.extend_from_slice(b", ");
+                combined.extend_from_slice(value);
+            }
+            None => combined = Some(value.clone()),
+        }
+    }
+    combined
+}
+
+/// Fetch's *sort and combine a header list*: the view the pair iterator walks.
+///
+/// The list itself stays in insertion order — that is the order `getSetCookie`
+/// and every mutation work on — so this view is built on demand from it, and
+/// rebuilt on each iteration, so a `for...of` sees the list as it stands when
+/// the iteration begins. Names are stored byte-lowercased, so Fetch's
+/// *sorted-lowercase set* is a plain `sort` and `dedup`, and the sort is the
+/// byte order the standard's code-unit order is for an ASCII name.
+///
+/// `set-cookie` is the one name the standard does not combine: each of its
+/// values becomes its own pair, because a value formed by joining two
+/// `Set-Cookie` fields is a cookie header no client could parse back. Fetch's
+/// `getSetCookie` and this carve-out are two halves of the same decision.
+fn sort_and_combine_headers(list: &[(Vec<u8>, Vec<u8>)]) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut names: Vec<&[u8]> = list.iter().map(|(name, _)| name.as_slice()).collect();
+    names.sort_unstable();
+    names.dedup();
+
+    let mut combined = Vec::with_capacity(names.len());
+    for name in names {
+        if name == SET_COOKIE {
+            combined.extend(
+                list.iter()
+                    .filter(|(pair_name, _)| pair_name.as_slice() == name)
+                    .map(|(_, value)| (name.to_vec(), value.clone())),
+            );
+            continue;
+        }
+        // `name` came out of `names`, so a header in `list` carries it and a
+        // combined value exists.
+        if let Some(value) = combined_header_value(list, name) {
+            combined.push((name.to_vec(), value));
+        }
+    }
+    combined
+}
+
+impl HeadersOps for HostObject {
+    fn append(&self, name: &[u8], value: &[u8]) -> Result<(), JsError> {
+        let context = "Failed to execute 'append' on 'Headers'";
+        let (name, value) = checked_header(context, name, value)?;
+        self.with_headers_mut(|record| record.list.push((name, value)));
+        Ok(())
+    }
+
+    fn delete(&self, name: &[u8]) -> Result<(), JsError> {
+        let context = "Failed to execute 'delete' on 'Headers'";
+        // There is no value to check, so the name check stands alone — and it
+        // must, or `headers.delete({})` would be the one member that silently
+        // accepted a value WebIDL's `ByteString` conversion let through.
+        let name = normalize_header_name(context, name)?;
+        self.with_headers_mut(|record| {
+            record.list.retain(|(pair_name, _)| pair_name != &name);
+        });
+        Ok(())
+    }
+
+    fn get(&self, name: &[u8]) -> Result<Option<Vec<u8>>, JsError> {
+        let context = "Failed to execute 'get' on 'Headers'";
+        let name = normalize_header_name(context, name)?;
+        Ok(self.with_headers(None, |record| combined_header_value(&record.list, &name)))
+    }
+
+    fn get_set_cookie(&self) -> Result<Vec<Vec<u8>>, JsError> {
+        // The cookie accessor is the one read that is not combined: it reports
+        // each `Set-Cookie` field separately, in list order, because a page
+        // that reads cookies needs them one per field and `get` would hand back
+        // the joined string Fetch forbids.
+        Ok(self.with_headers(Vec::new(), |record| {
+            record
+                .list
+                .iter()
+                .filter(|(name, _)| name.as_slice() == SET_COOKIE)
+                .map(|(_, value)| value.clone())
+                .collect()
+        }))
+    }
+
+    fn has(&self, name: &[u8]) -> Result<bool, JsError> {
+        let context = "Failed to execute 'has' on 'Headers'";
+        let name = normalize_header_name(context, name)?;
+        Ok(self.with_headers(false, |record| {
+            record.list.iter().any(|(pair_name, _)| pair_name == &name)
+        }))
+    }
+
+    fn set(&self, name: &[u8], value: &[u8]) -> Result<(), JsError> {
+        let context = "Failed to execute 'set' on 'Headers'";
+        let (name, value) = checked_header(context, name, value)?;
+        self.with_headers_mut(|record| {
+            // The first pair with the name takes the new value where it stands;
+            // the rest are removed, and a name that matched nothing is appended.
+            // Insertion order therefore survives a `set`, which is what the
+            // list's order means: the sorted view is produced only for
+            // iteration.
+            let mut replaced = false;
+            record.list.retain_mut(|(pair_name, pair_value)| {
+                if pair_name != &name {
+                    return true;
+                }
+                if replaced {
+                    return false;
+                }
+                replaced = true;
+                *pair_value = value.clone();
+                true
+            });
+            if !replaced {
+                record.list.push((name.clone(), value.clone()));
+            }
+        });
+        Ok(())
+    }
+
+    fn iterable_entries(&self) -> Result<Vec<(Vec<u8>, Vec<u8>)>, JsError> {
+        // Every pair view the standard defines is produced here: the generated
+        // glue builds `keys`, `values`, `entries`, the spread operator and
+        // `@@iterator` from this one hook, and `@@iterator` is the very same
+        // function object as `entries`, so the identity holds with no second
+        // code path to keep in step.
+        Ok(self.with_headers(Vec::new(), |record| sort_and_combine_headers(&record.list)))
+    }
+}
+
+impl HeadersConstructor for HostObject {
+    fn construct(realm: &Realm, init: Option<HeadersInit>) -> Result<Self, JsError> {
+        let context = "Failed to construct 'Headers'";
+        // The list is built locally and installed only once every pair has
+        // passed, which is Fetch's own order — the constructor's last step sets
+        // the instance's header list — and what makes a throw here leave nothing
+        // half-built behind.
+        let mut list = Vec::new();
+        match init {
+            None => {}
+            Some(HeadersInit::SequenceOfSequenceOfByteString(pairs)) => {
+                for pair in pairs {
+                    // Fetch throws when an inner sequence does not hold exactly
+                    // two items. The generated union converter collects any
+                    // length, so the check belongs here.
+                    let [name, value] = pair.as_slice() else {
+                        return Err(JsError::type_error(
+                            "Failed to construct 'Headers': each item must be a pair",
+                        ));
+                    };
+                    list.push(checked_header(context, name, value)?);
+                }
+            }
+            // The record arm arrives with its keys already read through the
+            // declared `ByteString` key type, which is what turns a key above
+            // `0xFF` into a `TypeError` before this code is reached.
+            Some(HeadersInit::RecordOfByteStringToByteString(pairs)) => {
+                for (name, value) in pairs {
+                    list.push(checked_header(context, &name, &value)?);
+                }
+            }
+        }
+        let ctx = realm_context(realm)?;
+        let key = ctx
+            .host_records
+            .borrow_mut()
+            .insert(HostRecord::Headers(HeadersRecord {
+                list,
+                guard: HeadersGuard::None,
+            }));
+        Ok(HostObject::host_record(ctx, key))
+    }
+}
+
 impl HostObject {
     /// Builds and dispatches the synthetic, untrusted `click` `MouseEvent` for
     /// [`HTMLElementOps::click`]. The event bubbles, is cancelable and composed,
@@ -3959,10 +4337,11 @@ pub const TAG_STYLE: u8 = 7;
 /// It exists because the window is the outermost target of every event path,
 /// and a listener's `currentTarget` has to be the window object.
 pub const TAG_WINDOW: u8 = 8;
-/// Handle tag for a JS-owned host object that is not a node: an `URL` or a
-/// `URLSearchParams`, keyed into the host-record slab. The interface is named by
-/// the *record*, not by the tag, because the two share this one tag — the tag
-/// is 8 bits of a handle and there is no room for one per class.
+/// Handle tag for a JS-owned host object that is not a node: a `URL`, a
+/// `URLSearchParams` or a `Headers`, keyed into the host-record slab. The
+/// interface is named by the *record*, not by the tag, because all three share
+/// this one tag — the tag is 8 bits of a handle and there is no room for one
+/// per class.
 pub const TAG_HOST: u8 = 9;
 
 /// A handle decoded back into its parts.

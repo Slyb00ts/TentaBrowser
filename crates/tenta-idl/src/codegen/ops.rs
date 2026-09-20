@@ -289,7 +289,7 @@ fn pair_iterator_item(key: &Type, value: &Type, out: &mut String) {
     let value_type = rust_type(value, Position::Owned);
     let _ = write!(
         out,
-        "    /// `iterable<{}, {}>;`\n    ///\n    /// A snapshot of the entries, in iteration order. The generated\n    /// `entries`, `keys` and `values` members are views over one call, so a\n    /// collection mutated between two of them cannot be observed half-way.\n    fn iterable_entries(&self) -> Result<Vec<({key_type}, {value_type})>, JsError>;\n",
+        "    /// `iterable<{}, {}>;`\n    ///\n    /// A snapshot of the entries, in iteration order. The generated\n    /// `entries`, `keys` and `values` members are views over one call, so a\n    /// collection mutated between two of them cannot be observed half-way.\n    fn iterable_entries(&self) -> Result<IterableEntries<{key_type}, {value_type}>, JsError>;\n",
         key.idl_name(),
         value.idl_name(),
     );
