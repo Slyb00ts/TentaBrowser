@@ -7,6 +7,7 @@ mod common;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use tenta_idl::model::BufferType;
 use tenta_idl::{GeneratedFile, Model};
 
 fn generated_file(model: &Model, name: &str) -> GeneratedFile {
@@ -487,6 +488,111 @@ fn a_byte_string_is_converted_isomorphically() {
         !file.contents.contains("from_utf8_lossy"),
         "the `ByteString` path decoded the bytes as UTF-8"
     );
+}
+
+/// A buffer source is converted by its bytes, never as a host object.
+///
+/// This is the assertion the opaque-interface lowering failed: routing one of
+/// these names through `handle_from_v8` compiled, generated an
+/// `InterfaceMarker` for a type V8 owns, and then rejected every real typed
+/// array the page passed in.
+#[test]
+fn a_buffer_source_is_converted_by_its_bytes() {
+    let model = tenta_idl::parse_webidl(
+        "interface Sample {\n  \
+           Uint8Array read(ArrayBuffer data);\n  \
+           undefined write(DataView view, Float64Array numbers);\n\
+         };\n",
+    )
+    .expect("the source parses");
+
+    let v8 = generated_file(&model, "sample_v8.rs").contents;
+    for call in [
+        "array_buffer_from_v8(scope, raw)",
+        "data_view_from_v8(scope, raw)",
+        "float64_array_from_v8(scope, raw)",
+        "uint8_array_to_v8(scope, value)",
+    ] {
+        assert!(v8.contains(call), "the generated glue never calls {call}");
+    }
+    for name in ["ArrayBuffer", "DataView", "Uint8Array", "Float64Array"] {
+        for call in [
+            format!("handle_from_v8::<{name}>"),
+            format!("handle_to_v8::<{name}>"),
+        ] {
+            assert!(
+                !v8.contains(&call),
+                "`{name}` still goes through `{call}`, which a native V8 type \
+                 never satisfies"
+            );
+        }
+    }
+
+    // No opaque interface is invented for the name, so no `InterfaceMarker` is
+    // generated for it either.
+    for name in ["ArrayBuffer", "DataView", "Uint8Array", "Float64Array"] {
+        assert!(
+            !model.opaque_interfaces.contains(&name.to_string()),
+            "`{name}` was recorded as an undefined interface"
+        );
+        assert!(
+            !generated_file(&model, "types.rs")
+                .contents
+                .contains(&format!("pub enum {name} {{}}")),
+            "`{name}` was declared as a host-interface marker"
+        );
+    }
+
+    // The host boundary carries bytes, not handles.
+    let ops = generated_file(&model, "sample_ops.rs").contents;
+    assert!(ops.contains("fn read(&self, data: Vec<u8>) -> Result<Vec<u8>, JsError>;"));
+    assert!(
+        ops.contains("fn write(&self, view: Vec<u8>, numbers: Vec<u8>) -> Result<(), JsError>;")
+    );
+}
+
+/// Every buffer type the model can name has both of its conversions defined in
+/// the prelude, under the name the generator calls it by.
+///
+/// The two halves are generated from the type: `codegen::convert` builds the
+/// call from `BufferType::conversion_suffix` and the prelude builds the
+/// definition from the same, so this test is what catches a member added to one
+/// side only.
+#[test]
+fn every_buffer_type_has_the_conversion_the_generator_calls() {
+    let prelude = generated_file(&common::toy(), "prelude.rs").contents;
+
+    for kind in BufferType::ALL {
+        let name = kind.idl_name();
+        let suffix = kind.conversion_suffix();
+        for (direction, declaration) in [
+            ("from_v8", format!("undefined probe({name} value);")),
+            ("to_v8", format!("{name} probe();")),
+        ] {
+            let model =
+                tenta_idl::parse_webidl(&format!("interface Sample {{ {declaration} }};\n"))
+                    .expect("the source parses");
+            let v8 = generated_file(&model, "sample_v8.rs").contents;
+            let call = match direction {
+                "from_v8" => format!("{suffix}_from_v8(scope, raw)"),
+                _ => format!("{suffix}_to_v8(scope, value)"),
+            };
+            assert!(
+                v8.contains(&call),
+                "`{name}` is not converted through `{call}`"
+            );
+        }
+        for function in [
+            format!("pub fn {suffix}_from_v8("),
+            // The writer is the arm that returns a value tied to the scope.
+            format!("pub fn {suffix}_to_v8<'s>("),
+        ] {
+            assert!(
+                prelude.contains(&function),
+                "the prelude does not define `{function}`, which `{name}` is converted by"
+            );
+        }
+    }
 }
 
 #[test]

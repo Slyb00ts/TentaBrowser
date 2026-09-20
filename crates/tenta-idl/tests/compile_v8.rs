@@ -26,6 +26,9 @@ mod toy_bindings {
     include!("golden/toy/timed_counter_ops.rs");
     include!("golden/toy/timed_counter_register.rs");
     include!("golden/toy/timed_counter_v8.rs");
+    include!("golden/toy/byte_box_ops.rs");
+    include!("golden/toy/byte_box_register.rs");
+    include!("golden/toy/byte_box_v8.rs");
 }
 
 #[allow(dead_code)]

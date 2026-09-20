@@ -726,4 +726,339 @@ mod prelude_helpers {
             assert_eq!(error.kind(), JsErrorKind::Type);
         });
     }
+
+    // ------------------------------------------------------------------------
+    // Buffer sources: `ArrayBuffer`, the typed arrays, `DataView`, and the
+    // `ArrayBufferView`/`BufferSource` typedefs.
+    //
+    // The tests above reach the helpers with values built in Rust. These go
+    // through script, because the bytes on both sides of the boundary are the
+    // subject: the array the page builds is what the host has to receive, and
+    // the array the host hands back has to be a native V8 typed array — one
+    // with a real `length`, indexed elements and a `buffer` — and not a wrapper
+    // object that merely carries the interface's name.
+    // ------------------------------------------------------------------------
+
+    /// A view is read as the range it covers, never as the buffer behind it.
+    ///
+    /// `new Uint8Array(store.buffer, 4, 3)` is the case the conversion exists
+    /// for: a `byteOffset` that is not zero and a `byteLength` that is not the
+    /// whole store. The three readers that admit a view all have to agree.
+    #[test]
+    fn a_view_is_read_as_the_bytes_it_covers() {
+        with_context(|scope| {
+            eval(
+                scope,
+                "const store = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+                 globalThis.__sub = new Uint8Array(store.buffer, 4, 3);
+                 globalThis.__whole = store;
+                 globalThis.__store = store.buffer;
+                 globalThis.__empty = new Uint8Array(0);
+                 globalThis.__zero = new ArrayBuffer(0);",
+            );
+
+            let sub = global(scope, "__sub");
+            assert_eq!(
+                uint8_array_from_v8(scope, sub).expect("a `Uint8Array` is one"),
+                [5, 6, 7],
+                "the view's own range is not what was read"
+            );
+            assert_eq!(
+                buffer_source_from_v8(scope, sub).expect("a view is a `BufferSource`"),
+                [5, 6, 7],
+                "`BufferSource` read past the view"
+            );
+            assert_eq!(
+                array_buffer_view_from_v8(scope, sub).expect("a view is an `ArrayBufferView`"),
+                [5, 6, 7],
+                "`ArrayBufferView` read past the view"
+            );
+
+            let whole = global(scope, "__whole");
+            assert_eq!(
+                uint8_array_from_v8(scope, whole).expect("a `Uint8Array` is one"),
+                [1, 2, 3, 4, 5, 6, 7, 8],
+                "a view that covers its whole store was truncated"
+            );
+
+            let store = global(scope, "__store");
+            assert_eq!(
+                array_buffer_from_v8(scope, store).expect("an `ArrayBuffer` is one"),
+                [1, 2, 3, 4, 5, 6, 7, 8]
+            );
+            assert_eq!(
+                buffer_source_from_v8(scope, store).expect("an `ArrayBuffer` is a `BufferSource`"),
+                [1, 2, 3, 4, 5, 6, 7, 8]
+            );
+
+            // An empty buffer is an empty sequence, not an error.
+            let zero = global(scope, "__zero");
+            assert_eq!(
+                array_buffer_from_v8(scope, zero).expect("an empty `ArrayBuffer` is one"),
+                Vec::<u8>::new()
+            );
+            let empty = global(scope, "__empty");
+            assert_eq!(
+                uint8_array_from_v8(scope, empty).expect("an empty `Uint8Array` is one"),
+                Vec::<u8>::new()
+            );
+        });
+    }
+
+    /// A detached buffer and every view of it hold no bytes.
+    ///
+    /// WebIDL's `GetACopyOfTheBufferSource` reads a detached buffer as the empty
+    /// byte sequence rather than failing, which is what
+    /// `encoding/textdecoder-arguments.any.js` observes of the page-visible
+    /// behaviour of these conversions. `ArrayBuffer.prototype.transfer()`
+    /// detaches the original and leaves the view over it with a zero length.
+    #[test]
+    fn a_detached_buffer_reads_as_no_bytes() {
+        with_context(|scope| {
+            eval(
+                scope,
+                "globalThis.__detached = new ArrayBuffer(4);
+                 globalThis.__over = new Uint8Array(__detached);
+                 __over.set([1, 2, 3, 4]);
+                 __detached.transfer();",
+            );
+
+            let over = global(scope, "__over");
+            assert_eq!(
+                eval(scope, "__over.length.toString()"),
+                "0",
+                "the buffer was not detached, so the rest of this test proves nothing"
+            );
+            assert!(
+                uint8_array_from_v8(scope, over)
+                    .expect("a view over a detached buffer is still a `Uint8Array`")
+                    .is_empty(),
+                "a detached view read as non-empty"
+            );
+
+            let detached = global(scope, "__detached");
+            assert!(
+                array_buffer_from_v8(scope, detached)
+                    .expect("a detached `ArrayBuffer` is still one")
+                    .is_empty(),
+                "a detached `ArrayBuffer` read as non-empty"
+            );
+            assert!(
+                buffer_source_from_v8(scope, detached)
+                    .expect("a detached `ArrayBuffer` is still a `BufferSource`")
+                    .is_empty()
+            );
+        });
+    }
+
+    /// Bytes written to script arrive as a native typed array.
+    ///
+    /// `instanceof`, `length`, `byteLength`, indexed access and `.buffer` are
+    /// all observed from JavaScript, because a host-object wrapper carrying the
+    /// interface's name would satisfy none of them — which is exactly how the
+    /// previous lowering failed at runtime.
+    #[test]
+    fn bytes_written_to_script_are_a_real_typed_array() {
+        with_context(|scope| {
+            let mut numbers = Vec::new();
+            numbers.extend_from_slice(&1.5f64.to_ne_bytes());
+            numbers.extend_from_slice(&(-2.25f64).to_ne_bytes());
+
+            for (name, value) in [
+                (
+                    "__bytes",
+                    uint8_array_to_v8(scope, vec![1, 2, 3]).expect("the bytes fit"),
+                ),
+                (
+                    "__numbers",
+                    float64_array_to_v8(scope, numbers).expect("the bytes fit"),
+                ),
+                (
+                    "__source",
+                    buffer_source_to_v8(scope, vec![6]).expect("the bytes fit"),
+                ),
+                (
+                    "__any_view",
+                    array_buffer_view_to_v8(scope, vec![5]).expect("the bytes fit"),
+                ),
+                (
+                    "__buffer",
+                    array_buffer_to_v8(scope, vec![7, 8]).expect("the bytes fit"),
+                ),
+                (
+                    "__data_view",
+                    data_view_to_v8(scope, vec![9, 10]).expect("the bytes fit"),
+                ),
+            ] {
+                let key = v8_string(scope, name).expect("the name fits a V8 string");
+                scope
+                    .get_current_context()
+                    .global(scope)
+                    .set(scope, key.into(), value);
+            }
+
+            assert_eq!(
+                eval(
+                    scope,
+                    "[__bytes instanceof Uint8Array,
+                      __bytes instanceof Object,
+                      ArrayBuffer.isView(__bytes),
+                      __bytes.length, __bytes.byteLength,
+                      __bytes[0], __bytes[2], __bytes.buffer.byteLength,
+                      Object.prototype.toString.call(__bytes)].join('|')"
+                ),
+                "true|true|true|3|3|1|3|3|[object Uint8Array]",
+                "the value is not a native `Uint8Array`"
+            );
+            assert_eq!(
+                eval(
+                    scope,
+                    "[__numbers instanceof Float64Array,
+                      __numbers.length, __numbers.byteLength,
+                      __numbers[0], __numbers[1],
+                      Object.prototype.toString.call(__numbers)].join('|')"
+                ),
+                "true|2|16|1.5|-2.25|[object Float64Array]",
+                "the bytes did not land on whole 8-byte elements"
+            );
+            assert_eq!(
+                eval(
+                    scope,
+                    "[__data_view instanceof DataView,
+                      __data_view instanceof Uint8Array,
+                      __data_view.byteOffset, __data_view.byteLength,
+                      __data_view.getUint8(0), __data_view.getUint8(1),
+                      Object.prototype.toString.call(__data_view)].join('|')"
+                ),
+                "true|false|0|2|9|10|[object DataView]",
+                "the value is not a native `DataView`"
+            );
+            assert_eq!(
+                eval(
+                    scope,
+                    "[Object.prototype.toString.call(__buffer),
+                      __buffer.byteLength,
+                      new Uint8Array(__buffer)[0], new Uint8Array(__buffer)[1]].join('|')"
+                ),
+                "[object ArrayBuffer]|2|7|8",
+                "the value is not a native `ArrayBuffer`"
+            );
+            // `BufferSource` and `ArrayBufferView` are typedefs: the value is
+            // one of their members, not an object of a type of its own.
+            assert_eq!(
+                eval(
+                    scope,
+                    "[__source instanceof Uint8Array, __source.length,
+                      __any_view instanceof Uint8Array, __any_view.length].join('|')"
+                ),
+                "true|1|true|1"
+            );
+        });
+    }
+
+    /// A byte count that is not a whole number of elements is a `RangeError`
+    /// rather than a silently truncated array.
+    #[test]
+    fn a_buffer_write_that_is_not_whole_elements_is_a_range_error() {
+        with_context(|scope| {
+            let error = float64_array_to_v8(scope, vec![0; 6])
+                .expect_err("six bytes are not whole `Float64Array` elements");
+            assert_eq!(error.kind(), JsErrorKind::Range);
+            assert!(
+                error.message().contains("multiple of 8"),
+                "unexpected message: {}",
+                error.message()
+            );
+        });
+    }
+
+    /// The brand check is per type, and only the types the conversion names are
+    /// accepted.
+    ///
+    /// A `Uint8ClampedArray` is a view but not a `Uint8Array`; a `Float64Array`
+    /// is a view but not a `DataView`; a `SharedArrayBuffer` is a buffer but not
+    /// an `ArrayBuffer` (no declaration in the corpus carries `[AllowShared]`);
+    /// and an `ArrayBuffer` is not a view at all.
+    #[test]
+    fn a_value_that_is_not_the_named_buffer_type_is_a_type_error() {
+        with_context(|scope| {
+            eval(
+                scope,
+                "globalThis.__clamped = new Uint8ClampedArray(1);
+                 globalThis.__numbers = new Float64Array(1);
+                 globalThis.__shared = new SharedArrayBuffer(4);
+                 globalThis.__buffer = new ArrayBuffer(4);
+                 globalThis.__plain = { length: 1, 0: 1 };
+                 globalThis.__text = 'abc';
+                 globalThis.__bigints = new BigInt64Array(1);",
+            );
+
+            for (name, message) in [("__plain", "a plain object"), ("__text", "a string")] {
+                let value = global(scope, name);
+                assert_eq!(
+                    buffer_source_from_v8(scope, value)
+                        .expect_err("not a buffer source")
+                        .kind(),
+                    JsErrorKind::Type,
+                    "{message} was accepted as a `BufferSource`"
+                );
+                assert!(array_buffer_from_v8(scope, value).is_err());
+                assert!(array_buffer_view_from_v8(scope, value).is_err());
+            }
+
+            let clamped = global(scope, "__clamped");
+            assert_eq!(
+                uint8_array_from_v8(scope, clamped)
+                    .expect_err("a `Uint8ClampedArray` is not a `Uint8Array`")
+                    .kind(),
+                JsErrorKind::Type,
+                "the brand check admitted the wrong view type"
+            );
+            assert!(
+                buffer_source_from_v8(scope, clamped).is_ok(),
+                "a `Uint8ClampedArray` is a `BufferSource`"
+            );
+
+            let numbers = global(scope, "__numbers");
+            assert!(data_view_from_v8(scope, numbers).is_err());
+            assert_eq!(
+                uint8_array_from_v8(scope, numbers)
+                    .expect_err("a `Float64Array` is not a `Uint8Array`")
+                    .kind(),
+                JsErrorKind::Type
+            );
+
+            let shared = global(scope, "__shared");
+            assert!(array_buffer_from_v8(scope, shared).is_err());
+            assert!(buffer_source_from_v8(scope, shared).is_err());
+
+            let buffer = global(scope, "__buffer");
+            assert!(
+                array_buffer_view_from_v8(scope, buffer).is_err(),
+                "an `ArrayBuffer` is not an `ArrayBufferView`"
+            );
+            assert!(data_view_from_v8(scope, buffer).is_err());
+            assert!(uint8_array_from_v8(scope, buffer).is_err());
+            assert!(array_buffer_from_v8(scope, buffer).is_ok());
+            assert!(buffer_source_from_v8(scope, buffer).is_ok());
+
+            // Nothing here brands on the element type, so an array whose name
+            // the generator cannot spell is still a view. The two `BigInt`
+            // array spellings have no weedle keyword arm, which costs a
+            // *declaration* the ability to name one, not a value the ability to
+            // be converted.
+            let bigints = global(scope, "__bigints");
+            assert_eq!(
+                buffer_source_from_v8(scope, bigints)
+                    .expect("a `BigInt64Array` is an `ArrayBufferView`")
+                    .len(),
+                8,
+                "the eight bytes of one `BigInt64` element were not read"
+            );
+            assert!(
+                array_buffer_view_from_v8(scope, bigints).is_ok(),
+                "a `BigInt64Array` is an `ArrayBufferView`"
+            );
+        });
+    }
 }

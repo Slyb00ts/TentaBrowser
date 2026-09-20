@@ -69,6 +69,13 @@ pub fn from_v8(ty: &Type, scope: &str, value: &str, mode: IntegerMode) -> String
         Type::Interface(name) => {
             format!("handle_from_v8::<{name}>({scope}, {value})")
         }
+        // A buffer source is not a host object: it is a native V8 typed array,
+        // data view or array buffer, and the prelude converts it by its bytes.
+        // The name comes from the type, so the call and the prelude's definition
+        // of it are generated from one source.
+        Type::Buffer(kind) => {
+            format!("{}_from_v8({scope}, {value})", kind.conversion_suffix())
+        }
         Type::Dictionary(name) | Type::Enum(name) | Type::Union(name) => {
             format!("{name}::from_v8({scope}, {value})")
         }
@@ -115,6 +122,7 @@ pub fn to_v8(ty: &Type, scope: &str, value: &str) -> String {
         Type::ByteString => format!("byte_string_to_v8({scope}, &{value})"),
         Type::Any | Type::Object | Type::Symbol => format!("value_to_v8({scope}, {value}.0)"),
         Type::Interface(name) => format!("handle_to_v8::<{name}>({scope}, {value})"),
+        Type::Buffer(kind) => format!("{}_to_v8({scope}, {value})", kind.conversion_suffix()),
         Type::Dictionary(_) | Type::Enum(_) | Type::Union(_) => {
             format!("{value}.to_v8({scope})")
         }
@@ -223,6 +231,26 @@ pub fn return_value_cast(ty: &Type) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::BufferType;
+
+    /// A buffer source is converted by its bytes. `Handle<T>` is what the
+    /// previous lowering produced, and it is what a native V8 typed array can
+    /// never satisfy, so both directions are pinned per type.
+    #[test]
+    fn a_buffer_source_converts_by_its_bytes() {
+        for kind in BufferType::ALL {
+            let ty = Type::Buffer(kind);
+            let suffix = kind.conversion_suffix();
+            assert_eq!(
+                from_v8(&ty, "scope", "value", IntegerMode::Modulo),
+                format!("{suffix}_from_v8(scope, value)")
+            );
+            assert_eq!(
+                to_v8(&ty, "scope", "value"),
+                format!("{suffix}_to_v8(scope, value)")
+            );
+        }
+    }
 
     /// A record whose value type is the string one, so the emitted text differs
     /// only in the key converter under test.

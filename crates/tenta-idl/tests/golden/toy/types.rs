@@ -5,6 +5,13 @@
 // Interface marker types. `Handle<Node>` names a host object of interface
 // `Node`; the marker itself is uninhabited and only carries the name.
 
+/// Marker for the WebIDL interface `ByteBox` (defined in this module).
+pub enum ByteBox {}
+
+impl InterfaceMarker for ByteBox {
+    const INTERFACE_NAME: &'static str = "ByteBox";
+}
+
 /// Marker for the WebIDL interface `Counter` (defined in this module).
 pub enum Counter {}
 

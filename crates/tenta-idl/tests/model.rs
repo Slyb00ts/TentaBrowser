@@ -3,8 +3,8 @@
 mod common;
 
 use tenta_idl::model::{
-    DefaultValue, Exposure, FastApi, Member, MemberOrigin, NotFastBecause, PropertyKey, Special,
-    Stringifier, Type,
+    BufferType, DefaultValue, Exposure, FastApi, Member, MemberOrigin, NotFastBecause, PropertyKey,
+    Special, Stringifier, Type,
 };
 use tenta_idl::{Interface, Model};
 
@@ -40,7 +40,7 @@ fn operation<'a>(
 fn toy_model_has_the_expected_shape() {
     let model = common::toy();
 
-    assert_eq!(model.interfaces.len(), 3);
+    assert_eq!(model.interfaces.len(), 4);
     assert_eq!(model.dictionaries.len(), 1);
     assert_eq!(model.enums.len(), 1);
     assert!(model.namespaces.is_empty());
@@ -82,6 +82,47 @@ fn toy_model_has_the_expected_shape() {
     assert_eq!(iterable.key, Some(Type::DomString));
     assert_eq!(iterable.value, Type::DomString);
     assert!(!iterable.is_async);
+}
+
+/// The buffer-source names are types of their own, not interfaces.
+///
+/// Leaving them opaque is what produced a `Handle<Uint8Array>` that compiled
+/// and then failed at runtime: `opaque_interfaces` and `Type::Buffer` are the
+/// two halves of that, so both are asserted here.
+#[test]
+fn the_buffer_source_names_lower_to_the_buffer_types() {
+    let model = common::toy();
+    let byte_box = interface(&model, "ByteBox");
+
+    assert!(
+        model.opaque_interfaces.is_empty(),
+        "a buffer source is a native V8 type, not an undefined interface"
+    );
+    let mut lowered: Vec<Type> = byte_box
+        .members
+        .iter()
+        .filter_map(|member| match member {
+            Member::Attribute(attribute) => Some(attribute.ty.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut expected: Vec<Type> = BufferType::ALL
+        .iter()
+        .map(|kind| Type::Buffer(*kind))
+        .collect();
+    lowered.sort_by_key(Type::idl_name);
+    expected.sort_by_key(Type::idl_name);
+    assert_eq!(
+        lowered, expected,
+        "every buffer type the fixture declares lowers to its own variant"
+    );
+
+    let decode = operation(&model, "ByteBox", "decode");
+    assert_eq!(
+        decode.overloads[0].arguments[0].ty,
+        Type::Buffer(BufferType::BufferSource),
+        "the `BufferSource` typedef reached the model as something else"
+    );
 }
 
 #[test]

@@ -362,6 +362,7 @@ fn is_copy(ty: &Type) -> bool {
         Type::DomString
         | Type::UsvString
         | Type::ByteString
+        | Type::Buffer(_)
         | Type::Dictionary(_)
         | Type::Union(_)
         | Type::Sequence(_)

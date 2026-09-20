@@ -484,24 +484,56 @@ impl<'a> Lowerer<'a> {
                 let resolved = self.resolve_identifier(t.type_.0)?;
                 nullable_if(t.q_mark.is_some(), resolved)
             }
-            NonAnyType::Error(t) => nullable_if(t.q_mark.is_some(), buffer("Error")),
-            NonAnyType::ArrayBuffer(t) => nullable_if(t.q_mark.is_some(), buffer("ArrayBuffer")),
-            NonAnyType::DataView(t) => nullable_if(t.q_mark.is_some(), buffer("DataView")),
-            NonAnyType::Int8Array(t) => nullable_if(t.q_mark.is_some(), buffer("Int8Array")),
-            NonAnyType::Int16Array(t) => nullable_if(t.q_mark.is_some(), buffer("Int16Array")),
-            NonAnyType::Int32Array(t) => nullable_if(t.q_mark.is_some(), buffer("Int32Array")),
-            NonAnyType::Uint8Array(t) => nullable_if(t.q_mark.is_some(), buffer("Uint8Array")),
-            NonAnyType::Uint16Array(t) => nullable_if(t.q_mark.is_some(), buffer("Uint16Array")),
-            NonAnyType::Uint32Array(t) => nullable_if(t.q_mark.is_some(), buffer("Uint32Array")),
-            NonAnyType::Uint8ClampedArray(t) => {
-                nullable_if(t.q_mark.is_some(), buffer("Uint8ClampedArray"))
+            NonAnyType::Error(t) => {
+                nullable_if(t.q_mark.is_some(), Type::Interface("Error".to_string()))
             }
-            NonAnyType::Float32Array(t) => nullable_if(t.q_mark.is_some(), buffer("Float32Array")),
-            NonAnyType::Float64Array(t) => nullable_if(t.q_mark.is_some(), buffer("Float64Array")),
-            NonAnyType::ArrayBufferView(t) => {
-                nullable_if(t.q_mark.is_some(), buffer("ArrayBufferView"))
+            // The buffer source types reach here rather than through
+            // `resolve_identifier`: weedle has a keyword arm for each of them
+            // and tries those before the `Identifier` arm, so a unit's own
+            // `typedef (ArrayBufferView or ArrayBuffer) BufferSource;` is
+            // shadowed by the arm below — harmlessly, since the two agree on
+            // what the name means.
+            NonAnyType::ArrayBuffer(t) => {
+                nullable_if(t.q_mark.is_some(), Type::Buffer(BufferType::ArrayBuffer))
             }
-            NonAnyType::BufferSource(t) => nullable_if(t.q_mark.is_some(), buffer("BufferSource")),
+            NonAnyType::DataView(t) => {
+                nullable_if(t.q_mark.is_some(), Type::Buffer(BufferType::DataView))
+            }
+            NonAnyType::Int8Array(t) => {
+                nullable_if(t.q_mark.is_some(), Type::Buffer(BufferType::Int8Array))
+            }
+            NonAnyType::Int16Array(t) => {
+                nullable_if(t.q_mark.is_some(), Type::Buffer(BufferType::Int16Array))
+            }
+            NonAnyType::Int32Array(t) => {
+                nullable_if(t.q_mark.is_some(), Type::Buffer(BufferType::Int32Array))
+            }
+            NonAnyType::Uint8Array(t) => {
+                nullable_if(t.q_mark.is_some(), Type::Buffer(BufferType::Uint8Array))
+            }
+            NonAnyType::Uint16Array(t) => {
+                nullable_if(t.q_mark.is_some(), Type::Buffer(BufferType::Uint16Array))
+            }
+            NonAnyType::Uint32Array(t) => {
+                nullable_if(t.q_mark.is_some(), Type::Buffer(BufferType::Uint32Array))
+            }
+            NonAnyType::Uint8ClampedArray(t) => nullable_if(
+                t.q_mark.is_some(),
+                Type::Buffer(BufferType::Uint8ClampedArray),
+            ),
+            NonAnyType::Float32Array(t) => {
+                nullable_if(t.q_mark.is_some(), Type::Buffer(BufferType::Float32Array))
+            }
+            NonAnyType::Float64Array(t) => {
+                nullable_if(t.q_mark.is_some(), Type::Buffer(BufferType::Float64Array))
+            }
+            NonAnyType::ArrayBufferView(t) => nullable_if(
+                t.q_mark.is_some(),
+                Type::Buffer(BufferType::ArrayBufferView),
+            ),
+            NonAnyType::BufferSource(t) => {
+                nullable_if(t.q_mark.is_some(), Type::Buffer(BufferType::BufferSource))
+            }
         };
         if let Type::Interface(name) = resolved.unwrap_nullable()
             && !self.kinds.contains_key(name)
@@ -1611,8 +1643,4 @@ fn nullable_if(nullable: bool, ty: Type) -> Type {
     } else {
         ty
     }
-}
-
-fn buffer(name: &str) -> Type {
-    Type::Interface(name.to_string())
 }

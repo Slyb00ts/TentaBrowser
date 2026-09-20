@@ -855,6 +855,9 @@ pub enum Type {
     Symbol,
     /// An interface type, defined here or opaque.
     Interface(String),
+    /// A buffer source: `ArrayBuffer`, one of the typed arrays, `DataView`, or
+    /// one of the two typedefs that name a set of them.
+    Buffer(BufferType),
     /// A dictionary type.
     Dictionary(String),
     /// An enumeration type.
@@ -961,6 +964,7 @@ impl Type {
             Type::UsvString => "USVString".into(),
             Type::Object => "object".into(),
             Type::Symbol => "symbol".into(),
+            Type::Buffer(kind) => kind.idl_name().to_string(),
             Type::Interface(name)
             | Type::Dictionary(name)
             | Type::Enum(name)
@@ -996,6 +1000,113 @@ impl Type {
             Type::Promise(inner) => format!("PromiseOf{}", inner.variant_name()),
             Type::Nullable(inner) => format!("Nullable{}", inner.variant_name()),
             other => naming::pascal_case(&other.idl_name()),
+        }
+    }
+}
+
+/// A WebIDL buffer source type.
+///
+/// The thirteen spellings that weedle lowers through a keyword arm —
+/// `ArrayBuffer`, `DataView`, the nine typed arrays, and the `ArrayBufferView`
+/// and `BufferSource` typedefs — are one thing to this generator: a byte
+/// container whose conversion is the byte sequence it holds. They therefore
+/// share the single [`Type::Buffer`] variant parameterised by this enum instead
+/// of taking a variant each, which would multiply the conversion table by
+/// thirteen without changing a line of its logic.
+///
+/// `BigInt64Array` and `BigUint64Array` have no member here because weedle
+/// 0.13.1 has no keyword arm for them: they parse as plain identifiers and stay
+/// opaque interfaces (`Handle<BigInt64Array>`), a pre-existing gap this slice
+/// neither introduces nor closes. The runtime conversions do accept them, since
+/// both are `ArrayBufferView`s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BufferType {
+    /// `ArrayBuffer`
+    ArrayBuffer,
+    /// `DataView`
+    DataView,
+    /// `Int8Array`
+    Int8Array,
+    /// `Int16Array`
+    Int16Array,
+    /// `Int32Array`
+    Int32Array,
+    /// `Uint8Array`
+    Uint8Array,
+    /// `Uint16Array`
+    Uint16Array,
+    /// `Uint32Array`
+    Uint32Array,
+    /// `Uint8ClampedArray`
+    Uint8ClampedArray,
+    /// `Float32Array`
+    Float32Array,
+    /// `Float64Array`
+    Float64Array,
+    /// `ArrayBufferView`, the typedef naming the ten view types
+    ArrayBufferView,
+    /// `BufferSource`, the typedef naming an `ArrayBuffer` or any view
+    BufferSource,
+}
+
+impl BufferType {
+    /// Every member, in WebIDL's declaration order: the `ArrayBuffer`, then the
+    /// view types, then the two typedefs that name a set of them.
+    pub const ALL: [BufferType; 13] = [
+        BufferType::ArrayBuffer,
+        BufferType::DataView,
+        BufferType::Int8Array,
+        BufferType::Int16Array,
+        BufferType::Int32Array,
+        BufferType::Uint8Array,
+        BufferType::Uint16Array,
+        BufferType::Uint32Array,
+        BufferType::Uint8ClampedArray,
+        BufferType::Float32Array,
+        BufferType::Float64Array,
+        BufferType::ArrayBufferView,
+        BufferType::BufferSource,
+    ];
+
+    /// The WebIDL spelling, which is also the name the type is diagnosed under.
+    pub fn idl_name(&self) -> &'static str {
+        match self {
+            BufferType::ArrayBuffer => "ArrayBuffer",
+            BufferType::DataView => "DataView",
+            BufferType::Int8Array => "Int8Array",
+            BufferType::Int16Array => "Int16Array",
+            BufferType::Int32Array => "Int32Array",
+            BufferType::Uint8Array => "Uint8Array",
+            BufferType::Uint16Array => "Uint16Array",
+            BufferType::Uint32Array => "Uint32Array",
+            BufferType::Uint8ClampedArray => "Uint8ClampedArray",
+            BufferType::Float32Array => "Float32Array",
+            BufferType::Float64Array => "Float64Array",
+            BufferType::ArrayBufferView => "ArrayBufferView",
+            BufferType::BufferSource => "BufferSource",
+        }
+    }
+
+    /// The name fragment of the conversions emitted for this type, so that
+    /// `Uint8Array` reads `uint8_array_from_v8` / `uint8_array_to_v8`.
+    ///
+    /// The prelude names its helpers from this, and `codegen::convert` builds
+    /// the calls from it, so a call and its definition cannot drift apart.
+    pub fn conversion_suffix(&self) -> &'static str {
+        match self {
+            BufferType::ArrayBuffer => "array_buffer",
+            BufferType::DataView => "data_view",
+            BufferType::Int8Array => "int8_array",
+            BufferType::Int16Array => "int16_array",
+            BufferType::Int32Array => "int32_array",
+            BufferType::Uint8Array => "uint8_array",
+            BufferType::Uint16Array => "uint16_array",
+            BufferType::Uint32Array => "uint32_array",
+            BufferType::Uint8ClampedArray => "uint8_clamped_array",
+            BufferType::Float32Array => "float32_array",
+            BufferType::Float64Array => "float64_array",
+            BufferType::ArrayBufferView => "array_buffer_view",
+            BufferType::BufferSource => "buffer_source",
         }
     }
 }

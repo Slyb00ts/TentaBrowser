@@ -2,6 +2,8 @@
 
 use std::fmt::Write as _;
 
+use crate::model::BufferType;
+
 /// The eight WebIDL integer types: helper suffix, Rust type, bit width.
 const INTEGERS: &[(&str, &str, u32, bool)] = &[
     ("byte", "i8", 8, true),
@@ -14,6 +16,39 @@ const INTEGERS: &[(&str, &str, u32, bool)] = &[
     ("unsigned_long_long", "u64", 64, false),
 ];
 
+/// The typed arrays: model member, V8 brand predicate, V8 type name, bytes per
+/// element.
+///
+/// `DataView` is not here. A typed array's constructor returns an `Option`
+/// where `DataView::new` cannot fail, so its pair is written out with the other
+/// hand-written conversions instead of being generated from this table.
+const TYPED_ARRAYS: &[(BufferType, &str, &str, usize)] = &[
+    (BufferType::Int8Array, "is_int8_array", "Int8Array", 1),
+    (BufferType::Int16Array, "is_int16_array", "Int16Array", 2),
+    (BufferType::Int32Array, "is_int32_array", "Int32Array", 4),
+    (BufferType::Uint8Array, "is_uint8_array", "Uint8Array", 1),
+    (BufferType::Uint16Array, "is_uint16_array", "Uint16Array", 2),
+    (BufferType::Uint32Array, "is_uint32_array", "Uint32Array", 4),
+    (
+        BufferType::Uint8ClampedArray,
+        "is_uint8_clamped_array",
+        "Uint8ClampedArray",
+        1,
+    ),
+    (
+        BufferType::Float32Array,
+        "is_float32_array",
+        "Float32Array",
+        4,
+    ),
+    (
+        BufferType::Float64Array,
+        "is_float64_array",
+        "Float64Array",
+        8,
+    ),
+];
+
 /// Generates `prelude.rs`.
 pub fn prelude() -> String {
     let mut out = String::new();
@@ -21,6 +56,7 @@ pub fn prelude() -> String {
     out.push_str(CORE);
     integer_conversions(&mut out);
     out.push_str(V8_SUPPORT);
+    buffer_conversions(&mut out);
     out.push_str(QUICKJS_SUPPORT);
     out
 }
@@ -88,6 +124,70 @@ pub fn enforce_{suffix}(value: f64) -> Result<{rust}, JsError> {{
             wrap_cast = wrap_cast,
         );
     }
+}
+
+/// Emits the buffer-source conversions.
+///
+/// The nine typed arrays differ only in their V8 brand, their V8 type name and
+/// their element width, so they are generated from [`TYPED_ARRAYS`]. The two
+/// typedefs and `ArrayBuffer`/`DataView` are written out in
+/// [`BUFFER_SUPPORT`]/[`BUFFER_SUPPORT_TYPEDEFS`], because how they are read
+/// and built differs in kind rather than in a parameter.
+fn buffer_conversions(out: &mut String) {
+    out.push_str(BUFFER_SUPPORT);
+    for (kind, brand, v8_type, element_size) in TYPED_ARRAYS {
+        let suffix = kind.conversion_suffix();
+        let idl = kind.idl_name();
+        // A one-byte element count *is* the byte count, so the narrowing check
+        // and the division are not emitted for it.
+        let (alignment, elements) = if *element_size == 1 {
+            (String::new(), "bytes.len()".to_string())
+        } else {
+            (
+                format!(
+                    "    if !bytes.len().is_multiple_of({element_size}) {{\n        \
+                     return Err(JsError::range_error(\n            \
+                     \"a `{idl}` holds {element_size}-byte elements, so its byte length must be a multiple of {element_size}\",\n        \
+                     ));\n    }}\n"
+                ),
+                format!("bytes.len() / {element_size}"),
+            )
+        };
+        let _ = write!(
+            out,
+            "
+/// WebIDL `{idl}` conversion.
+///
+/// The bytes are those of the view's own `byteOffset .. byteOffset +
+/// byteLength` range and not of its backing store, and a view whose buffer has
+/// been detached reads as the empty sequence.
+#[cfg(feature = \"v8\")]
+pub fn {suffix}_from_v8(
+    _scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<v8::Value>,
+) -> Result<Vec<u8>, JsError> {{
+    brand_checked_view_bytes(value, value.{brand}(), \"{idl}\")
+}}
+
+/// Converts bytes to a fresh `{idl}` over an `ArrayBuffer` of its own.
+///
+/// The bytes are copied into the buffer the view covers, so the array the
+/// script side receives owns its storage.
+#[cfg(feature = \"v8\")]
+pub fn {suffix}_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: Vec<u8>,
+) -> Result<v8::Local<'s, v8::Value>, JsError> {{
+{alignment}    let buffer = array_buffer_with_bytes(scope, &bytes)?;
+    match v8::{v8_type}::new(scope, buffer, 0, {elements}) {{
+        Some(view) => Ok(view.into()),
+        None => Err(JsError::range_error(\"the bytes do not fit a `{idl}`\")),
+    }}
+}}
+"
+        );
+    }
+    out.push_str(BUFFER_SUPPORT_TYPEDEFS);
 }
 
 const HEADER: &str = r#"// Runtime support for the generated WebIDL bindings.
@@ -1355,6 +1455,241 @@ pub fn to_string_tag_attributes() -> v8::PropertyAttribute {
 #[cfg(feature = "v8")]
 pub fn unforgeable_attributes() -> v8::PropertyAttribute {
     v8::PropertyAttribute::DONT_DELETE
+}
+"#;
+
+const BUFFER_SUPPORT: &str = r#"
+// ---------------------------------------------------------------------------
+// Buffer sources: `ArrayBuffer`, `DataView`, the typed arrays, and the
+// `ArrayBufferView` and `BufferSource` typedefs that name them.
+//
+// A buffer source is not a host object, so none of these go through
+// `handle_from_v8`: the script side owns a native V8 array buffer or view and
+// the host side receives the bytes it holds. Reading a view copies its own
+// `byteOffset .. byteOffset + byteLength` range and never the whole backing
+// store, and a detached buffer or view reads as the empty sequence, which is
+// the WebIDL conversion rather than an error.
+// ---------------------------------------------------------------------------
+
+/// The bytes a V8 view holds.
+///
+/// `ArrayBufferView::copy_contents` copies exactly the view's own range, so a
+/// `Uint8Array` over a larger backing store yields its own bytes and no more.
+/// A view over a detached buffer reports a zero byte length and no data, and
+/// the length check keeps `copy_contents` from being asked about one at all.
+#[cfg(feature = "v8")]
+fn view_bytes(view: &v8::ArrayBufferView) -> Vec<u8> {
+    let length = view.byte_length();
+    if length == 0 {
+        return Vec::new();
+    }
+    let mut bytes = vec![0u8; length];
+    let written = view.copy_contents(&mut bytes);
+    // `copy_contents` writes `min(dest.len(), byte_length)` bytes, and no script
+    // runs between the two calls, so a short copy would mean the view changed
+    // under us.
+    debug_assert_eq!(
+        written,
+        bytes.len(),
+        "the view copied fewer bytes than it holds"
+    );
+    bytes
+}
+
+/// The value as a V8 view, or a `TypeError` naming what was expected.
+#[cfg(feature = "v8")]
+fn view_of_v8<'s>(
+    value: v8::Local<'s, v8::Value>,
+    idl_name: &str,
+) -> Result<v8::Local<'s, v8::ArrayBufferView>, JsError> {
+    v8::Local::<v8::ArrayBufferView>::try_from(value)
+        .map_err(|_| JsError::type_error(format!("the value is not a `{idl_name}`")))
+}
+
+/// The bytes of a V8 view, after the brand check that makes it the thing the
+/// declaration names.
+///
+/// The two steps are separate because every typed array is an
+/// `ArrayBufferView` as well: `brand` is the named type's own predicate, while
+/// the conversion that follows is the general one yielding the `byteOffset`
+/// aware reader.
+#[cfg(feature = "v8")]
+fn brand_checked_view_bytes(
+    value: v8::Local<v8::Value>,
+    brand: bool,
+    idl_name: &str,
+) -> Result<Vec<u8>, JsError> {
+    if !brand {
+        return Err(JsError::type_error(format!(
+            "the value is not a `{idl_name}`"
+        )));
+    }
+    let view = view_of_v8(value, idl_name)?;
+    Ok(view_bytes(&view))
+}
+
+/// The bytes a V8 `ArrayBuffer` holds, which is its whole data block.
+///
+/// The zero-length check covers a detached `ArrayBuffer`, which reports a zero
+/// byte length: it holds no bytes either way, and that is the WebIDL
+/// conversion rather than an error.
+#[cfg(feature = "v8")]
+fn array_buffer_bytes(buffer: &v8::ArrayBuffer) -> Result<Vec<u8>, JsError> {
+    let length = buffer.byte_length();
+    if length == 0 {
+        return Ok(Vec::new());
+    }
+    let Some(data) = buffer.data() else {
+        return Err(JsError::type_error("the `ArrayBuffer` has no backing store"));
+    };
+    let mut bytes = vec![0u8; length];
+    // SAFETY: `data` is the start of the buffer's data block and `length` is
+    // that block's length in bytes, as V8 reports them, so the source range is
+    // exactly `length` bytes and cannot run past the block. `bytes` is an
+    // embedder-owned allocation of the same length that cannot overlap it, and
+    // no script runs between the reads and the copy, so neither can go stale.
+    unsafe {
+        std::ptr::copy_nonoverlapping(data.as_ptr().cast::<u8>(), bytes.as_mut_ptr(), length);
+    }
+    Ok(bytes)
+}
+
+/// An `ArrayBuffer` holding a copy of `bytes`.
+#[cfg(feature = "v8")]
+fn array_buffer_with_bytes<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: &[u8],
+) -> Result<v8::Local<'s, v8::ArrayBuffer>, JsError> {
+    let buffer = v8::ArrayBuffer::new(scope, bytes.len());
+    if bytes.is_empty() {
+        return Ok(buffer);
+    }
+    let Some(data) = buffer.data() else {
+        return Err(JsError::type_error("the `ArrayBuffer` has no backing store"));
+    };
+    // SAFETY: the buffer was allocated a moment ago with exactly `bytes.len()`
+    // bytes and nothing has detached it, so `data` is the start of a block of
+    // at least that length. V8 zero-fills the block and every byte of it is
+    // overwritten here, and `bytes` is an embedder-side Rust slice that cannot
+    // overlap it.
+    //
+    // `new_backing_store_from_vec` would hand the `Vec` over without the copy,
+    // but it is compiled out when V8 is built with the sandbox
+    // (`v8_enable_sandbox`), and V8's own documentation names this path as the
+    // sandbox-compatible alternative, so the generated glue takes the one that
+    // compiles under every feature set.
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), data.as_ptr().cast::<u8>(), bytes.len());
+    }
+    Ok(buffer)
+}
+
+/// WebIDL `ArrayBuffer` conversion.
+///
+/// A `SharedArrayBuffer` is rejected: it is a different type, and no
+/// declaration in the corpus carries the `[AllowShared]` extended attribute
+/// that would admit one.
+#[cfg(feature = "v8")]
+pub fn array_buffer_from_v8(
+    _scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<v8::Value>,
+) -> Result<Vec<u8>, JsError> {
+    let buffer = v8::Local::<v8::ArrayBuffer>::try_from(value)
+        .map_err(|_| JsError::type_error("the value is not an `ArrayBuffer`"))?;
+    array_buffer_bytes(&buffer)
+}
+
+/// Converts bytes to an `ArrayBuffer`.
+#[cfg(feature = "v8")]
+pub fn array_buffer_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: Vec<u8>,
+) -> Result<v8::Local<'s, v8::Value>, JsError> {
+    Ok(array_buffer_with_bytes(scope, &bytes)?.into())
+}
+
+/// WebIDL `DataView` conversion.
+///
+/// A `DataView` has no element width of its own, so its bytes are the range it
+/// covers, exactly as for a typed array.
+#[cfg(feature = "v8")]
+pub fn data_view_from_v8(
+    _scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<v8::Value>,
+) -> Result<Vec<u8>, JsError> {
+    brand_checked_view_bytes(value, value.is_data_view(), "DataView")
+}
+
+/// Converts bytes to a `DataView` over a fresh `ArrayBuffer`.
+#[cfg(feature = "v8")]
+pub fn data_view_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: Vec<u8>,
+) -> Result<v8::Local<'s, v8::Value>, JsError> {
+    let buffer = array_buffer_with_bytes(scope, &bytes)?;
+    Ok(v8::DataView::new(scope, buffer, 0, bytes.len()).into())
+}
+"#;
+
+const BUFFER_SUPPORT_TYPEDEFS: &str = r#"
+/// WebIDL `ArrayBufferView` conversion: any of the ten view types.
+///
+/// The view's own range is what is read, so the backing store it is a window
+/// into is never touched beyond it.
+#[cfg(feature = "v8")]
+pub fn array_buffer_view_from_v8(
+    _scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<v8::Value>,
+) -> Result<Vec<u8>, JsError> {
+    let view = view_of_v8(value, "ArrayBufferView")?;
+    Ok(view_bytes(&view))
+}
+
+/// Converts bytes to an `ArrayBufferView`.
+///
+/// The value is a `Uint8Array` over a fresh `ArrayBuffer`. Any of the ten view
+/// types satisfies the typedef, and the one-element-wide view is the only one
+/// that needs no element width to interpret the bytes, so it is the one a byte
+/// sequence is already spelled in.
+#[cfg(feature = "v8")]
+pub fn array_buffer_view_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: Vec<u8>,
+) -> Result<v8::Local<'s, v8::Value>, JsError> {
+    uint8_array_to_v8(scope, bytes)
+}
+
+/// WebIDL `BufferSource` conversion: an `ArrayBuffer` or any `ArrayBufferView`.
+///
+/// The two cases are tried in the order the typedef declares them. A
+/// `SharedArrayBuffer` is neither, so it is a `TypeError`, as for `ArrayBuffer`.
+#[cfg(feature = "v8")]
+pub fn buffer_source_from_v8(
+    _scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<v8::Value>,
+) -> Result<Vec<u8>, JsError> {
+    if let Ok(buffer) = v8::Local::<v8::ArrayBuffer>::try_from(value) {
+        return array_buffer_bytes(&buffer);
+    }
+    if let Ok(view) = v8::Local::<v8::ArrayBufferView>::try_from(value) {
+        return Ok(view_bytes(&view));
+    }
+    Err(JsError::type_error(
+        "the value is not an `ArrayBuffer` or an `ArrayBufferView`",
+    ))
+}
+
+/// Converts bytes to a `BufferSource`.
+///
+/// As in `array_buffer_view_to_v8`, the value is a `Uint8Array`: both cases the
+/// typedef admits satisfy it, and this is the spelling a byte sequence is
+/// already in.
+#[cfg(feature = "v8")]
+pub fn buffer_source_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: Vec<u8>,
+) -> Result<v8::Local<'s, v8::Value>, JsError> {
+    uint8_array_to_v8(scope, bytes)
 }
 "#;
 

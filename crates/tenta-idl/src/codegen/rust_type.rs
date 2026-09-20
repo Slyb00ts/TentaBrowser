@@ -38,6 +38,13 @@ pub fn rust_type(ty: &Type, position: Position) -> String {
         Type::Object => "JsObject".to_string(),
         Type::Symbol => "JsSymbol".to_string(),
         Type::Interface(name) => format!("Handle<{name}>"),
+        // A buffer source crosses the host boundary as the bytes it holds: a
+        // `Handle<Uint8Array>` would be a wrapper object rather than the native
+        // typed array the script side has to receive, and only the bytes are
+        // what a host can use. Both positions are the owned `Vec<u8>` because
+        // the argument binding owns the copy the conversion made, so the
+        // borrowed form would not be the expression the caller passes.
+        Type::Buffer(_) => "Vec<u8>".to_string(),
         Type::Dictionary(name)
         | Type::Enum(name)
         | Type::Callback(name)

@@ -74,6 +74,13 @@ generated enum, named after its members (`NodeOrDomString`).
   `DOMString`/`ByteString`/`USVString`, `object`, `symbol`, interfaces,
   dictionaries, enums, callbacks, sequences, frozen and observable arrays,
   records, promises, unions and nullables.
+- `Type::Buffer(BufferType)` is the buffer-source family: one variant per
+  spelling (`ArrayBuffer`, `DataView`, the nine typed arrays, and the
+  `ArrayBufferView` and `BufferSource` typedefs), with `BufferType::ALL` as the
+  single list of them. One variant per spelling rather than one for the family
+  keeps the brand check and the Rust element type per type, which is what the
+  conversion needs; `idl_name` and `conversion_suffix` both read it, so the
+  emitted call and the prelude's definition of it come from one source.
 - `Argument` carries `optional`, `variadic`, the default value and the
   extended attributes, so `[Clamp]` and `[EnforceRange]` reach the converters.
 
@@ -124,6 +131,7 @@ prelude's `clamp_*` helpers cannot fail.
 | `any` | `AnyValue` | `AnyValue` |
 | `object`, `symbol` | `JsObject`, `JsSymbol` | same |
 | interface `X` | `Handle<X>` | `Handle<X>` |
+| `ArrayBuffer`, `DataView`, the typed arrays, `ArrayBufferView`, `BufferSource` | `Vec<u8>` | `Vec<u8>` |
 | `sequence<T>`, `FrozenArray<T>`, `ObservableArray<T>` | `Vec<T>` | `Vec<T>` |
 | `record<K, V>` | `Vec<(K, V)>` | `Vec<(K, V)>` |
 | `Promise<T>` | `Promise<T>` | `Promise<T>` |
@@ -169,6 +177,82 @@ of the JavaScript value:
   for a record, `is_number()` for the numeric arms — and the arms are tried in
   declaration order. The first arm with no test of its own is the fallback;
   declaring one earlier cannot shadow a later arm of the same kind.
+- A buffer source is converted by its bytes, and it maps to `Vec<u8>` in *both*
+  positions. Reading one always allocates: the bytes have to be copied out of
+  the engine's own storage before the host may look at them, so a borrowed
+  argument form would save the move and nothing else. `sequence`,
+  `FrozenArray`, `ObservableArray` and `record` already map `Vec<T>` in both
+  positions, and buffers following them keeps one rule instead of adding a
+  third borrow case (`ByteString` is the only container with a borrowed
+  argument form). The cost at the call site is therefore one allocation and one
+  copy per inbound boundary crossing, and one allocation and one copy per
+  outbound one.
+- A view (`DataView` and the nine typed arrays) is read as the
+  `byteOffset..byteOffset + byteLength` range it covers, not as its whole
+  backing `ArrayBuffer`, so `new Uint8Array(buf, 2, 3)` reads three bytes —
+  the range WebIDL's *get a copy of the bytes held by the buffer source* names.
+  The read is `ArrayBufferView::copy_contents` over the view's own range, and its
+  return value is compared with `debug_assert_eq!` rather than used as the
+  length, so a view whose byte length is reported wrongly cannot quietly
+  truncate a conversion.
+- A detached buffer, a detached view and a zero-length one all read as the
+  empty sequence and are **not** an error: V8 reports their byte length as 0,
+  and the prelude short-circuits on that before it touches a backing store.
+  The standard's algorithm says so outright — *if `IsDetachedBuffer` is true,
+  return the empty byte sequence* — and
+  `encoding/textdecoder-arguments.any.js` observes it from a page by handing
+  `TextDecoder.decode` a detached buffer.
+- The brand check is per type: `Value::is_data_view`, `Value::is_uint8_array` and
+  their siblings for the named view types, and
+  `Local::<ArrayBuffer>::try_from` for `ArrayBuffer`. So a `Uint8ClampedArray`
+  is not a `Uint8Array`, a `Float64Array` is not a `DataView`, and no
+  `ArrayBufferView` satisfies `ArrayBuffer`. A value that is not the named type
+  is a `TypeError`, as WebIDL's buffer-source conversion requires. The two
+  typedefs are the union of their members: `ArrayBufferView` accepts any of the
+  ten view types, `BufferSource` accepts those plus `ArrayBuffer` itself.
+- `BigInt64Array`, `BigUint64Array` and `Float16Array` have no weedle keyword
+  arm, so `idl/` still cannot declare them and they stay opaque identifiers.
+  A value of one of those types does *not* fail as a `BufferSource` or
+  `ArrayBufferView`: it is an `ArrayBufferView`, and the runtime conversions
+  accept it. Only the two BigInt spellings cannot be named in a declaration.
+- Handing bytes back to script produces a native V8 typed array or `DataView`
+  over a fresh `ArrayBuffer` of its own, never a host wrapper with an internal
+  field: `Object.prototype.toString.call(...)` is `[object Uint8Array]` and
+  `ArrayBuffer.isView(...)` is true, which is what the platform's own classes
+  report and what script branches on. A multi-byte typed array whose byte
+  length is not a whole number of elements is a `RangeError`; the length it
+  reports is `bytes.len() / element_size`. That case is a precondition in the
+  standard rather than an exception it names — *create one of the
+  ArrayBufferView types from a byte sequence* opens with an **assert** that the
+  length is a multiple of the element size, and only then calls the typed
+  array's constructor with `!`, the constructor being what throws a
+  `RangeError` — so the explicit check exists to turn a host-side mistake into
+  a diagnosable error rather than a violated assertion. `DataView` is exempt,
+  as the standard's assert is.
+- The write path allocates the `ArrayBuffer` and copies with
+  `std::ptr::copy_nonoverlapping` into its `data()`, rather than using
+  `new_backing_store_from_vec`, which is compiled out when the Rust `v8`
+  crate's `v8_enable_sandbox` feature is on. The copy is what makes the
+  conversion independent of which crate features the host builds with.
+- A unit's own `typedef (ArrayBufferView or ArrayBuffer) BufferSource;` never
+  reaches the model: weedle's keyword arms are matched before its `Identifier`
+  arm, so the spelling *is* the type and no typedef lookup happens. The
+  shadowing is harmless because the two agree, and it is why `BufferSource`
+  carries its own model variant whose conversions are written by hand.
+- The QuickJS glue does not use these conversions at all: it never names
+  `convert.rs`, and it hands a buffer source to `rquickjs` as the `Vec<u8>` the
+  type maps to. `rquickjs`'s own `FromJs`/`IntoJs` for `Vec<u8>` then reads and
+  writes a JavaScript `Array` of numbers, not a typed array or an
+  `ArrayBuffer`. The gap is real but dormant: it is a shape difference rather
+  than a compile error, the `quickjs` feature has no `rquickjs` dependency to
+  build against (its `cargo` feature is `quickjs = []`), and no `idl/`
+  declaration names a buffer source. A QuickJS host that needed one would need
+  the byte conversions written for it.
+- A union with a buffer member has no `is_…` test in `union_test`, so such a
+  union falls back exactly as a `DOMString`/`ByteString` member already does.
+  No declaration in `idl/` has one; a buffer source is not distinguishable from
+  an arbitrary object by a cheap test, which is why the arm is left out rather
+  than guessed at.
 
 Fast-API-eligible members return their value directly; every other member
 returns `Result<_, JsError>` so the glue can turn a failure into a JavaScript
@@ -180,7 +264,7 @@ exception.
 
 | File | Contents |
 |------|----------|
-| `prelude.rs` | Runtime support: `Handle`, `Promise`, `Callback`, `AnyValue`, `JsError`, the WebIDL integer conversions (`to_*`, `clamp_*`, `enforce_*`), the registry types, and the engine helpers behind `cfg(feature = "v8")` / `cfg(feature = "quickjs")`. |
+| `prelude.rs` | Runtime support: `Handle`, `Promise`, `Callback`, `AnyValue`, `JsError`, the WebIDL integer conversions (`to_*`, `clamp_*`, `enforce_*`), the buffer-source conversions (`*_from_v8` / `*_to_v8` for `ArrayBuffer`, `DataView`, the nine typed arrays and the two typedefs), the registry types, and the engine helpers behind `cfg(feature = "v8")` / `cfg(feature = "quickjs")`. |
 | `types.rs` | Interface markers, typedef aliases, enums, dictionaries, unions, callback aliases, with their engine conversions. |
 | `<snake>_ops.rs` | The `*Ops` trait the host implements, one per interface and namespace. |
 | `<snake>_v8.rs` | The V8 glue. |
@@ -236,6 +320,9 @@ in the doc comment of the generated `install_*` function:
 - `v8::Symbol::{get_to_string_tag, get_iterator, get_unscopables}`,
   `v8::Intrinsic::{ArrayProtoEntries, ArrayProtoForEach, ArrayProtoKeys, ArrayProtoValues}`
 - `v8::Exception::{type_error, range_error, syntax_error}`, `PinScope::throw_exception`
+- `ArrayBuffer::{new, data, byte_length}`, `ArrayBufferView::{copy_contents, byte_length}`,
+  `v8::Local::<v8::ArrayBufferView>::try_from`, `Value::{is_data_view, is_int8_array, …}`,
+  and `v8::DataView` / the nine `v8::*Array` types with their `new` and `data`
 
 Notes on the shape of the generated code:
 
