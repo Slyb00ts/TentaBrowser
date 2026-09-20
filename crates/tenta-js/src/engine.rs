@@ -40,6 +40,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use tenta_core::TimerRule;
+use tenta_net::CookieJar;
 
 use crate::bindings::host::SharedDocument;
 use crate::event_loop::ProvenanceSink;
@@ -110,6 +111,13 @@ pub struct PageEngineConfig {
     pub script_timeout: Option<Duration>,
     pub locale: String,
     pub timezone: Option<String>,
+    /// The cookie jar `document.cookie` reads and writes.
+    ///
+    /// It is the browsing context's jar — the same store `tenta-net` sends
+    /// from — so the value here is a clone of one `Rc`-shared handle, never a
+    /// per-engine copy. The binding layer only passes it through; the jar's
+    /// policy and its storage rules stay in `tenta-net`.
+    pub cookies: CookieJar,
 }
 
 /// One isolate driving one document.

@@ -227,7 +227,11 @@ fn fixture() -> Fixture {
     let div = document.node_ref(div);
 
     let clock = SharedClock::new(Clock::virtual_at(MonoTime::ZERO));
-    let ctx = Rc::new(HostContext::new(Rc::new(RefCell::new(document)), clock));
+    let ctx = Rc::new(HostContext::new(
+        Rc::new(RefCell::new(document)),
+        clock,
+        tenta_net::CookieJar::new(),
+    ));
     let mock = MockHost::new();
     *mock.ctx.borrow_mut() = Rc::downgrade(&ctx);
     *ctx.script.borrow_mut() = Some(mock.clone() as Rc<dyn ScriptHost>);

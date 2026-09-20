@@ -448,6 +448,7 @@ impl BrowserContext {
             locale: self.inner.engine.options.locale.clone(),
             extra_headers: self.inner.extra_headers.clone(),
             viewport: options.viewport,
+            cookies: self.inner.cookies.clone(),
             on_close: Some({
                 let inner = Arc::downgrade(&self.inner);
                 Arc::new(move |page| {

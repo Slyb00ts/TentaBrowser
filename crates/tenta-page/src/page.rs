@@ -18,7 +18,7 @@ use tenta_core::{BudgetKind, Budgets, ContextId, Error, FrameId, PageId, Request
 use tenta_dom::{Document as DomDocument, SharedDocument, SharedSink};
 use tenta_html::{Encoding, ParseStatus, Parser, ParserOptions, PreloadHint};
 use tenta_js::engine::PageEngineFactory;
-use tenta_net::policy::cookies::Site;
+use tenta_net::policy::cookies::{CookieJar, Site};
 use tenta_net::policy::error_names::ErrorName;
 use tenta_net::request::RequestLimits;
 use tenta_net::{Client, RedirectHop, Request, ResourceType, Response, Timing};
@@ -256,6 +256,11 @@ pub struct PageConfig {
     /// `Accept-Language` overrides).
     pub extra_headers: Vec<(String, String)>,
     pub viewport: Viewport,
+    /// The browsing context's cookie jar, handed to the engine so
+    /// `document.cookie` writes into the same store the network client sends
+    /// from. It is a clone of one `Rc`-shared handle; see
+    /// [`tenta_js::engine::PageEngineConfig::cookies`].
+    pub cookies: CookieJar,
     /// Called once, from [`Page::close`], so whoever registered the page
     /// (its context's group table) can forget it without polling.
     pub on_close: Option<Arc<dyn Fn(PageId) + Send + Sync>>,

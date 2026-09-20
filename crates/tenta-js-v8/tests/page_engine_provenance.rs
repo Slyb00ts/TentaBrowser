@@ -30,6 +30,7 @@ use tenta_dom::{Document, SharedDocument};
 use tenta_js::engine::{EngineClock, PageEngine, PageEngineConfig, PageEngineFactory, ScriptKind};
 use tenta_js::event_loop::{Clock, MonoTime, ProvenanceSink};
 use tenta_js_v8::{Engine, V8EngineFactory};
+use tenta_net::CookieJar;
 
 /// A delay short enough to be a deferral under [`TimerRule::default`], so the
 /// only thing that can make a timer background is its parent's provenance.
@@ -72,6 +73,7 @@ fn config() -> PageEngineConfig {
         script_timeout: None,
         locale: "en-US".to_owned(),
         timezone: None,
+        cookies: CookieJar::new(),
     }
 }
 
@@ -139,8 +141,12 @@ fn work_started_outside_a_page_script_is_not_a_deferral() {
     // `run_script` from being widened into the engine core, where it would make
     // every evaluation a caller makes hold a settle open.
     let recorded = Rc::new(Recording::default());
-    let mut engine =
-        Engine::with_document_on_clock(document(), Clock::virtual_at(MonoTime::ZERO), None);
+    let mut engine = Engine::with_document_on_clock(
+        document(),
+        Clock::virtual_at(MonoTime::ZERO),
+        None,
+        CookieJar::new(),
+    );
     engine.set_timer_rule(TimerRule::default());
     engine.set_provenance_sink(Rc::clone(&recorded) as Rc<dyn ProvenanceSink>);
 

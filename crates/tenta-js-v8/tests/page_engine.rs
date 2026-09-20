@@ -21,6 +21,7 @@ use tenta_js::engine::{
     EngineClock, PageEngine, PageEngineConfig, PageEngineFactory, ScriptErrorKind, ScriptKind,
 };
 use tenta_js_v8::V8EngineFactory;
+use tenta_net::CookieJar;
 
 /// `<html><body><div id="target"></div></body></html>`, and the id of that
 /// `<div>` so a test can assert on the tree from the Rust side.
@@ -69,6 +70,7 @@ fn config() -> PageEngineConfig {
         script_timeout: None,
         locale: "en-US".to_owned(),
         timezone: None,
+        cookies: CookieJar::new(),
     }
 }
 

@@ -33,6 +33,7 @@ use tenta_js::bindings::{
 use tenta_js::dom::events::{HostValue, PromiseOutcome, PromiseRef, ScriptHost};
 use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId};
 use tenta_js::fetch::{FetchDriver, FetchRequest};
+use tenta_net::CookieJar;
 
 /// Timer functions whose deadline has passed, in fire order, waiting for the
 /// engine to invoke them with the isolate in hand.
@@ -95,11 +96,19 @@ pub struct HostState {
     /// before the page has a driver to give. A `RefCell` and not a `Cell`: the
     /// driver is an `Rc<dyn FetchDriver>`, which is not `Copy`.
     pub fetch_driver: RefCell<Option<Rc<dyn FetchDriver>>>,
+    /// The browsing context's cookie jar, handed to the DOM context so
+    /// `document.cookie` reads and writes the same store `tenta-net` sends
+    /// from. It is a clone of one `Rc`-shared handle and its identity never
+    /// changes, so it lives in the constructor rather than behind a setter:
+    /// the DOM context is built during `Engine::build`, before any setter could
+    /// run.
+    pub cookies: CookieJar,
 }
 
 impl HostState {
-    /// Builds host state over an event loop's `scheduler`.
-    pub fn new(scheduler: Scheduler) -> Rc<Self> {
+    /// Builds host state over an event loop's `scheduler` and a browsing
+    /// context's `cookies`.
+    pub fn new(scheduler: Scheduler, cookies: CookieJar) -> Rc<Self> {
         Rc::new(HostState {
             scheduler,
             ready: Rc::new(RefCell::new(VecDeque::new())),
@@ -107,6 +116,7 @@ impl HostState {
             script_depth: std::cell::Cell::new(0),
             microtasks_pending: std::cell::Cell::new(false),
             fetch_driver: RefCell::new(None),
+            cookies,
         })
     }
 

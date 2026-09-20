@@ -622,7 +622,9 @@ of `tenta_js::fetch::FetchDriver` in the workspace. It lives in `tenta-page`
 because that is the only crate that can see `tenta-net`, the seam, the
 `SettleTracker` and `page::next_request_id` at once while keeping the
 dependency direction: a driver holds no engine, and neither `tenta-js` nor
-`tenta-js-v8` gains an edge to the network tier. `PageRuntime::create` builds
+`tenta-js-v8` gains an edge to the *driver*. (The V8 backend does name
+`tenta-net` since d-4b, which holds the type in a field and a parameter and no
+cookie logic — see the next section.) `PageRuntime::create` builds
 one per navigation and installs it with `PageEngine::set_fetch_driver`, so a
 completion always names a resolver of the engine current when the page drains
 the table.
@@ -711,6 +713,86 @@ machine settles as soon as
 `load_fired && network_sources_empty() && tracked_tasks == 0`; it does not use
 the 500 ms `network_idle_window`, so the loop waits for the fetch rather than
 for a quiet period.
+
+### The cookie jar behind `document.cookie` (P2 slice d-4b b-1)
+
+`attribute USVString cookie` on `Document` (`idl/dom/dom.webidl`) was the last
+framework-visible IDL gap in the window tests. `Document` is a node-backed
+interface, so the member needs no new seam and no new host variant: the
+generated `DocumentOps::cookie` / `set_cookie` are implemented on `HostObject`
+(`crates/tenta-js/src/bindings/host.rs`), which reaches the jar through the
+`HostContext` every host already carries.
+
+Both directions are the HTML Standard's cookie getter and setter
+(<https://html.spec.whatwg.org/multipage/dom.html#dom-document-cookie>), which
+delegate to RFC 6265bis's "cookie-string" and "receive a set-cookie-string" with
+the **non-HTTP API flag** set. That flag is one argument on each call and it is
+the whole security boundary of the member:
+
+- The getter calls `CookieJar::cookie_header(url, site, is_http = false, ..)`.
+  `cookies_for`'s `is_http || !cookie.http_only` filter is what hides every
+  `HttpOnly` cookie from script. The join (`name=value`, `"; "` separated) and
+  the ordering (RFC 6265 §5.4: longer path first, then earlier creation time)
+  are `tenta-net`'s and are deliberately not re-implemented.
+- The setter calls `CookieJar::set_cookie(value, url, is_http = false, ..)`.
+  `CookieJar::store` returns `RejectedHttpOnly` for `!is_http && (cookie.http_only
+  || existing.http_only)` (RFC 6265bis §5.7 steps 15 and 21), so a script can
+  neither create nor overwrite an `HttpOnly` cookie. The whole assignment —
+  including the parser that splits at the first `;` into the name-value pair and
+  the attribute list — is delegated, so `document.cookie = 'a=b; Path=/sub'`
+  stores `a` with path `/sub`. The `Option<StoreOutcome>` is discarded on
+  purpose: every refusal path is silent in the standard, and surfacing one would
+  invent an error a real browser does not throw.
+
+Two further values the binding chooses rather than derives:
+
+- `SameSiteContext::same_site()` on both calls. The site for cookies *is* the
+  document's site, so a non-HTTP API acting on the document's own URL makes a
+  trivially same-site request; the constant is the value the standard's
+  computation yields, not a shortcut.
+- The cookie-averse rule. The standard's cookie-averse `Document` is one with a
+  null browsing context or a URL whose scheme is neither `http` nor `https`;
+  this tree has no null-context case, so `is_cookie_averse_scheme` is the scheme
+  test written out rather than inherited from `canonical_host`. The two
+  observable consequences are the getter returning `""` and the setter being a
+  silent no-op, and both are pinned for the no-URL and `file:` cases.
+
+**Unreachable deviation.** The standard's getter and setter both throw a
+`SecurityError` `DOMException` when the origin is opaque. This tree cannot
+represent an opaque origin, so neither throw is implemented and neither is
+reachable.
+
+**The jar is context-level, and that is what the end-to-end test pins.** The
+plumbing chain, so it need not be re-derived:
+
+1. `ContextInner.cookies` (`crates/tenta-browser/src/context.rs`) is the
+   context's `CookieJar`, handed to the network client as
+   `cookie_jar: Some(cookies.clone())`.
+2. `BrowserContext::new_page` clones it into `PageConfig::cookies`
+   (`crates/tenta-page/src/page.rs`).
+3. `runtime::engine_config` forwards it into `PageEngineConfig::cookies`
+   (`crates/tenta-js/src/engine.rs`).
+4. `V8EngineFactory::create` passes it to `Engine::with_document_on_clock`,
+   which hands it to `HostState::new` and on to `HostContext::new`.
+
+`CookieJar` is `#[derive(Clone)]` over an `Arc`-shared inner, so every link is a
+clone of one handle and all of them are the same store. A per-engine copy would
+make `document.cookie = ...` invisible to the next request; the end-to-end test
+sets a cookie and then `fetch`es `/api/cookie`, which echoes the `Cookie` header
+the request carried, so only the shared jar passes. The jar's policy is the
+context's policy — this slice adds none.
+
+`tenta-js-v8` therefore names `tenta-net` in `[dependencies]`. The backend holds
+the type in a field and a parameter and contains no cookie logic; `tenta-net`
+sits below `tenta-js-v8` in `xtask/src/deps.rs`'s foundation order, so
+`cargo xtask lint-deps` permits the edge.
+
+The two halves of the test split follow the `Response` precedent:
+`crates/tenta-js-v8/tests/dom_cookie.rs` covers the binding against a jar only
+Rust can see (the join, the `HttpOnly` filter, the refusal to overwrite, the
+attribute parser, the cookie-averse rule, and the "no own property left behind"
+regression), and `crates/tenta-browser/tests/cookie_js.rs` is the end-to-end
+half, where the cookie has to survive into a real request.
 
 ## Extended attributes
 

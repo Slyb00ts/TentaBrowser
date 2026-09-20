@@ -152,6 +152,7 @@ fn config() -> PageEngineConfig {
         script_timeout: None,
         locale: "en-US".to_string(),
         timezone: None,
+        cookies: tenta_net::CookieJar::new(),
     }
 }
 

@@ -2419,6 +2419,7 @@ dependencies = [
  "tenta-dom",
  "tenta-html",
  "tenta-js",
+ "tenta-net",
  "url",
  "v8",
 ]

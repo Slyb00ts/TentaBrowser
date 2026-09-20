@@ -36,7 +36,12 @@ fn test_document() -> Rc<RefCell<Document>> {
 }
 
 fn real_engine() -> Engine {
-    Engine::with_document_on_clock(test_document(), Clock::real(), None)
+    Engine::with_document_on_clock(
+        test_document(),
+        Clock::real(),
+        None,
+        tenta_net::CookieJar::new(),
+    )
 }
 
 /// A delay comfortably longer than an `evaluate` on a loaded machine, so a

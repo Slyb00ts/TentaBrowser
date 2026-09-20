@@ -30,6 +30,7 @@ use tenta_js::dom::events::ScriptHost;
 use tenta_js::engine::ScriptErrorKind;
 use tenta_js::event_loop::{Clock, EventLoop, FiringRelease, MonoTime};
 use tenta_js::fetch::{FetchCompletion, FetchOutcome};
+use tenta_net::CookieJar;
 
 use host::{HostState, ReadyHandler};
 use script_host::{V8ScriptHost, construct_global};
@@ -198,7 +199,12 @@ enum CallOutcome {
 impl Engine {
     /// Builds an isolate with one fresh context and no heap cap.
     pub fn new() -> Self {
-        Self::build(None, None, Clock::virtual_at(MonoTime::ZERO))
+        Self::build(
+            None,
+            None,
+            Clock::virtual_at(MonoTime::ZERO),
+            CookieJar::new(),
+        )
     }
 
     /// Builds an isolate whose heap is capped at `max_heap_bytes`; a script that
@@ -209,6 +215,7 @@ impl Engine {
             Some(max_heap_bytes),
             None,
             Clock::virtual_at(MonoTime::ZERO),
+            CookieJar::new(),
         )
     }
 
@@ -217,8 +224,17 @@ impl Engine {
     /// global bound to the document node (`docs/spec/05-javascript.md` §3).
     /// This is the Phase 0c vertical slice that proves the generated V8 glue
     /// end to end; it grows into the full binding surface in phase 1.
+    ///
+    /// The engine gets a jar of its own, so `document.cookie` works without a
+    /// browsing context; a page supplies its context's jar through
+    /// [`Self::with_document_on_clock`].
     pub fn with_document(doc: SharedDocument) -> Self {
-        Self::build(None, Some(doc), Clock::virtual_at(MonoTime::ZERO))
+        Self::build(
+            None,
+            Some(doc),
+            Clock::virtual_at(MonoTime::ZERO),
+            CookieJar::new(),
+        )
     }
 
     /// Builds a DOM engine over `doc` driven by `clock`. A live page passes
@@ -236,15 +252,27 @@ impl Engine {
     /// constructor that runs *untrusted* page script: without a cap, script
     /// that allocates without bound aborts the process instead of producing a
     /// contained [`JsError`].
+    ///
+    /// `cookies` is the browsing context's jar, which `document.cookie` reads
+    /// and writes. It is passed to the constructor rather than installed later
+    /// because the context is built during `build`: the member must not depend
+    /// on install order, and the jar a page supplies never changes identity. A
+    /// caller with no context of its own passes [`CookieJar::new`].
     pub fn with_document_on_clock(
         doc: SharedDocument,
         clock: Clock,
         max_heap_bytes: Option<usize>,
+        cookies: CookieJar,
     ) -> Self {
-        Self::build(max_heap_bytes, Some(doc), clock)
+        Self::build(max_heap_bytes, Some(doc), clock, cookies)
     }
 
-    fn build(max_heap_bytes: Option<usize>, doc: Option<SharedDocument>, clock: Clock) -> Self {
+    fn build(
+        max_heap_bytes: Option<usize>,
+        doc: Option<SharedDocument>,
+        clock: Clock,
+        cookies: CookieJar,
+    ) -> Self {
         ensure_platform();
         let mut params = v8::CreateParams::default();
         if let Some(max) = max_heap_bytes {
@@ -276,7 +304,7 @@ impl Engine {
         };
 
         let event_loop = EventLoop::new(clock);
-        let host = HostState::new(event_loop.scheduler());
+        let host = HostState::new(event_loop.scheduler(), cookies);
 
         let (context, dom) = {
             v8::scope!(let handle_scope, &mut isolate);
@@ -353,7 +381,11 @@ impl Engine {
         let state = Rc::new(RefCell::new(world::WorldState::default()));
         // Events timestamp against the loop clock, so `evt.timeStamp` and
         // `performance.now()` are readings of the same clock.
-        let ctx = Rc::new(HostContext::new(doc.clone(), host.scheduler.clock()));
+        let ctx = Rc::new(HostContext::new(
+            doc.clone(),
+            host.scheduler.clock(),
+            host.cookies.clone(),
+        ));
         let document_ref = {
             let doc = doc.borrow();
             doc.node_ref(doc.document_node())

@@ -1100,7 +1100,11 @@ mod prelude_helpers {
     fn host_realm() -> Realm {
         let document = Rc::new(RefCell::new(Document::new()));
         let clock = SharedClock::new(Clock::virtual_at(MonoTime::ZERO));
-        let context: Realm = Rc::new(HostContext::new(document, clock));
+        let context: Realm = Rc::new(HostContext::new(
+            document,
+            clock,
+            tenta_net::CookieJar::new(),
+        ));
         context
     }
 

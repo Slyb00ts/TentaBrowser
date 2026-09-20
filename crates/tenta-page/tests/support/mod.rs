@@ -27,6 +27,7 @@ use tenta_js::engine::{
 use tenta_js::event_loop::{Clock, EventLoop, ProvenanceSink, Scheduler};
 use tenta_js::fetch::{FetchCompletion, FetchDriver};
 use tenta_net::hooks::{BoxFuture, FulfilledResponse, Hooks, Interception, Interceptor};
+use tenta_net::policy::cookies::CookieJar;
 use tenta_net::policy::private_network::DestinationPolicy;
 use tenta_net::{ClientConfig, ErrorName, NetError, NetRuntime};
 use tenta_page::page::{Goto, Navigation, Page, PageConfig, TestHooks, Viewport};
@@ -916,6 +917,7 @@ impl Builder {
             locale: "en-US".to_owned(),
             extra_headers: Vec::new(),
             viewport: Viewport::default(),
+            cookies: CookieJar::new(),
             on_close: None,
             test_hooks: TestHooks::default(),
         });

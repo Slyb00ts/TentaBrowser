@@ -276,7 +276,12 @@ impl PageEngineFactory for V8EngineFactory {
             // clock itself.
             EngineClock::Virtual => Clock::virtual_at(MonoTime::ZERO),
         };
-        let mut engine = Engine::with_document_on_clock(document, clock, config.max_heap_bytes);
+        let mut engine = Engine::with_document_on_clock(
+            document,
+            clock,
+            config.max_heap_bytes,
+            config.cookies.clone(),
+        );
         // The page derives the rule from its settle configuration, so the
         // engine and the settle machine cannot disagree about what defers a
         // settle.

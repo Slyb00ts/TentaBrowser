@@ -12,11 +12,13 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::time::SystemTime;
 
 use tenta_core::atom::atoms;
 use tenta_core::{Atom, NodeId, NodeRef};
 use tenta_dom::{Document, Mutation, NodeKind};
 use tenta_html::{ElementFlags, QualName, QuirksMode};
+use tenta_net::policy::cookies::{CookieJar, SameSiteContext, Site};
 
 // The generated name of the `URLSearchParams` constructor's `init` union. It is
 // spelled out of the union's own members, so the alias is the only way to read
@@ -641,12 +643,19 @@ pub struct HostContext {
     /// on the same element during its own dispatch is a no-op (the DOM
     /// "click in progress" flag).
     pub click_in_progress: RefCell<HashSet<NodeId>>,
+    /// The cookie jar of the browsing context this world belongs to.
+    ///
+    /// It is the *same* jar `tenta-net` sends from — a clone of one
+    /// `Rc`-shared store, not a copy — so a cookie `document.cookie` writes is
+    /// sent on the next request, which is the whole point of the member. The
+    /// jar's policy is the context's policy, not the world's.
+    pub cookies: CookieJar,
 }
 
 impl HostContext {
     /// Builds a fresh context over `doc`, timestamping events against `clock`,
-    /// with empty event state and no script host yet.
-    pub fn new(doc: SharedDocument, clock: SharedClock) -> Self {
+    /// with empty event state, the context's cookie jar, and no script host yet.
+    pub fn new(doc: SharedDocument, clock: SharedClock, cookies: CookieJar) -> Self {
         Self {
             doc,
             snapshots: RefCell::new(SnapshotSlab::new()),
@@ -656,6 +665,7 @@ impl HostContext {
             script: RefCell::new(None),
             clock,
             click_in_progress: RefCell::new(HashSet::new()),
+            cookies,
         }
     }
 
@@ -2300,6 +2310,80 @@ impl DocumentOps for HostObject {
         // which cannot be distinguished from a wired one until the navigation
         // side records the referrer on the document.
         Ok(String::new())
+    }
+
+    fn cookie(&self) -> Result<String, JsError> {
+        // https://html.spec.whatwg.org/multipage/dom.html#dom-document-cookie:
+        // the getter is RFC 6265bis's "cookie-string" for the document's URL,
+        // computed with the non-HTTP API flag set. `cookie_header` is exactly
+        // that — `cookies_for` (RFC 6265 §5.4 order: longer path first, then
+        // earlier creation time) joined as `name=value` with `"; "`. Nothing of
+        // the join is re-implemented here.
+        let ctx = self.context();
+        let doc = ctx.doc.borrow();
+        // A cookie-averse `Document` returns the empty string; see
+        // [`is_cookie_averse_scheme`] for the rule.
+        let Some(url) = doc.url() else {
+            return Ok(String::new());
+        };
+        if is_cookie_averse_scheme(url) {
+            return Ok(String::new());
+        }
+        // `is_http = false` is the security boundary of this member: it makes
+        // `cookies_for`'s `is_http || !cookie.http_only` filter hide every
+        // `HttpOnly` cookie from script. Never pass `true` here.
+        //
+        // The request is trivially same-site, because the site for cookies *is*
+        // the document's own site: `SameSiteContext::same_site()` is the value
+        // the standard's computation yields for a non-HTTP API acting on the
+        // document's URL. Passing `Site::from_url(url)` as the first party also
+        // selects the document's own partition (`cookies_for`'s partition
+        // filter), which is right — the document is the top-level site.
+        Ok(ctx
+            .cookies
+            .cookie_header(
+                url,
+                Site::from_url(url).as_ref(),
+                false,
+                SameSiteContext::same_site(),
+                SystemTime::now(),
+            )
+            .unwrap_or_default())
+    }
+
+    fn set_cookie(&self, value: &str) {
+        // https://html.spec.whatwg.org/multipage/dom.html#dom-document-cookie:
+        // the setter is RFC 6265bis's "receive a set-cookie-string" with the
+        // non-HTTP API flag, which is exactly `set_cookie`'s contract — the
+        // whole assignment is delegated, including its parser
+        // (`parse_set_cookie_in`, which splits at the first `;` into the
+        // name-value pair and the attribute list). `document.cookie =
+        // 'a=b; Path=/sub'` therefore stores `a` with path `/sub`; a naive
+        // split at the first `=` and take-the-rest-as-value would not.
+        //
+        // Attribute syntax (`Path`, `Domain`, `Max-Age`, ...) *is* honoured
+        // from script. What script cannot do is create or overwrite an
+        // `HttpOnly` cookie: `is_http = false` makes `CookieJar::store` return
+        // `RejectedHttpOnly` (RFC 6265bis §5.7 steps 15 and 21).
+        let ctx = self.context();
+        let url = {
+            let doc = ctx.doc.borrow();
+            doc.url().cloned()
+        };
+        // A cookie-averse `Document` stores nothing — the standard's setter is a
+        // silent no-op there, and there is no jar key to compute without a URL.
+        let Some(url) = url else { return };
+        if is_cookie_averse_scheme(&url) {
+            return;
+        }
+        // The outcome is deliberately discarded: every refusal path of the
+        // storage algorithm — no `=`, a `__Secure-`/`__Host-` prefix violation,
+        // `SameSite=None` without `Secure`, `RejectedHttpOnly` — is silent in
+        // the standard, so surfacing it as a `JsError` would invent an error the
+        // page cannot get from a real browser.
+        let _ = ctx
+            .cookies
+            .set_cookie(value.as_bytes(), &url, false, SystemTime::now());
     }
 
     fn first_element_child(&self) -> Result<Option<Handle<Element>>, JsError> {
@@ -5505,6 +5589,19 @@ fn mutation_error(e: &tenta_core::Error) -> JsError {
 fn document_title_element(doc: &Document) -> Option<NodeId> {
     doc.descendants(doc.document_node())
         .find(|id| doc.tag(*id) == Some(atoms::TITLE) && doc.namespace(*id) == Some(atoms::NS_HTML))
+}
+
+/// Whether `url`'s scheme makes its document *cookie-averse*
+/// (<https://html.spec.whatwg.org/multipage/dom.html#cookie-averse-document-object>).
+///
+/// The standard defines a cookie-averse `Document` as one with a null browsing
+/// context, or whose URL's scheme is neither `http` nor `https`. This tree has
+/// no null-browsing-context case, so the whole rule reduces to the scheme test,
+/// written out rather than inherited from `canonical_host` — whose
+/// permissiveness with `file:` is a property of the network tier, not this
+/// member's contract.
+fn is_cookie_averse_scheme(url: &url::Url) -> bool {
+    !(url.scheme() == "http" || url.scheme() == "https")
 }
 
 /// Infra's "strip and collapse ASCII whitespace"

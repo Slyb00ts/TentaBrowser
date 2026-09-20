@@ -612,6 +612,7 @@ fn engine_config(config: &PageConfig) -> PageEngineConfig {
         script_timeout: Some(config.budgets.evaluate_time),
         locale: config.locale.clone(),
         timezone: None,
+        cookies: config.cookies.clone(),
     }
 }
 

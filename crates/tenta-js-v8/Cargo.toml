@@ -12,6 +12,12 @@ publish = false
 tenta-core = { workspace = true }
 tenta-dom = { workspace = true }
 tenta-js = { workspace = true, features = ["v8"] }
+# `document.cookie` hands the browsing context's cookie jar from the page
+# configuration to the binding layer. The backend only names the type in a field
+# and a parameter — it holds no cookie logic — and `tenta-net` sits below
+# `tenta-js-v8` in `xtask/src/deps.rs`'s foundation order, so the edge is
+# allowed.
+tenta-net = { workspace = true }
 v8 = { workspace = true }
 
 [dev-dependencies]

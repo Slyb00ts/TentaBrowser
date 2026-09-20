@@ -149,6 +149,13 @@ interface Document : Node {
   readonly attribute DOMString compatMode;
   readonly attribute USVString referrer;
 
+  // d-4b: `document.cookie` — the last framework-visible IDL gap. The
+  // getter and setter are the HTML Standard's cookie getter/setter
+  // (https://html.spec.whatwg.org/multipage/dom.html#dom-document-cookie),
+  // which delegate to RFC 6265bis's "cookie-string" and "receiving a
+  // set-cookie-string" with the non-HTTP API flag set.
+  attribute USVString cookie;
+
   readonly attribute Element? firstElementChild;
   readonly attribute Element? lastElementChild;
   readonly attribute unsigned long childElementCount;
