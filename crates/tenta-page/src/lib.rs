@@ -8,6 +8,9 @@ pub mod clock;
 pub mod document;
 pub mod error_page;
 pub mod event;
+// Private: the `tenta-net` driver behind the page's `fetch()` is installed into
+// the engine the page owns, not an API (`crates/tenta-page/src/fetch.rs`).
+mod fetch;
 pub mod fetch_policy;
 pub mod page;
 // Private: the runtime is page-thread-local state the page owns, not an API

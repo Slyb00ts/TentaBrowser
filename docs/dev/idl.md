@@ -593,8 +593,11 @@ Deliberate deviations in this slice, each with the slice that removes it:
   member. `fetch(url)`, `fetch(url, undefined)`, `fetch(url, null)` and
   `fetch(url, {})` are all the empty dictionary and all a `GET`. Silently
   dropping `{method: "POST"}` would send a different request than the page asked
-  for; `method`, `headers`, `body` and `signal` (with the `AbortSignal` slice)
-  each remove the refusal.
+  for. `method`, `headers` and `body` each remove the refusal. So does `signal`,
+  but it is not waiting on the interface — `AbortSignal` landed with `d-3`, and
+  what is missing is the plumbing: the driver would have to take a signal handle
+  and abort the request it is already running. That is its own slice
+  (`4a-abort`), not a consequence of `d-3`.
 - With no driver installed, `fetch` rejects with
   `TypeError: fetch is not available` instead of throwing or leaving the promise
   pending. A page that has loaded always has a driver once the `tenta-net`
@@ -611,6 +614,103 @@ Deliberate deviations in this slice, each with the slice that removes it:
 - A response's `url` and `redirected` are the driver's report; nothing here
   follows a redirect, and CORS, `Response.type` other than `basic`, and the
   forbidden request-header names are all absent.
+
+### The network driver behind `fetch()` (P2 slice 4a-1b)
+
+`crates/tenta-page/src/fetch.rs` holds `NetFetchDriver`, the one implementation
+of `tenta_js::fetch::FetchDriver` in the workspace. It lives in `tenta-page`
+because that is the only crate that can see `tenta-net`, the seam, the
+`SettleTracker` and `page::next_request_id` at once while keeping the
+dependency direction: a driver holds no engine, and neither `tenta-js` nor
+`tenta-js-v8` gains an edge to the network tier. `PageRuntime::create` builds
+one per navigation and installs it with `PageEngine::set_fetch_driver`, so a
+completion always names a resolver of the engine current when the page drains
+the table.
+
+A request maps to a `Fetch`-resource `tenta-net` `Request`: priority `Medium`,
+mode `Cors`, `initiator` set to the document URL (which supplies
+`Sec-Fetch-Site`, `Origin` and the default `Referer`), `first_party` from the
+document rather than the request URL, and the page's own `extra_headers`
+appended after the request's. `limits.total` is deliberately left unset so
+`ClientConfig::request_timeout` applies: there is no defensible per-request
+deadline here, because `Goto::timeout` is the navigation's and
+`settle.foreground_request_max` is the settle machine's *reclassification*
+bound, and using the latter would fail legitimately slow fetches. The task is
+bounded by the driver's `Drop` instead.
+
+Settlement depends on one ordering the driver owns: the completion is **pushed
+into `FetchCompletions` first, then `note_request_done`**. The push alone is
+invisible until a turn drains the table; the wake is what makes the loop take
+that turn, because `note_request_done` signals the notification the loop's
+`select!` parks on. Neither can be lost in between — the page thread is a
+single-threaded `LocalSet` whose `select!` is its only await point, so the task
+runs only while the loop is parked and `notify_one` leaves a permit behind.
+Removing the wake does not hang: the request stays registered until
+`record.started + foreground_request_max` (`crates/tenta-page/src/settle.rs:592`,
+five seconds for `SettleConfig::library()`), is reclassified as background, and
+the navigation reports `Settled { busy: true }` about five seconds later. That
+distinction is what the end-to-end test asserts on.
+
+Cross-origin is refused at **two** gates, and both are required:
+
+1. **Before anything is registered or sent**, in `start`. A URL that is not
+   same-origin (RFC 6454, `same_origin` in `tenta-net`, compared against
+   `FetchRequest.initiator` — the document — and never against
+   `FetchRequest.origin`, which is task provenance) becomes
+   `Err(FetchStartError)`, which the seam turns into a `TypeError` *rejection*:
+   no synchronous throw, no network, no settle registration.
+2. **On the final URL, before the body is read.** `Client::send` follows
+   redirects internally, so a same-origin URL can redirect off-origin and the
+   transport would then hand script a cross-origin body and header list. Gate 1
+   alone would leave that leak behind the refusal it performs.
+
+Neither gate is CORS, and there is no CORS or preflight code anywhere in the
+workspace, so a page can only fetch its own origin. Keeping the refusal
+engine-authored and stable means a page can branch on "the promise rejected
+with a `TypeError`" and not on this engine's internal names.
+
+Deliberate deviations in this slice, each with the slice that removes it:
+
+- Because the seam delivers head and body together, **a body that fails
+  mid-stream** — connection reset, `max_body_bytes` exceeded — **rejects the
+  whole `fetch()`**, whereas the standard resolves a `Response` whose `text()`
+  later rejects. Streaming `Response.body` (`d-5b`) removes this; the seam's
+  `body: Option<Vec<u8>>` is frozen until then.
+- Every transport failure rejects with one fixed message, `Failed to fetch`,
+  mirroring Fetch's own network error. The `NetError` detail
+  (`error.error_text()`, `error.message`) goes to `tracing` and never reaches
+  script: `net::ERR_*` is this project's event vocabulary, not a stable script
+  API.
+- A header that cannot go on the wire — reachable only through
+  `PageConfig::extra_headers`, since `RequestInit` is refused — is a *start*
+  refusal rather than a `Failed` outcome: the request cannot be built at all,
+  so there is nothing to send and nothing to wait for.
+- Response headers are passed through untouched. `insert_fetched_response`
+  already drops the forbidden names and the NUL/CR/LF values and corrects
+  null-body statuses, so a driver that filtered too would be a second, drifting
+  copy of the rule. `as_bytes()` is used, never `to_str()`, so an obs-text
+  header value survives rather than silently blanking.
+- There is no `AbortSignal`-driven cancellation. Cancellation exists only as
+  `Drop`, which aborts the in-flight handles.
+- There is no per-hop event for a script fetch.
+
+**Under `Settle::Load` a page's `fetch()` never completes, and this is
+product-visible.** `Settle::Load` is `Goto::default().wait_until`
+(`crates/tenta-page/src/page.rs:105`), and its machine is
+`event_state(self.load_fired)` (`crates/tenta-page/src/settle.rs:701`), which
+reads `Settled` purely from that flag and ignores open requests. So the loop
+returns the moment `load` fires, settling tears the engine and the driver down,
+`Drop` aborts the fetch, and the promise can never settle. Both in-tree callers
+name it explicitly — `crates/tentabrowser-cli/src/scrape.rs:519` and
+`crates/tenta-browser/src/context.rs:481` — but both open their pages with
+`PageOptions::tier1()`, so no script runs and the limitation is not reachable
+through them today. It is reachable through the library API, where
+`Goto::default()` is the default rather than a choice. **A caller that wants a
+page's `fetch` to land must ask for `Settle::NetworkIdle`.** `NetworkIdle`'s
+machine settles as soon as
+`load_fired && network_sources_empty() && tracked_tasks == 0`; it does not use
+the 500 ms `network_idle_window`, so the loop waits for the fetch rather than
+for a quiet period.
 
 ## Extended attributes
 

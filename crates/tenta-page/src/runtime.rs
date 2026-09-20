@@ -35,11 +35,12 @@ use tenta_dom::{SharedDocument, SharedSink};
 use tenta_html::{Encoding, Parser};
 use tenta_js::engine::{EngineClock, EngineWatchdog, PageEngine, PageEngineConfig, ScriptKind};
 use tenta_js::event_loop::ProvenanceSink;
-use tenta_js::fetch::FetchCompletions;
+use tenta_js::fetch::{FetchCompletions, FetchDriver};
 use tenta_net::policy::cookies::Site;
 use tenta_net::{Client, NetError, Request, ResourceType};
 use url::Url;
 
+use crate::fetch::NetFetchDriver;
 use crate::page::{PageConfig, next_request_id};
 use crate::settle::{RequestClass, SettleTracker};
 
@@ -202,7 +203,11 @@ impl PageRuntime {
         // open (`docs/spec/02-architecture.md` §5.1).
         engine.set_timer_rule(engine_config.timer_rule);
         let bridge = Rc::new(SettleBridge::new());
-        bridge.attach(tracker);
+        // A clone, not the handle itself: `attach` consumes its argument, and
+        // the fetch driver below is registered against this same settle call —
+        // it is the machine the requests it issues are counted in, and the
+        // notification the settle loop parks on is the one it wakes.
+        bridge.attach(Rc::clone(&tracker));
         engine.set_provenance_sink(Rc::clone(&bridge) as Rc<dyn ProvenanceSink>);
         // Taken from the engine as built, so the first turn does not read the
         // engine's own construction-time collection as a change that owes a
@@ -220,10 +225,17 @@ impl PageRuntime {
         }
         let script_timeout = engine_config.script_timeout.unwrap_or_default();
         // The table belongs to the navigation and the driver gets a handle to
-        // it. This slice installs no driver — that is 4a-1b's — so the table
-        // stays empty and `turn`'s drain costs nothing, while `fetch` rejects
-        // because a page with no driver cannot answer one.
+        // it, so a completion the driver leaves behind is drained by this
+        // navigation's `turn` and never by another's. The driver is installed
+        // before this runtime is reachable, and `create` runs before the paused
+        // script is run, so a driver exists before any script can call `fetch`.
         let fetches = Rc::new(FetchCompletions::new());
+        let driver = Rc::new(NetFetchDriver::new(
+            config,
+            Rc::clone(&tracker),
+            Rc::clone(&fetches),
+        ));
+        engine.set_fetch_driver(driver as Rc<dyn FetchDriver>);
         Ok(PageRuntime {
             page,
             engine,
