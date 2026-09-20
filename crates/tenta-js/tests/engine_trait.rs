@@ -16,6 +16,7 @@ use tenta_js::engine::{
 };
 use tenta_js::event_loop::ProvenanceSink;
 use tenta_js::fetch::{FetchCompletion, FetchDriver, FetchOutcome, FetchRequest, FetchStartError};
+use tenta_js::xhr::{XhrCompletion, XhrDriver};
 
 /// Records what it was asked to do, so a test can assert the page's calls
 /// arrive with the arguments the page meant.
@@ -27,6 +28,8 @@ struct Recorder {
     terminated: bool,
     /// How many completions the page handed the engine to settle.
     settled: usize,
+    /// How many the page handed over to dispatch, and at which targets.
+    settled_xhr: Vec<u64>,
 }
 
 /// The factory is shared across page threads while the engines it builds stay
@@ -80,6 +83,15 @@ impl PageEngine for StubEngine {
         self.recorder.lock().unwrap().settled += completions.len();
     }
 
+    fn set_xhr_driver(&mut self, _driver: Rc<dyn XhrDriver>) {}
+
+    fn settle_xhr(&mut self, completions: Vec<XhrCompletion>) {
+        let mut recorder = self.recorder.lock().unwrap();
+        for completion in completions {
+            recorder.settled_xhr.push(completion.target);
+        }
+    }
+
     fn next_wakeup(&self) -> Option<Duration> {
         Some(Duration::ZERO)
     }
@@ -126,6 +138,16 @@ struct StubDriver;
 
 impl FetchDriver for StubDriver {
     fn start(&self, _request: FetchRequest, _resolver: u64) -> Result<(), FetchStartError> {
+        Ok(())
+    }
+}
+
+/// The XHR seam is reachable the same way: a driver is installed through the
+/// trait object and a batch of completions is handed over to dispatch.
+struct StubXhrDriver;
+
+impl XhrDriver for StubXhrDriver {
+    fn start(&self, _request: FetchRequest, _target: u64) -> Result<(), FetchStartError> {
         Ok(())
     }
 }
@@ -208,6 +230,19 @@ fn a_page_drives_an_engine_through_the_trait_object_alone() {
         },
     ]);
     assert_eq!(recorder.lock().unwrap().settled, 2);
+
+    engine.set_xhr_driver(Rc::new(StubXhrDriver));
+    engine.settle_xhr(vec![
+        XhrCompletion {
+            target: 0x11,
+            outcome: FetchOutcome::Failed("stub".to_string()),
+        },
+        XhrCompletion {
+            target: 0x22,
+            outcome: FetchOutcome::Failed("stub".to_string()),
+        },
+    ]);
+    assert_eq!(recorder.lock().unwrap().settled_xhr, vec![0x11, 0x22]);
 
     let watchdog = engine.watchdog().expect("the stub can be interrupted");
     watchdog.terminate();

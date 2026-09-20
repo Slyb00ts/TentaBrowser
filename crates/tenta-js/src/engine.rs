@@ -45,6 +45,7 @@ use tenta_net::CookieJar;
 use crate::bindings::host::SharedDocument;
 use crate::event_loop::ProvenanceSink;
 use crate::fetch::{FetchCompletion, FetchDriver};
+use crate::xhr::{XhrCompletion, XhrDriver};
 
 /// How a script was delivered to the document.
 ///
@@ -172,6 +173,33 @@ pub trait PageEngine {
     /// (`tenta_page::runtime`). An empty batch settles nothing and must not be
     /// entered at all.
     fn settle_fetches(&mut self, completions: Vec<FetchCompletion>);
+
+    /// Points the engine's `XMLHttpRequest` objects at the driver that answers
+    /// their requests, replacing any driver installed before.
+    ///
+    /// The same per-navigation contract as [`PageEngine::set_fetch_driver`], for
+    /// the same reason: a completion belongs to the document that is current
+    /// when it is drained. The XHR objects themselves land in b-5; this is the
+    /// seam they will reach the driver through.
+    fn set_xhr_driver(&mut self, driver: Rc<dyn XhrDriver>);
+
+    /// Delivers the answers this batch of completions carries, as one entry:
+    /// each completion is dispatched at the event target it names.
+    ///
+    /// A sibling of [`PageEngine::settle_fetches`] rather than a shape of it,
+    /// because an XHR completion is an *event dispatch* and a fetch completion
+    /// is a *promise settlement* — the two differ in what the engine does, not
+    /// only in what it is told. The batch is passed in rather than drained from
+    /// a table the engine owns for the same reason: the table is the page's, and
+    /// it is the page's turn that makes a completion visible
+    /// (`tenta_page::runtime`). An empty batch settles nothing and must not be
+    /// entered at all.
+    ///
+    /// This entry runs with **no V8 callback on the stack** — it is the first
+    /// engine entry that dispatches a DOM event from native code — so a backend
+    /// has to bootstrap its scope the way a plain entry does rather than the way
+    /// a binding call does.
+    fn settle_xhr(&mut self, completions: Vec<XhrCompletion>);
 
     /// How long until the engine next has work of its own to do, as a delay
     /// from now. `None` means nothing is scheduled; `Some(Duration::ZERO)`

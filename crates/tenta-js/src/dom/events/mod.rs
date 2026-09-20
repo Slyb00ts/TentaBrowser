@@ -26,7 +26,8 @@ use tenta_core::NodeRef;
 
 use crate::bindings::JsError;
 use crate::bindings::host::{
-    HostContext, HostKey, encode_event, encode_host, encode_node, encode_window,
+    HostContext, HostKey, TAG_HOST, TAG_NODE, TAG_WINDOW, decode, encode_event, encode_host,
+    encode_node, encode_window,
 };
 
 #[cfg(test)]
@@ -669,6 +670,32 @@ impl DispatchTarget {
         DispatchTarget {
             target: TargetKey::Host(key),
             bits: encode_host(key),
+        }
+    }
+
+    /// The dispatch target a handle's bits name, or `None` for a handle that is
+    /// not an event target (a `NodeList`, an `Event`, a `URL`, …).
+    ///
+    /// The inverse of the three constructors above, for a caller that holds bits
+    /// and no handle: an XHR completion names its target as opaque bits
+    /// ([`crate::xhr::XhrCompletion::target`]), because the driver that produced
+    /// it cannot name a handle type. Re-encoding what this decodes gives the
+    /// input back, which is what keeps `event.target` the *same* object the page
+    /// holds — the world memoises one wrapper per handle.
+    ///
+    /// A node's generation survives only as the 16 bits `encode_node` packs, so
+    /// a reference decoded from bits is the one that was encoded; nothing here
+    /// widens the handle format (see the `pack` TODO in `bindings::host`).
+    pub fn from_bits(bits: u64) -> Option<DispatchTarget> {
+        let decoded = decode(bits);
+        match decoded.tag {
+            TAG_NODE => Some(DispatchTarget::node(NodeRef::new(
+                decoded.node_id,
+                u32::from(decoded.generation),
+            ))),
+            TAG_WINDOW => Some(DispatchTarget::window()),
+            TAG_HOST => Some(DispatchTarget::host(decoded.host_key())),
+            _ => None,
         }
     }
 }

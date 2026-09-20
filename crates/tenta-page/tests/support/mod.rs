@@ -26,6 +26,7 @@ use tenta_js::engine::{
 };
 use tenta_js::event_loop::{Clock, EventLoop, ProvenanceSink, Scheduler};
 use tenta_js::fetch::{FetchCompletion, FetchDriver};
+use tenta_js::xhr::{XhrCompletion, XhrDriver};
 use tenta_net::hooks::{BoxFuture, FulfilledResponse, Hooks, Interception, Interceptor};
 use tenta_net::policy::cookies::CookieJar;
 use tenta_net::policy::private_network::DestinationPolicy;
@@ -463,6 +464,20 @@ impl PageEngine for StubEngine {
         assert!(
             completions.is_empty(),
             "the stub page never starts a fetch, so no completion can arrive"
+        );
+    }
+
+    /// Same as [`Self::set_fetch_driver`]: nothing installs an XHR driver, so
+    /// nothing can complete a request.
+    fn set_xhr_driver(&mut self, _driver: Rc<dyn XhrDriver>) {}
+
+    /// Nothing installs an XHR driver, so the page's table is always empty and a
+    /// batch reaching here would mean the drain ran for a page that made no
+    /// request.
+    fn settle_xhr(&mut self, completions: Vec<XhrCompletion>) {
+        assert!(
+            completions.is_empty(),
+            "the stub page never starts an XHR, so no completion can arrive"
         );
     }
 

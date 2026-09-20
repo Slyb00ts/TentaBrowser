@@ -36,6 +36,7 @@ use tenta_html::{Encoding, Parser};
 use tenta_js::engine::{EngineClock, EngineWatchdog, PageEngine, PageEngineConfig, ScriptKind};
 use tenta_js::event_loop::ProvenanceSink;
 use tenta_js::fetch::{FetchCompletions, FetchDriver};
+use tenta_js::xhr::XhrCompletions;
 use tenta_net::policy::cookies::Site;
 use tenta_net::{Client, NetError, Request, ResourceType};
 use url::Url;
@@ -181,6 +182,15 @@ pub(crate) struct PageRuntime {
     /// it (`tenta_js::fetch::FetchDriver`), so it is shared rather than owned
     /// outright.
     fetches: Rc<FetchCompletions>,
+    /// The completions this navigation's XHR driver has left for the page to
+    /// dispatch.
+    ///
+    /// One table per navigation, for the same reason [`Self::fetches`] is: a
+    /// completion names an event target of the document that is current, and a
+    /// table that outlived its engine would hold a handle no engine can
+    /// dispatch at. The driver will hold a handle to it
+    /// (`tenta_js::xhr::XhrDriver`), so it is shared rather than owned outright.
+    xhrs: Rc<XhrCompletions>,
 }
 
 impl PageRuntime {
@@ -236,6 +246,13 @@ impl PageRuntime {
             Rc::clone(&fetches),
         ));
         engine.set_fetch_driver(driver as Rc<dyn FetchDriver>);
+        // The XHR table is created here and handed to the driver that will fill
+        // it, but nothing installs that driver in this slice: the only candidate
+        // is `NetFetchDriver`, which gains its `XhrDriver` impl — and this
+        // runtime the `set_xhr_driver` call — with the XHR route itself (b-6).
+        // Until then the table stays empty, and an empty table costs no engine
+        // entry (`turn`).
+        let xhrs = Rc::new(XhrCompletions::new());
         Ok(PageRuntime {
             page,
             engine,
@@ -249,6 +266,7 @@ impl PageRuntime {
             script_timeout,
             script_budget,
             fetches,
+            xhrs,
         })
     }
 
@@ -294,6 +312,18 @@ impl PageRuntime {
         let completions = self.fetches.take_all();
         if !completions.is_empty() {
             self.bounded("fetch", |engine| engine.settle_fetches(completions));
+        }
+        // The XHR drain sits immediately after the fetch drain and before the
+        // timers, for the same reason the fetch drain does: it is the task a
+        // completion belongs to, and `pump_due_timers`' leading microtask
+        // checkpoint is what pays the debt the dispatch creates, in the same
+        // turn. A `load` handler that queues a reaction must not wait for an
+        // unrelated timer to come due. One entry for the whole batch — one
+        // watchdog arm, one native-dispatch guard, one stray-termination clear —
+        // and an empty table costs no entry at all.
+        let xhr_completions = self.xhrs.take_all();
+        if !xhr_completions.is_empty() {
+            self.bounded("xhr", |engine| engine.settle_xhr(xhr_completions));
         }
         // Both entries below run callback script the engine does not bound
         // itself, so each is armed around its call (`PageRuntime::bounded`).
@@ -981,6 +1011,7 @@ mod tests {
     use tenta_dom::Document;
     use tenta_js::engine::{EngineWatchdog, ScriptError, ScriptKind};
     use tenta_js::fetch::{FetchCompletion, FetchDriver, FetchOutcome};
+    use tenta_js::xhr::{XhrCompletion, XhrDriver};
 
     /// An engine that records whether the page trimmed it and does nothing
     /// else: what the guard under test decides is whether the page enters the
@@ -997,6 +1028,13 @@ mod tests {
         /// drained two completions in one entry" from "the page made two
         /// entries".
         settled: Rc<RefCell<Vec<Vec<FetchCompletion>>>>,
+        /// The same for the XHR drain: one entry per `settle_xhr` call, so the
+        /// drain's position and its one-entry-per-batch shape are observable.
+        settled_xhr: Rc<RefCell<Vec<Vec<XhrCompletion>>>>,
+        /// The engine entries of each turn, in call order, so the drain's
+        /// position relative to the fetch drain and the timer pump is pinned
+        /// rather than merely commented.
+        entries: Rc<RefCell<Vec<&'static str>>>,
     }
 
     impl PageEngine for RecordingEngine {
@@ -1015,7 +1053,15 @@ mod tests {
         fn set_fetch_driver(&mut self, _driver: Rc<dyn FetchDriver>) {}
 
         fn settle_fetches(&mut self, completions: Vec<FetchCompletion>) {
+            self.entries.borrow_mut().push("fetch");
             self.settled.borrow_mut().push(completions);
+        }
+
+        fn set_xhr_driver(&mut self, _driver: Rc<dyn XhrDriver>) {}
+
+        fn settle_xhr(&mut self, completions: Vec<XhrCompletion>) {
+            self.entries.borrow_mut().push("xhr");
+            self.settled_xhr.borrow_mut().push(completions);
         }
 
         fn next_wakeup(&self) -> Option<Duration> {
@@ -1023,6 +1069,7 @@ mod tests {
         }
 
         fn pump_due_timers(&mut self, _max_tasks: usize) -> usize {
+            self.entries.borrow_mut().push("timers");
             0
         }
 
@@ -1067,9 +1114,13 @@ mod tests {
         trims: Rc<Cell<usize>>,
         epoch: Rc<Cell<u64>>,
         settled: Rc<RefCell<Vec<Vec<FetchCompletion>>>>,
+        settled_xhr: Rc<RefCell<Vec<Vec<XhrCompletion>>>>,
         /// The runtime's own table, which is the handle a driver is given. A
         /// test pushes into it in the driver's place.
         fetches: Rc<FetchCompletions>,
+        /// The runtime's XHR table, for the same reason.
+        xhrs: Rc<XhrCompletions>,
+        entries: Rc<RefCell<Vec<&'static str>>>,
     }
 
     impl Harness {
@@ -1078,12 +1129,17 @@ mod tests {
             let trims = Rc::new(Cell::new(0));
             let epoch = Rc::new(Cell::new(0));
             let settled = Rc::new(RefCell::new(Vec::new()));
+            let settled_xhr = Rc::new(RefCell::new(Vec::new()));
             let fetches = Rc::new(FetchCompletions::new());
+            let xhrs = Rc::new(XhrCompletions::new());
+            let entries = Rc::new(RefCell::new(Vec::new()));
             let engine = RecordingEngine {
                 document: Rc::clone(&document),
                 trims: Rc::clone(&trims),
                 epoch: Rc::clone(&epoch),
                 settled: Rc::clone(&settled),
+                settled_xhr: Rc::clone(&settled_xhr),
+                entries: Rc::clone(&entries),
             };
             let runtime = PageRuntime {
                 page: PageId(1),
@@ -1096,13 +1152,17 @@ mod tests {
                 script_timeout: Duration::from_secs(30),
                 script_budget: Arc::new(NullBudget),
                 fetches: Rc::clone(&fetches),
+                xhrs: Rc::clone(&xhrs),
             };
             Harness {
                 runtime,
                 trims,
                 epoch,
                 settled,
+                settled_xhr,
                 fetches,
+                xhrs,
+                entries,
             }
         }
 
@@ -1114,6 +1174,12 @@ mod tests {
                 .push(resolver, FetchOutcome::Failed(message.to_owned()));
         }
 
+        /// Records an XHR completion the way a driver would.
+        fn complete_xhr(&self, target: u64, message: &str) {
+            self.xhrs
+                .push(target, FetchOutcome::Failed(message.to_owned()));
+        }
+
         /// The resolvers of every completion the page has handed the engine, one
         /// inner list per entry.
         fn batches(&self) -> Vec<Vec<u64>> {
@@ -1121,6 +1187,16 @@ mod tests {
                 .borrow()
                 .iter()
                 .map(|batch| batch.iter().map(|done| done.resolver).collect())
+                .collect()
+        }
+
+        /// The targets of every XHR completion the page has handed the engine,
+        /// one inner list per entry.
+        fn xhr_batches(&self) -> Vec<Vec<u64>> {
+            self.settled_xhr
+                .borrow()
+                .iter()
+                .map(|batch| batch.iter().map(|done| done.target).collect())
                 .collect()
         }
     }
@@ -1231,5 +1307,60 @@ mod tests {
 
         assert!(harness.runtime.turn(1).is_none());
         assert_eq!(harness.batches(), vec![vec![1], vec![2]]);
+    }
+
+    /// One XHR drain is one engine entry, however many completions are waiting:
+    /// the page pays one watchdog arm and one native-dispatch guard for the
+    /// batch, not one each.
+    #[test]
+    fn a_turn_drains_the_xhr_table_into_one_batch() {
+        let mut harness = Harness::new(true);
+        harness.complete_xhr(0x11, "first");
+        harness.complete_xhr(0x22, "second");
+
+        assert!(harness.runtime.turn(1).is_none());
+        assert_eq!(
+            harness.xhr_batches(),
+            vec![vec![0x11, 0x22]],
+            "one entry, in push order"
+        );
+        assert!(
+            harness.xhrs.take_all().is_empty(),
+            "the table is drained, not read"
+        );
+
+        assert!(harness.runtime.turn(1).is_none());
+        assert_eq!(
+            harness.xhr_batches(),
+            vec![vec![0x11, 0x22]],
+            "a turn with nothing waiting makes no entry"
+        );
+    }
+
+    /// The XHR drain sits between the fetch drain and the timer pump — the
+    /// position the microtask-debt argument requires — and is skipped entirely
+    /// when its table is empty, so a page that made no XHR request pays no
+    /// engine entry for one.
+    #[test]
+    fn an_empty_xhr_table_costs_no_engine_entry_and_the_drain_sits_before_the_timers() {
+        let mut harness = Harness::new(true);
+        harness.complete(7, "fetch");
+        harness.complete_xhr(0x33, "xhr");
+
+        assert!(harness.runtime.turn(1).is_none());
+        assert_eq!(
+            harness.entries.borrow().as_slice(),
+            ["fetch", "xhr", "timers"],
+            "the XHR drain is the task its completion belongs to, before the \
+             checkpoint the timer pump runs"
+        );
+
+        harness.entries.borrow_mut().clear();
+        assert!(harness.runtime.turn(1).is_none());
+        assert_eq!(
+            harness.entries.borrow().as_slice(),
+            ["timers"],
+            "settle_xhr was not called for an empty table"
+        );
     }
 }

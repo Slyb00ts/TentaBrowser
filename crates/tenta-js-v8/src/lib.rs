@@ -26,10 +26,11 @@ use tenta_js::bindings::host::{
     HostContext, HostObject, SharedContext, SharedDocument, encode_host, insert_fetched_response,
 };
 use tenta_js::bindings::{Handle, handle_to_v8};
-use tenta_js::dom::events::ScriptHost;
+use tenta_js::dom::events::{DispatchTarget, EventKind, EventRecord, ScriptHost, dispatch_at};
 use tenta_js::engine::ScriptErrorKind;
 use tenta_js::event_loop::{Clock, EventLoop, FiringRelease, MonoTime};
 use tenta_js::fetch::{FetchCompletion, FetchOutcome};
+use tenta_js::xhr::XhrCompletion;
 use tenta_net::CookieJar;
 
 use host::{HostState, ReadyHandler};
@@ -1141,6 +1142,91 @@ impl Engine {
         }
         if queued {
             self.host.microtasks_pending.set(true);
+        }
+    }
+
+    /// Delivers a batch of XHR completions: for each, the event its outcome
+    /// names is dispatched at the event target the completion carries.
+    ///
+    /// **This is the codebase's first native-initiated DOM dispatch**, and the
+    /// reason the entry is not simply [`Self::settle_fetches`] with a different
+    /// payload. Every existing `dispatch_at` caller runs inside a live DOM
+    /// binding call, so the listener invocation behind it bootstraps its scope
+    /// with a `v8::CallbackScope` — legal only from a callback. This entry runs
+    /// from the page's turn loop with **no V8 callback anywhere on the stack**,
+    /// so it marks itself through `HostState::enter_native_dispatch` and
+    /// [`V8ScriptHost::with_context`](script_host::V8ScriptHost) opens a plain
+    /// `HandleScope` instead. The guard covers the whole entry — the record
+    /// building below and every dispatch in the batch — because a half-set flag
+    /// would make the two scope choices disagree.
+    ///
+    /// Two points are decisions rather than style:
+    ///
+    /// - An empty batch returns before anything else, exactly as
+    ///   [`Self::settle_fetches`] does: an entry that delivers nothing must not
+    ///   arm the watchdog, charge the script budget or clear a termination.
+    /// - The `outcome` is mapped here and nowhere else, so it is the one place
+    ///   the response-vs-failure decision is made: a completed response is a
+    ///   `load` event and anything else is an `error`. The two are
+    ///   `ProgressEvent`s (the standard's four XHR progress events are), with the
+    ///   init defaults — the loaded/total accounting belongs to the XHR route
+    ///   that produces the body (b-6).
+    pub fn settle_xhr(&mut self, completions: Vec<XhrCompletion>) {
+        if completions.is_empty() {
+            return;
+        }
+        // A completion can arrive after a watchdog terminated the script that
+        // started the request, and the dispatch below runs script, so this entry
+        // starts with nothing pending, like every other way in.
+        self.discard_stray_termination();
+        let Some(dom) = &self.dom else {
+            return;
+        };
+        // Held for the whole batch: `with_context` reads it on every dispatch,
+        // and the guard restores whatever it found when the entry returns — or
+        // unwinds.
+        let _native = self.host.enter_native_dispatch();
+        for completion in completions {
+            // A handle that does not name an event target is skipped rather than
+            // aborting the batch: the completions after it did nothing wrong.
+            // A target whose record has since been reclaimed is not a skip here
+            // — its key simply matches no listener, and its wrapper is never
+            // built.
+            let Some(target) = DispatchTarget::from_bits(completion.target) else {
+                continue;
+            };
+            let type_ = match completion.outcome {
+                FetchOutcome::Response(_) => "load",
+                FetchOutcome::Failed(_) => "error",
+            };
+            let mut record = EventRecord::new(
+                type_.to_owned(),
+                EventKind::Progress {
+                    length_computable: false,
+                    loaded: 0.0,
+                    total: 0.0,
+                },
+                dom.ctx.time_stamp(),
+            );
+            record.flags.initialized = true;
+            let event_key = dom.ctx.events.borrow_mut().insert(record);
+            // `trusted` is true: every completion reaching this entry comes from
+            // a driver, never from script, so the event is one the user agent
+            // fired — the same call `AbortSignal::abort` makes for its `abort`.
+            // The untrusted kind is a script-synthesized event, `element.click()`
+            // or `dispatchEvent(...)`.
+            let _ = dispatch_at(&dom.ctx, target, event_key, true);
+            // Remove the transient record unless a listener made a wrapper for it
+            // (in which case the world's dead-event sweep owns its removal).
+            let orphaned = dom
+                .ctx
+                .events
+                .borrow()
+                .get(event_key)
+                .is_some_and(|record| !record.has_wrapper);
+            if orphaned {
+                dom.ctx.events.borrow_mut().remove(event_key);
+            }
         }
     }
 

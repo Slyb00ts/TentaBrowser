@@ -33,6 +33,7 @@ use tenta_js::bindings::{
 use tenta_js::dom::events::{HostValue, PromiseOutcome, PromiseRef, ScriptHost};
 use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId};
 use tenta_js::fetch::{FetchDriver, FetchRequest};
+use tenta_js::xhr::XhrDriver;
 use tenta_net::CookieJar;
 
 /// Timer functions whose deadline has passed, in fire order, waiting for the
@@ -103,6 +104,24 @@ pub struct HostState {
     /// the DOM context is built during `Engine::build`, before any setter could
     /// run.
     pub cookies: CookieJar,
+    /// The driver the page's `XMLHttpRequest` objects hand their requests to, or
+    /// `None` before one is installed. It lives here for the same reason
+    /// [`Self::fetch_driver`] does: the XHR surface reaches the world only
+    /// through the context slot ([`host_state`]), and never through the engine.
+    pub xhr_driver: RefCell<Option<Rc<dyn XhrDriver>>>,
+    /// Set while an engine entry is dispatching a DOM event with **no V8
+    /// callback anywhere on the stack**.
+    ///
+    /// Every other dispatch in this tree is reached from a live binding call, so
+    /// [`V8ScriptHost::with_context`](crate::script_host::V8ScriptHost) can
+    /// bootstrap a `v8::CallbackScope` — the one sanctioned use of that type. A
+    /// native completion drained by the engine's turn loop has no callback to
+    /// bootstrap from, so the entry that drains one sets this and
+    /// `with_context` opens a plain `HandleScope` instead. It is set for the
+    /// *whole* entry, not per dispatch, because `with_context` is also how the
+    /// entry builds and throws values; a half-set flag would make the two
+    /// disagree.
+    pub native_dispatch: std::cell::Cell<bool>,
 }
 
 impl HostState {
@@ -117,6 +136,8 @@ impl HostState {
             microtasks_pending: std::cell::Cell::new(false),
             fetch_driver: RefCell::new(None),
             cookies,
+            xhr_driver: RefCell::new(None),
+            native_dispatch: std::cell::Cell::new(false),
         })
     }
 
@@ -150,6 +171,49 @@ impl HostState {
     /// for why a page may not have installed one yet.
     pub fn fetch_driver(&self) -> Option<Rc<dyn FetchDriver>> {
         self.fetch_driver.borrow().clone()
+    }
+
+    /// Installs the driver the page's `XMLHttpRequest` objects hand their
+    /// requests to, replacing any driver installed before.
+    ///
+    /// One driver per navigation, for the same reason
+    /// [`Self::set_fetch_driver`] takes one: the completions it leaves behind
+    /// belong to the document that is current when they are drained
+    /// (`tenta_js::engine::PageEngine::set_xhr_driver`).
+    pub fn set_xhr_driver(&self, driver: Rc<dyn XhrDriver>) {
+        *self.xhr_driver.borrow_mut() = Some(driver);
+    }
+
+    /// Marks the start of an engine entry that runs with no V8 callback on the
+    /// stack, so [`V8ScriptHost::with_context`](crate::script_host::V8ScriptHost)
+    /// bootstraps a plain `HandleScope`. Pair by dropping the guard.
+    ///
+    /// The guard restores the flag it found rather than clearing it, so an
+    /// entry nested inside another cannot turn the outer one's scope back into
+    /// the callback path on the way out.
+    pub fn enter_native_dispatch(&self) -> NativeDispatchGuard<'_> {
+        NativeDispatchGuard {
+            flag: &self.native_dispatch,
+            previous: self.native_dispatch.replace(true),
+        }
+    }
+}
+
+/// The RAII half of [`HostState::enter_native_dispatch`].
+///
+/// A guard rather than a bare `set`, because a body that returns early — or
+/// unwinds — with the flag still set would put every later `with_context` on the
+/// plain path, including one reached from a live callback. The flag has to
+/// describe the stack it is on, so it is restored on the way out of the entry
+/// that set it.
+pub struct NativeDispatchGuard<'a> {
+    flag: &'a std::cell::Cell<bool>,
+    previous: bool,
+}
+
+impl Drop for NativeDispatchGuard<'_> {
+    fn drop(&mut self) {
+        self.flag.set(self.previous);
     }
 }
 

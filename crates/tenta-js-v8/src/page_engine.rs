@@ -31,6 +31,7 @@ use tenta_js::engine::{
 };
 use tenta_js::event_loop::{Clock, MonoTime, ProvenanceSink};
 use tenta_js::fetch::{FetchCompletion, FetchDriver};
+use tenta_js::xhr::{XhrCompletion, XhrDriver};
 
 use crate::{Engine, world};
 
@@ -147,6 +148,24 @@ impl PageEngine for Engine {
     /// default cannot shadow it.
     fn settle_fetches(&mut self, completions: Vec<FetchCompletion>) {
         Engine::settle_fetches(self, completions);
+    }
+
+    /// Installs the driver the page's XHR objects hand their requests to.
+    ///
+    /// Stored in a slot on this engine's [`HostState`], like the `fetch` driver
+    /// and for the same reason: the XHR surface reaches the world through the
+    /// context slot, not through the engine. See
+    /// [`crate::host::HostState::set_xhr_driver`].
+    ///
+    /// [`HostState`]: crate::host::HostState
+    fn set_xhr_driver(&mut self, driver: Rc<dyn XhrDriver>) {
+        self.host.set_xhr_driver(driver);
+    }
+
+    /// Named explicitly so the inherent method is what runs and a later trait
+    /// default cannot shadow it.
+    fn settle_xhr(&mut self, completions: Vec<XhrCompletion>) {
+        Engine::settle_xhr(self, completions);
     }
 
     fn next_wakeup(&self) -> Option<Duration> {
