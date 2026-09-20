@@ -25,7 +25,9 @@ use std::collections::HashMap;
 use tenta_core::NodeRef;
 
 use crate::bindings::JsError;
-use crate::bindings::host::{HostContext, encode_event, encode_node, encode_window};
+use crate::bindings::host::{
+    HostContext, HostKey, encode_event, encode_host, encode_node, encode_window,
+};
 
 #[cfg(test)]
 mod tests;
@@ -61,6 +63,54 @@ pub trait ScriptHost {
     /// Drops one owned reference to a stored value (a callback, or a
     /// `CustomEvent` detail).
     fn release_value(&self, bits: u64);
+
+    /// Interns a value the engine has to build and returns the bits that stand
+    /// for it, or `None` when this world cannot build one.
+    ///
+    /// The host owns records whose members hand JavaScript values back, and two
+    /// of those values have no representation to hand back from the host side:
+    /// `undefined` is not one of the prelude's sentinels (only `null` is), and a
+    /// `DOMException` exists only once a constructor call on the context's
+    /// global has built it. Both are built here, behind the same boundary the
+    /// dispatcher already uses to run a listener.
+    ///
+    /// # Ownership
+    ///
+    /// The returned bits carry one stored reference, exactly as
+    /// `WrapperWorld::store_value` returns them: the caller owns it and must
+    /// give it back through [`Self::release_value`] when the record that holds
+    /// it is freed — except for the world-wide `undefined`, which the
+    /// implementation is allowed to cache and owns itself, so that every unset
+    /// `any` reads back as the same value.
+    fn build_value(&self, value: HostValue<'_>) -> Option<u64>;
+
+    /// Throws the value at `bits` in the script context that is on the stack, so
+    /// the exception propagates out of the binding call that asked for it.
+    ///
+    /// A no-op when the value is gone or no context is entered. This is the only
+    /// way a binding can raise a value that is *not* a fresh `JsError`: WebIDL
+    /// says `AbortSignal.throwIfAborted()` throws the signal's abort reason, and
+    /// the reason is an arbitrary value the page stored — including one the page
+    /// holds an identity for, which `assert_throws_exactly` compares by
+    /// identity.
+    fn throw_value(&self, bits: u64);
+}
+
+/// A JavaScript value the host needs the engine to build, because the host
+/// holds no isolate of its own (`docs/spec/05-javascript.md` §3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostValue<'a> {
+    /// The JavaScript `undefined`, interned once per world so every read of an
+    /// unset `any` is the same value.
+    Undefined,
+    /// A fresh `DOMException` built as `new DOMException(message, name)` from
+    /// the context's global object.
+    DomException {
+        /// The `DOMException.name` of the new object, e.g. `"AbortError"`.
+        name: &'a str,
+        /// The `DOMException.message` of the new object.
+        message: &'a str,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -70,7 +120,7 @@ pub trait ScriptHost {
 /// A key into a [`GenSlab`]: a slot index plus the generation the slot had when
 /// the key was minted. A key whose generation no longer matches its slot is
 /// stale and resolves to `None`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GenKey {
     /// Index of the slot.
     pub index: u32,
@@ -365,6 +415,20 @@ struct TargetListeners {
 pub enum TargetKey {
     Node(NodeRef),
     Window,
+    /// A host object that is an `EventTarget` and is neither a node nor the
+    /// window: today only an `AbortSignal`.
+    ///
+    /// It is keyed by its [`HostKey`], generation included, because that is the
+    /// only identity such an object has — it is not in the tree, so it has no
+    /// [`NodeRef`]. Keying it by anything coarser would be wrong rather than
+    /// merely imprecise: a `URL`, a `Headers` and an `AbortSignal` all share the
+    /// `TAG_HOST` handle tag, so a table keyed by the tag — or by the interface
+    /// name its record reports — would let a listener registered on one signal
+    /// fire for another. The generation matters for the same reason it does on a
+    /// node: the slab reuses a freed slot, and a signal that took a recycled
+    /// slot must not inherit the listeners of the signal that used to live
+    /// there.
+    Host(HostKey),
 }
 
 impl From<NodeRef> for TargetKey {
@@ -405,6 +469,20 @@ impl DispatchTarget {
         DispatchTarget {
             target: TargetKey::Window,
             bits: encode_window(),
+        }
+    }
+
+    /// Dispatches at the host object whose record key is `key` — an
+    /// `AbortSignal`.
+    ///
+    /// The bits are the record's own tagged handle, which is exactly what
+    /// `controller.signal` handed script: the world memoises one wrapper per
+    /// handle, so `event.target` resolves back to the *same* object the page
+    /// holds, which is what the WPT `abort` event test compares.
+    pub fn host(key: HostKey) -> DispatchTarget {
+        DispatchTarget {
+            target: TargetKey::Host(key),
+            bits: encode_host(key),
         }
     }
 }

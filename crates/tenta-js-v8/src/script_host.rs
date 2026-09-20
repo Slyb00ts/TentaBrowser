@@ -16,11 +16,11 @@
 //! calls (`set_wrapper_world` sets it once; `handle_to_v8` removes and restores
 //! it around each use), so `handle_to_v8`/`value_to_v8` resolve here.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use tenta_js::bindings::{Event, EventTarget, Handle, handle_to_v8, value_to_v8};
-use tenta_js::dom::events::{CallbackRef, ScriptHost};
+use tenta_js::dom::events::{CallbackRef, HostValue, ScriptHost};
 
 use crate::host::HostState;
 use crate::world::WorldState;
@@ -39,6 +39,14 @@ pub struct V8ScriptHost {
     state: Rc<RefCell<WorldState>>,
     /// The host state, for the script-activation depth.
     host: Rc<HostState>,
+    /// The bits of the one interned `undefined`, filled on the first request.
+    ///
+    /// `undefined` is a primitive, so [`WorldState::store_value`] does not intern
+    /// it and a fresh call would occupy a fresh slot every time — which would
+    /// make an unset `AbortSignal.reason` read back as a different value on every
+    /// access. Interning it once here gives every reader the same bits, and
+    /// therefore the same value.
+    undefined: Cell<Option<u64>>,
 }
 
 impl V8ScriptHost {
@@ -54,17 +62,64 @@ impl V8ScriptHost {
             context,
             state,
             host,
+            undefined: Cell::new(None),
         }
     }
+
+    /// Enters this host's context on its isolate and runs `f` inside it.
+    ///
+    /// This is the bootstrap [`ScriptHost::invoke_listener`] documents: a
+    /// [`v8::CallbackScope`] spun up from the isolate we are already inside,
+    /// which is only legal because every caller is reached from a live DOM
+    /// binding call on this isolate's thread.
+    fn with_context<R>(&self, f: impl FnOnce(&mut v8::PinScope<'_, '_>) -> R) -> R {
+        // SAFETY: the isolate address was captured by value at install time, so
+        // it is stable and non-null for the engine's lifetime, and this runs on
+        // that isolate's own thread inside a binding call — the sole valid use of
+        // `CallbackScope` (see the module docs).
+        let mut raw = self.isolate;
+        let isolate: &mut v8::Isolate =
+            unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut raw) };
+        let mut storage = unsafe { v8::CallbackScope::new(isolate) };
+        let mut callback_scope = {
+            let pinned = unsafe { std::pin::Pin::new_unchecked(&mut storage) };
+            pinned.init()
+        };
+        let callback_scope = &mut callback_scope;
+        let context = v8::Local::new(callback_scope, &self.context);
+        let mut context_scope = v8::ContextScope::new(callback_scope, context);
+        v8::scope!(let scope, &mut context_scope);
+        f(scope)
+    }
+}
+
+/// Builds `new DOMException(message, name)` from the context's global and
+/// returns it as a value, or `None` when the page's DOM bootstrap is absent.
+///
+/// This is the construction [`tenta_js::bindings::throw_js_error`] performs to
+/// raise a `DOMException`; an abort reason and a thrown abort reason have to be
+/// the *same* object, so the object is built here once and the caller both
+/// stores and re-throws it rather than building a second one.
+fn dom_exception_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    name: &str,
+    message: &str,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let context = scope.get_current_context();
+    let global = context.global(scope);
+    let key = v8::String::new(scope, "DOMException")?;
+    let constructor = global.get(scope, key.into())?;
+    let constructor = v8::Local::<v8::Function>::try_from(constructor).ok()?;
+    let name = v8::String::new(scope, name)?;
+    let message = v8::String::new(scope, message)?;
+    let arguments = [message.into(), name.into()];
+    constructor
+        .new_instance(scope, &arguments)
+        .map(|object| object.into())
 }
 
 impl ScriptHost for V8ScriptHost {
     fn invoke_listener(&self, callback: CallbackRef, current_target: u64, event: u64) {
-        // Bootstrap a scope from the isolate we are re-entering. SAFETY: this is
-        // only reached from inside a DOM binding call on this isolate's thread,
-        // the sole valid use of `CallbackScope` (see the module docs). The
-        // isolate address was captured by value at install time, so it is stable
-        // and non-null for the engine's lifetime.
         let mut raw = self.isolate;
         let isolate: &mut v8::Isolate =
             unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut raw) };
@@ -131,5 +186,39 @@ impl ScriptHost for V8ScriptHost {
 
     fn release_value(&self, bits: u64) {
         self.state.borrow_mut().release_value(bits);
+    }
+
+    fn build_value(&self, value: HostValue<'_>) -> Option<u64> {
+        match value {
+            HostValue::Undefined => {
+                if let Some(bits) = self.undefined.get() {
+                    return Some(bits);
+                }
+                let bits = self.with_context(|scope| {
+                    let undefined = v8::undefined(scope);
+                    self.state.borrow_mut().store_value(scope, undefined.into())
+                });
+                self.undefined.set(Some(bits));
+                Some(bits)
+            }
+            HostValue::DomException { name, message } => self.with_context(|scope| {
+                let object = dom_exception_value(scope, name, message)?;
+                Some(self.state.borrow_mut().store_value(scope, object))
+            }),
+        }
+    }
+
+    fn throw_value(&self, bits: u64) {
+        self.with_context(|scope| {
+            // A slot that has already been freed cannot be thrown; silently
+            // skipping is the same shape as `invoke_listener`'s stale-handle
+            // check, and the alternative — throwing `undefined` — would turn a
+            // reclaimed reason into a different exception rather than no
+            // exception.
+            let Some(value) = self.state.borrow().load_value(scope, bits) else {
+                return;
+            };
+            scope.throw_exception(value);
+        });
     }
 }

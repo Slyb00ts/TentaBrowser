@@ -24,9 +24,8 @@ use tenta_core::NodeId;
 use tenta_core::atom::atoms;
 use tenta_dom::NodeKind;
 use tenta_js::bindings::host::{
-    HostObject, HostRecord, HostSlab, SharedContext, TAG_EVENT, TAG_HOST, TAG_HTML_COLLECTION,
-    TAG_NODE_LIST, TAG_STYLE, TAG_TOKEN_LIST, TAG_WINDOW, decode, encode_window,
-    reclaim_host_record,
+    HostObject, HostRecord, SharedContext, TAG_EVENT, TAG_HOST, TAG_HTML_COLLECTION, TAG_NODE_LIST,
+    TAG_STYLE, TAG_TOKEN_LIST, TAG_WINDOW, decode, encode_window, reclaim_host_record,
 };
 use tenta_js::bindings::{
     InterfaceDescriptor, InterfaceRegistry, WRAPPER_HOST_FIELD, WRAPPER_TAG, WrapperWorld,
@@ -187,6 +186,83 @@ impl WorldState {
     pub fn value_count(&self) -> usize {
         self.values.iter().filter(|slot| slot.is_some()).count()
     }
+
+    /// Stores `value` and returns its bits, incrementing the reference count when
+    /// the value is an object already interned under the same identity.
+    ///
+    /// Interning objects by identity means the same listener callback or the same
+    /// `AbortSignal.reason` object gets a single stable bit pattern and a single
+    /// stored `Global`; primitives are not interned, so a caller that needs a
+    /// stable bits for a primitive (`undefined`) caches the result itself.
+    pub fn store_value(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        value: v8::Local<v8::Value>,
+    ) -> u64 {
+        let object_hash: Option<i32> = if value.is_object() {
+            v8::Local::<v8::Object>::try_from(value)
+                .ok()
+                .map(|object| object.get_identity_hash().get())
+        } else {
+            None
+        };
+
+        if let Some(hash) = object_hash {
+            // Look for an existing slot holding a strictly-equal object.
+            let matched = self.by_identity.get(&hash).and_then(|bucket| {
+                bucket.iter().copied().find(|&idx| {
+                    self.values
+                        .get(idx as usize)
+                        .and_then(|slot| slot.as_ref())
+                        .is_some_and(|slot| {
+                            let candidate = v8::Local::new(scope, &slot.global);
+                            value.strict_equals(candidate)
+                        })
+                })
+            });
+            if let Some(idx) = matched {
+                if let Some(Some(slot)) = self.values.get_mut(idx as usize) {
+                    slot.refs += 1;
+                }
+                return idx;
+            }
+        }
+
+        let global = v8::Global::new(scope.as_ref(), value);
+        let bits = match self.free_values.pop() {
+            Some(free) => {
+                self.values[free as usize] = Some(ValueSlot {
+                    global,
+                    refs: 1,
+                    hash: object_hash,
+                });
+                free
+            }
+            None => {
+                let bits = self.values.len() as u64;
+                self.values.push(Some(ValueSlot {
+                    global,
+                    refs: 1,
+                    hash: object_hash,
+                }));
+                bits
+            }
+        };
+        if let Some(hash) = object_hash {
+            self.by_identity.entry(hash).or_default().push(bits);
+        }
+        bits
+    }
+
+    /// The value stored at `bits`, or `None` when the slot is free or stale.
+    pub fn load_value<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        bits: u64,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        let slot = self.values.get(bits as usize)?.as_ref()?;
+        Some(v8::Local::new(scope, &slot.global))
+    }
 }
 
 /// What a wrapper's host is anchored to, which decides both whether the wrapper
@@ -245,19 +321,39 @@ pub fn reclaim_dead_events(
     }
 }
 
-/// Reclaims the host-record slab entries of `dead_host_bits` — `URL` and
-/// `URLSearchParams` wrappers a finalizer collected — and disarms their
-/// tombstone `Weak`s.
+/// Reclaims the host-record slab entries of `dead_host_bits` — JS-owned host
+/// object wrappers (`URL`, `URLSearchParams`, `Headers`, `AbortController`,
+/// `AbortSignal`) a finalizer collected — releasing the records those wrappers
+/// were keeping alive and disarming their tombstone `Weak`s.
 ///
 /// [`reclaim_host_record`] owns the pair-tracking rules (a URL keeps its query
-/// object alive and vice versa), so this only decodes and disposes.
-pub fn reclaim_dead_hosts(
-    state: &mut WorldState,
-    hosts: &RefCell<HostSlab>,
-    dead_host_bits: Vec<u64>,
-) {
+/// object alive and vice versa, a controller keeps its signal alive), so this
+/// only decodes and disposes. Disposing is not trivial for a freed signal: the
+/// record's listeners are keyed under the record's own handle
+/// ([`TargetKey::Host`]) and its abort reason is an interned value, and neither
+/// the listener table nor the value slab is [`reclaim_host_record`]'s to touch,
+/// so the freed keys and values come back to be given up here.
+///
+/// The listener drain is by exact key, so it reaches precisely the
+/// registrations made while that record lived — see
+/// [`HostContext::drain_host_listeners`].
+pub fn reclaim_dead_hosts(state: &mut WorldState, ctx: &SharedContext, dead_host_bits: Vec<u64>) {
     for bits in dead_host_bits {
-        reclaim_host_record(&mut hosts.borrow_mut(), decode(bits).host_key());
+        let reclaimed =
+            reclaim_host_record(&mut ctx.host_records.borrow_mut(), decode(bits).host_key());
+        // A freed record's listener list left with it. Without this every
+        // listener registered on a collected signal keeps a V8 value alive for
+        // the life of the world, because a `CallbackRef` is a bare handle with
+        // no `Drop`.
+        for callback in ctx.drain_host_listeners(&reclaimed.keys) {
+            state.release_value(callback.0);
+        }
+        // The abort reason is an interned value the record owned; a signal freed
+        // without releasing it would pin a V8 object the page can no longer
+        // reach.
+        for value in reclaimed.values {
+            state.release_value(value);
+        }
         state.wrappers.remove(&bits);
     }
 }
@@ -298,10 +394,12 @@ pub fn reclaim_dead_bookkeeping(state: &RefCell<WorldState>, ctx: &SharedContext
         let dead_event_bits = state_mut.take_dead_events();
         reclaim_dead_events(&mut state_mut, &ctx.events, dead_event_bits);
 
-        // Remove dead `URL`/`URLSearchParams` wrappers' host-record slab
-        // entries, following the link each holds to the other.
+        // Remove dead JS-owned host object wrappers' host-record slab entries,
+        // following the link each holds to its counterpart (a URL and its query
+        // object, a controller and its signal) and giving up what the freed
+        // records owned.
         let dead_host_bits = state_mut.take_dead_hosts();
-        reclaim_dead_hosts(&mut state_mut, &ctx.host_records, dead_host_bits);
+        reclaim_dead_hosts(&mut state_mut, ctx, dead_host_bits);
     }
 }
 
@@ -386,15 +484,21 @@ impl WrapperWorld for V8World {
             host = Box::new(HostObject::event(self.ctx.clone(), key));
             kind = WrapperKind::Event;
         } else if decoded.tag == TAG_HOST {
-            // A `URL` or a `URLSearchParams`. The tag does not name the
-            // interface — the two share it — so the record does, and a missing
-            // record (reclaimed with its previous wrapper) is the same `None`
-            // the event arm returns.
+            // A JS-owned host object. The tag does not name the interface — every
+            // one of them shares it — so the record does, and a missing record
+            // (reclaimed with its previous wrapper) is the same `None` the event
+            // arm returns.
             let key = decoded.host_key();
             let mut records = self.ctx.host_records.borrow_mut();
             let record = records.get_mut(key)?;
-            if let HostRecord::Url(url) = record {
-                url.has_wrapper = true;
+            // A record that another record's key can point at — a URL its query
+            // object, a signal its controller — has to be told it has a wrapper
+            // again, because its record outlives its own wrapper and its
+            // reclamation frees it only once no live counterpart refers to it.
+            match record {
+                HostRecord::Url(url) => url.has_wrapper = true,
+                HostRecord::Signal(signal) => signal.has_wrapper = true,
+                HostRecord::Params(_) | HostRecord::Headers(_) | HostRecord::Controller(_) => {}
             }
             interface_name = record.interface_name();
             host = Box::new(HostObject::host_record(self.ctx.clone(), key));
@@ -553,67 +657,7 @@ impl WrapperWorld for V8World {
     }
 
     fn store_value(&self, scope: &mut v8::PinScope<'_, '_>, value: v8::Local<v8::Value>) -> u64 {
-        // Intern objects by identity so a value stored more than once (the same
-        // listener callback, say) gets a single stable bit pattern and a single
-        // stored `Global`. Primitives are not interned.
-        let object_hash: Option<i32> = if value.is_object() {
-            v8::Local::<v8::Object>::try_from(value)
-                .ok()
-                .map(|object| object.get_identity_hash().get())
-        } else {
-            None
-        };
-
-        if let Some(hash) = object_hash {
-            // Look for an existing slot holding a strictly-equal object.
-            let matched = {
-                let state = self.state.borrow();
-                state.by_identity.get(&hash).and_then(|bucket| {
-                    bucket.iter().copied().find(|&idx| {
-                        state
-                            .values
-                            .get(idx as usize)
-                            .and_then(|slot| slot.as_ref())
-                            .is_some_and(|slot| {
-                                let candidate = v8::Local::new(scope, &slot.global);
-                                value.strict_equals(candidate)
-                            })
-                    })
-                })
-            };
-            if let Some(idx) = matched {
-                if let Some(Some(slot)) = self.state.borrow_mut().values.get_mut(idx as usize) {
-                    slot.refs += 1;
-                }
-                return idx;
-            }
-        }
-
-        let global = v8::Global::new(scope.as_ref(), value);
-        let mut state = self.state.borrow_mut();
-        let bits = match state.free_values.pop() {
-            Some(free) => {
-                state.values[free as usize] = Some(ValueSlot {
-                    global,
-                    refs: 1,
-                    hash: object_hash,
-                });
-                free
-            }
-            None => {
-                let bits = state.values.len() as u64;
-                state.values.push(Some(ValueSlot {
-                    global,
-                    refs: 1,
-                    hash: object_hash,
-                }));
-                bits
-            }
-        };
-        if let Some(hash) = object_hash {
-            state.by_identity.entry(hash).or_default().push(bits);
-        }
-        bits
+        self.state.borrow_mut().store_value(scope, value)
     }
 
     fn load_value<'s>(
@@ -621,9 +665,7 @@ impl WrapperWorld for V8World {
         scope: &mut v8::PinScope<'s, '_>,
         bits: u64,
     ) -> Option<v8::Local<'s, v8::Value>> {
-        let state = self.state.borrow();
-        let slot = state.values.get(bits as usize)?.as_ref()?;
-        Some(v8::Local::new(scope, &slot.global))
+        self.state.borrow().load_value(scope, bits)
     }
 
     fn realm(&self) -> Realm {

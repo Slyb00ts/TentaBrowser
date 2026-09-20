@@ -23,6 +23,7 @@ use tenta_html::{ElementFlags, QualName, QuirksMode};
 // this code.
 use super::SequenceOfSequenceOfUsvStringOrRecordOfUsvStringToUsvStringOrUsvString as ParamsInit;
 use super::{
+    AbortControllerConstructor, AbortControllerOps, AbortSignal, AbortSignalOps,
     AddEventListenerOptionsOrBoolean, AnyValue, CSSStyleDeclaration, CSSStyleDeclarationOps,
     CharacterDataOps, Comment, CommentOps, CustomEventConstructor, CustomEventInit, CustomEventOps,
     DOMTokenList, DOMTokenListOps, DocumentFragment, DocumentFragmentOps, DocumentOps, Element,
@@ -39,7 +40,7 @@ use super::{
 };
 use crate::dom::events::{
     CallbackRef, DispatchTarget, EventKey, EventKind, EventRecord, EventSlab, GenKey, GenSlab,
-    ListenerTable, ScriptHost, TargetKey, dispatch, dispatch_at,
+    HostValue, ListenerTable, ScriptHost, TargetKey, dispatch, dispatch_at,
 };
 use crate::event_loop::SharedClock;
 
@@ -165,18 +166,24 @@ pub enum HostRecord {
     Params(ParamsRecord),
     /// A `Headers`.
     Headers(HeadersRecord),
+    /// An `AbortController`.
+    Controller(ControllerRecord),
+    /// An `AbortSignal`.
+    Signal(SignalRecord),
 }
 
 impl HostRecord {
     /// The WebIDL interface this record's wrapper carries, which is the name the
     /// wrapper world instantiates a template for. The handle tag cannot say it:
-    /// `URL`, `URLSearchParams` and `Headers` share [`TAG_HOST`], because a tag
-    /// is eight bits of a handle and there is no room for one per class.
+    /// every one of these shares [`TAG_HOST`], because a tag is eight bits of a
+    /// handle and there is no room for one per class.
     pub fn interface_name(&self) -> &'static str {
         match self {
             HostRecord::Url(_) => "URL",
             HostRecord::Params(_) => "URLSearchParams",
             HostRecord::Headers(_) => "Headers",
+            HostRecord::Controller(_) => "AbortController",
+            HostRecord::Signal(_) => "AbortSignal",
         }
     }
 }
@@ -234,6 +241,60 @@ pub struct HeadersRecord {
     pub guard: HeadersGuard,
 }
 
+/// An `AbortController` record.
+///
+/// The controller is the pair's *owner*: `[SameObject]` requires every read of
+/// `signal` to answer with the same object, so the signal record outlives its
+/// own wrapper for as long as the controller's record does. The link runs one
+/// way — the DOM Standard gives `AbortSignal` no `controller` attribute, so
+/// nothing script can reach leads back — and [`SignalRecord::controller`] exists
+/// only so that reclamation knows which of the two records is keeping the other
+/// alive.
+#[derive(Debug)]
+pub struct ControllerRecord {
+    /// The `AbortSignal` this controller aborts, created by the constructor and
+    /// never replaced.
+    pub signal: HostKey,
+}
+
+/// An `AbortSignal` record.
+///
+/// The abort state *is* the abort reason. The DOM Standard defines "an
+/// `AbortSignal` object is aborted when its abort reason is not `undefined`"
+/// (<https://dom.spec.whatwg.org/#abortsignal-aborted>), so one field answers
+/// both `aborted` and `reason` and the two can never disagree.
+#[derive(Debug)]
+pub struct SignalRecord {
+    /// The *abort reason*: the interned bits of the JavaScript value `reason`
+    /// reads back, or `None` while the signal is not aborted — the reason is
+    /// then `undefined`, which is the one value the prelude has no sentinel for
+    /// and is produced through [`ScriptHost::build_value`].
+    ///
+    /// `Some(AnyValue::NULL.0)` is the aborted-with-`null` case: a value, but
+    /// not a *stored* one, so freeing the record must not release it.
+    pub reason: Option<u64>,
+    /// The controller that aborts this signal, while that controller's record is
+    /// still alive. Set by the constructor and cleared when the controller's
+    /// wrapper is finalized, which is what makes the two reclamation orders
+    /// converge however the pair is collected.
+    pub controller: Option<HostKey>,
+    /// Whether this record still has a live wrapper. See
+    /// [`UrlRecord::has_wrapper`]: a signal record outlives its own wrapper
+    /// while a live controller still points at it.
+    pub has_wrapper: bool,
+}
+
+impl SignalRecord {
+    /// The name a default abort reason carries. The DOM Standard's two producers
+    /// are `"AbortError"` (`abort()`) and `"TimeoutError"` (`AbortSignal.timeout`,
+    /// deferred); the message is this engine's own, since the standard states
+    /// none.
+    const DEFAULT_REASON_NAME: &'static str = "AbortError";
+
+    /// The message of a default abort reason.
+    const DEFAULT_REASON_MESSAGE: &'static str = "The operation was aborted.";
+}
+
 /// The Fetch Standard's *guard* for a header list.
 ///
 /// A guard is a property of the instance, not of the list: the same header
@@ -275,10 +336,12 @@ pub struct HostContext {
     pub listeners: RefCell<ListenerTable>,
     /// The live event records for this world.
     pub events: RefCell<EventSlab>,
-    /// The live `URL` and `URLSearchParams` records for this world. Unlike a
-    /// node, a `new URL()` has no document row to live in, so the record is the
-    /// whole of its state and its wrapper is its only owner — the event slab's
-    /// shape, not the snapshot slab's.
+    /// The live `URL`, `URLSearchParams`, `Headers`, `AbortController` and
+    /// `AbortSignal` records for this world. Unlike a node, a `new URL()` has no
+    /// document row to live in, so the record is the whole of its state and its
+    /// wrapper is its owner — the event slab's shape, not the snapshot slab's —
+    /// except for the URL/query and controller/signal pairs, where one record
+    /// keeps the other alive (see [`reclaim_host_record`]).
     pub host_records: RefCell<HostSlab>,
     /// The engine's callback boundary, installed at `Engine::build` and cleared
     /// at teardown. `None` before installation and after teardown.
@@ -359,6 +422,46 @@ impl HostContext {
                 script.release_value(callback.0);
             }
         }
+    }
+
+    /// Removes and returns every listener registered on the host targets in
+    /// `keys`, matched by the key taken exactly as given — generation included.
+    ///
+    /// A host record owns its listener entries the way a node does, but the two
+    /// are freed by different owners: the document sweeps a dead node, and a
+    /// wrapper's finalizer frees a dead host record, so this is the counterpart
+    /// of [`Self::drain_swept_listeners`] for the record side. Exact matching is
+    /// [`ListenerTable::drain_target_at`]'s; see it for why a generation-blind
+    /// drain would be wrong.
+    ///
+    /// The caller owns the returned references and releases them; unlike
+    /// [`Self::drain_swept_listeners`], this cannot release them itself, because
+    /// its caller is already holding the world's value table to free the record
+    /// in the same pass.
+    pub fn drain_host_listeners(&self, keys: &[HostKey]) -> Vec<CallbackRef> {
+        let mut listeners = self.listeners.borrow_mut();
+        keys.iter()
+            .flat_map(|key| listeners.drain_target_at(TargetKey::Host(*key)))
+            .collect()
+    }
+
+    /// The JavaScript `undefined`, as the wrapper world's bits for it.
+    ///
+    /// A record that hands back an unset WebIDL `any` needs a *value*, and the
+    /// one sentinel the prelude maps back out is `null`'s — so `undefined` is
+    /// built through [`ScriptHost::build_value`], which interns it once per
+    /// world and answers with the same bits every time. That stability is what
+    /// makes an unset `AbortSignal.reason` read back as `undefined` on every
+    /// access rather than as a fresh value.
+    ///
+    /// Without a script host there is no world to intern in and no script that
+    /// could read the result, so the `null` sentinel stands in.
+    pub fn undefined_value(&self) -> AnyValue {
+        let script = self.script.borrow();
+        script
+            .as_ref()
+            .and_then(|script| script.build_value(HostValue::Undefined))
+            .map_or(AnyValue::NULL, AnyValue)
     }
 }
 
@@ -617,6 +720,47 @@ impl HostObject {
         }
     }
 
+    /// Reads the `AbortController` this host stands for, or returns `default`
+    /// when the host is not one or its record has been reclaimed.
+    fn with_controller<R>(&self, default: R, f: impl FnOnce(&ControllerRecord) -> R) -> R {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::Controller(record)) = ctx.host_records.borrow().get(*key)
+        {
+            return f(record);
+        }
+        default
+    }
+
+    /// Reads the `AbortSignal` this host stands for, or returns `default` when
+    /// the host is not one or its record has been reclaimed.
+    fn with_signal<R>(&self, default: R, f: impl FnOnce(&SignalRecord) -> R) -> R {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::Signal(record)) = ctx.host_records.borrow().get(*key)
+        {
+            return f(record);
+        }
+        default
+    }
+
+    /// The record key of the `AbortSignal` this host stands for, or `None` for
+    /// every other host.
+    ///
+    /// The tag cannot answer this: `URL`, `Headers` and `AbortSignal` share
+    /// [`TAG_HOST`], so only the record knows which interface it is. This is the
+    /// one place the host asks, and both event-target queries below go through
+    /// it.
+    fn signal_key(&self) -> Option<HostKey> {
+        if let HostObject::Host { ctx, key } = self
+            && matches!(
+                ctx.host_records.borrow().get(*key),
+                Some(HostRecord::Signal(_))
+            )
+        {
+            return Some(*key);
+        }
+        None
+    }
+
     /// The opaque handle bits this host stands for, tagged by variant so a node
     /// and its `NodeList` (and a recycled slot) never share a key.
     pub fn handle_bits(&self) -> u64 {
@@ -651,7 +795,9 @@ impl HostObject {
             HostObject::StaticNodeList { ctx, .. } => (&ctx.doc, NodeId::NONE),
             HostObject::StaticHtmlCollection { ctx, .. } => (&ctx.doc, NodeId::NONE),
             HostObject::Event { ctx, .. } => (&ctx.doc, NodeId::NONE),
-            // A `URL` or `URLSearchParams` is not in the tree either.
+            // No JS-owned host object is in the tree, not even an `AbortSignal`:
+            // it is an event target, and its abort event does not reach the
+            // document.
             HostObject::Host { ctx, .. } => (&ctx.doc, NodeId::NONE),
             // The window is not in the tree, so there is no node to anchor to.
             // It only reaches the anchored paths if a generated operation that
@@ -664,15 +810,17 @@ impl HostObject {
     /// The event target this host stands for, or `None` for a host that cannot
     /// be one.
     ///
-    /// Only a node wrapper and the window carry the `EventTarget` prototype
-    /// chain, so a `NodeList`, a snapshot, an `Event` or a style declaration
-    /// reaching here means the receiver was not what the template's signature
-    /// promised.
+    /// A node wrapper, the window and an `AbortSignal` carry the `EventTarget`
+    /// prototype chain — the signal is the first of the JS-owned host objects
+    /// that does, which is why [`Self::dispatch_target`] has to consult the
+    /// record rather than the handle tag. A `NodeList`, a snapshot, an `Event`,
+    /// a `URL`, a `URLSearchParams` or a style declaration reaching here means
+    /// the receiver was not what the template's signature promised.
     fn dispatch_target(&self) -> Option<DispatchTarget> {
         match self {
             HostObject::Node { node, .. } => Some(DispatchTarget::node(*node)),
             HostObject::Window { .. } => Some(DispatchTarget::window()),
-            _ => None,
+            _ => self.signal_key().map(DispatchTarget::host),
         }
     }
 
@@ -682,7 +830,7 @@ impl HostObject {
         match self {
             HostObject::Node { node, .. } => Some(TargetKey::Node(*node)),
             HostObject::Window { .. } => Some(TargetKey::Window),
-            _ => None,
+            _ => self.signal_key().map(TargetKey::Host),
         }
     }
 
@@ -3203,11 +3351,14 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
     let params = match slab.get(key)? {
         HostRecord::Params(params) => params,
         HostRecord::Url(_) | HostRecord::Headers(_) => return None,
+        // Neither abort record holds a pair list, so neither owns pairs.
+        HostRecord::Controller(_) | HostRecord::Signal(_) => return None,
     };
     match params.url {
         Some(owner) => match slab.get(owner)? {
             HostRecord::Url(record) => Some(parse_pairs(record.url.query().unwrap_or(""))),
             HostRecord::Params(_) | HostRecord::Headers(_) => None,
+            HostRecord::Controller(_) | HostRecord::Signal(_) => None,
         },
         None => Some(params.list.clone()),
     }
@@ -3288,35 +3439,91 @@ enum HostLink {
     Params(Option<HostKey>),
     /// The record is a `Headers`, which links to nothing.
     Headers,
+    /// The record is an `AbortController` holding its signal's key, always.
+    Controller(HostKey),
+    /// The record is an `AbortSignal` holding its controller's key, while that
+    /// controller's record lives.
+    Signal(Option<HostKey>),
+}
+
+/// What freeing host records took out of the world: the record slots that left
+/// the slab, and the interned values those records owned.
+///
+/// The caller needs both. A freed signal's listener list is keyed under the
+/// record's own key ([`TargetKey::Host`]), so it has to leave the listener table
+/// with it; and the abort reason it interned has to be released, or the page's
+/// `reason` would keep a V8 value alive for the life of the world. Neither can
+/// be done here — one needs the listener table and the other the world's value
+/// table — so this reports what to free and leaves the freeing to the caller.
+#[derive(Debug, Default)]
+pub struct ReclaimedHost {
+    /// The record keys whose slots were freed, in the order they were freed.
+    pub keys: Vec<HostKey>,
+    /// The interned value bits those records owned and no longer reference.
+    pub values: Vec<u64>,
+}
+
+/// Removes the record at `key` and reports what its removal released.
+///
+/// A `GenSlab::remove` that finds a stale key frees nothing and reports nothing,
+/// which is what makes a second reclamation of the same key a no-op rather than
+/// a double release.
+fn free_record(slab: &mut HostSlab, key: HostKey, out: &mut ReclaimedHost) {
+    let Some(record) = slab.remove(key) else {
+        return;
+    };
+    out.keys.push(key);
+    // Only a signal owns an interned value, and only a *stored* one: `null` and
+    // `undefined` are sentinels the wrapper world never handed a slot to.
+    if let HostRecord::Signal(signal) = record
+        && let Some(bits) = signal.reason
+        && bits != AnyValue::NULL.0
+    {
+        out.values.push(bits);
+    }
 }
 
 /// Frees the host record of a wrapper that has just been finalized, along with
-/// the record that wrapper alone was keeping alive.
+/// the record that wrapper alone was keeping alive, and reports what the caller
+/// still has to give back.
 ///
-/// A `Headers` owns nothing else, so it is freed outright. A URL and its query
-/// object point at each other: the object writes every
-/// mutation through to its URL, and the URL caches the object's key so that
-/// `url.searchParams` can return the same object twice. Either wrapper may be
-/// collected first, so this clears *both* links and frees a record only once
-/// nothing else refers to it:
+/// A `Headers` owns nothing else, so it is freed outright. Two pairs point at
+/// each other. A URL and its query object: the object writes every mutation
+/// through to its URL, and the URL caches the object's key so that
+/// `url.searchParams` can return the same object twice. An `AbortController` and
+/// its signal: `[SameObject]` makes every read of `controller.signal` answer
+/// with the object the constructor made, so the signal record has to outlive its
+/// own wrapper for as long as the controller's record does.
 ///
-///  - the object's wrapper dies: the object is freed, and its URL goes with it
-///    when that URL's own wrapper is already gone;
+/// Either wrapper of a pair may be collected first, so this clears the link that
+/// pointed at the dying record and frees a record only once nothing else refers
+/// to it:
+///
+///  - the query object's wrapper dies: the object is freed, and its URL goes
+///    with it when that URL's own wrapper is already gone;
 ///  - the URL's wrapper dies: the URL keeps its cached key while the object
-///    lives on, and is freed at once when no object was ever created.
+///    lives on, and is freed at once when no object was ever created;
+///  - the signal's wrapper dies: the signal stays while a live controller still
+///    points at it, and is freed at once otherwise;
+///  - the controller's wrapper dies: the controller's record goes (nothing else
+///    can reach it), and the signal goes with it unless the signal's own wrapper
+///    is still alive.
 ///
 /// Freeing a record that is still pointed at would be observable — the object
-/// would write into a recycled slot — while clearing the cached key without
-/// freeing the object would make the next `url.searchParams` a different
-/// object, which is the one thing `[SameObject]` forbids. Whichever of the two
-/// wrappers dies first, the other's reclamation finishes the job, so the two
-/// orders converge.
-pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) {
+/// would write into a recycled slot, or a second `abort()` would reach a signal
+/// whose state is gone — while clearing a cached key without freeing the record
+/// would make the next read a *different* object, which is the one thing
+/// `[SameObject]` forbids. Whichever of the two wrappers dies first, the other's
+/// reclamation finishes the job, so the two orders converge.
+pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
+    let mut freed = ReclaimedHost::default();
     let link = match slab.get(key) {
         Some(HostRecord::Url(record)) => HostLink::Url(record.params),
         Some(HostRecord::Params(record)) => HostLink::Params(record.url),
         Some(HostRecord::Headers(_)) => HostLink::Headers,
-        None => return,
+        Some(HostRecord::Controller(record)) => HostLink::Controller(record.signal),
+        Some(HostRecord::Signal(record)) => HostLink::Signal(record.controller),
+        None => return freed,
     };
     match link {
         // A `Headers` has no counterpart to keep alive or to clear a key on, so
@@ -3325,7 +3532,7 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) {
         // wrapper and `GenSlab::remove` bumps the generation so a second call
         // for the same key finds nothing.
         HostLink::Headers => {
-            slab.remove(key);
+            free_record(slab, key, &mut freed);
         }
         HostLink::Url(params) => {
             if let Some(HostRecord::Url(record)) = slab.get_mut(key) {
@@ -3335,13 +3542,13 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) {
             // through it.
             let still_referenced = params.is_some_and(|params| slab.get(params).is_some());
             if !still_referenced {
-                slab.remove(key);
+                free_record(slab, key, &mut freed);
             }
         }
         HostLink::Params(owner) => {
-            slab.remove(key);
+            free_record(slab, key, &mut freed);
             let Some(owner) = owner else {
-                return;
+                return freed;
             };
             if let Some(HostRecord::Url(record)) = slab.get_mut(owner) {
                 // The cached key is cleared so a later `url.searchParams`
@@ -3350,10 +3557,54 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) {
                 record.params = None;
             }
             if matches!(slab.get(owner), Some(HostRecord::Url(record)) if !record.has_wrapper) {
-                slab.remove(owner);
+                free_record(slab, owner, &mut freed);
+            }
+        }
+        HostLink::Controller(signal) => {
+            // The controller's record has no second referent — the DOM Standard
+            // gives `AbortSignal` no `controller` attribute, so nothing script
+            // can reach leads back — so its wrapper's death is its record's
+            // death.
+            free_record(slab, key, &mut freed);
+            // The signal it was keeping alive becomes free, unless the signal's
+            // own wrapper is still around: then script may still hold the
+            // object, and a second `abort()` is no longer reachable through a
+            // controller but `aborted`, `reason` and `throwIfAborted()` are.
+            let free_signal = match slab.get_mut(signal) {
+                Some(HostRecord::Signal(record)) => {
+                    record.controller = None;
+                    !record.has_wrapper
+                }
+                _ => false,
+            };
+            if free_signal {
+                free_record(slab, signal, &mut freed);
+            }
+        }
+        HostLink::Signal(controller) => {
+            // The signal's wrapper died. Whether the record goes with it is
+            // decided by the controller, not by the signal: while the
+            // controller's record is alive, `controller.signal` can be read
+            // again, and it has to answer with the path's state — a fresh signal
+            // would come back un-aborted.
+            let free_signal = match slab.get_mut(key) {
+                Some(HostRecord::Signal(record)) => {
+                    record.has_wrapper = false;
+                    // A cleared key is a dead controller: the record's `None` case
+                    // and a key whose slot no longer holds that record say the
+                    // same thing, which is why the generation in the key is
+                    // enough and this does not have to chase the controller
+                    // first.
+                    controller.is_none_or(|controller| slab.get(controller).is_none())
+                }
+                _ => false,
+            };
+            if free_signal {
+                free_record(slab, key, &mut freed);
             }
         }
     }
+    freed
 }
 
 impl URLOps for HostObject {
@@ -3987,6 +4238,203 @@ impl HeadersConstructor for HostObject {
                 guard: HeadersGuard::None,
             }));
         Ok(HostObject::host_record(ctx, key))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AbortController / AbortSignal
+// ---------------------------------------------------------------------------
+
+impl AbortControllerConstructor for HostObject {
+    fn construct(realm: &Realm) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        // The constructor makes the signal and links the pair eagerly — the
+        // spec's own steps ("let signal be a new `AbortSignal` object", "set
+        // this's signal to signal") — so `signal` is a read of a key that
+        // already exists rather than a lazy creation, and `[SameObject]` holds
+        // from the first read.
+        let mut records = ctx.host_records.borrow_mut();
+        let signal = records.insert(HostRecord::Signal(SignalRecord {
+            reason: None,
+            controller: None,
+            has_wrapper: false,
+        }));
+        let controller = records.insert(HostRecord::Controller(ControllerRecord { signal }));
+        if let Some(HostRecord::Signal(record)) = records.get_mut(signal) {
+            record.controller = Some(controller);
+        }
+        drop(records);
+        Ok(HostObject::host_record(ctx, controller))
+    }
+}
+
+impl AbortControllerOps for HostObject {
+    fn signal(&self) -> Result<Handle<AbortSignal>, JsError> {
+        self.with_controller(None, |record| Some(record.signal))
+            .map(|signal| Handle::from_bits(encode_host(signal)))
+            // The template's signature brand check makes this unreachable: only a
+            // controller wrapper can reach the getter, and the record it was
+            // built over lives exactly as long as that wrapper does.
+            .ok_or_else(|| JsError::type_error("signal: the receiver is not an AbortController"))
+    }
+
+    fn abort(&self, reason: Option<AnyValue>) -> Result<(), JsError> {
+        let HostObject::Host { ctx, key } = self else {
+            return Ok(());
+        };
+        let controller = *key;
+        // The signal this controller aborts. Read under one short borrow, which
+        // ends before anything below can fire an event, so a listener reached
+        // through `dispatch_at` never runs under a live borrow of the slab.
+        let signal = {
+            let records = ctx.host_records.borrow();
+            match records.get(controller) {
+                Some(HostRecord::Controller(record)) => record.signal,
+                _ => return Ok(()),
+            }
+        };
+
+        // Gives back the reference to the argument's stored value. A reason the
+        // page passed arrived as bits the glue already stored (+1 reference), so
+        // the call owns it; `null` is the prelude's sentinel and holds none.
+        let give_back = |bits: u64| {
+            if bits != AnyValue::NULL.0 {
+                self.release_stored(bits);
+            }
+        };
+
+        // Step 1 of the DOM Standard's *signal abort*: "If signal is aborted,
+        // then return." This is what makes the first abort the only one that
+        // counts, and it is deliberately read *before* the default reason is
+        // built: step 2 runs the `DOMException` constructor, so returning first
+        // is the difference between a no-op second `abort()` and one that calls
+        // that constructor and throws the result away.
+        let already_aborted = matches!(
+            ctx.host_records.borrow().get(signal),
+            Some(HostRecord::Signal(record)) if record.reason.is_some()
+        );
+        if already_aborted {
+            if let Some(value) = reason {
+                give_back(value.0);
+            }
+            return Ok(());
+        }
+
+        // Step 2: "Set signal's abort reason to reason if it is given; otherwise
+        // to a new `AbortError` `DOMException`."
+        //
+        // `undefined` never reaches here as a reason: the generated glue maps an
+        // absent *and* an explicitly `undefined` argument to `None`, which is
+        // what makes `abort(undefined)` produce an `AbortError` as the WPT test
+        // requires. `null` does arrive, as the prelude's own sentinel.
+        let reason = match reason {
+            Some(value) => Some(value.0),
+            None => ctx
+                .script
+                .borrow()
+                .as_ref()
+                .and_then(|script| {
+                    script.build_value(HostValue::DomException {
+                        name: SignalRecord::DEFAULT_REASON_NAME,
+                        message: SignalRecord::DEFAULT_REASON_MESSAGE,
+                    })
+                })
+                // No script host means no context to build a `DOMException` in,
+                // and none to have called `abort()` either; the signal is still
+                // marked aborted, with the `null` sentinel standing in for the
+                // reason that could not be built.
+                .or(Some(AnyValue::NULL.0)),
+        };
+
+        // Storing the reason *is* aborting the signal, because the standard
+        // defines the two as the same fact. The test of step 1 is repeated here,
+        // atomically with the store: the default reason above was built by
+        // running the `DOMException` constructor, which is script, so a page that
+        // replaced that constructor with one that re-enters `abort()` is the one
+        // caller this second test exists for.
+        let stored = {
+            let mut records = ctx.host_records.borrow_mut();
+            match records.get_mut(signal) {
+                Some(HostRecord::Signal(record)) if record.reason.is_none() => {
+                    record.reason = reason;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if !stored {
+            // Lost the race, or the signal's record went with a collected
+            // wrapper. Either way nothing below runs and the reference the
+            // argument came with is nobody's.
+            if let Some(bits) = reason {
+                give_back(bits);
+            }
+            return Ok(());
+        }
+
+        // Steps 3 and 4: `dependentSignalsToAbort`. `AbortSignal.any` is the
+        // only producer of a dependent signal and it is deferred, so the list is
+        // always empty here — the steps are not reordered around it, they simply
+        // have nothing to iterate.
+
+        // Step 5: "Run the abort steps for signal": run the abort algorithms
+        // (none are registered yet), empty them, and fire an event named `abort`
+        // at signal.
+        //
+        // The event is UA-created, so `isTrusted` is true; "fire an event named
+        // e at target" gives it no bubbles, no cancelable and no default action,
+        // and the signal is already aborted while a listener runs. It is fired
+        // here, on this stack, which is what makes a listener added before the
+        // call run before `abort()` returns.
+        let mut record = EventRecord::new("abort".to_owned(), EventKind::Plain, ctx.time_stamp());
+        record.flags.initialized = true;
+        record.is_trusted = true;
+        let event_key = ctx.events.borrow_mut().insert(record);
+        let dispatched = dispatch_at(ctx, DispatchTarget::host(signal), event_key, true);
+        // Remove the transient record unless a listener made a wrapper for it
+        // (in which case the world's dead-event sweep owns its removal).
+        let orphaned = ctx
+            .events
+            .borrow()
+            .get(event_key)
+            .is_some_and(|record| !record.has_wrapper);
+        if orphaned {
+            ctx.events.borrow_mut().remove(event_key);
+        }
+        dispatched.map(|_| ())
+    }
+}
+
+impl AbortSignalOps for HostObject {
+    fn aborted(&self) -> bool {
+        // "An `AbortSignal` object is aborted when its abort reason is not
+        // `undefined`" — so this and `reason` read one field and cannot
+        // disagree.
+        self.with_signal(false, |record| record.reason.is_some())
+    }
+
+    fn reason(&self) -> Result<AnyValue, JsError> {
+        // The stored bits are returned as they are: `value_to_v8` loads the same
+        // stored value every time, so `signal.reason === signal.reason` holds by
+        // identity for an object reason and not merely by value.
+        Ok(match self.with_signal(None, |record| record.reason) {
+            Some(bits) => AnyValue(bits),
+            None => self.context().undefined_value(),
+        })
+    }
+
+    fn throw_if_aborted(&self) -> Result<(), JsError> {
+        let Some(bits) = self.with_signal(None, |record| record.reason) else {
+            return Ok(());
+        };
+        // The reason is thrown as the very value it is, not as a copy and not as
+        // a `JsError`: `assert_throws_exactly` compares the thrown value with
+        // `===` against `signal.reason`, so a default `AbortError` has to be the
+        // same `DOMException` object `reason` returns.
+        if let Some(script) = self.context().script.borrow().as_ref() {
+            script.throw_value(bits);
+        }
+        Ok(())
     }
 }
 

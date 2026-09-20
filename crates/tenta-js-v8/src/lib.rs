@@ -591,6 +591,22 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the Headers interface");
+            // `AbortSignal : EventTarget`, so `EventTarget` must already be in
+            // the template cache; `AbortController` roots at `Object`. Installing
+            // the signal first keeps the two in dependency order, and both are
+            // independent of the URL block above.
+            tenta_js::bindings::install_abort_signal::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the AbortSignal interface");
+            tenta_js::bindings::install_abort_controller::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the AbortController interface");
         }
 
         let local = v8::Context::new(
@@ -681,21 +697,23 @@ impl Engine {
     }
 
     /// Drains host-object wrappers a finalizer has collected, freeing their
-    /// slab records (test-only; the same sweep runs lazily at the head of
-    /// `wrapper`). Call after [`Engine::low_memory_gc`] to make reclamation
-    /// observable without waiting for the next wrapper.
+    /// slab records — along with whatever those records owned, such as a freed
+    /// signal's listeners and abort reason (test-only; the same sweep runs
+    /// lazily at the head of `wrapper`). Call after [`Engine::low_memory_gc`] to
+    /// make reclamation observable without waiting for the next wrapper.
     pub fn reclaim_dead_hosts(&mut self) {
         if let Some(dom) = &self.dom {
             let dead = dom.state.borrow_mut().take_dead_hosts();
             let mut state = dom.state.borrow_mut();
-            world::reclaim_dead_hosts(&mut state, &dom.ctx.host_records, dead);
+            world::reclaim_dead_hosts(&mut state, &dom.ctx, dead);
         }
     }
 
-    /// The number of live `URL`, `URLSearchParams` and `Headers` records in
-    /// this engine's world (test-only): a record whose wrapper has been
-    /// collected is still counted until [`Engine::reclaim_dead_hosts`] drains
-    /// it, which is what makes the finalizer path observable.
+    /// The number of live `URL`, `URLSearchParams`, `Headers`,
+    /// `AbortController` and `AbortSignal` records in this engine's world
+    /// (test-only): a record whose wrapper has been collected is still counted
+    /// until [`Engine::reclaim_dead_hosts`] drains it, which is what makes the
+    /// finalizer path observable.
     pub fn host_record_count(&self) -> usize {
         self.dom
             .as_ref()

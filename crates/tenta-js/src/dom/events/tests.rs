@@ -10,6 +10,7 @@ use tenta_core::atom::atoms;
 use tenta_dom::{Document, Mutation};
 
 use super::*;
+use crate::bindings::AnyValue;
 use crate::bindings::host::{HostContext, decode};
 use crate::event_loop::{Clock, MonoTime, SharedClock};
 
@@ -45,7 +46,21 @@ struct MockHost {
     released: RefCell<Vec<u64>>,
     /// Called with the event key at each invocation.
     path_probe: RefCell<Option<PathProbe>>,
+    /// Every [`ScriptHost::build_value`] request, as `(bits, description)`.
+    built: RefCell<Vec<(u64, String)>>,
+    /// The bits of every value [`ScriptHost::throw_value`] was asked to throw.
+    thrown: RefCell<Vec<u64>>,
 }
+
+/// The bits the mock hands back for `undefined`. It is not `AnyValue::NULL`,
+/// because the two must be distinguishable in an assertion — a `reason` that is
+/// `undefined` and one that is `null` are different outcomes.
+const MOCK_UNDEFINED: u64 = AnyValue::NULL.0 - 1;
+
+/// The bits the mock hands back for a `DOMException`. Every call returns the
+/// same ones, so a test can assert that the reason a signal stores and the
+/// value `throwIfAborted` throws are the same by identity.
+const MOCK_DOM_EXCEPTION: u64 = AnyValue::NULL.0 - 2;
 
 impl MockHost {
     fn new() -> Rc<Self> {
@@ -56,6 +71,8 @@ impl MockHost {
             passive_seen: RefCell::new(Vec::new()),
             released: RefCell::new(Vec::new()),
             path_probe: RefCell::new(None),
+            built: RefCell::new(Vec::new()),
+            thrown: RefCell::new(Vec::new()),
         })
     }
 
@@ -134,6 +151,21 @@ impl ScriptHost for MockHost {
 
     fn release_value(&self, bits: u64) {
         self.released.borrow_mut().push(bits);
+    }
+
+    fn build_value(&self, value: HostValue<'_>) -> Option<u64> {
+        let (bits, description) = match value {
+            HostValue::Undefined => (MOCK_UNDEFINED, "undefined".to_owned()),
+            HostValue::DomException { name, message } => {
+                (MOCK_DOM_EXCEPTION, format!("{name}: {message}"))
+            }
+        };
+        self.built.borrow_mut().push((bits, description));
+        Some(bits)
+    }
+
+    fn throw_value(&self, bits: u64) {
+        self.thrown.borrow_mut().push(bits);
     }
 }
 
@@ -801,5 +833,106 @@ fn a_reused_slots_listener_survives_a_drain_of_the_freed_nodes_ref() {
         f.mock.released.borrow().as_slice(),
         &[1],
         "and only the freed node's callback was released"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A JS-owned host object as a target
+// ---------------------------------------------------------------------------
+
+/// Inserts a fresh host record into the context's host slab and returns its key.
+///
+/// The record's payload is irrelevant to the dispatch algorithm — only the key
+/// is, because a host target's propagation path is the target alone — so the
+/// cheapest record stands in for an `AbortSignal`.
+fn host_key(ctx: &HostContext) -> HostKey {
+    ctx.host_records
+        .borrow_mut()
+        .insert(crate::bindings::host::HostRecord::Headers(
+            crate::bindings::host::HeadersRecord {
+                list: Vec::new(),
+                guard: crate::bindings::host::HeadersGuard::None,
+            },
+        ))
+}
+
+#[test]
+fn a_host_target_is_its_own_listener_bucket() {
+    let f = fixture();
+    let first = host_key(&f.ctx);
+    let second = host_key(&f.ctx);
+    assert_ne!(first, second, "two records are two keys");
+
+    let on_first = f
+        .ctx
+        .listeners
+        .borrow_mut()
+        .add_at(
+            TargetKey::Host(first),
+            "abort".to_owned(),
+            CallbackRef(1),
+            false,
+            false,
+            false,
+        )
+        .expect("listener added");
+    let on_second = f
+        .ctx
+        .listeners
+        .borrow_mut()
+        .add_at(
+            TargetKey::Host(second),
+            "abort".to_owned(),
+            CallbackRef(2),
+            false,
+            false,
+            false,
+        )
+        .expect("listener added");
+
+    let key = make_event(&f.ctx, "abort", false, false);
+    dispatch_at(&f.ctx, DispatchTarget::host(first), key, true).unwrap();
+
+    assert_eq!(
+        f.mock
+            .calls
+            .borrow()
+            .iter()
+            .map(|c| c.0)
+            .collect::<Vec<_>>(),
+        [1],
+        "only the dispatched-at key's listener runs"
+    );
+    assert_eq!(
+        f.ctx.events.borrow().get(key).unwrap().target,
+        Some(crate::bindings::host::encode_host(first)),
+        "script sees the host's own handle as the target"
+    );
+
+    let drained = f.ctx.drain_host_listeners(&[first]);
+    assert_eq!(
+        drained.iter().map(|cb| cb.0).collect::<Vec<_>>(),
+        [1],
+        "the drain reaches exactly the drained key's listener"
+    );
+    assert!(
+        !f.ctx
+            .listeners
+            .borrow()
+            .contains_at(TargetKey::Host(first), on_first)
+    );
+    assert!(
+        f.ctx
+            .listeners
+            .borrow()
+            .contains_at(TargetKey::Host(second), on_second),
+        "a different host key is untouched"
+    );
+    assert!(
+        !f.ctx
+            .listeners
+            .borrow()
+            .contains_at(TargetKey::Host(second), on_first),
+        "the drain of one key never reaches another key's bucket"
     );
 }

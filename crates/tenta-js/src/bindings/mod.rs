@@ -76,6 +76,8 @@ include!(concat!(env!("OUT_DIR"), "/text_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/url_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/url_search_params_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/headers_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/abort_signal_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/abort_controller_ops.rs"));
 
 include!(concat!(env!("OUT_DIR"), "/character_data_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_register.rs"));
@@ -125,6 +127,8 @@ include!(concat!(env!("OUT_DIR"), "/text_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/url_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/url_search_params_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/headers_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/abort_signal_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/abort_controller_register.rs"));
 
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/character_data_v8.rs"));
@@ -198,6 +202,10 @@ include!(concat!(env!("OUT_DIR"), "/url_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/url_search_params_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/headers_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/abort_signal_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/abort_controller_v8.rs"));
 
 pub mod host;
 
