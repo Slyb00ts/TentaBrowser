@@ -672,9 +672,9 @@ impl AddEventListenerOptionsOrBoolean {
     /// that selects it — a sequence by its `@@iterator`, a record by being an
     /// object that is not an array. The first arm that has no test of its own
     /// is the fallback.
-    pub fn from_v8(
-        scope: &mut v8::PinScope<'_, '_>,
-        value: v8::Local<v8::Value>,
+    pub fn from_v8<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
     ) -> Result<Self, JsError> {
         if value.is_object() {
             return (AddEventListenerOptions::from_v8(scope, value)).map(AddEventListenerOptionsOrBoolean::AddEventListenerOptions);
@@ -743,9 +743,9 @@ impl EventListenerOptionsOrBoolean {
     /// that selects it — a sequence by its `@@iterator`, a record by being an
     /// object that is not an array. The first arm that has no test of its own
     /// is the fallback.
-    pub fn from_v8(
-        scope: &mut v8::PinScope<'_, '_>,
-        value: v8::Local<v8::Value>,
+    pub fn from_v8<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
     ) -> Result<Self, JsError> {
         if value.is_object() {
             return (EventListenerOptions::from_v8(scope, value)).map(EventListenerOptionsOrBoolean::EventListenerOptions);
@@ -814,9 +814,9 @@ impl NodeOrDomString {
     /// that selects it — a sequence by its `@@iterator`, a record by being an
     /// object that is not an array. The first arm that has no test of its own
     /// is the fallback.
-    pub fn from_v8(
-        scope: &mut v8::PinScope<'_, '_>,
-        value: v8::Local<v8::Value>,
+    pub fn from_v8<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
     ) -> Result<Self, JsError> {
         if value.is_object() {
             return (handle_from_v8::<Node>(scope, value)).map(NodeOrDomString::Node);

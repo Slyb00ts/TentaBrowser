@@ -1,4 +1,5 @@
-//! DOM binding glue generated from `idl/dom` by `tenta-idl` (see `build.rs`).
+//! DOM binding glue generated from `idl/dom` and `idl/url` by `tenta-idl` (see
+//! `build.rs`).
 //!
 //! The engine-independent output (`prelude.rs`, `types.rs`, the `*Ops` traits
 //! and the `register_*` functions) is always compiled. The V8 glue (`*_v8.rs`)
@@ -72,6 +73,8 @@ include!(concat!(env!("OUT_DIR"), "/html_option_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_script_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/url_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/url_search_params_ops.rs"));
 
 include!(concat!(env!("OUT_DIR"), "/character_data_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_register.rs"));
@@ -118,6 +121,8 @@ include!(concat!(env!("OUT_DIR"), "/html_option_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_script_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/url_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/url_search_params_register.rs"));
 
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/character_data_v8.rs"));
@@ -185,6 +190,10 @@ include!(concat!(env!("OUT_DIR"), "/html_script_element_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/text_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/url_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/url_search_params_v8.rs"));
 
 pub mod host;
 
@@ -194,10 +203,9 @@ pub mod host;
 /// `entries`.
 ///
 /// The generated `entries`/`keys`/`values` callbacks need an interface with a
-/// host behind it, and nothing wires a pair-iterable interface up yet, so these
-/// tests reach the helpers directly. Without them `array_iterator` and the
-/// rethrow contract of `call_js_function` would only ever be compiled, never
-/// run.
+/// host behind it. `URLSearchParams` is one, but its callbacks run inside a page
+/// engine, so these tests reach the helpers on a bare isolate where the
+/// template's own behaviour can be observed directly.
 #[cfg(all(test, feature = "v8"))]
 mod prelude_helpers {
     use super::*;

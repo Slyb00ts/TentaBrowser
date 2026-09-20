@@ -18,6 +18,10 @@ use tenta_core::{Atom, NodeId, NodeRef};
 use tenta_dom::{Document, Mutation, NodeKind};
 use tenta_html::{ElementFlags, QualName, QuirksMode};
 
+// The generated name of the `URLSearchParams` constructor's `init` union. It is
+// spelled out of the union's own members, so the alias is the only way to read
+// this code.
+use super::SequenceOfSequenceOfUsvStringOrRecordOfUsvStringToUsvStringOrUsvString as ParamsInit;
 use super::{
     AddEventListenerOptionsOrBoolean, AnyValue, CSSStyleDeclaration, CSSStyleDeclarationOps,
     CharacterDataOps, Comment, CommentOps, CustomEventConstructor, CustomEventInit, CustomEventOps,
@@ -30,11 +34,12 @@ use super::{
     HTMLSelectElementOps, HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps,
     Handle, JsError, MouseEventConstructor, MouseEventInit, MouseEventOps, Node, NodeList,
     NodeListOps, NodeOps, Realm, SVGElementOps, Text, TextOps, UIEventConstructor, UIEventInit,
-    UIEventOps,
+    UIEventOps, URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor,
+    URLSearchParamsOps,
 };
 use crate::dom::events::{
-    CallbackRef, DispatchTarget, EventKey, EventKind, EventRecord, EventSlab, ListenerTable,
-    ScriptHost, TargetKey, dispatch, dispatch_at,
+    CallbackRef, DispatchTarget, EventKey, EventKind, EventRecord, EventSlab, GenKey, GenSlab,
+    ListenerTable, ScriptHost, TargetKey, dispatch, dispatch_at,
 };
 use crate::event_loop::SharedClock;
 
@@ -136,6 +141,77 @@ impl Default for SnapshotSlab {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Host records: URL and URLSearchParams
+// ---------------------------------------------------------------------------
+
+/// A key into a world's [`HostSlab`]; the payload of a [`TAG_HOST`] handle.
+pub type HostKey = GenKey;
+
+/// The generational slab of live `URL` and `URLSearchParams` records for one
+/// world.
+///
+/// It is a [`GenSlab`] rather than a [`SnapshotSlab`] because a host record has
+/// no document row to live in and no other referent: the wrapper is its owner,
+/// so the world frees the record when the wrapper is finalized, exactly as it
+/// frees an event record. A snapshot, by contrast, belongs to the context.
+pub type HostSlab = GenSlab<HostRecord>;
+
+/// The state behind one JS-owned host object that is not a node.
+pub enum HostRecord {
+    /// A `URL`.
+    Url(UrlRecord),
+    /// A `URLSearchParams`.
+    Params(ParamsRecord),
+}
+
+impl HostRecord {
+    /// The WebIDL interface this record's wrapper carries, which is the name the
+    /// wrapper world instantiates a template for. The handle tag cannot say it:
+    /// `URL` and `URLSearchParams` share [`TAG_HOST`], because a tag is eight
+    /// bits of a handle and there is no room for one per class.
+    pub fn interface_name(&self) -> &'static str {
+        match self {
+            HostRecord::Url(_) => "URL",
+            HostRecord::Params(_) => "URLSearchParams",
+        }
+    }
+}
+
+/// A `URL` record.
+pub struct UrlRecord {
+    /// The URL itself: the source of truth for every attribute, and for the
+    /// query its `URLSearchParams` observes.
+    pub url: url::Url,
+    /// The `[[searchParams]]` slot: the key of this URL's query object once one
+    /// has been created, `None` until it is. Creating it lazily and caching it
+    /// here is what both halves of the spec require — `url.searchParams` returns
+    /// the *same* object on every access, and a URL that is never asked for one
+    /// never builds it.
+    pub params: Option<HostKey>,
+    /// Whether this record still has a live wrapper.
+    ///
+    /// A URL record outlives its own wrapper while a live query object points at
+    /// it, because the object writes through to it; so "the wrapper is gone" and
+    /// "the record is free" are different states, and the record is freed only
+    /// once both are true.
+    pub has_wrapper: bool,
+}
+
+/// A `URLSearchParams` record.
+pub struct ParamsRecord {
+    /// The pair list. It is this object's own state when `url` is `None`; when
+    /// the object is a URL's query object, the URL's query is the source of
+    /// truth instead and this stays empty — a second copy is precisely the copy
+    /// that goes stale when script assigns `url.search` or `url.href` behind the
+    /// object's back.
+    pub list: Vec<(String, String)>,
+    /// The URL this object is the query object of, when it came from
+    /// `url.searchParams`. The reference is the spec's own: the query object
+    /// keeps its URL alive, and every mutation writes back through it.
+    pub url: Option<HostKey>,
+}
+
 /// The shared host context: document, snapshots, event state and the script
 /// callback boundary for one wrapper world.
 pub struct HostContext {
@@ -147,6 +223,11 @@ pub struct HostContext {
     pub listeners: RefCell<ListenerTable>,
     /// The live event records for this world.
     pub events: RefCell<EventSlab>,
+    /// The live `URL` and `URLSearchParams` records for this world. Unlike a
+    /// node, a `new URL()` has no document row to live in, so the record is the
+    /// whole of its state and its wrapper is its only owner — the event slab's
+    /// shape, not the snapshot slab's.
+    pub host_records: RefCell<HostSlab>,
     /// The engine's callback boundary, installed at `Engine::build` and cleared
     /// at teardown. `None` before installation and after teardown.
     pub script: RefCell<Option<Rc<dyn ScriptHost>>>,
@@ -170,6 +251,7 @@ impl HostContext {
             snapshots: RefCell::new(SnapshotSlab::new()),
             listeners: RefCell::new(ListenerTable::new()),
             events: RefCell::new(EventSlab::new()),
+            host_records: RefCell::new(HostSlab::new()),
             script: RefCell::new(None),
             clock,
             click_in_progress: RefCell::new(HashSet::new()),
@@ -305,6 +387,17 @@ pub enum HostObject {
         /// The context whose browsing context this is.
         ctx: SharedContext,
     },
+    /// A JS-owned object with no document row: an `URL` or a `URLSearchParams`.
+    ///
+    /// Its whole state is the slab record, and its wrapper is its only owner, so
+    /// the world reclaims the record when the wrapper is finalized — the `Event`
+    /// pattern, not the snapshot one.
+    Host {
+        /// The context holding the host-record slab.
+        ctx: SharedContext,
+        /// The key to the record in the slab.
+        key: HostKey,
+    },
 }
 
 impl HostObject {
@@ -353,6 +446,11 @@ impl HostObject {
         Self::Window { ctx }
     }
 
+    /// Builds the host for the `URL` or `URLSearchParams` record at `key`.
+    pub fn host_record(ctx: SharedContext, key: HostKey) -> Self {
+        Self::Host { ctx, key }
+    }
+
     /// The shared context this host belongs to.
     pub fn context(&self) -> &SharedContext {
         match self {
@@ -364,6 +462,7 @@ impl HostObject {
             | HostObject::Event { ctx, .. }
             | HostObject::TokenList { ctx, .. }
             | HostObject::Style { ctx, .. }
+            | HostObject::Host { ctx, .. }
             | HostObject::Window { ctx } => ctx,
         }
     }
@@ -395,6 +494,48 @@ impl HostObject {
         }
     }
 
+    /// Reads the `URL` this host stands for, or returns `default` when the host
+    /// is not a `URL` or its record has been reclaimed. The template's signature
+    /// brand check means only a `URL` wrapper can reach a `URL` member, so
+    /// `default` is unreachable in practice.
+    fn with_url<R>(&self, default: R, f: impl FnOnce(&url::Url) -> R) -> R {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::Url(record)) = ctx.host_records.borrow().get(*key)
+        {
+            return f(&record.url);
+        }
+        default
+    }
+
+    /// Mutates the `URL` this host stands for, if it is a live `URL`.
+    fn with_url_mut(&self, f: impl FnOnce(&mut url::Url)) {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::Url(record)) = ctx.host_records.borrow_mut().get_mut(*key)
+        {
+            f(&mut record.url);
+        }
+    }
+
+    /// Reads the pair list of the `URLSearchParams` this host stands for, or
+    /// returns `default` when the host is not one or its record has been
+    /// reclaimed.
+    fn with_params<R>(&self, default: R, f: impl FnOnce(&[(String, String)]) -> R) -> R {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(list) = host_pairs(&ctx.host_records.borrow(), *key)
+        {
+            return f(&list);
+        }
+        default
+    }
+
+    /// Mutates the pair list of the `URLSearchParams` this host stands for,
+    /// performing the URL Standard's update step. A no-op for any other host.
+    fn with_params_mut(&self, f: impl FnOnce(&mut Vec<(String, String)>)) {
+        if let HostObject::Host { ctx, key } = self {
+            mutate_pairs(&mut ctx.host_records.borrow_mut(), *key, f);
+        }
+    }
+
     /// The opaque handle bits this host stands for, tagged by variant so a node
     /// and its `NodeList` (and a recycled slot) never share a key.
     pub fn handle_bits(&self) -> u64 {
@@ -409,6 +550,7 @@ impl HostObject {
             HostObject::Event { key, .. } => encode_event(*key),
             HostObject::TokenList { owner, .. } => encode_token_list(*owner),
             HostObject::Style { owner, .. } => encode_style(*owner),
+            HostObject::Host { key, .. } => encode_host(*key),
             HostObject::Window { .. } => encode_window(),
         }
     }
@@ -428,6 +570,8 @@ impl HostObject {
             HostObject::StaticNodeList { ctx, .. } => (&ctx.doc, NodeId::NONE),
             HostObject::StaticHtmlCollection { ctx, .. } => (&ctx.doc, NodeId::NONE),
             HostObject::Event { ctx, .. } => (&ctx.doc, NodeId::NONE),
+            // A `URL` or `URLSearchParams` is not in the tree either.
+            HostObject::Host { ctx, .. } => (&ctx.doc, NodeId::NONE),
             // The window is not in the tree, so there is no node to anchor to.
             // It only reaches the anchored paths if a generated operation that
             // needs a node is somehow reachable on the window, which none is:
@@ -721,9 +865,7 @@ impl NodeOps for HostObject {
         let Some(other) = other else {
             return Ok(false);
         };
-        let decoded = decode(other.bits());
-        debug_assert_eq!(decoded.tag, TAG_NODE, "contains requires a Node handle");
-        let other_id = decoded.node_id;
+        let other_id = node_argument(other)?;
         let (doc, self_id) = self.anchor();
         let doc = doc.borrow();
         Ok(other_id == self_id || doc.ancestors(other_id).any(|ancestor| ancestor == self_id))
@@ -848,8 +990,7 @@ impl NodeOps for HostObject {
 
     fn append_child(&self, node: Handle<Node>) -> Result<Handle<Node>, JsError> {
         let (doc, self_id) = self.anchor();
-        let decoded = decode(node.bits());
-        let child_id = decoded.node_id;
+        let child_id = node_argument(node)?;
 
         let mut doc = doc.borrow_mut();
         doc.mutate(Mutation::Append {
@@ -869,11 +1010,11 @@ impl NodeOps for HostObject {
         child: Option<Handle<Node>>,
     ) -> Result<Handle<Node>, JsError> {
         let (doc, self_id) = self.anchor();
-        let decoded = decode(node.bits());
-        let node_id = decoded.node_id;
+        let node_id = node_argument(node)?;
 
         let before = child
-            .map(|h| decode(h.bits()).node_id)
+            .map(node_argument)
+            .transpose()?
             .unwrap_or(NodeId::NONE);
 
         let mut doc = doc.borrow_mut();
@@ -890,8 +1031,7 @@ impl NodeOps for HostObject {
 
     fn remove_child(&self, child: Handle<Node>) -> Result<Handle<Node>, JsError> {
         let (doc, _) = self.anchor();
-        let decoded = decode(child.bits());
-        let child_id = decoded.node_id;
+        let child_id = node_argument(child)?;
 
         let mut doc = doc.borrow_mut();
         doc.mutate(Mutation::Remove { child: child_id })
@@ -907,14 +1047,14 @@ impl NodeOps for HostObject {
         child: Handle<Node>,
     ) -> Result<Handle<Node>, JsError> {
         let (doc, self_id) = self.anchor();
-        let new_decoded = decode(node.bits());
-        let old_decoded = decode(child.bits());
+        let new_child = node_argument(node)?;
+        let old_child = node_argument(child)?;
 
         let mut doc = doc.borrow_mut();
         doc.mutate(Mutation::ReplaceChild {
             parent: self_id,
-            new_child: new_decoded.node_id,
-            old_child: old_decoded.node_id,
+            new_child,
+            old_child,
         })
         .map_err(|e| mutation_error(&e))?;
         drop(doc);
@@ -2904,6 +3044,574 @@ impl CSSStyleDeclarationOps for HostObject {
     }
 }
 
+// ---------------------------------------------------------------------------
+// URL and URLSearchParams
+// ---------------------------------------------------------------------------
+
+/// The `TypeError` the URL Standard raises for a string the URL parser rejects.
+fn invalid_url(property: &str) -> JsError {
+    JsError::type_error(format!(
+        "Failed to set the '{property}' property on 'URL': Invalid URL"
+    ))
+}
+
+/// Splits a `host[:port]` value the way the URL Standard's host state does.
+///
+/// `url::Url::set_host` takes a host alone and silently drops everything after a
+/// `:`, so leaving the split to it would drop the port of `url.host =
+/// 'example.com:8080'`. Brackets protect the colons of an IPv6 literal, which is
+/// why the closing bracket is searched for first.
+fn split_host_port(value: &str) -> (&str, Option<&str>) {
+    let host_end = if value.starts_with('[') {
+        match value.find(']') {
+            Some(index) => index + 1,
+            None => return (value, None),
+        }
+    } else {
+        value.find(':').unwrap_or(value.len())
+    };
+    match value[host_end..].strip_prefix(':') {
+        Some(port) => (&value[..host_end], Some(port)),
+        None => (value, None),
+    }
+}
+
+/// The URL Standard's sort order: UTF-16 code units.
+///
+/// It differs from comparing Rust strings (UTF-8 bytes, so scalar values) only
+/// where a non-BMP character meets one in `U+E000..=U+FFFF`, and sorting a query
+/// string differently from every other browser is not worth the saved iterator.
+fn cmp_code_units(left: &str, right: &str) -> std::cmp::Ordering {
+    left.encode_utf16().cmp(right.encode_utf16())
+}
+
+/// Parses an `application/x-www-form-urlencoded` byte string into a pair list.
+///
+/// This is the URL Standard's parser itself: `+` is a space, a `%XX` escape is
+/// decoded, and anything undecodable is replaced.
+fn parse_pairs(input: &str) -> Vec<(String, String)> {
+    url::form_urlencoded::parse(input.as_bytes())
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+        .collect()
+}
+
+/// Serializes a pair list as `application/x-www-form-urlencoded` — the inverse
+/// of [`parse_pairs`], and the serializer the spec names, so the surviving
+/// character set (`A-Za-z0-9*-._`, with a space as `+`) is not a choice made
+/// here.
+fn serialize_pairs(list: &[(String, String)]) -> String {
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    for (name, value) in list {
+        serializer.append_pair(name, value);
+    }
+    serializer.finish()
+}
+
+/// The pair list of the `URLSearchParams` at `key`, or `None` when the key names
+/// no such record.
+///
+/// A query object derives its pairs from its URL's *current* query on every
+/// read, because the URL is the shared source of truth: an assignment to
+/// `url.search` or `url.href` must be visible through a `URLSearchParams` that
+/// was obtained before it, and a stored copy would not see it. Deriving on read
+/// is also what keeps a read from rewriting the URL: the pair list of `?a` is
+/// `[('a', '')]`, whose serialization is `a=`, so only a *mutation* may perform
+/// the spec's update — the URL must not gain an `=` merely because something
+/// read its params.
+fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
+    let params = match slab.get(key)? {
+        HostRecord::Params(params) => params,
+        HostRecord::Url(_) => return None,
+    };
+    match params.url {
+        Some(owner) => match slab.get(owner)? {
+            HostRecord::Url(record) => Some(parse_pairs(record.url.query().unwrap_or(""))),
+            HostRecord::Params(_) => None,
+        },
+        None => Some(params.list.clone()),
+    }
+}
+
+/// Applies `f` to the pair list of the `URLSearchParams` at `key`, then performs
+/// the URL Standard's *update* step: the serialized list becomes the query of
+/// the owning URL, or the stored list of a standalone object.
+fn mutate_pairs(slab: &mut HostSlab, key: HostKey, f: impl FnOnce(&mut Vec<(String, String)>)) {
+    let owner = match slab.get(key) {
+        Some(HostRecord::Params(params)) => params.url,
+        _ => return,
+    };
+    let Some(mut list) = host_pairs(slab, key) else {
+        return;
+    };
+    f(&mut list);
+    match owner {
+        Some(owner) => {
+            // `set_query` takes the query without its `?`. The empty list
+            // serializes to the empty string, which is the query `''` and not
+            // `null` — `url.searchParams.delete(name)` leaves a trailing `?`,
+            // as the spec's update step requires.
+            let serialized = serialize_pairs(&list);
+            if let Some(HostRecord::Url(record)) = slab.get_mut(owner) {
+                record.url.set_query(Some(&serialized));
+            }
+        }
+        None => {
+            if let Some(HostRecord::Params(params)) = slab.get_mut(key) {
+                params.list = list;
+            }
+        }
+    }
+}
+
+/// The query object of the `URL` at `key`, creating and caching it on first
+/// access — the `[[searchParams]]` slot of the URL Standard.
+///
+/// The returned handle's bits are stable once the object exists, and a wrapper
+/// world keeps one wrapper per handle, so `url.searchParams` hands back the
+/// *same* JavaScript object on every read, as `[SameObject]` requires.
+fn url_search_params(ctx: &HostContext, key: HostKey) -> Result<Handle<URLSearchParams>, JsError> {
+    let mut slab = ctx.host_records.borrow_mut();
+    let cached = match slab.get(key) {
+        Some(HostRecord::Url(record)) => record.params,
+        _ => {
+            return Err(JsError::type_error(
+                "searchParams: the receiver is not a URL",
+            ));
+        }
+    };
+    let params_key = match cached {
+        Some(params_key) => params_key,
+        None => {
+            // The record starts with an empty list: a query object reads its
+            // pairs from its URL every time, so there is nothing to seed.
+            let params_key = slab.insert(HostRecord::Params(ParamsRecord {
+                list: Vec::new(),
+                url: Some(key),
+            }));
+            if let Some(HostRecord::Url(record)) = slab.get_mut(key) {
+                record.params = Some(params_key);
+            }
+            params_key
+        }
+    };
+    Ok(Handle::from_bits(encode_host(params_key)))
+}
+
+/// The link a host record holds to its counterpart, read out before either is
+/// touched: a `match` on `slab.get` borrows the slab for the whole match, so the
+/// two steps cannot be interleaved.
+enum HostLink {
+    /// The record is a URL holding this `[[searchParams]]` key, if any.
+    Url(Option<HostKey>),
+    /// The record is a query object holding the key of its URL, if any.
+    Params(Option<HostKey>),
+}
+
+/// Frees the host record of a wrapper that has just been finalized, along with
+/// the record that wrapper alone was keeping alive.
+///
+/// A URL and its query object point at each other: the object writes every
+/// mutation through to its URL, and the URL caches the object's key so that
+/// `url.searchParams` can return the same object twice. Either wrapper may be
+/// collected first, so this clears *both* links and frees a record only once
+/// nothing else refers to it:
+///
+///  - the object's wrapper dies: the object is freed, and its URL goes with it
+///    when that URL's own wrapper is already gone;
+///  - the URL's wrapper dies: the URL keeps its cached key while the object
+///    lives on, and is freed at once when no object was ever created.
+///
+/// Freeing a record that is still pointed at would be observable — the object
+/// would write into a recycled slot — while clearing the cached key without
+/// freeing the object would make the next `url.searchParams` a different
+/// object, which is the one thing `[SameObject]` forbids. Whichever of the two
+/// wrappers dies first, the other's reclamation finishes the job, so the two
+/// orders converge.
+pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) {
+    let link = match slab.get(key) {
+        Some(HostRecord::Url(record)) => HostLink::Url(record.params),
+        Some(HostRecord::Params(record)) => HostLink::Params(record.url),
+        None => return,
+    };
+    match link {
+        HostLink::Url(params) => {
+            if let Some(HostRecord::Url(record)) = slab.get_mut(key) {
+                record.has_wrapper = false;
+            }
+            // The record is free unless a live query object still writes
+            // through it.
+            let still_referenced = params.is_some_and(|params| slab.get(params).is_some());
+            if !still_referenced {
+                slab.remove(key);
+            }
+        }
+        HostLink::Params(owner) => {
+            slab.remove(key);
+            let Some(owner) = owner else {
+                return;
+            };
+            if let Some(HostRecord::Url(record)) = slab.get_mut(owner) {
+                // The cached key is cleared so a later `url.searchParams`
+                // creates a fresh object rather than a handle to a record that
+                // is gone.
+                record.params = None;
+            }
+            if matches!(slab.get(owner), Some(HostRecord::Url(record)) if !record.has_wrapper) {
+                slab.remove(owner);
+            }
+        }
+    }
+}
+
+impl URLOps for HostObject {
+    fn href(&self) -> Result<String, JsError> {
+        Ok(self.with_url(String::new(), |url| url.as_str().to_owned()))
+    }
+
+    fn set_href(&self, value: &str) -> Result<(), JsError> {
+        // The URL Standard makes this the one setter that throws: the value is
+        // parsed, and a parse failure leaves the URL untouched and raises a
+        // `TypeError`. That is why `href` carries `[Throws]` in the IDL and the
+        // generated glue takes the fallible path for it alone.
+        let parsed = url::Url::parse(value).map_err(|_| invalid_url("href"))?;
+        self.with_url_mut(|url| *url = parsed);
+        Ok(())
+    }
+
+    fn origin(&self) -> Result<String, JsError> {
+        // An opaque origin serializes as `"null"`, which is what the `url`
+        // crate's own serialization returns; a `blob:` URL is the common case.
+        Ok(self.with_url(String::from("null"), |url| {
+            url.origin().ascii_serialization()
+        }))
+    }
+
+    fn protocol(&self) -> Result<String, JsError> {
+        // The getter appends the `:` of the scheme delimiter, which the parser
+        // keeps out of `scheme()`.
+        Ok(self.with_url(String::new(), |url| format!("{}:", url.scheme())))
+    }
+
+    fn set_protocol(&self, value: &str) {
+        // A silent no-op on failure, as the spec's "return" is: the parser
+        // refuses a switch between the special and non-special schemes, a
+        // remaining `:` is a failure too (so one trailing `:` is stripped first),
+        // and `file:` is refused on any URL that carries an authority.
+        let scheme = value.strip_suffix(':').unwrap_or(value);
+        self.with_url_mut(|url| {
+            let _ = url.set_scheme(scheme);
+        });
+    }
+
+    fn username(&self) -> Result<String, JsError> {
+        Ok(self.with_url(String::new(), |url| url.username().to_owned()))
+    }
+
+    fn set_username(&self, value: &str) {
+        // The parser percent-encodes with the userinfo set, and refuses a URL
+        // that cannot carry credentials at all.
+        self.with_url_mut(|url| {
+            let _ = url.set_username(value);
+        });
+    }
+
+    fn password(&self) -> Result<String, JsError> {
+        Ok(self.with_url(String::new(), |url| url.password().unwrap_or("").to_owned()))
+    }
+
+    fn set_password(&self, value: &str) {
+        self.with_url_mut(|url| {
+            let _ = url.set_password(Some(value));
+        });
+    }
+
+    fn host(&self) -> Result<String, JsError> {
+        // The spec's `host` is the hostname followed by `:` and the port when
+        // there is one, so it is assembled rather than read from one accessor.
+        Ok(self.with_url(String::new(), |url| {
+            let host = url.host_str().unwrap_or("");
+            match url.port() {
+                Some(port) => format!("{host}:{port}"),
+                None => host.to_owned(),
+            }
+        }))
+    }
+
+    fn set_host(&self, value: &str) {
+        let (host, port) = split_host_port(value);
+        // The spec's `host` setter sets the host *and* the port, so a value with
+        // no port clears an existing one. A port the parser cannot read fails
+        // the whole parse, so the host is not written either — which is why the
+        // port is resolved before anything is touched.
+        let Some(port) = parse_port(port.unwrap_or("")) else {
+            return;
+        };
+        self.with_url_mut(|url| {
+            if url.set_host(Some(host)).is_err() {
+                return;
+            }
+            let _ = url.set_port(port);
+        });
+    }
+
+    fn hostname(&self) -> Result<String, JsError> {
+        Ok(self.with_url(String::new(), |url| url.host_str().unwrap_or("").to_owned()))
+    }
+
+    fn set_hostname(&self, value: &str) {
+        self.with_url_mut(|url| {
+            let _ = url.set_host(Some(value));
+        });
+    }
+
+    fn port(&self) -> Result<String, JsError> {
+        Ok(self.with_url(String::new(), |url| {
+            url.port().map(|port| port.to_string()).unwrap_or_default()
+        }))
+    }
+
+    fn set_port(&self, value: &str) {
+        self.with_url_mut(|url| set_port(url, value));
+    }
+
+    fn pathname(&self) -> Result<String, JsError> {
+        Ok(self.with_url(String::new(), |url| url.path().to_owned()))
+    }
+
+    fn set_pathname(&self, value: &str) {
+        self.with_url_mut(|url| url.set_path(value));
+    }
+
+    fn search(&self) -> Result<String, JsError> {
+        Ok(self.with_url(String::new(), |url| match url.query() {
+            // A null query and the empty query both serialize to "": a bare `?`
+            // is not part of `search`.
+            Some(query) if !query.is_empty() => format!("?{query}"),
+            _ => String::new(),
+        }))
+    }
+
+    fn set_search(&self, value: &str) {
+        // Only the *whole* value being empty clears the query; `'?'` on its own
+        // leaves a bare one. That asymmetry is the spec's: its setter tests the
+        // given value first and then strips one leading `?` from what is left,
+        // so `'?'` becomes the empty query rather than a null one.
+        if value.is_empty() {
+            self.with_url_mut(|url| url.set_query(None));
+            return;
+        }
+        let query = value.strip_prefix('?').unwrap_or(value);
+        self.with_url_mut(|url| url.set_query(Some(query)));
+    }
+
+    fn search_params(&self) -> Result<Handle<URLSearchParams>, JsError> {
+        match self {
+            HostObject::Host { ctx, key } => url_search_params(ctx, *key),
+            _ => Err(JsError::type_error(
+                "searchParams: the receiver is not a URL",
+            )),
+        }
+    }
+
+    fn hash(&self) -> Result<String, JsError> {
+        Ok(self.with_url(String::new(), |url| match url.fragment() {
+            Some(fragment) if !fragment.is_empty() => format!("#{fragment}"),
+            _ => String::new(),
+        }))
+    }
+
+    fn set_hash(&self, value: &str) {
+        // The same asymmetry as `search`: an empty value removes the fragment
+        // and its `#`, while `'#'` alone leaves a bare one.
+        if value.is_empty() {
+            self.with_url_mut(|url| url.set_fragment(None));
+            return;
+        }
+        let fragment = value.strip_prefix('#').unwrap_or(value);
+        self.with_url_mut(|url| url.set_fragment(Some(fragment)));
+    }
+
+    fn to_string(&self) -> Result<String, JsError> {
+        // The derived `toString` of `stringifier attribute USVString href` is
+        // the attribute's getter, which is `href` itself — named in full because
+        // the element traits declare an `href` of their own.
+        <Self as URLOps>::href(self)
+    }
+}
+
+/// Sets a URL's port from the string a setter was given, following the URL
+/// Standard's *port* state.
+fn set_port(url: &mut url::Url, value: &str) {
+    if let Some(port) = parse_port(value) {
+        // `set_port` also drops a port that is the scheme's default, which is
+        // the spec's own rule.
+        let _ = url.set_port(port);
+    }
+}
+
+/// The port the URL Standard's *port* state reads out of `value`: `Some(None)`
+/// for a value that clears the port, `Some(Some(port))` for one that sets it,
+/// and `None` for a value the state rejects.
+///
+/// The state reads the leading ASCII digits and ignores what follows, so
+/// `'8080abc'` sets port 8080 rather than failing; a value whose first character
+/// is not a digit fails the state, and the empty string clears the port. A port
+/// above `u16::MAX` is the state's own "greater than 2^16 - 1" failure.
+fn parse_port(value: &str) -> Option<Option<u16>> {
+    if value.is_empty() {
+        return Some(None);
+    }
+    let digits: String = value.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse::<u16>().ok().map(Some)
+}
+
+impl URLConstructor for HostObject {
+    fn construct(realm: &Realm, url: &str, base: Option<&str>) -> Result<Self, JsError> {
+        let invalid = || JsError::type_error("Failed to construct 'URL': Invalid URL");
+        let parsed = match base {
+            // A relative URL is resolved against the parsed base, so a base that
+            // does not itself parse fails the construction. The spec resolves
+            // against the *API base URL* — the document's — which is not
+            // modelled yet, so a relative URL with no base is the same failure
+            // here as an unparseable one.
+            Some(base) => url::Url::parse(base)
+                .and_then(|base| base.join(url))
+                .map_err(|_| invalid())?,
+            None => url::Url::parse(url).map_err(|_| invalid())?,
+        };
+        let ctx = realm_context(realm)?;
+        let key = ctx
+            .host_records
+            .borrow_mut()
+            .insert(HostRecord::Url(UrlRecord {
+                url: parsed,
+                params: None,
+                has_wrapper: false,
+            }));
+        Ok(HostObject::host_record(ctx, key))
+    }
+}
+
+impl URLSearchParamsOps for HostObject {
+    fn append(&self, name: &str, value: &str) -> Result<(), JsError> {
+        self.with_params_mut(|list| list.push((name.to_owned(), value.to_owned())));
+        Ok(())
+    }
+
+    fn delete(&self, name: &str, value: Option<&str>) -> Result<(), JsError> {
+        // `delete(name)` removes every pair with that name; `delete(name,
+        // value)` only the pairs matching both halves.
+        self.with_params_mut(|list| match value {
+            Some(value) => {
+                list.retain(|(pair_name, pair_value)| pair_name != name || pair_value != value)
+            }
+            None => list.retain(|(pair_name, _)| pair_name != name),
+        });
+        Ok(())
+    }
+
+    fn get(&self, name: &str) -> Result<Option<String>, JsError> {
+        Ok(self.with_params(None, |list| {
+            list.iter()
+                .find(|(pair_name, _)| pair_name == name)
+                .map(|(_, value)| value.clone())
+        }))
+    }
+
+    fn get_all(&self, name: &str) -> Result<Vec<String>, JsError> {
+        Ok(self.with_params(Vec::new(), |list| {
+            list.iter()
+                .filter(|(pair_name, _)| pair_name == name)
+                .map(|(_, value)| value.clone())
+                .collect()
+        }))
+    }
+
+    fn has(&self, name: &str, value: Option<&str>) -> Result<bool, JsError> {
+        Ok(self.with_params(false, |list| {
+            list.iter().any(|(pair_name, pair_value)| {
+                pair_name == name && value.is_none_or(|value| pair_value == value)
+            })
+        }))
+    }
+
+    fn set(&self, name: &str, value: &str) -> Result<(), JsError> {
+        self.with_params_mut(|list| {
+            // The first matching pair keeps its position and takes the new
+            // value; the rest are removed, and a name that matched nothing is
+            // appended.
+            let mut replaced = false;
+            list.retain_mut(|(pair_name, pair_value)| {
+                if pair_name != name {
+                    return true;
+                }
+                if replaced {
+                    return false;
+                }
+                replaced = true;
+                *pair_value = value.to_owned();
+                true
+            });
+            if !replaced {
+                list.push((name.to_owned(), value.to_owned()));
+            }
+        });
+        Ok(())
+    }
+
+    fn sort(&self) {
+        // `sort_by` is stable, which is what makes the spec's "pairs with the
+        // same name keep their relative order" hold.
+        self.with_params_mut(|list| {
+            list.sort_by(|(left, _), (right, _)| cmp_code_units(left, right));
+        });
+    }
+
+    fn iterable_entries(&self) -> Result<Vec<(String, String)>, JsError> {
+        // Re-derived on every iteration, so a `for...of` over
+        // `url.searchParams` sees the URL's query as it stands when the
+        // iteration begins.
+        Ok(self.with_params(Vec::new(), |list| list.to_vec()))
+    }
+
+    fn to_string(&self) -> Result<String, JsError> {
+        Ok(self.with_params(String::new(), serialize_pairs))
+    }
+}
+
+impl URLSearchParamsConstructor for HostObject {
+    fn construct(realm: &Realm, init: Option<ParamsInit>) -> Result<Self, JsError> {
+        let list = match init {
+            None => Vec::new(),
+            Some(ParamsInit::SequenceOfSequenceOfUsvString(pairs)) => {
+                let mut list = Vec::with_capacity(pairs.len());
+                for pair in pairs {
+                    // The URL Standard throws when an inner sequence does not
+                    // hold exactly two items. The generated union converter
+                    // collects any length, so the check belongs here.
+                    let [name, value] = pair.as_slice() else {
+                        return Err(JsError::type_error(
+                            "Failed to construct 'URLSearchParams': each item must be a pair",
+                        ));
+                    };
+                    list.push((name.clone(), value.clone()));
+                }
+                list
+            }
+            Some(ParamsInit::RecordOfUsvStringToUsvString(pairs)) => pairs,
+            // A string is parsed; the record arm is the plain list of pairs the
+            // converter already produced.
+            Some(ParamsInit::UsvString(init)) => parse_pairs(&init),
+        };
+        let ctx = realm_context(realm)?;
+        let key = ctx
+            .host_records
+            .borrow_mut()
+            .insert(HostRecord::Params(ParamsRecord { list, url: None }));
+        Ok(HostObject::host_record(ctx, key))
+    }
+}
+
 impl HostObject {
     /// Builds and dispatches the synthetic, untrusted `click` `MouseEvent` for
     /// [`HTMLElementOps::click`]. The event bubbles, is cancelable and composed,
@@ -2961,6 +3669,28 @@ impl HostObject {
         }
         dispatch_result.map(|_| ())
     }
+}
+
+/// Decodes the handle of a node-typed argument into the node id it names.
+///
+/// A generated binding hands an interface-typed argument to the host as bare
+/// handle bits, and the receiver's template signature says nothing about *which*
+/// interface the argument was — so `appendChild(url)` arrives with the bits of a
+/// `URL`. Those bits carry their own tag and a payload that is a host-record
+/// index, and using that payload as a node id would mutate an unrelated arena
+/// slot: silently wrong in release, and only a debug assertion away from an
+/// abort before. The tag is therefore checked here and a mismatch becomes the
+/// `TypeError` WebIDL's brand check would raise.
+///
+/// This is a check of the tag, not of the interface: what "a `Node`" means in
+/// the tree — `Document`, `Text`, `Element` and the rest — is decided by the
+/// arena, which rejects an id it never issued.
+fn node_argument(handle: Handle<Node>) -> Result<NodeId, JsError> {
+    let decoded = decode(handle.bits());
+    if decoded.tag != TAG_NODE {
+        return Err(JsError::type_error("the argument is not a Node"));
+    }
+    Ok(decoded.node_id)
 }
 
 /// Maps a `tenta_core::Error` from a mutation to a `JsError`. A DOM error
@@ -3229,6 +3959,11 @@ pub const TAG_STYLE: u8 = 7;
 /// It exists because the window is the outermost target of every event path,
 /// and a listener's `currentTarget` has to be the window object.
 pub const TAG_WINDOW: u8 = 8;
+/// Handle tag for a JS-owned host object that is not a node: an `URL` or a
+/// `URLSearchParams`, keyed into the host-record slab. The interface is named by
+/// the *record*, not by the tag, because the two share this one tag — the tag
+/// is 8 bits of a handle and there is no room for one per class.
+pub const TAG_HOST: u8 = 9;
 
 /// A handle decoded back into its parts.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -3250,10 +3985,20 @@ impl DecodedHandle {
             TAG_NODE | TAG_NODE_LIST | TAG_HTML_COLLECTION | TAG_TOKEN_LIST | TAG_STYLE => {
                 Some(self.node_id)
             }
-            // Snapshot tags 3 and 4, TAG_EVENT, and TAG_WINDOW: a window handle
-            // is deliberately not anchored to any node, so a sweep cannot
-            // mistake its zero payload for node 0.
+            // Snapshot tags 3 and 4, TAG_EVENT, TAG_WINDOW and TAG_HOST: none of
+            // them is anchored to a node. A window handle and a host handle are
+            // deliberately excluded so a sweep cannot mistake their small
+            // payload for a node id.
             _ => None,
+        }
+    }
+
+    /// Reconstructs a [`HostKey`] from decoded host handle parts. Only valid
+    /// when `tag` is [`TAG_HOST`].
+    pub fn host_key(&self) -> HostKey {
+        HostKey {
+            index: self.node_id.raw(),
+            generation: self.generation,
         }
     }
 
@@ -3332,6 +4077,18 @@ pub fn encode_snapshot(tag: u8, key: SnapshotKey) -> u64 {
 /// Packs an [`EventKey`] into [`TAG_EVENT`] handle bits.
 pub fn encode_event(key: EventKey) -> u64 {
     ((TAG_EVENT as u64) << TAG_SHIFT)
+        | (0u64 << DOC_SLOT_SHIFT)
+        | ((key.index as u64) << NODE_ID_SHIFT)
+        | (key.generation as u64)
+}
+
+/// Packs a [`HostKey`] into [`TAG_HOST`] handle bits.
+///
+/// The bits are the object's identity: the wrapper world keeps one wrapper per
+/// handle, so two accesses that produce the same key produce the same JS object.
+/// That is what makes `url.searchParams === url.searchParams` hold.
+pub fn encode_host(key: HostKey) -> u64 {
+    ((TAG_HOST as u64) << TAG_SHIFT)
         | (0u64 << DOC_SLOT_SHIFT)
         | ((key.index as u64) << NODE_ID_SHIFT)
         | (key.generation as u64)

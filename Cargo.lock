@@ -2397,6 +2397,7 @@ dependencies = [
  "tenta-html",
  "tenta-idl",
  "tenta-net",
+ "url",
  "v8",
 ]
 

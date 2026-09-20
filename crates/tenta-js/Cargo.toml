@@ -21,6 +21,10 @@ tenta-net = { workspace = true }
 tenta-dom = { workspace = true }
 tenta-html = { workspace = true }
 tenta-css = { workspace = true }
+# The `URL` and `URLSearchParams` hosts are the WHATWG URL parser and the
+# `application/x-www-form-urlencoded` serializer themselves; hand-writing
+# either is how the two get out of step with the rest of the browser tier.
+url = { workspace = true }
 v8 = { workspace = true, optional = true }
 
 [build-dependencies]

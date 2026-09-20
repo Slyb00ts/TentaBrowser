@@ -571,6 +571,18 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the MouseEvent interface");
+            // `URL` and `URLSearchParams` carry no parent chain of their own;
+            // their order among themselves does not matter, but
+            // `URLSearchParams` must precede no one either — `URL.searchParams`
+            // resolves the template through the isolate's cache at call time.
+            tenta_js::bindings::install_url_search_params::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the URLSearchParams interface");
+            tenta_js::bindings::install_url::<HostObject>(scope, global_template, &mut registry)
+                .expect("install the URL interface");
         }
 
         let local = v8::Context::new(

@@ -405,7 +405,7 @@ fn union_code(union: &Union, out: &mut String) {
          /// that selects it — a sequence by its `@@iterator`, a record by being an\n    \
          /// object that is not an array. The first arm that has no test of its own\n    \
          /// is the fallback.\n    \
-         pub fn from_v8(\n        scope: &mut v8::PinScope<'_, '_>,\n        value: v8::Local<v8::Value>,\n    ) -> Result<Self, JsError> {{\n"
+         pub fn from_v8<'s>(\n        scope: &mut v8::PinScope<'s, '_>,\n        value: v8::Local<'s, v8::Value>,\n    ) -> Result<Self, JsError> {{\n"
     );
     let mut fallback: Option<String> = None;
     for member in &union.members {
@@ -511,8 +511,13 @@ fn union_code(union: &Union, out: &mut String) {
 fn union_test(ty: &Type) -> Option<&'static str> {
     match ty {
         Type::Interface(_) | Type::Object | Type::Dictionary(_) => Some("value.is_object()"),
+        // WebIDL gates its sequence and record arms on `V` being an *object*:
+        // a string primitive has a `@@iterator` of its own, and probing for it
+        // without the gate would turn `new URLSearchParams('a=1')` into the
+        // sequence arm's `[['a'], ['='], ['1']]` instead of three minus one
+        // form-encoded pairs.
         Type::Sequence(_) | Type::FrozenArray(_) | Type::ObservableArray(_) => {
-            Some("has_iterator(scope, value)")
+            Some("value.is_object() && has_iterator(scope, value)")
         }
         Type::Record(_, _) => Some("value.is_object() && !value.is_array()"),
         Type::Boolean => Some("value.is_boolean()"),

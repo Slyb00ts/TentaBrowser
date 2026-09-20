@@ -1360,10 +1360,55 @@ fn finish_interface(interface: &mut Interface) {
             format!("construct_{}", constructor.arguments.len())
         };
     }
+    add_stringifier_member(interface);
     finish_members(&mut interface.members);
     for operation in &mut interface.special_operations {
         operation.fast = FastApi::Ineligible(NotFastBecause::Special);
     }
+}
+
+/// Adds the `toString` member a `stringifier` implies.
+///
+/// WebIDL's stringifier *is* the interface's `toString`: `stringifier attribute
+/// USVString href;` means `toString` returns `this.href`, `stringifier DOMString
+/// serialize();` means it is that operation, and a bare `stringifier;` leaves the
+/// result to the interface's own definition. The front end lowers all three
+/// spellings into [`Interface::stringifier`] but every generator works from
+/// *members*, so the derived operation is materialised here — once, ahead of
+/// every generator and both engines, rather than three times over. The body is
+/// the host's: only the interface knows whether `toString` forwards to an
+/// attribute's getter or serializes its own state.
+///
+/// A member the interface declares itself wins, as WebIDL requires, so an
+/// explicit `toString` suppresses the derived one.
+fn add_stringifier_member(interface: &mut Interface) {
+    if interface.stringifier.is_none() {
+        return;
+    }
+    let declared = interface
+        .members
+        .iter()
+        .any(|member| matches!(member, Member::Operation(group) if group.name == "toString"));
+    if declared {
+        return;
+    }
+    let group = OperationGroup {
+        name: "toString".to_string(),
+        is_static: false,
+        overloads: vec![Operation {
+            name: "toString".to_string(),
+            rust_name: String::new(),
+            arguments: Vec::new(),
+            return_type: Type::DomString,
+            attrs: ExtendedAttributes::default(),
+            special: None,
+            stringifier: true,
+            fast: FastApi::Eligible,
+        }],
+        fast: FastApi::Eligible,
+        origin: MemberOrigin::Interface,
+    };
+    push_member(&mut interface.members, Member::Operation(group));
 }
 
 fn finish_namespace(namespace: &mut Namespace) {

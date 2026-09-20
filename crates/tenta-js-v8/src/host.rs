@@ -276,9 +276,14 @@ fn event_listener_args(
 }
 
 /// `window.addEventListener(type, callback, options)`.
-fn window_add_event_listener(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
+///
+/// The lifetimes are named because the `options` union's `from_v8` ties its
+/// value to the scope it converts in: the generated converter builds a sequence
+/// from the value, so it needs the value to belong to the scope's handle
+/// partition, and the arguments object carries that same lifetime.
+fn window_add_event_listener<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut retval: v8::ReturnValue,
 ) {
     if args.length() < 2 {
@@ -321,9 +326,9 @@ fn window_add_event_listener(
 }
 
 /// `window.removeEventListener(type, callback, options)`.
-fn window_remove_event_listener(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
+fn window_remove_event_listener<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut retval: v8::ReturnValue,
 ) {
     if args.length() < 2 {

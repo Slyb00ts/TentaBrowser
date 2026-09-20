@@ -84,6 +84,37 @@ pub struct GeneratedFile {
 /// Files are read in sorted order so that the model, and therefore the
 /// generated code, does not depend on directory iteration order.
 pub fn parse_directory(directory: &Path) -> Result<Model> {
+    parse_directories([directory])
+}
+
+/// Parses the `.webidl` files of several directories as one compilation unit.
+///
+/// The directories are visited in the order given and the files within each in
+/// sorted order, so the model never depends on directory iteration order. The
+/// result is *one* model, not one per directory: [`generate`] emits `prelude.rs`
+/// and `types.rs` once per model, so a second directory generated on its own
+/// would write a second `prelude.rs` over the first. Naming an interface of one
+/// directory from another is part of the same point — `idl/url`'s `URL` declares
+/// a `URLSearchParams` attribute, and `idl/dom` and `idl/url` are lowered
+/// together.
+///
+/// Every named directory must hold at least one `.webidl` file, so a directory
+/// that was renamed or emptied fails loudly instead of silently contributing
+/// nothing.
+pub fn parse_directories<'a>(directories: impl IntoIterator<Item = &'a Path>) -> Result<Model> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for directory in directories {
+        paths.extend(webidl_paths(directory)?);
+    }
+    let mut sources = Vec::with_capacity(paths.len());
+    for path in &paths {
+        sources.push(std::fs::read_to_string(path).map_err(|e| Error::io(path, e))?);
+    }
+    parse_webidl_units(sources.iter().map(String::as_str))
+}
+
+/// The `.webidl` files of `directory`, sorted by path.
+fn webidl_paths(directory: &Path) -> Result<Vec<PathBuf>> {
     let mut paths: Vec<PathBuf> = std::fs::read_dir(directory)
         .map_err(|e| Error::io(directory, e))?
         .filter_map(|entry| entry.ok())
@@ -97,11 +128,7 @@ pub fn parse_directory(directory: &Path) -> Result<Model> {
             directory.display()
         )));
     }
-    let mut sources = Vec::with_capacity(paths.len());
-    for path in &paths {
-        sources.push(std::fs::read_to_string(path).map_err(|e| Error::io(path, e))?);
-    }
-    parse_webidl_units(sources.iter().map(String::as_str))
+    Ok(paths)
 }
 
 /// Generates every output file for a model.
@@ -165,7 +192,20 @@ pub fn generate(model: &Model) -> Vec<GeneratedFile> {
 ///
 /// This is what a feature crate's `build.rs` calls; see `docs/dev/idl.md`.
 pub fn generate_directory(idl_dir: &Path, out_dir: &Path) -> Result<Vec<PathBuf>> {
-    let model = parse_directory(idl_dir)?;
+    generate_directories([idl_dir], out_dir)
+}
+
+/// Generates every output file for several IDL directories into `out_dir`.
+///
+/// The directories are lowered as one unit (see [`parse_directories`]) and
+/// generated once, so `prelude.rs` and `types.rs` are written exactly once no
+/// matter how many directories contributed. The caller is responsible for
+/// emitting one `cargo:rerun-if-changed` per directory.
+pub fn generate_directories<'a>(
+    directories: impl IntoIterator<Item = &'a Path>,
+    out_dir: &Path,
+) -> Result<Vec<PathBuf>> {
+    let model = parse_directories(directories)?;
     std::fs::create_dir_all(out_dir).map_err(|e| Error::io(out_dir, e))?;
     let mut written = Vec::new();
     for file in generate(&model) {

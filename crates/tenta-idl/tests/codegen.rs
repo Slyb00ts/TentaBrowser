@@ -399,8 +399,8 @@ fn a_union_arm_is_selected_by_its_own_test_in_declaration_order() {
     let v8 = impl_body(&contents, &model.unions[0].name, "v8");
 
     let sequence_at = v8
-        .find("if has_iterator(scope, value) {")
-        .expect("the sequence arm is selected by its `@@iterator`");
+        .find("if value.is_object() && has_iterator(scope, value) {")
+        .expect("the sequence arm is selected by its `@@iterator`, on an object");
     let record_at = v8
         .find("if value.is_object() && !value.is_array() {")
         .expect("the record arm is selected as an object that is not an array");
