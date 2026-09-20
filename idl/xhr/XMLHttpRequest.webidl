@@ -1,15 +1,15 @@
 // Minimal XMLHttpRequest WebIDL for the P2 package (c) bindings
-// (`docs/spec/05-javascript.md`), slice b-5a. The member text is copied from the
-// XHR Standard's own IDL index (<https://xhr.spec.whatwg.org/>), so the names,
-// types and order are the spec's; the members it does not list are the ones this
-// slice does not implement.
+// (`docs/spec/05-javascript.md`), slices b-5a and b-5a2. The member text is
+// copied from the XHR Standard's own IDL index (<https://xhr.spec.whatwg.org/>),
+// so the names, types and order are the spec's; the members it does not list are
+// the ones this product does not implement.
 //
-// This slice brings the object into existence and implements the first two
-// states of its state machine, `UNSENT` and `OPENED`. **Nothing is sent.**
-// The response state machine, its accessors and the events that go with it,
-// driven by completions through the seam slice b-4 landed, are the next slice
-// (b-5a2); `send()` and `setRequestHeader()` with the driver seam are the one
-// after (b-5a3).
+// This file covers the object's first half: the five states of its state
+// machine, the request `open()` sets up, and the response the machine stores,
+// with the accessors and events that go with it. **Nothing is sent**: a
+// completion is delivered to the object through the seam slice b-4 landed, and
+// `send()` and `setRequestHeader()` with the driver seam are the slice after
+// this one (b-5a3).
 //
 // Deferred, and not declared here. Each is recorded rather than stubbed, because
 // a declared-but-unimplemented member is the bug class 4a removed:
@@ -19,34 +19,34 @@
 //    where the network driver is reached; a `send()` that returned without a
 //    request would leave the object in a state the page cannot distinguish from
 //    a slow response.
-//  - `undefined abort()`. The state machine is not there yet, so there is
-//    nothing to abort and no `abort` event to fire.
+//  - `undefined abort()`. The state machine exists now, but nothing is ever in
+//    flight, so there is no request to terminate and no reason to enter the
+//    `abort` path that would fire an `abort` event. It arrives with `send()`.
 //  - `[SameObject] readonly attribute XMLHttpRequestUpload upload`, and the
 //    `XMLHttpRequestUpload` interface with it. The object would be inert — no
 //    upload progress can be reported before `send()` — and an inert target
 //    invites handlers that can never fire. This is a deviation from the
 //    standard, recorded rather than implemented.
 //  - `readonly attribute USVString responseURL`, `readonly attribute any
-//    response` and `readonly attribute Document? responseXML`: the response
-//    state machine (b-5a2). `response` in particular needs the response type's
-//    conversions (`arraybuffer`, `blob`, `json`), which cannot produce a value
-//    before there is a response to convert.
-//  - `[Exposed=Window] readonly attribute Document? responseXML` is
-//    additionally gated on a `Document` response type that this slice refuses
-//    (see `responseType`), so it lands with the response object rather than
-//    before it.
+//    response` and `readonly attribute Document? responseXML`. The machine and
+//    the text response are here, but `response` needs the response type's
+//    conversions (`arraybuffer`, `blob`, `json`), each of which needs an
+//    interface this engine has no value for yet, `responseXML` needs a document
+//    the parsed body would build, and `responseURL` needs the URL field the
+//    transport does not carry at this boundary. Every one of them is recorded
+//    rather than declared with a stand-in value.
 //
 // `[Throws]` is this repository's spelling for "this member can fail, so it
 // takes the fallible, non-fast-API path" (`idl/dom/AbortSignal.webidl`): a fast
 // callback cannot raise an exception at all, so a refusal written into one would
-// be lost. This slice marks every member that refuses a value: the `open`
-// operation, `overrideMimeType`, and the `timeout`, `withCredentials` and
+// be lost. Every member that can raise is marked: the `open` operation, the
+// `overrideMimeType` operation, and the `timeout`, `withCredentials` and
 // `responseType` setters. The `[Throws]` on an attribute leaves its *getter*
 // fast-API eligible, which is why `timeout` and `withCredentials` still read
 // back as primitives.
 //
-// Five deliberate deviations from the standard, all of them narrowings this
-// slice is responsible for:
+// Four deliberate deviations from the standard, all of them narrowings this
+// engine is responsible for:
 //
 //  - `open()` refuses `async = false` with a `NotSupportedError`. A synchronous
 //    request cannot be expressed by the network driver and would block the
@@ -62,10 +62,16 @@
 //  - `responseType` accepts only `""` and `"text"`, the two values a decoded
 //    text response can serve; every other value of the (fully declared)
 //    enumeration is refused with a `NotSupportedError`.
-//  - `overrideMimeType` is refused with a `NotSupportedError` rather than
-//    stored: an override exists to make the body decode as something other than
-//    its `Content-Type` says, and this slice has neither a response nor a
-//    decoding step.
+//
+// One more deviation is a limit of the transport rather than a narrowing:
+// `statusText` reads back as the status code's canonical reason text, and an
+// empty string for a status that has none, because the response the driver
+// hands over carries no reason phrase for the server's own to come from.
+//
+// `overrideMimeType` is *not* on either list. It stores the MIME type it is
+// given — the `charset` parameter of it is what a text response decodes with —
+// and raises only where the standard raises: an `InvalidStateError` when the
+// state is `LOADING` or `DONE`.
 //
 // `XMLHttpRequestEventTarget` and the `EventHandler` declarations live in the
 // sibling file; the lexer lowers all of `idl/` as one model, so the parent and

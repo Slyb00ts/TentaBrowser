@@ -673,6 +673,21 @@ impl DispatchTarget {
         }
     }
 
+    /// The host record this target dispatches at, or `None` for a target that
+    /// is a node or the window.
+    ///
+    /// The XHR completion route needs it: a completion names its target as
+    /// opaque bits, and the object the bits name is the object whose state
+    /// machine has to run — so the key has to come back out of the target the
+    /// bits were decoded into. It is the record, not the tag, that says which
+    /// interface an `XMLHttpRequest` is (see [`TargetKey::Host`]).
+    pub fn host_key(&self) -> Option<HostKey> {
+        match self.target {
+            TargetKey::Host(key) => Some(key),
+            TargetKey::Node(_) | TargetKey::Window => None,
+        }
+    }
+
     /// The dispatch target a handle's bits name, or `None` for a handle that is
     /// not an event target (a `NodeList`, an `Event`, a `URL`, …).
     ///

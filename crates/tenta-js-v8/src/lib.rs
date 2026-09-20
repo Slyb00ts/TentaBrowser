@@ -23,9 +23,10 @@ use std::sync::Once;
 
 use tenta_js::bindings::WrapperWorld;
 use tenta_js::bindings::host::{
-    HostContext, HostObject, SharedContext, SharedDocument, encode_host, insert_fetched_response,
+    HostContext, HostObject, SharedContext, SharedDocument, deliver_xhr_completion, encode_host,
+    insert_fetched_response,
 };
-use tenta_js::bindings::{Handle, handle_to_v8};
+use tenta_js::bindings::{Handle, handle_from_v8, handle_to_v8};
 use tenta_js::dom::events::{DispatchTarget, EventKind, EventRecord, ScriptHost, dispatch_at};
 use tenta_js::engine::ScriptErrorKind;
 use tenta_js::event_loop::{Clock, EventLoop, FiringRelease, MonoTime};
@@ -837,6 +838,45 @@ impl Engine {
             .unwrap_or(0)
     }
 
+    /// The handle bits of the interface object the global expression
+    /// `expression` evaluates to (test-only).
+    ///
+    /// A driver learns its target's bits from the object itself, and no page
+    /// script can hand them to Rust: they are the wrapper world's private
+    /// identity for the object, not a value any surface exposes. So a test that
+    /// has to deliver a *native* completion at an object it created from script
+    /// — an `XMLHttpRequest` its own completion drives — has no way to name
+    /// that object, and this is that way. Nothing but a test reads it.
+    ///
+    /// The expression is compiled and run rather than looked up on the global
+    /// object, because a `v8::Object::get` on a context's global proxy does not
+    /// reach the global object's own properties (the same measured fact the
+    /// wrapper world's own receiver path is built around).
+    ///
+    /// `T` types the returned handle only: the world's conversion asks the
+    /// object for its bits and does not check the interface it was named with,
+    /// so any marker answers for any object. `None` when the expression throws,
+    /// or when it names neither an interface object nor the window.
+    pub fn global_handle_bits<T: tenta_js::bindings::InterfaceMarker>(
+        &mut self,
+        expression: &str,
+    ) -> Option<Handle<T>> {
+        // Running the expression is entering script, so this entry clears a
+        // termination a watchdog left pending, like every other way in.
+        self.discard_stray_termination();
+        v8::scope!(let handle_scope, &mut self.isolate);
+        let context = v8::Local::new(handle_scope, &self.context);
+        let mut context_scope = v8::ContextScope::new(handle_scope, context);
+        v8::scope!(let scope, &mut context_scope);
+        // A `TryCatch` so an expression that throws leaves no pending exception
+        // behind on the isolate.
+        v8::tc_scope!(let tc, scope);
+        let source = v8::String::new(tc, expression)?;
+        let script = v8::Script::compile(tc, source, None)?;
+        let value = script.run(tc)?;
+        handle_from_v8::<T>(tc, value).ok()
+    }
+
     /// Like [`Engine::evaluate`], but a watchdog thread requests termination if
     /// the script runs longer than `timeout` (`docs/spec/05-javascript.md` §11).
     pub fn evaluate_with_timeout(
@@ -1181,12 +1221,16 @@ impl Engine {
     /// - An empty batch returns before anything else, exactly as
     ///   [`Self::settle_fetches`] does: an entry that delivers nothing must not
     ///   arm the watchdog, charge the script budget or clear a termination.
-    /// - The `outcome` is mapped here and nowhere else, so it is the one place
-    ///   the response-vs-failure decision is made: a completed response is a
-    ///   `load` event and anything else is an `error`. The two are
-    ///   `ProgressEvent`s (the standard's four XHR progress events are), with the
-    ///   init defaults — the loaded/total accounting belongs to the XHR route
-    ///   that produces the body (b-6).
+    /// - An `outcome` at an `XMLHttpRequest` is delivered by the standard's own
+    ///   response state machine, which lives in `tenta-js`
+    ///   ([`deliver_xhr_completion`]) and fires the events it prescribes — the
+    ///   readystate changes, the two `progress` events of a body, `load` and
+    ///   `loadend`, or `error` and `loadend` for a failure. A completion at any
+    ///   *other* target is still mapped here, one event per outcome: a response
+    ///   is a `load` and anything else an `error`, both of them
+    ///   `ProgressEvent`s with the init defaults. That fallback is what keeps
+    ///   this entry total for a target that is not an XHR at all, and a `true`
+    ///   return from the machine is the only thing that suppresses it.
     pub fn settle_xhr(&mut self, completions: Vec<XhrCompletion>) {
         if completions.is_empty() {
             return;
@@ -1211,6 +1255,9 @@ impl Engine {
             let Some(target) = DispatchTarget::from_bits(completion.target) else {
                 continue;
             };
+            if deliver_xhr_completion(&dom.ctx, target, &completion.outcome) {
+                continue;
+            }
             let type_ = match completion.outcome {
                 FetchOutcome::Response(_) => "load",
                 FetchOutcome::Failed(_) => "error",

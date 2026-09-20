@@ -51,7 +51,7 @@ use crate::dom::events::{
     dispatch, dispatch_at,
 };
 use crate::event_loop::SharedClock;
-use crate::fetch::FetchedResponse;
+use crate::fetch::{FetchOutcome, FetchedResponse};
 
 /// A document shared between the host objects of one world and the engine that
 /// drives it. Every `HostObject` for the document holds one of these clones, so
@@ -364,14 +364,74 @@ impl ResponseRecord {
     }
 }
 
+/// An `XMLHttpRequest`'s *response*: the fields the response members read.
+///
+/// A completed request is delivered as plain data
+/// ([`FetchedResponse`](crate::fetch::FetchedResponse)), and this is that data
+/// sanitized the way a `Response` record's is: a name Fetch calls a *forbidden
+/// response-header name*, a name that is not an HTTP field name and a value
+/// holding a NUL, CR or LF are each dropped rather than faulting the whole
+/// response. Two records are now built from the same driver data, which is why
+/// the sanitizing is applied here rather than in the driver.
+pub struct XhrResponse {
+    /// The response's *status*.
+    status: u16,
+    /// The response's *status message*.
+    ///
+    /// [`http::StatusCode::canonical_reason`]'s text rather than the reason
+    /// phrase the server sent: `FetchedResponse` has no field for one, so the
+    /// wire's is not available at this boundary. A status with no canonical
+    /// reason reads back as the empty byte sequence.
+    status_text: Vec<u8>,
+    /// The response's *header list*: names byte-lowercased, values normalized,
+    /// forbidden names dropped.
+    headers: HeaderList,
+    /// The response's *body*, or `None` for a null body.
+    body: Option<Vec<u8>>,
+}
+
+impl XhrResponse {
+    /// The response a completed request delivers.
+    fn from_fetched(data: &FetchedResponse) -> XhrResponse {
+        let context = "XMLHttpRequest";
+        let status_text = http::StatusCode::from_u16(data.status)
+            .ok()
+            .and_then(|status| status.canonical_reason())
+            .map_or_else(Vec::new, |reason| reason.as_bytes().to_vec());
+        let headers = data
+            .headers
+            .iter()
+            .filter_map(|(name, value)| {
+                let (name, value) = checked_header(context, name.as_bytes(), value).ok()?;
+                (!is_forbidden_response_header_name(&name)).then_some((name, value))
+            })
+            .collect();
+        // A null-body status carries no body whatever the driver reported, the
+        // rule `insert_fetched_response` applies for the same reason: the
+        // status is what says a response may not have one. A body the driver
+        // reports as `None` for any other status is a null body too — the
+        // state machine keys on the body, not on the status.
+        let body = match ResponseRecord::is_null_body_status(data.status) {
+            true => None,
+            false => data.body.clone(),
+        };
+        XhrResponse {
+            status: data.status,
+            status_text,
+            headers,
+            body,
+        }
+    }
+}
+
 /// An `XMLHttpRequest` record.
 ///
-/// The record *is* the standard's request object, reduced to the part the first
-/// slice of the surface implements: the two states `UNSENT` and `OPENED`, the
-/// request `open()` sets up, and the four request attributes. Nothing is sent,
-/// so there is no `send()` flag, no response, no received bytes and no author
-/// request headers to hold — the fields here are the ones the standard's
-/// `open()` steps write, and the ones a later slice reads.
+/// The record *is* the standard's request object, reduced to the part this
+/// product's surface implements: the five states, the request `open()` sets up,
+/// the four request attributes, and the response a completion stores. Nothing is
+/// sent yet, so there is still no `send()` flag, no author request headers and no
+/// request body to hold — the fields here are the ones the standard's `open()`
+/// steps and its response machine write.
 ///
 /// The record is also the object's *event target key*: an `XMLHttpRequest` is an
 /// `EventTarget` that is neither a node nor the window, so its listeners live
@@ -379,17 +439,17 @@ impl ResponseRecord {
 /// `readystatechange` is dispatched at it. That is why the record has to outlive
 /// its own wrapper's listeners rather than being rebuilt from them.
 pub struct XhrRecord {
-    /// The *state*, which the five constants name: `UNSENT` (0) or `OPENED` (1)
-    /// in this slice. `HEADERS_RECEIVED`, `LOADING` and `DONE` arrive with the
-    /// response state machine (b-5a2).
+    /// The *state*, which the five constants name: the response machine writes
+    /// `HEADERS_RECEIVED`, `LOADING` and `DONE` as a completion is delivered.
     pub ready_state: u16,
     /// The *request method*, once `open()` has validated and normalised it.
     ///
-    /// Nothing reads the method or the URL yet. They are `open()`'s own step 8
-    /// state, kept because b-5a3 builds the `FetchRequest` out of them rather
-    /// than out of arguments it would have to be handed a second time — and
-    /// because a state machine that forgot what it was opened with would not be
-    /// the standard's.
+    /// Nothing reads the method or the URL yet. They are *reset associated
+    /// variables* state: steps 2 to 6 validate and normalise them and step 11
+    /// writes them. They are kept because b-5a3 builds the `FetchRequest` out of
+    /// them rather than out of arguments it would have to be handed a second
+    /// time, and because a state machine that forgot what it was opened with
+    /// would not be the standard's.
     pub method: Option<String>,
     /// The *request URL*: the parsed `url` argument, resolved against the
     /// document's URL.
@@ -402,6 +462,30 @@ pub struct XhrRecord {
     pub with_credentials: bool,
     /// The *response type*, which the setter narrows to `""` and `"text"`.
     pub response_type: XMLHttpRequestResponseType,
+    /// The *response*: the answer the last completion delivered, or `None`
+    /// while there is none.
+    ///
+    /// `None` is the standard's *network error*, and it is the value a fresh
+    /// object and a re-opened one both hold, which is what makes the response
+    /// members answer `0` / `""` / `null` in `UNSENT` and `OPENED` without a
+    /// rule of their own.
+    ///
+    /// Stored inline rather than as an owned host record: `open()` and a later
+    /// `send()` *replace* the response, and a plain drop is the whole of that
+    /// replacement, where an owned key would have to be freed at every
+    /// replacement point as well as at wrapper death.
+    pub response: Option<XhrResponse>,
+    /// The `charset` of the MIME type `overrideMimeType` stored, or `None` when
+    /// it has none.
+    ///
+    /// Only the `charset` is kept, because it is the only parameter a text
+    /// response reads — and a value that fails to parse is stored as
+    /// `application/octet-stream`, whose `charset` is likewise absent, so the
+    /// two are one `None` here.
+    ///
+    /// `open()` does not clear it: the standard says so explicitly, because
+    /// `overrideMimeType()` may be called before `open()`.
+    pub override_charset: Option<Vec<u8>>,
 }
 
 /// An `AbortController` record.
@@ -6018,9 +6102,14 @@ impl XMLHttpRequestOps for HostObject {
         // Step 10 ("terminate this's fetch controller") and the rest of step 11
         // have nothing to act on: nothing is sent in this slice, so there is no
         // request in flight to terminate, no `send()` flag, no author request
-        // headers, no body, no response and no received bytes. The two parts of
-        // step 11 a record exists for are the request method and the request URL,
-        // which b-5a3 builds its `FetchRequest` from.
+        // headers and no body. The parts of step 11 a record exists for are the
+        // request method and the request URL, which b-5a3 builds its
+        // `FetchRequest` from, and the *response*, which is reset here — "set
+        // this's response to a network error", with the received bytes and the
+        // response object — so that a request whose answer already arrived
+        // answers `0` / `""` / `null` again once it is re-opened. The override
+        // MIME type is deliberately not reset, and the standard says why: it may
+        // be set before `open()` is called.
         //
         // Step 12: "if this's state is not opened, then set this's state to
         // opened and fire an event named readystatechange at this". A second
@@ -6032,6 +6121,7 @@ impl XMLHttpRequestOps for HostObject {
         let opened = self.with_xhr_mut(false, |record| {
             record.method = Some(normalized);
             record.url = Some(parsed);
+            record.response = None;
             let opened = record.ready_state != <HostObject as XMLHttpRequestOps>::OPENED;
             record.ready_state = <HostObject as XMLHttpRequestOps>::OPENED;
             opened
@@ -6073,10 +6163,11 @@ impl XMLHttpRequestOps for HostObject {
     }
 
     fn set_timeout(&self, value: u32) -> Result<(), JsError> {
-        // The standard stores any value here and fires a `timeout` event when
-        // the request outlives it. Nothing in this slice can time a request out
-        // — nothing is sent — so a non-zero value is refused rather than
-        // stored: keeping it would promise an event that can never fire.
+        // The standard stores any value here and arms it in `send()`, firing a
+        // `timeout` event when the request outlives it. Nothing here can time a
+        // request out — nothing is sent — so a non-zero value is refused rather
+        // than stored: keeping it would promise an event that can never fire.
+        // The refusal is lifted where the attribute is armed, not before.
         if value != 0 {
             return Err(JsError::dom_exception(
                 "NotSupportedError",
@@ -6107,40 +6198,117 @@ impl XMLHttpRequestOps for HostObject {
     }
 
     fn status(&self) -> u16 {
-        // "If this's state is unsent or opened, then return 0." Those are the
-        // only two states this slice has, so the answer is the standard's own
-        // and not a stub.
-        0
+        // One delegating step: "return this's response's status". There is no
+        // per-state rule to write, because the state that has no answer is
+        // exactly the state whose response *is* Fetch's network error, whose
+        // status is 0 — so `None` here is the standard's value and not a stub.
+        self.with_xhr(0, |record| {
+            record
+                .response
+                .as_ref()
+                .map_or(0, |response| response.status)
+        })
     }
 
     fn status_text(&self) -> Result<Vec<u8>, JsError> {
-        // "If this's state is unsent or opened, then return the empty
-        // bytestring", as above.
-        Ok(Vec::new())
+        // "Return this's response's status message", the network error's being
+        // the empty byte sequence. See `status` for why there is no state test.
+        Ok(self.with_xhr(Vec::new(), |record| {
+            record
+                .response
+                .as_ref()
+                .map_or_else(Vec::new, |response| response.status_text.clone())
+        }))
     }
 
-    fn get_response_header(&self, _name: &[u8]) -> Result<Option<String>, JsError> {
-        // "If this's state is unsent or opened, then return null." The header
-        // *name* still converts, which is why the argument is not dropped before
-        // this point.
-        Ok(None)
+    fn get_response_header(&self, name: &[u8]) -> Result<Option<String>, JsError> {
+        // One step: "return the result of getting name from this's response's
+        // header list", which is Fetch's *get* — `combined_header_value`, the
+        // same function `Headers` reads through — and its answer for a name the
+        // list does not hold is null, never the empty string
+        // (`xhr/getresponseheader-case-insensitive.htm`). An unsent or opened
+        // object answers null for every name, because a network error's header
+        // list is empty.
+        //
+        // Fetch's *get* matches byte-case-insensitively and every stored name is
+        // already byte-lowercase, so the argument is lowercased rather than
+        // parsed. Parsing is what `Headers.get` does, through
+        // `normalize_header_name`, and it *throws* for a name that is not an
+        // HTTP token — but this member has no such step: a name that is not a
+        // header name is a name the list does not hold, so
+        // `getResponseHeader('x-custom-header ')`, `'x¾'` and `'x:'` are each
+        // null (`xhr/getresponseheader-special-characters.htm`).
+        let name = name.to_ascii_lowercase();
+        let value = self.with_xhr(None, |record| {
+            record
+                .response
+                .as_ref()
+                .and_then(|response| combined_header_value(&response.headers, &name))
+        });
+        // A header value is a byte sequence and the IDL declares this member a
+        // `DOMString?`, so it reaches script through the Encoding Standard's
+        // UTF-8 decode: obs-text is not UTF-8, and a value holding it reads back
+        // with U+FFFD in place of the bytes that are not.
+        Ok(value.map(|value| String::from_utf8_lossy(&value).into_owned()))
     }
 
     fn get_all_response_headers(&self) -> Result<Vec<u8>, JsError> {
-        // "If this's state is unsent or opened, then return the empty
-        // bytestring", as above.
-        Ok(Vec::new())
+        // "Let initialHeaders be the result of running sort and combine with
+        // this's response's header list", then "let headers be the result of
+        // sorting initialHeaders in ascending order, with a being less than b if
+        // a's name is legacy-uppercased-byte less than b's name". The second sort
+        // is the one place this member is not byte order: the comparison
+        // byte-uppercases both names first, "unfortunately needed for
+        // compatibility with deployed content", so `x-mix` sorts before
+        // `x-zebra` where byte order would put it after
+        // (<https://xhr.spec.whatwg.org/#the-getallresponseheaders()-method>).
+        //
+        // Each pair is `name: value\r\n`; a request with no response has an
+        // empty header list, so the output is empty without a branch of its own.
+        Ok(self.with_xhr(Vec::new(), |record| {
+            let Some(response) = &record.response else {
+                return Vec::new();
+            };
+            let mut headers = sort_and_combine_headers(&response.headers);
+            headers.sort_by_key(|header| header.0.to_ascii_uppercase());
+            let mut output = Vec::new();
+            for (name, value) in headers {
+                output.extend_from_slice(&name);
+                output.extend_from_slice(b": ");
+                output.extend_from_slice(&value);
+                output.extend_from_slice(b"\r\n");
+            }
+            output
+        }))
     }
 
-    fn override_mime_type(&self, _mime: &str) -> Result<(), JsError> {
-        // The override exists to make the response body be decoded as something
-        // other than its `Content-Type` says, and this slice has neither a
-        // decoding step nor a response to decode, so there is nothing for an
-        // override to change. Refusing is the narrowing recorded in the IDL.
-        Err(JsError::dom_exception(
-            "NotSupportedError",
-            "this engine cannot override the response MIME type",
-        ))
+    fn override_mime_type(&self, mime: &str) -> Result<(), JsError> {
+        // The standard's three steps. Step 1 throws an `InvalidStateError` when
+        // the state is loading or done, which is its own rule rather than one of
+        // this engine's narrowings — and it is reachable only now, because only
+        // now does a request reach those states.
+        //
+        // Steps 2 and 3 store the parsed value, or `application/octet-stream`
+        // when it does not parse. Only the `charset` parameter is stored, since
+        // it is the only part a text response reads; a type that fails to parse
+        // has no charset, exactly like the `application/octet-stream` step 3
+        // puts in its place, so the two are the same value here.
+        let state = self.with_xhr(<HostObject as XMLHttpRequestOps>::UNSENT, |record| {
+            record.ready_state
+        });
+        if state == <HostObject as XMLHttpRequestOps>::LOADING
+            || state == <HostObject as XMLHttpRequestOps>::DONE
+        {
+            return Err(JsError::dom_exception(
+                "InvalidStateError",
+                "the response is already being received",
+            ));
+        }
+        self.with_xhr_mut((), |record| {
+            record.override_charset =
+                parse_mime_type(mime.as_bytes()).and_then(|mime_type| mime_type.charset);
+        });
+        Ok(())
     }
 
     fn response_type(&self) -> Result<XMLHttpRequestResponseType, JsError> {
@@ -6152,11 +6320,30 @@ impl XMLHttpRequestOps for HostObject {
     }
 
     fn set_response_type(&self, value: XMLHttpRequestResponseType) -> Result<(), JsError> {
-        // The enumeration is the standard's, and every member of it converts;
-        // the narrowing is this engine's, so the refusal is a
-        // `NotSupportedError` and not the `TypeError` an unknown enum value
-        // would produce. `""` and `"text"` are the two the decoded-text path can
-        // serve; the rest need the response conversions b-5a2 adds.
+        // The standard's setter, in its order. Step 1 (a `document` value on a
+        // non-`Window` global object is ignored) cannot be reached from a
+        // `Window`, and step 3's `InvalidAccessError` needs a synchronous
+        // request, which `open()` refuses — but step 2 is reachable now: the
+        // state being loading or done is an `InvalidStateError`, thrown before
+        // the value is looked at, so `xhr.responseType = ''` on a finished
+        // request throws as well.
+        //
+        // Step 4 is this engine's narrowing rather than the standard's: the
+        // enumeration is the standard's and every member of it converts, but
+        // only `""` and `"text"` are values a decoded-text response can serve,
+        // and the refusal is a `NotSupportedError` and not the `TypeError` an
+        // unknown enumeration value produces.
+        let state = self.with_xhr(<HostObject as XMLHttpRequestOps>::UNSENT, |record| {
+            record.ready_state
+        });
+        if state == <HostObject as XMLHttpRequestOps>::LOADING
+            || state == <HostObject as XMLHttpRequestOps>::DONE
+        {
+            return Err(JsError::dom_exception(
+                "InvalidStateError",
+                "the response is already being received",
+            ));
+        }
         match value {
             XMLHttpRequestResponseType::EmptyString | XMLHttpRequestResponseType::Text => {
                 self.with_xhr_mut((), |record| record.response_type = value);
@@ -6170,11 +6357,36 @@ impl XMLHttpRequestOps for HostObject {
     }
 
     fn response_text(&self) -> Result<String, JsError> {
-        // "If this's state is not loading or done, then return the empty
-        // string", which is every state this slice has. The state check also
-        // drops the standard's `InvalidStateError` for a non-text `responseType`,
-        // since the setter refuses every such type.
-        Ok(String::new())
+        // The standard's three steps: a `responseType` that is neither the empty
+        // string nor `"text"` throws an `InvalidStateError` (unreachable, since
+        // the setter stores no other value and is not written here as a check
+        // that cannot be reached), a state that is not loading or done returns
+        // the empty string, and otherwise the text response is the received
+        // bytes decoded with the response's final encoding.
+        Ok(self.with_xhr(String::new(), |record| {
+            if record.ready_state != <HostObject as XMLHttpRequestOps>::LOADING
+                && record.ready_state != <HostObject as XMLHttpRequestOps>::DONE
+            {
+                return String::new();
+            }
+            // A null body is the empty string, which the encoding step below
+            // would reach anyway; a network error is the empty string too.
+            let Some(response) = &record.response else {
+                return String::new();
+            };
+            let Some(body) = &response.body else {
+                return String::new();
+            };
+            // `Encoding::decode` *is* the standard's *decode*: it reads a BOM and
+            // uses its encoding in preference to the fallback, removes the BOM
+            // from the output, and replaces every malformed sequence with
+            // U+FFFD. The replacement encoding is a label like any other and
+            // decodes to U+FFFD, which is what the standard asks for; it is
+            // `TextDecoder` that refuses it, not this.
+            let encoding = text_response_encoding(record.override_charset.as_deref(), response);
+            let (text, _, _) = encoding.decode(body);
+            text.into_owned()
+        }))
     }
 }
 
@@ -6199,9 +6411,480 @@ impl XMLHttpRequestConstructor for HostObject {
                 timeout: 0,
                 with_credentials: false,
                 response_type: XMLHttpRequestResponseType::EmptyString,
+                // A new object's response is the standard's *network error*, and
+                // nothing has been asked for with `overrideMimeType`.
+                response: None,
+                override_charset: None,
             }));
         Ok(HostObject::host_record(ctx, key))
     }
+}
+
+/// Delivers one completed request to the `XMLHttpRequest` object `target` names:
+/// the standard's response state machine, and the events that go with it.
+///
+/// Returns whether `target` was an `XMLHttpRequest`. That answer *is* the
+/// caller's decision: a completion at one of these is answered here, and every
+/// other target keeps whatever the caller did with it before. The handle tag
+/// cannot tell the two apart — `URL`, `Headers`, `AbortSignal` and
+/// `XMLHttpRequest` share one — so only the record does.
+///
+/// The events are fired synchronously, on this stack, at the object's own event
+/// target key, and the caller holds the native-dispatch guard that makes a
+/// listener here runnable with no V8 callback underneath it.
+pub fn deliver_xhr_completion(
+    ctx: &SharedContext,
+    target: DispatchTarget,
+    outcome: &FetchOutcome,
+) -> bool {
+    let Some(key) = target.host_key() else {
+        return false;
+    };
+    if !matches!(ctx.host_records.borrow().get(key), Some(HostRecord::Xhr(_))) {
+        return false;
+    }
+    match outcome {
+        FetchOutcome::Response(data) => xhr_handle_response(ctx, target, key, data),
+        FetchOutcome::Failed(_) => xhr_handle_error(ctx, target, key),
+    }
+    true
+}
+
+/// The standard's *handle response*, run through to *handle response
+/// end-of-body*, for a completion that carries a response.
+///
+/// A driver hands over a finished response rather than a stream, so this is the
+/// one-chunk case of a machine that reads a body a chunk at a time: the response
+/// is stored, the first `readystatechange` fires, one chunk arrives
+/// (`LOADING`, `readystatechange`, `progress`), and the end of the body follows
+/// at once (a second `progress`, `DONE`, `readystatechange`, `load`, `loadend`).
+fn xhr_handle_response(
+    ctx: &SharedContext,
+    target: DispatchTarget,
+    key: HostKey,
+    data: &FetchedResponse,
+) {
+    let response = XhrResponse::from_fetched(data);
+    // *Extract a length* reads the `Content-Length` header, not the body, and
+    // its caller sets a length that is not an integer to 0 — so a body sent
+    // without one reports `lengthComputable === false` with `total` 0 while
+    // `loaded` is still the body's own length.
+    let length = extract_content_length(&response.headers).unwrap_or(0);
+    // `received bytes` *is* the body here, and this engine has no chunk smaller
+    // than all of it. A body with no bytes has no chunk at all, which is what an
+    // empty body does in the standard's own reader too: it reaches the end of
+    // the stream without delivering one, so the state goes `HEADERS_RECEIVED` →
+    // `DONE` with no `LOADING` and no chunk `progress`. That answers a null-body
+    // status, a null body and an empty one by the same rule.
+    let transmitted = response.body.as_ref().map_or(0, Vec::len);
+
+    // The response is stored before the first event, so a page that reads
+    // `getResponseHeader('Content-Type')` from its `HEADERS_RECEIVED` handler
+    // sees the response that just arrived.
+    store_xhr_response(ctx, key, Some(response));
+    set_xhr_state(ctx, key, HEADERS_RECEIVED);
+    fire_xhr_event(ctx, target, READY_STATE_CHANGE, EventKind::Plain);
+
+    if transmitted > 0 {
+        set_xhr_state(ctx, key, LOADING);
+        fire_xhr_event(ctx, target, READY_STATE_CHANGE, EventKind::Plain);
+        fire_xhr_progress(ctx, target, "progress", transmitted, length);
+    }
+
+    // The second `progress`, from *handle response end-of-body*: the one event of
+    // this sequence Chromium does not fire, since it fires the chunk's
+    // `progress` alone and skips this one when the byte count has not changed
+    // since (whatwg/xhr#318, still open). Two in one turn is the standard's own
+    // sequence — one per chunk, one from the end of the body — and not a
+    // duplicated call, and the standard is what this engine follows.
+    fire_xhr_progress(ctx, target, "progress", transmitted, length);
+    set_xhr_state(ctx, key, DONE);
+    fire_xhr_event(ctx, target, READY_STATE_CHANGE, EventKind::Plain);
+    fire_xhr_progress(ctx, target, "load", transmitted, length);
+    fire_xhr_progress(ctx, target, "loadend", transmitted, length);
+}
+
+/// The standard's *handle errors* for an object whose request failed: the
+/// *request error steps* with a `NetworkError`.
+///
+/// A failure never reaches `HEADERS_RECEIVED` or `LOADING`, and none of these
+/// three events carries a length — the standard fires `error` and `loadend` with
+/// 0 and 0, and fires no `progress` at all.
+fn xhr_handle_error(ctx: &SharedContext, target: DispatchTarget, key: HostKey) {
+    // "Set this's response to a network error" comes before the event, so every
+    // member already reads 0, the empty string and null from inside the
+    // `readystatechange` handler onwards.
+    store_xhr_response(ctx, key, None);
+    set_xhr_state(ctx, key, DONE);
+    fire_xhr_event(ctx, target, READY_STATE_CHANGE, EventKind::Plain);
+    fire_xhr_progress(ctx, target, "error", 0, 0);
+    fire_xhr_progress(ctx, target, "loadend", 0, 0);
+}
+
+/// Writes one of the five state constants onto the record, if it is still there.
+fn set_xhr_state(ctx: &SharedContext, key: HostKey, state: u16) {
+    if let Some(HostRecord::Xhr(record)) = ctx.host_records.borrow_mut().get_mut(key) {
+        record.ready_state = state;
+    }
+}
+
+/// Stores the response a completion delivered, or clears it to the network error
+/// a failure leaves behind.
+fn store_xhr_response(ctx: &SharedContext, key: HostKey, response: Option<XhrResponse>) {
+    if let Some(HostRecord::Xhr(record)) = ctx.host_records.borrow_mut().get_mut(key) {
+        record.response = response;
+    }
+}
+
+/// Fires one event the user agent created, at an `XMLHttpRequest` object.
+///
+/// The same shape `open()` inlines once, written out here because the machine
+/// fires it seven times per completion and because the transient record's removal
+/// is the part of it that is easy to get subtly wrong: the record is dropped
+/// unless a listener made a wrapper for it, in which case the world's dead-event
+/// sweep owns its removal.
+///
+/// The event is trusted — it comes from the user agent and never from script —
+/// and "fire an event named e at target" gives it no bubbles, no cancelable and
+/// no default action.
+fn fire_xhr_event(ctx: &SharedContext, target: DispatchTarget, type_: &str, kind: EventKind) {
+    let mut record = EventRecord::new(type_.to_owned(), kind, ctx.time_stamp());
+    record.flags.initialized = true;
+    record.is_trusted = true;
+    let event_key = ctx.events.borrow_mut().insert(record);
+    let _ = dispatch_at(ctx, target, event_key, true);
+    let orphaned = ctx
+        .events
+        .borrow()
+        .get(event_key)
+        .is_some_and(|record| !record.has_wrapper);
+    if orphaned {
+        ctx.events.borrow_mut().remove(event_key);
+    }
+}
+
+/// Fires the standard's *progress event* named `type_`, given `transmitted` bytes
+/// and a `length`
+/// (<https://xhr.spec.whatwg.org/#firing-events-using-the-progressevent-interface>).
+///
+/// `loaded` is always `transmitted`; `lengthComputable` and `total` are set only
+/// when `length` is not zero. That is why a missing `Content-Length` and a
+/// `Content-Length: 0` both read `lengthComputable === false`, and why `loaded`
+/// is the body's own length in every case.
+fn fire_xhr_progress(
+    ctx: &SharedContext,
+    target: DispatchTarget,
+    type_: &str,
+    transmitted: usize,
+    length: u64,
+) {
+    let kind = EventKind::Progress {
+        length_computable: length != 0,
+        loaded: transmitted as f64,
+        total: length as f64,
+    };
+    fire_xhr_event(ctx, target, type_, kind);
+}
+
+/// The `Content-Length` header's name, byte-lowercased the way every stored name
+/// is.
+const CONTENT_LENGTH: &[u8] = b"content-length";
+
+/// The three states a delivered response passes through, bound to the constants
+/// the generated trait declares so that no state number is written in this file.
+const HEADERS_RECEIVED: u16 = <HostObject as XMLHttpRequestOps>::HEADERS_RECEIVED;
+const LOADING: u16 = <HostObject as XMLHttpRequestOps>::LOADING;
+const DONE: u16 = <HostObject as XMLHttpRequestOps>::DONE;
+
+/// The `charset` parameter's name, ASCII-lowercased by the MIME parser.
+const CHARSET: &[u8] = b"charset";
+
+/// The one *essence* Fetch's *extract a MIME type* skips: a `Content-Type` of
+/// `*/*` names no type at all, so it is as good as an absent header.
+const ANY_MIME_TYPE: &[u8] = b"*/*";
+
+/// Fetch's *extract a length*: the number of bytes `Content-Length` declares, or
+/// `None` when the header list holds no length
+/// (<https://fetch.spec.whatwg.org/#extract-a-length>).
+///
+/// One `None` covers all four of the standard's outcomes — no such header, values
+/// that disagree with each other, an empty value, and a value that is not a
+/// non-negative integer — because the XHR Standard treats them alike: "if length
+/// is not an integer, then set it to 0".
+fn extract_content_length(headers: &HeaderList) -> Option<u64> {
+    let mut values = headers
+        .iter()
+        .filter(|(name, _)| name.as_slice() == CONTENT_LENGTH)
+        .flat_map(|(_, value)| split_header_value(value));
+    let candidate = values.next()?;
+    if values.any(|value| value != candidate) {
+        return None;
+    }
+    if candidate.is_empty() || !candidate.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    String::from_utf8(candidate).ok()?.parse().ok()
+}
+
+/// The encoding a text response decodes with: the standard's *get a final
+/// encoding*, which reads the `charset` of the value `overrideMimeType` stored
+/// and, when that value has none, the `charset` of the response's `Content-Type`
+/// (<https://xhr.spec.whatwg.org/#get-a-final-encoding>).
+///
+/// The override replaces the *label*, not the whole type, which is why
+/// `overrideMimeType('text/plain')` and an override that failed to parse both
+/// leave the response's own charset standing. A label that names no encoding is
+/// UTF-8, which is also what a body with no charset gets.
+fn text_response_encoding(
+    override_charset: Option<&[u8]>,
+    response: &XhrResponse,
+) -> &'static encoding_rs::Encoding {
+    let response_charset = extract_mime_charset(&response.headers);
+    override_charset
+        .or(response_charset.as_deref())
+        .and_then(encoding_rs::Encoding::for_label)
+        .unwrap_or(encoding_rs::UTF_8)
+}
+
+/// Fetch's *extract a MIME type*, reduced to the `charset` it carries: the first
+/// `Content-Type` value that parses, and the `charset` a later value of the same
+/// essence may supply for it
+/// (<https://fetch.spec.whatwg.org/#extract-a-mime-type>).
+///
+/// The loop is the standard's, including the two rules that read like details: a
+/// value whose essence is `*/*` is skipped, and a value whose essence matches the
+/// one already found inherits its `charset` when it has none of its own.
+fn extract_mime_charset(headers: &HeaderList) -> Option<Vec<u8>> {
+    let mut essence: Option<Vec<u8>> = None;
+    let mut inherited: Option<Vec<u8>> = None;
+    let mut charset: Option<Option<Vec<u8>>> = None;
+    let values = headers
+        .iter()
+        .filter(|(name, _)| name.as_slice() == CONTENT_TYPE)
+        .flat_map(|(_, value)| split_header_value(value));
+    for value in values {
+        let Some(parsed) = parse_mime_type(&value) else {
+            continue;
+        };
+        if parsed.essence.as_slice() == ANY_MIME_TYPE {
+            continue;
+        }
+        if essence.as_deref() != Some(parsed.essence.as_slice()) {
+            inherited = parsed.charset.clone();
+            essence = Some(parsed.essence);
+            charset = Some(parsed.charset);
+        } else {
+            charset = Some(parsed.charset.or_else(|| inherited.clone()));
+        }
+    }
+    charset.flatten()
+}
+
+/// A parsed MIME type, reduced to the two parts a text response reads.
+struct MimeType {
+    /// The *essence*: the type and the subtype, ASCII-lowercased, joined by `/`.
+    /// Fetch's *extract a MIME type* compares it from one header value to the
+    /// next.
+    essence: Vec<u8>,
+    /// The `charset` parameter, if the type has one. It is the only parameter this
+    /// engine reads, so the parser applies the standard's conditions for storing
+    /// a parameter to `charset` alone rather than collecting a map of them.
+    charset: Option<Vec<u8>>,
+}
+
+/// The MIME Sniffing Standard's *parse a MIME type*
+/// (<https://mimesniff.spec.whatwg.org/#parse-a-mime-type>).
+///
+/// The validity rules are the whole point of the parse: a type or subtype holding
+/// a byte that is not an HTTP token, an empty one, or a value with no `/` is
+/// *failure* — and a caller can see the difference, because a failed
+/// `overrideMimeType` is stored as `application/octet-stream` and so carries no
+/// charset.
+fn parse_mime_type(input: &[u8]) -> Option<MimeType> {
+    let input = strip_http_whitespace(input);
+    let mut position = 0;
+
+    let mut essence = collect_until(input, &mut position, |byte| byte == b'/');
+    if essence.is_empty() || !essence.iter().all(|byte| is_tchar(*byte)) {
+        return None;
+    }
+    if position == input.len() {
+        return None;
+    }
+    position += 1;
+
+    let subtype = collect_until(input, &mut position, |byte| byte == b';');
+    let subtype = strip_trailing_http_whitespace(&subtype);
+    if subtype.is_empty() || !subtype.iter().all(|byte| is_tchar(*byte)) {
+        return None;
+    }
+    essence.make_ascii_lowercase();
+    essence.push(b'/');
+    essence.extend(subtype.iter().map(u8::to_ascii_lowercase));
+
+    let mut charset: Option<Vec<u8>> = None;
+    while position < input.len() {
+        // The `;` this parameter follows, then the whitespace before its name.
+        position += 1;
+        while position < input.len() && is_http_whitespace(input[position]) {
+            position += 1;
+        }
+        let mut name = collect_until(input, &mut position, |byte| matches!(byte, b';' | b'='));
+        name.make_ascii_lowercase();
+
+        // A parameter with no `=` at all is skipped, and so is a name that ends
+        // the input: the standard only reads a value when the `=` is followed by
+        // something.
+        let mut value = None;
+        if position < input.len() {
+            if input[position] == b';' {
+                continue;
+            }
+            position += 1;
+            if position == input.len() {
+                break;
+            }
+            if input[position] == b'"' {
+                let (quoted, next) = collect_http_quoted_string(input, position);
+                position = next;
+                // "Collect a sequence of code points that are not U+003B (;)" —
+                // whatever follows the closing quote is not part of the value.
+                let _ = collect_until(input, &mut position, |byte| byte == b';');
+                value = Some(quoted);
+            } else {
+                let raw = collect_until(input, &mut position, |byte| byte == b';');
+                let raw = strip_trailing_http_whitespace(&raw);
+                if raw.is_empty() {
+                    continue;
+                }
+                value = Some(raw.to_vec());
+            }
+        }
+
+        // The standard's four conditions for storing a parameter, applied to the
+        // one name this engine reads: a name that is not `charset` (which also
+        // covers the empty one and every name holding a non-token byte) stores
+        // nothing, a `charset` that is already there is not replaced, and a value
+        // holding a byte outside HTTP's *quoted-string token* set is dropped.
+        let Some(value) = value else {
+            continue;
+        };
+        if name.as_slice() != CHARSET || charset.is_some() || !is_http_quoted_string_token(&value) {
+            continue;
+        }
+        charset = Some(value);
+    }
+
+    Some(MimeType { essence, charset })
+}
+
+/// Collects the bytes up to the first one `stop` accepts: the standard's *collect
+/// a sequence of code points that are not …*, with `position` left on that byte
+/// or at the end of the input.
+fn collect_until(input: &[u8], position: &mut usize, stop: impl Fn(u8) -> bool) -> Vec<u8> {
+    let start = *position;
+    while *position < input.len() && !stop(input[*position]) {
+        *position += 1;
+    }
+    input[start..*position].to_vec()
+}
+
+/// Fetch's *collect an HTTP quoted string*, with the value extracted: the quotes
+/// and the backslash escapes are dropped
+/// (<https://fetch.spec.whatwg.org/#collect-an-http-quoted-string>).
+///
+/// `position` points at the opening quote, and the returned index is the first
+/// byte after the closing one — or the end of the input for a string that is
+/// never closed, which the standard treats as a string that simply ends there
+/// rather than as a failure.
+fn collect_http_quoted_string(input: &[u8], position: usize) -> (Vec<u8>, usize) {
+    let mut position = position + 1;
+    let mut value = Vec::new();
+    loop {
+        while position < input.len() && !matches!(input[position], b'"' | b'\\') {
+            value.push(input[position]);
+            position += 1;
+        }
+        if position == input.len() {
+            return (value, position);
+        }
+        let quote_or_backslash = input[position];
+        position += 1;
+        if quote_or_backslash == b'\\' {
+            // A backslash that ends the input is a literal one, and the string
+            // ends with it.
+            if position == input.len() {
+                value.push(b'\\');
+                return (value, position);
+            }
+            value.push(input[position]);
+            position += 1;
+        } else {
+            return (value, position);
+        }
+    }
+}
+
+/// Whether every byte of a parameter value is an HTTP *quoted-string token code
+/// point*: a tab, a printable ASCII byte or obs-text. A parameter whose value
+/// holds anything else is not stored, which is what drops `charset=gbk\x7f`
+/// (<https://mimesniff.spec.whatwg.org/#http-quoted-string-token-code-point>).
+fn is_http_quoted_string_token(value: &[u8]) -> bool {
+    value
+        .iter()
+        .all(|byte| matches!(byte, b'\t' | 0x20..=0x7E | 0x80..=0xFF))
+}
+
+/// Removes HTTP whitespace from the end of `value`.
+///
+/// The MIME parser's own steps are on *HTTP whitespace* while Fetch's *split* is
+/// on HTTP *tab or space*, a smaller set — but a stored header value holds no CR
+/// or LF (they are rejected on the way into a header list), so the two sets can
+/// only differ for input that cannot reach either caller.
+fn strip_trailing_http_whitespace(value: &[u8]) -> &[u8] {
+    let end = value
+        .iter()
+        .rposition(|byte| !is_http_whitespace(*byte))
+        .map_or(0, |index| index + 1);
+    &value[..end]
+}
+
+/// Fetch's *get, decode, and split a header value*: the value split on its
+/// commas, with HTTP whitespace removed from each part, and with a comma inside a
+/// quoted string not splitting anything
+/// (<https://fetch.spec.whatwg.org/#collect-an-http-quoted-string>).
+///
+/// The split is what makes `Content-Type: text/html;x="a,b"` one value rather
+/// than two, and what keeps a header whose values disagree — the case Fetch's
+/// *extract a length* and *extract a MIME type* both read — visible as separate
+/// values.
+fn split_header_value(value: &[u8]) -> Vec<Vec<u8>> {
+    let mut values = Vec::new();
+    let mut temporary = Vec::new();
+    let mut position = 0;
+    while position < value.len() {
+        match value[position] {
+            b'"' => {
+                let (_, next) = collect_http_quoted_string(value, position);
+                // The standard appends the quoted string *as it stands* here:
+                // the escapes are the MIME parser's to remove, not the
+                // splitter's.
+                temporary.extend_from_slice(&value[position..next]);
+                position = next;
+            }
+            b',' => {
+                values.push(strip_http_whitespace(&temporary).to_vec());
+                temporary.clear();
+                position += 1;
+            }
+            byte => {
+                temporary.push(byte);
+                position += 1;
+            }
+        }
+    }
+    values.push(strip_http_whitespace(&temporary).to_vec());
+    values
 }
 
 impl HostObject {

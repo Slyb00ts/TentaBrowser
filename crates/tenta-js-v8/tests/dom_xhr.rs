@@ -1,15 +1,15 @@
 //! Tests for the XHR completion seam, the engine's native dispatch
-//! (`tenta_js::xhr`, slice d-4b b-4) and the script-visible `XMLHttpRequest`
-//! object (slice d-4b b-5a).
+//! (`tenta_js::xhr`, slice d-4b b-4), the script-visible `XMLHttpRequest`
+//! object (slice d-4b b-5a) and that object's response state machine and
+//! response members (slice d-4b b-5a2).
 //!
 //! XHR's completion is an **event dispatch**, not a promise settlement, so the
 //! `fetch` seam (`dom_fetch.rs`) cannot be reused verbatim: a driver is handed a
 //! request and the opaque handle bits of an event target, and the answer comes
 //! back as an [`XhrCompletion`] the page's turn loop hands to
-//! [`Engine::settle_xhr`]. Nothing here opens a socket — the driver below is a
-//! recorder — and the b-5a tests below never reach one either: that slice brings
-//! the object into existence and implements `UNSENT` and `OPENED`, and nothing
-//! is sent until b-5a3.
+//! [`Engine::settle_xhr`]. Nothing here opens a socket: the driver below is a
+//! recorder, and the response tests hand their completions over directly,
+//! because nothing is sent until b-5a3.
 //!
 //! # The property this file exists for
 //!
@@ -24,6 +24,11 @@
 //! assertion, which is why one of them drives two dispatches through a single
 //! entry: a scope opened once per entry and misused per dispatch shows up there.
 //!
+//! The response tests rest on the same entry, reached the other way round: an
+//! object the *script* created is handed a completion the *rust* side built, so
+//! the test has to name that object's handle bits
+//! ([`Engine::global_handle_bits`]) — the one thing a page cannot do for itself.
+//!
 //! The tests live here rather than under `crates/tenta-page/tests/` because they
 //! need the V8 glue, and no V8 test may live there.
 
@@ -33,6 +38,7 @@ use std::rc::Rc;
 use tenta_core::Origin;
 use tenta_core::atom::atoms;
 use tenta_dom::{Document, Mutation};
+use tenta_js::bindings::XMLHttpRequest;
 use tenta_js::bindings::host::encode_node;
 use tenta_js::engine::PageEngine;
 use tenta_js::fetch::{FetchOutcome, FetchRequest, FetchStartError, FetchedResponse};
@@ -129,6 +135,84 @@ fn request() -> FetchRequest {
         Url::parse("http://fixture.test/dir/page.html").expect("a URL"),
         Origin::Tracked,
     )
+}
+
+/// The opaque handle bits of the global expression `expression`, which is what a
+/// driver is handed as a completion's `target` for that object.
+///
+/// A page cannot produce these bits for itself — they are the wrapper world's
+/// private identity for an object — so a test that has to deliver a *native*
+/// completion at an object it created from script names it this way. The
+/// expression is a *script* reference on purpose: an API read of the global
+/// proxy does not reach the global object's own properties.
+fn target_bits(engine: &mut Engine, expression: &str) -> u64 {
+    engine
+        .global_handle_bits::<XMLHttpRequest>(expression)
+        .unwrap_or_else(|| panic!("`{expression}` should name a live interface object"))
+        .bits()
+}
+
+/// Delivers one completion at the global `xhr`, as the page's turn loop would.
+fn deliver(engine: &mut Engine, outcome: FetchOutcome) {
+    let target = target_bits(engine, "xhr");
+    engine.settle_xhr(vec![completion(target, outcome)]);
+}
+
+/// A completed response carrying `status`, the driver's `headers` in the order
+/// it reported them, and `body`.
+fn response(status: u16, headers: &[(&str, &str)], body: Option<&[u8]>) -> FetchOutcome {
+    FetchOutcome::Response(FetchedResponse {
+        url: "http://fixture.test/data.json".to_owned(),
+        status,
+        redirected: false,
+        headers: headers
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), value.as_bytes().to_vec()))
+            .collect(),
+        body: body.map(<[u8]>::to_vec),
+    })
+}
+
+/// Registers on the global `xhr` one listener per event of the response machine
+/// which appends `type@readyState:trusted:isProgressEvent:lengthComputable,loaded,total`
+/// to the global `log`.
+///
+/// The ready state is read from the *object* rather than from the event, because
+/// the two can disagree in the one way worth pinning: a listener runs after the
+/// machine has already moved the state, so `progress` of a body is observed at
+/// `LOADING` and the end-of-body one still is, while `load` is observed at
+/// `DONE`.
+fn log_every_event(engine: &mut Engine) {
+    eval(
+        engine,
+        r#"
+        globalThis.log = [];
+        for (const name of ['readystatechange', 'progress', 'load', 'error', 'loadend']) {
+            xhr.addEventListener(name, event => {
+                const progress = event instanceof ProgressEvent;
+                log.push([
+                    event.type + '@' + xhr.readyState,
+                    event.isTrusted,
+                    progress,
+                    progress ? [event.lengthComputable, event.loaded, event.total].join(',') : '',
+                ].join(':'));
+            });
+        }
+        "#,
+    );
+}
+
+/// Creates the global `xhr`, opens it on `/x`, and logs every event the response
+/// machine fires into the global `log`.
+fn opened_xhr(engine: &mut Engine) {
+    eval(
+        engine,
+        r#"
+        globalThis.xhr = new XMLHttpRequest();
+        xhr.open('GET', '/x');
+        "#,
+    );
+    log_every_event(engine);
 }
 
 // ---------------------------------------------------------------------------
@@ -587,7 +671,7 @@ fn open_refuses_a_url_that_cannot_be_parsed() {
 /// A non-null `username` or `password` is refused rather than stored, and
 /// passing `null` for both is not a refusal.
 ///
-/// This is one of the slice's five narrowings. Accepting the pair and dropping it
+/// This is one of the slice's four narrowings. Accepting the pair and dropping it
 /// would be the silent version of the same lie `withCredentials = true` refuses
 /// to tell: the page would believe a credential travelled when none did. The
 /// state check is what pins that the refusal happens before the transition.
@@ -709,8 +793,12 @@ fn a_handler_and_a_listener_for_one_function_stay_two_registrations() {
     });
 }
 
-/// Every refusal the surface makes is synchronous and named, and the two values
-/// it can serve are stored.
+/// Every refusal the surface makes is synchronous and named, and the values it
+/// can serve are stored.
+///
+/// `overrideMimeType` is in the list because it now succeeds where the state
+/// allows it: it is not a narrowing any more, only the standard's own
+/// `InvalidStateError` on a state that is loading or done.
 #[test]
 fn the_refusing_setters_accept_only_what_this_engine_can_serve() {
     with_page(|engine| {
@@ -733,8 +821,8 @@ fn the_refusing_setters_accept_only_what_this_engine_can_serve() {
                 [results.join(','), xhr.responseType, xhr.withCredentials, xhr.timeout].join('|');
                 "#
             ),
-            "NotSupportedError,ok,TypeError,NotSupportedError,ok,NotSupportedError,ok,\
-             NotSupportedError|text|false|0",
+            "NotSupportedError,ok,TypeError,NotSupportedError,ok,NotSupportedError,ok,ok|\
+             text|false|0",
             "a value the enumeration does not name is a `TypeError`, not a `NotSupportedError`"
         );
     });
@@ -790,6 +878,510 @@ fn two_requests_have_independent_listener_tables() {
             ),
             "true|second|second,first",
             "the two objects share a record, so one's listener fires for the other"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// The response half (slice d-4b b-5a2)
+// ---------------------------------------------------------------------------
+
+/// A body runs the whole machine: `HEADERS_RECEIVED`, `LOADING`, `DONE`, with
+/// two `progress` events and the two events that close a request.
+///
+/// The two `progress` events are the standard's own sequence — one per chunk and
+/// one from *handle response end-of-body* — and both land in this one turn,
+/// because the completion arrives whole. Chromium fires the chunk's alone; the
+/// engine follows the standard.
+#[test]
+fn a_response_with_a_body_runs_the_states_and_their_events_in_order() {
+    with_page(|engine| {
+        opened_xhr(engine);
+        deliver(
+            engine,
+            response(200, &[("Content-Length", "5")], Some(b"hello")),
+        );
+
+        assert_eq!(
+            eval(engine, "log.join('\\n')"),
+            "readystatechange@2:true:false:\n\
+             readystatechange@3:true:false:\n\
+             progress@3:true:true:true,5,5\n\
+             progress@3:true:true:true,5,5\n\
+             readystatechange@4:true:false:\n\
+             load@4:true:true:true,5,5\n\
+             loadend@4:true:true:true,5,5",
+            "a body must reach LOADING and fire the standard's seven events"
+        );
+    });
+}
+
+/// A response whose body is null goes from `HEADERS_RECEIVED` straight to
+/// `DONE`: no `LOADING`, and one `progress` rather than two.
+///
+/// A null-body status carries no body whatever the driver reported, and the
+/// machine keys on the bytes it was handed rather than on the status.
+#[test]
+fn a_null_body_skips_loading_and_fires_one_progress() {
+    with_page(|engine| {
+        opened_xhr(engine);
+        deliver(engine, response(204, &[], None));
+
+        assert_eq!(
+            eval(engine, "log.join('\\n')"),
+            "readystatechange@2:true:false:\n\
+             progress@2:true:true:false,0,0\n\
+             readystatechange@4:true:false:\n\
+             load@4:true:true:false,0,0\n\
+             loadend@4:true:true:false,0,0",
+            "a null body must not pass through LOADING"
+        );
+    });
+}
+
+/// A failure goes to `DONE` and fires `error` and `loadend` — never `progress`,
+/// and never a `LOADING` — with every response member already reading the
+/// network error from inside the first listener.
+#[test]
+fn a_failed_request_reaches_done_with_error_and_no_progress() {
+    with_page(|engine| {
+        eval(
+            engine,
+            r#"
+            globalThis.xhr = new XMLHttpRequest();
+            xhr.open('GET', '/x');
+            globalThis.log = [];
+            for (const name of ['readystatechange', 'progress', 'load', 'error', 'loadend']) {
+                xhr.addEventListener(name, event => {
+                    log.push([
+                        event.type,
+                        xhr.readyState,
+                        xhr.status,
+                        xhr.responseText.length,
+                        xhr.getResponseHeader('content-type') === null,
+                    ].join(':'));
+                });
+            }
+            "#,
+        );
+        deliver(
+            engine,
+            FetchOutcome::Failed("the request failed".to_owned()),
+        );
+
+        assert_eq!(
+            eval(engine, "log.join('\\n')"),
+            "readystatechange:4:0:0:true\nerror:4:0:0:true\nloadend:4:0:0:true",
+            "a failed request must fire neither `progress` nor a `load`"
+        );
+    });
+}
+
+/// `lengthComputable` and `total` come from `Content-Length`, and `loaded` from
+/// the bytes handed over — the header here declares 9 and the body is 5, which
+/// is what tells the two readings apart.
+#[test]
+fn a_content_length_makes_the_events_length_computable() {
+    with_page(|engine| {
+        opened_xhr(engine);
+        deliver(
+            engine,
+            response(200, &[("Content-Length", "9")], Some(b"hello")),
+        );
+
+        assert_eq!(
+            eval(engine, "log.join('\\n')"),
+            "readystatechange@2:true:false:\n\
+             readystatechange@3:true:false:\n\
+             progress@3:true:true:true,5,9\n\
+             progress@3:true:true:true,5,9\n\
+             readystatechange@4:true:false:\n\
+             load@4:true:true:true,5,9\n\
+             loadend@4:true:true:true,5,9",
+            "`total` is the header's length and `loaded` the body's own"
+        );
+    });
+}
+
+/// A declared length of zero is a length, and the standard's own rule makes the
+/// events uncomputable for it: *extract a length* answers 0 and the progress
+/// event sets `lengthComputable` and `total` only "if length is not 0"
+/// (<https://xhr.spec.whatwg.org/#firing-events-using-the-progressevent-interface>).
+///
+/// So this is the case that tells the two readings apart, and the only one that
+/// does: a response that declares no bytes reads exactly as one that declares
+/// nothing does, where "computable because the header is present" would report
+/// `true,0,0` here and is what the assertion below is written against.
+#[test]
+fn a_zero_content_length_is_not_length_computable() {
+    with_page(|engine| {
+        opened_xhr(engine);
+        deliver(engine, response(200, &[("Content-Length", "0")], None));
+
+        assert_eq!(
+            eval(engine, "log.join('\\n')"),
+            "readystatechange@2:true:false:\n\
+             progress@2:true:true:false,0,0\n\
+             readystatechange@4:true:false:\n\
+             load@4:true:true:false,0,0\n\
+             loadend@4:true:true:false,0,0",
+            "a `Content-Length: 0` is a length of zero, not a computable length"
+        );
+    });
+}
+
+/// A body with no `Content-Length` still reports its own `loaded` count, and
+/// `lengthComputable` is false because the *length* is what is missing.
+#[test]
+fn a_body_without_a_content_length_still_reports_its_own_loaded_count() {
+    with_page(|engine| {
+        opened_xhr(engine);
+        deliver(engine, response(200, &[], Some(b"hello")));
+
+        assert_eq!(
+            eval(engine, "log.join('\\n')"),
+            "readystatechange@2:true:false:\n\
+             readystatechange@3:true:false:\n\
+             progress@3:true:true:false,5,0\n\
+             progress@3:true:true:false,5,0\n\
+             readystatechange@4:true:false:\n\
+             load@4:true:true:false,5,0\n\
+             loadend@4:true:true:false,5,0",
+            "an uncomputable length must not zero `loaded`"
+        );
+    });
+}
+
+/// The response members answer the standard's network error before a completion
+/// and the response itself afterwards.
+///
+/// `OPENED` is not a special case in the code: a request that has stored nothing
+/// *has* the network error as its response, and every member reads that value's
+/// own fields.
+#[test]
+fn status_and_status_text_read_the_response_once_there_is_one() {
+    with_page(|engine| {
+        eval(
+            engine,
+            r#"
+            globalThis.xhr = new XMLHttpRequest();
+            xhr.open('GET', '/x');
+            globalThis.before = [
+                xhr.readyState, xhr.status, xhr.statusText, xhr.responseText,
+                xhr.getResponseHeader('content-type') === null,
+                xhr.getAllResponseHeaders(),
+            ].join('|');
+            "#,
+        );
+        assert_eq!(
+            eval(engine, "before"),
+            "1|0|||true|",
+            "an opened request without a response is the network error"
+        );
+
+        deliver(
+            engine,
+            response(404, &[("Content-Type", "text/plain")], Some(b"nope")),
+        );
+
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                [
+                    xhr.readyState, xhr.status, xhr.statusText, xhr.responseText,
+                    xhr.getResponseHeader('content-type'),
+                    xhr.getAllResponseHeaders(),
+                ].join('|')
+                "#
+            ),
+            "4|404|Not Found|nope|text/plain|content-type: text/plain\r\n",
+            "the stored response is what every member reads"
+        );
+    });
+}
+
+/// `getResponseHeader` is Fetch's *get*: the name matches byte-case
+/// insensitively, every value of that name is joined with `", "`, and a name the
+/// list does not hold — including one that is not a header name at all — is
+/// `null` rather than the empty string.
+#[test]
+fn get_response_header_matches_case_insensitively_and_answers_null() {
+    with_page(|engine| {
+        opened_xhr(engine);
+        deliver(
+            engine,
+            response(
+                200,
+                &[
+                    ("Content-Type", "text/plain"),
+                    ("X-Custom", "one"),
+                    ("x-custom", "two"),
+                ],
+                None,
+            ),
+        );
+
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                [
+                    xhr.getResponseHeader('content-type'),
+                    xhr.getResponseHeader('Content-Type'),
+                    xhr.getResponseHeader('CONTENT-TYPE'),
+                    xhr.getResponseHeader('x-custom'),
+                    xhr.getResponseHeader('X-CUSTOM'),
+                    xhr.getResponseHeader('x-missing') === null,
+                    xhr.getResponseHeader('content-type ') === null,
+                ].join('|')
+                "#
+            ),
+            "text/plain|text/plain|text/plain|one, two|one, two|true|true",
+            "a name the list does not hold is null, not the empty string"
+        );
+    });
+}
+
+/// `getAllResponseHeaders` is *sort and combine* followed by the legacy second
+/// sort: names byte-lowercased and combined, `set-cookie` dropped, and the whole
+/// view re-sorted by its byte-uppercased names.
+///
+/// The names are chosen so the two sorts disagree. Byte order ends `x_a`, `xa`,
+/// because `_` sorts below a letter, while upper-casing first ends `xa`, `x_a`,
+/// because `A` sorts below `_`. Getting the second sort wrong is invisible on
+/// names that differ in their letters alone — and so is getting it right, which
+/// is why the assertion is the whole view.
+#[test]
+fn get_all_response_headers_is_sorted_and_combined() {
+    with_page(|engine| {
+        opened_xhr(engine);
+        deliver(
+            engine,
+            response(
+                200,
+                &[
+                    ("X-Zebra", "z"),
+                    ("X-Mix", "one"),
+                    ("x-MIX", "two"),
+                    ("Set-Cookie", "secret=1"),
+                    ("X_A", "underscore"),
+                    ("XA", "plain"),
+                ],
+                None,
+            ),
+        );
+
+        assert_eq!(
+            eval(engine, "xhr.getAllResponseHeaders()"),
+            "x-mix: one, two\r\nx-zebra: z\r\nxa: plain\r\nx_a: underscore\r\n",
+            "the view is combined, drop `set-cookie`, and legacy-sorted"
+        );
+    });
+}
+
+/// A body with no declared charset is decoded as UTF-8, and a malformed sequence
+/// becomes U+FFFD rather than an error.
+#[test]
+fn response_text_decodes_the_body_as_utf_8_by_default() {
+    with_page(|engine| {
+        opened_xhr(engine);
+        deliver(engine, response(200, &[], Some("h\u{e9}llo".as_bytes())));
+
+        assert_eq!(eval(engine, "xhr.responseText"), "h\u{e9}llo");
+    });
+}
+
+/// The `charset` of the response's `Content-Type` is what a text response
+/// decodes with.
+#[test]
+fn response_text_decodes_with_the_charset_of_the_response() {
+    with_page(|engine| {
+        opened_xhr(engine);
+        deliver(
+            engine,
+            response(
+                200,
+                &[("Content-Type", "text/plain;charset=windows-1252")],
+                Some(b"caf\xe9"),
+            ),
+        );
+
+        assert_eq!(eval(engine, "xhr.responseText"), "caf\u{e9}");
+    });
+}
+
+/// A byte-order mark wins over the response's own label and is removed from the
+/// output — the Encoding Standard's *decode*, which is what the member runs.
+#[test]
+fn response_text_lets_a_byte_order_mark_choose_the_encoding() {
+    with_page(|engine| {
+        opened_xhr(engine);
+        deliver(
+            engine,
+            response(
+                200,
+                &[("Content-Type", "text/plain;charset=windows-1252")],
+                Some(b"\xef\xbb\xbfhi"),
+            ),
+        );
+
+        assert_eq!(
+            eval(engine, "xhr.responseText"),
+            "hi",
+            "the BOM's encoding wins, and the BOM itself is not part of the text"
+        );
+    });
+}
+
+/// `overrideMimeType` replaces the label a text response decodes with, so the
+/// same bytes decode differently.
+///
+/// The state is checked, not the reason: the override is stored while the
+/// request is open, and the standard's own `InvalidStateError` is the only
+/// refusal it makes (after DONE; the test below).
+#[test]
+fn override_mime_type_changes_the_encoding_the_text_response_decodes_with() {
+    with_page(|engine| {
+        eval(
+            engine,
+            r#"
+            globalThis.xhr = new XMLHttpRequest();
+            xhr.open('GET', '/x');
+            xhr.overrideMimeType('text/plain;charset=utf-8');
+            "#,
+        );
+        deliver(
+            engine,
+            response(
+                200,
+                &[("Content-Type", "text/plain;charset=windows-1252")],
+                Some(b"caf\xe9"),
+            ),
+        );
+
+        assert_eq!(
+            eval(engine, "xhr.responseText"),
+            "caf\u{fffd}",
+            "the override's charset replaced the response's, so 0xE9 is malformed UTF-8"
+        );
+    });
+}
+
+/// Once the response is being received, `overrideMimeType` throws the standard's
+/// `InvalidStateError` rather than storing anything.
+#[test]
+fn override_mime_type_is_refused_once_the_response_is_being_received() {
+    with_page(|engine| {
+        opened_xhr(engine);
+        deliver(engine, response(200, &[], Some(b"body")));
+
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                try { xhr.overrideMimeType('text/plain'); 'no throw'; }
+                catch (error) { error.name; }
+                "#
+            ),
+            "InvalidStateError",
+            "the override is only settable before the response arrives"
+        );
+    });
+}
+
+/// `responseType`'s setter checks the state *before* it looks at the value, so
+/// every value — even one it would accept, and even one that is not in the
+/// enumeration — is the standard's `InvalidStateError` once the state is `DONE`.
+#[test]
+fn response_type_is_refused_once_the_response_is_being_received() {
+    with_page(|engine| {
+        opened_xhr(engine);
+        deliver(engine, response(200, &[], Some(b"body")));
+
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                const attempt = value => {
+                    try { xhr.responseType = value; return 'ok'; }
+                    catch (error) { return error.name; }
+                };
+                [attempt(''), attempt('text'), attempt('json')].join('|');
+                "#
+            ),
+            "InvalidStateError|InvalidStateError|InvalidStateError",
+            "the state check comes before the value is converted"
+        );
+    });
+}
+
+/// A second completion replaces the first response, because the response is
+/// stored inline on the record rather than as an object of its own.
+#[test]
+fn a_second_completion_replaces_the_first_response() {
+    with_page(|engine| {
+        opened_xhr(engine);
+        deliver(
+            engine,
+            response(200, &[("Content-Type", "text/plain")], Some(b"first")),
+        );
+        assert_eq!(
+            eval(
+                engine,
+                "[xhr.status, xhr.statusText, xhr.responseText].join('|')"
+            ),
+            "200|OK|first"
+        );
+
+        deliver(engine, response(404, &[], Some(b"second")));
+
+        assert_eq!(
+            eval(
+                engine,
+                "[xhr.status, xhr.statusText, xhr.responseText, xhr.getResponseHeader('content-type') === null].join('|')"
+            ),
+            "404|Not Found|second|true",
+            "the second response is what every member reads"
+        );
+    });
+}
+
+/// A second `open()` clears the stored response — the standard's step 11 — and
+/// leaves the object at `OPENED` rather than `UNSENT`, whether or not it had
+/// finished: its step 12 sets the state only if it is not already opened.
+#[test]
+fn a_second_open_clears_the_stored_response_and_leaves_the_state_opened() {
+    with_page(|engine| {
+        opened_xhr(engine);
+        deliver(
+            engine,
+            response(200, &[("Content-Type", "text/plain")], Some(b"first")),
+        );
+
+        eval(
+            engine,
+            r#"
+            globalThis.changes = 0;
+            xhr.addEventListener('readystatechange', () => changes++);
+            xhr.open('GET', '/again');
+            "#,
+        );
+
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                [
+                    xhr.readyState, changes,
+                    xhr.status, xhr.statusText, xhr.responseText,
+                    xhr.getResponseHeader('content-type') === null,
+                    xhr.getAllResponseHeaders(),
+                ].join('|')
+                "#
+            ),
+            "1|1|0|||true|",
+            "a re-opened request is the network error again, and is not UNSENT"
         );
     });
 }
