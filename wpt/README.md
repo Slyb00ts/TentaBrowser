@@ -7,12 +7,16 @@ Phase gates are WPT thresholds per directory (`docs/spec/16-roadmap.md`);
 
 | Path | Purpose |
 |------|---------|
-| `run.py` | runner: checkout, manifest, `wpt serve`, product drivers, results, expectations (stdlib only) |
+| `run.py` | runner: `checkout`, `list`, `serve`, `run`, `candidate`, `promote`, `compare` (stdlib only) |
 | `config.toml` | pinned WPT commit, timeouts, directories per phase |
 | `serve-config.json` | `./wpt serve` configuration (fixed ports, bound to 127.0.0.1) |
 | `tools/driver-chromium.mjs` | `--product chromium` driver on Playwright's Chromium (`npm install` in `tools/`) |
-| `expectations/<product>/` | known results, `.ini` per test (`expectations/README.md`) |
+| `tests/test_run.py` | non-vacuity tests for the judge and the round-trip (`python3 -m unittest discover -s wpt/tests`) |
+| `expectations/<product>/*.ini` | known results, one file per test (`expectations/README.md`) |
+| `expectations/<product>/BUCKETS.toml` | the bucket ledger — the unit a human reviews |
+| `expectations/<product>/BASELINE.toml` | the stamp each directory was blessed at (commit, driver sha, plan digest) |
 | `results/<product>/<dir>.json` | last run per directory (gitignored; gate numbers are recorded in this README) |
+| `results/<product>/candidate/` | a generated, **unreviewed** candidate tree and its review sheet (gitignored) |
 | `checkout/` | shallow WPT checkout at the pinned commit (gitignored) |
 
 Quick start:
@@ -24,6 +28,47 @@ python3 wpt/run.py run --product chromium --dir dom/nodes
 
 See `docs/dev/wpt.md` for the full recipe, host-name setup, adding
 directories and updating expectations.
+
+## Exit codes
+
+`run` and `compare` share one judge, so they share its contract. A pipeline
+must branch on it, not on "did the command finish":
+
+| code | meaning |
+|------|---------|
+| 0 | comparable run, every result matches a **reviewed** expectation |
+| 1 | comparable run, results differ — a regression, an improvement, or an entry nobody has reviewed |
+| 2 | tooling or usage error: no driver binary built, a bad ledger `status`, a port already in use. Never a statement about the engine |
+| 3 | **not comparable**: a truncated run, a baseline-stamp mismatch, or a configured directory that yielded zero tests |
+| 4 | `promote` refused; nothing was written |
+
+Exit 3 is the one worth reading twice. It is not a quieter kind of red — it
+says the number is not a measurement, and it names the stamp field that moved
+(`wpt_commit`, `driver_sha256`, `plan_digest`). `--max-minutes N` and a
+directory with no tests both land there.
+
+## The expectations round-trip
+
+`run` measures; it never writes a tracked file. Expectations change only
+through a human-reviewed candidate:
+
+```bash
+python3 wpt/run.py run --product tentabrowser --dir dom/nodes --jobs 4   # 0/1/3
+python3 wpt/run.py candidate --product tentabrowser --dir dom/nodes     # candidate only
+less wpt/results/tentabrowser/candidate/dom/nodes.review.txt            # bucket table + delta
+python3 wpt/run.py promote --product tentabrowser --dir dom/nodes --by "your name"
+python3 wpt/run.py compare --product tentabrowser --dir dom/nodes       # re-judge, no server
+```
+
+A generated entry whose status is new or changed carries
+`# reason: unreviewed`, and the judge treats that exactly like a mismatch, so
+generating a tree never turns a run green on its own. `promote` refuses a
+non-comparable run, a never-blessable shape (a `CRASH`, a deadline `NOTRUN`, a
+driver `TIMEOUT` the Chromium control contradicts, `N duplicate test names`
+without a reason and a `must-fix` ledger row), a bucket that is `forbidden`,
+unledgered or changed in count, and any surviving `unreviewed`. It exits 4 and
+writes nothing. `expectations/README.md` has the format, the bucket rules and
+the never-blessable list.
 
 ## Products
 

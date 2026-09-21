@@ -48,7 +48,11 @@ tests below each directory from the manifest, including `.any.js`/`.window.js`
 wrappers, `?variant` URLs and `timeout: long` metadata; the product driver;
 comparison against `wpt/expectations/<product>/`; and
 `wpt/results/<product>/<dir>.json` with the summary, the unexpected results
-and every subtest. The exit status is 1 when there are unexpected results.
+and every subtest. The exit status is 0 when every result matches a reviewed
+expectation and 1 when one does not; 2 means the tool or its inputs are wrong
+and 3 means the run is not comparable (see "Exit codes" below). Results are
+judged by the same function `compare` uses, so a stored results file can be
+re-judged later without a server.
 
 `--max-minutes N` stops starting new tests after N minutes; tests not started
 are recorded as `NOTRUN` and excluded from the pass count. Use `--channel
@@ -116,7 +120,10 @@ What it does, per test:
   the per-test deadline from `config.toml [runner]`; the navigation future is
   dropped when either wins, which cancels it, and the page is closed. A test
   whose hook never arrives is `TIMEOUT` with no subtests, and `run.py`'s exit
-  status flags it as unexpected until an expectation says otherwise.
+  status flags it as unexpected until an expectation says otherwise. That shape
+  is also on the never-blessable list when the Chromium control for the same
+  file reports subtests: it is a driver defect, not a finding, and blessing it
+  would hide the next one.
 - **the driver's deadline is a backstop, not the reporting path.** `testharness.js`
   runs its own timer over the same nominal budget, but it starts that timer when
   the harness script executes — after page creation, the document fetch, the
@@ -221,8 +228,14 @@ whether the harness script itself fails to load.
 1. Add the directory to the phase's `directories` list in `wpt/config.toml`
    (paths as in the WPT tree, for example `css/css-flexbox`).
 2. Run it on `chromium` first to establish the control baseline and note the
-   pass count in `wpt/README.md`.
-3. Run it on `tentabrowser`, then record expectations (below).
+   pass count in `wpt/README.md`. The control is not decoration: `promote`
+   refuses a driver-attributed `TIMEOUT` with no subtests when the Chromium
+   result for the same file reports subtests, so a directory with no control
+   stored in `wpt/results/chromium/` can be neither blessed nor diagnosed.
+3. Run it on `tentabrowser`, then generate a candidate and promote it
+   ("Updating expectations" below). A directory whose run yields zero tests
+   exits 3 rather than producing an empty candidate, which is how a typo in
+   this list is caught.
 
 Directories are only meaningful as testharness sets; reftests and crash tests
 are not enumerated yet (the manifest has them, `list_tests` reads
@@ -234,18 +247,77 @@ Expectations live in `wpt/expectations/<product>/<wpt path>.ini`, one file per
 test, in the format described in `wpt/expectations/README.md`. Missing files
 mean "everything passes".
 
+**Do not generate them straight into the live tree.** A mechanical
+`expected: ERROR` on `dom/events/passive-by-default.html`, for instance, absorbs
+20 subtests *and* a nameable interface-mapping defect ("20 duplicate test
+names": our `constructor.name` returns `HTMLElement` for two different targets).
+The live tree is a signed statement, so it is written only by an explicit
+`promote`, from a candidate a human has read:
+
 ```bash
-python3 wpt/run.py run --product tentabrowser --dir dom/nodes        # exit 1, lists unexpected results
-python3 wpt/run.py update-expectations --product tentabrowser --dir dom/nodes
-git diff wpt/expectations/                                           # review before committing
+python3 wpt/run.py run --product tentabrowser --dir dom/nodes --jobs 4   # exit 0/1/3
+python3 wpt/run.py candidate --product tentabrowser --dir dom/nodes     # writes a CANDIDATE only
+less wpt/results/tentabrowser/candidate/dom/nodes.review.txt            # the review unit: the bucket table
+python3 wpt/run.py promote --product tentabrowser --dir dom/nodes --by "your name"
+python3 wpt/run.py compare --product tentabrowser --dir dom/nodes       # exit 0; no server needed
+git diff wpt/expectations/                                              # the review of record
 ```
 
-`update-expectations` rewrites the `.ini` files from the last results file:
-it records every non-`OK` harness status and non-`PASS` subtest and deletes
-the file for tests that now pass fully. Review the diff: an expectation that
-disappears is an improvement, a new one is a regression that needs a reason
-(`# reason:` comment with an issue link). Unexpected passes fail the run on
-purpose so expectations get tightened rather than left stale.
+- `candidate` writes `wpt/results/<product>/candidate/<dir>/**/*.ini` plus a
+  review sheet, a proposed bucket ledger and nothing else. `wpt/results/` is
+  gitignored; `wpt/expectations/` is human-reviewed. That boundary is the whole
+  point.
+- **Regeneration is a merge, not an overwrite.** An entry whose status is
+  unchanged re-emits verbatim with its bucket and reason; a new or changed entry
+  emits `# reason: unreviewed`; an entry that no longer fails is dropped; a file
+  with nothing left to expect gets no candidate at all, so `promote` deletes it.
+  After the first blessing the diff is only what changed, which is what makes
+  "review the diff" a real instruction instead of a 13 000-line chore.
+- **`unreviewed` is judged exactly like a mismatch.** Generating an expectation
+  tree never turns a run green on its own; the run stays red until a human
+  writes a reason.
+- **The review unit is the bucket, not the entry.** `wpt/expectations/<product>/BUCKETS.toml`
+  holds one row per bucket (`key`, `label`, `issue`, `status`, `entries`) with
+  `status` in `accepted | must-fix | forbidden`. `dom` alone is ~265 files and
+  ~13 000 lines and the nine P2 directories project to 30 000-60 000 entries:
+  that cannot be reviewed entry by entry. Read the ledger and the delta table,
+  diff the tree. A bucket whose count **grew** or **shrank** is red, and
+  re-blessing it means editing `entries` by hand — that edit is the review.
+- **`promote` has four refusals and no override**: a non-comparable run, a
+  never-blessable result shape (a `CRASH`, a harness `NOTRUN` from
+  `run deadline reached`, a driver-attributed `TIMEOUT` with no subtests on a
+  file the Chromium control reports subtests for, `N duplicate test names`
+  without a reason and a `must-fix` row), a bucket that is `forbidden`, has no
+  ledger row, or changed count, and any entry still carrying `unreviewed`. It
+  exits 4 and writes nothing.
+- Unexpected passes fail the run on purpose so expectations get tightened rather
+  than left stale, and an `.ini` whose test no longer exists is a *stale
+  expectation* — also unexpected. The full list is in
+  `wpt/expectations/README.md`.
+
+### Exit codes
+
+`run` and `compare` share one judge, so they share its contract:
+
+| code | meaning |
+|------|---------|
+| 0 | comparable run, every result matches a reviewed expectation |
+| 1 | comparable run, results differ (regression, improvement, or an entry with no review) |
+| 2 | tooling or usage error — no driver binary built, a bad ledger `status`, a port in use. Never a statement about the engine |
+| 3 | **not comparable**: a truncated run, a baseline-stamp mismatch, or a configured directory that yielded zero tests |
+| 4 | `promote` refused |
+
+Exit 3 prints *which* stamp field moved next to the pass-percentage delta:
+`wpt_commit`, `driver_sha256` or `plan_digest`, against
+`wpt/expectations/<product>/BASELINE.toml`. `browser.version` is the crate
+version, so it is constant across driver commits and cannot stamp a baseline;
+`driver_sha256` is the sha256 of the `tenta-wpt-driver` binary, computed in
+`run.py`. No driver JSON-contract change was needed for any of this.
+
+A configured directory that yields no testharness tests is exit 3, not a
+silent skip. That is deliberate: `wpt/config.toml`'s P2 list historically named
+`cssom`, which is not a manifest root (the tests live at `css/cssom`), and a
+skip let the P2 gate go green having measured 8 of its 9 directories.
 
 ## Changing the pinned commit
 
