@@ -18,16 +18,17 @@ Host names. WPT tests address the server as `web-platform.test` and its
 subdomains. Two options:
 
 1. No hosts file changes (default for local runs): `run.py` detects that
-   `web-platform.test` does not resolve to `127.0.0.1` and passes
-   `--host-resolver-rules` to the browser, mapping `web-platform.test`,
-   `*.web-platform.test`, `not-web-platform.test` and
-   `*.not-web-platform.test` to loopback. The server binds to `127.0.0.1`
+   `web-platform.test` does not resolve to `127.0.0.1` and reports it in the
+   plan. Chromium is given `--host-resolver-rules`, mapping
+   `web-platform.test`, `*.web-platform.test`, `not-web-platform.test` and
+   `*.not-web-platform.test` to loopback; the `tentabrowser` driver puts the
+   same mapping in its own DNS cache. The server binds to `127.0.0.1`
    (`serve-config.json`, `server_host`), so no name resolution is needed on
    the server side.
-2. Hosts file (CI, and required for the `tentabrowser` product until it
-   accepts resolver rules): add the lines printed by
-   `python3 wpt/run.py serve` (or `./wpt make-hosts-file` inside the
-   checkout) to `/etc/hosts`.
+2. Hosts file (CI, and handy for debugging a page by hand in the browser):
+   add the lines printed by `python3 wpt/run.py serve` (or
+   `./wpt make-hosts-file` inside the checkout) to `/etc/hosts`. With it,
+   `run.py` reports `resolver_rules: false` and no product needs the mapping.
 
 ## Running
 
@@ -61,12 +62,70 @@ callback never fired; a page crash reports `CRASH`.
 
 Every test loads in a fresh page. The driver replaces
 `/resources/testharnessreport.js` on the wire with a hook that calls
-`add_completion_callback` and forwards `{status, message, tests[]}` through
-an exposed binding. The `tentabrowser` product will inject the same hook
-through its `Tenta.wptResult` binding instead of a network route; the
-plan/result JSON contract between `run.py` and a driver is documented on
-`Driver` in `wpt/run.py`, and `tools/driver-chromium.mjs` is the reference
-implementation.
+`add_completion_callback` and forwards `{status, message, tests[]}` to the
+driver. The `tentabrowser` product injects the same hook through its own
+transport: the context's interceptor answers that path with the hook script and
+the script posts the payload back with `fetch()` (see below). The plan/result
+JSON contract between `run.py` and a driver is documented on `Driver` in
+`wpt/run.py`; `tools/driver-chromium.mjs` is the reference implementation.
+
+## The `tentabrowser` product
+
+`--product tentabrowser` runs a Rust binary in the crate this repository builds:
+`tenta-wpt-driver` is a `[[bin]]` of `tenta-browser`, gated on that package's
+`v8` feature. `run.py` writes `wpt/results/.plan.json`, runs
+`tenta-wpt-driver <plan.json> <results.json>` and reads the result file back —
+the same shape as the Chromium driver, and no `cargo run` in the loop.
+
+```bash
+cargo build --release -p tenta-browser --features v8 --bin tenta-wpt-driver
+python3 wpt/run.py run --product tentabrowser --dir dom/nodes
+
+# an explicit binary, or $TENTA_WPT_DRIVER; otherwise target/release, then target/debug
+python3 wpt/run.py run --product tentabrowser --dir dom/nodes --driver target/debug/tenta-wpt-driver
+```
+
+The driver takes `--features v8` on the `tenta-browser` line only; it is the
+only place JavaScript is needed in this repository.
+
+What it does, per test:
+
+- one engine and one context for the whole run (`allow_private_network` and
+  `ignore_https_errors`, because the WPT server is on loopback with test
+  certificates), and one interceptor that answers three kinds of request:
+  - `/resources/testharnessreport.js` (any path ending with it) is fulfilled
+    with the completion hook — `setup({ output: false })` plus an
+    `add_completion_callback` that posts the harness status, the message and
+    every subtest as JSON;
+  - `/_tenta/wpt-result/<n>` is where that POST arrives: the interceptor reads
+    the request body, hands it to the test that is waiting, and answers 200
+    without touching the network;
+  - everything else continues, after the WPT hosts
+    (`web-platform.test`, `not-web-platform.test` and their subdomains) have
+    been mapped to loopback in the process's DNS cache when the plan says
+    `resolver_rules`. That mapping is refreshed on every request: a remembered
+    answer's life is capped by the resolver (60 s), so a single seed at start-up
+    would expire mid-run.
+- a fresh page, navigated with `Settle::VisuallyStable` and a quiet window
+  longer than the test's budget. `Settle::Load` cannot be used — it tears the
+  engine down at `load`, and the harness completes strictly after `load` — and
+  `Settle::NetworkIdle` can end before the hook's `fetch()` lands, because that
+  fetch is issued from a timer callback. The wait is raced against the hook and
+  the per-test deadline from `config.toml [runner]`; the navigation future is
+  dropped when either wins, which cancels it, and the page is closed. A test
+  whose hook never arrives is `TIMEOUT` with no subtests, and `run.py`'s exit
+  status flags it as unexpected until an expectation says otherwise.
+- one test at a time. The plan's `jobs` is read and reported but ignored:
+  concurrency is a later slice, and the driver warns on stderr when `jobs > 1`.
+
+The driver's diagnostics go to stderr at `WARN`; `TENTA_LOG=info` adds a line per
+test with its status and subtest passes, which is the only progress signal a run
+against a whole directory has. Results go to the file, never to stdout.
+
+A directory that measures 0 % or comes back all-`TIMEOUT` is a driver problem
+rather than a finding: check that the hook was requested at all in
+`wpt/results/tentabrowser-serve.log`, and re-run a single small directory to see
+whether the harness script itself fails to load.
 
 ## Adding a directory
 

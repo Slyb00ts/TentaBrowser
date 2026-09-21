@@ -15,8 +15,8 @@ Subcommands:
 
 Products:
   chromium             Playwright's Chromium driven by tools/driver-chromium.mjs
-  tentabrowser         reserved: will drive `tentabrowser serve` (CDP); P0 only
-                       defines the driver contract (see Driver below)
+  tentabrowser         tenta-wpt-driver, a [[bin]] of the tenta-browser crate
+                       built with its v8 feature (see TentaBrowserDriver)
 
 Only the Python standard library is used. Node dependencies live in
 wpt/tools/ (`npm install` there once).
@@ -217,10 +217,11 @@ class Driver:
                                   "message": str | None}]}]}
 
     The driver must (a) load every test URL in a fresh page/context, (b) serve
-    the completion hook in place of `/resources/testharnessreport.js` (or, for
-    `tentabrowser`, inject it through the `Tenta.wptResult` binding), (c) accept
-    self-signed certificates and private-network access, and (d) resolve the
-    `web-platform.test` hosts to loopback when `resolver_rules` is true.
+    the completion hook in place of `/resources/testharnessreport.js` (`chromium`
+    routes it in the driver process; `tentabrowser` answers it from inside its
+    own context, with no binding involved), (c) accept self-signed certificates
+    and private-network access, and (d) resolve the `web-platform.test` hosts to
+    loopback when `resolver_rules` is true.
     """
 
     name = "abstract"
@@ -254,18 +255,56 @@ class ChromiumDriver(Driver):
 class TentaBrowserDriver(Driver):
     name = "tentabrowser"
 
+    def __init__(self, driver: Path):
+        self.driver = driver
+
     def run(self, plan: dict) -> dict:
-        raise SystemExit(
-            "the tentabrowser product is not implemented yet: it will start `tentabrowser serve`, "
-            "connect over CDP and inject the completion hook through the `Tenta.wptResult` binding"
-        )
+        plan_path = RESULTS / ".plan.json"
+        out_path = RESULTS / ".driver-results.json"
+        plan_path.write_text(json.dumps(plan))
+        subprocess.run([str(self.driver), str(plan_path), str(out_path)], check=True)
+        with out_path.open("rb") as handle:
+            return json.load(handle)
+
+
+def checked_driver(path: Path, source: str) -> Path:
+    """`path`, or a `SystemExit` saying which `source` named it and why it is unusable."""
+    if not path.is_file():
+        raise SystemExit(f"{source} is not a file: {path}")
+    if not os.access(path, os.X_OK):
+        raise SystemExit(f"{source} is not executable: {path}")
+    return path
+
+
+def resolve_driver(explicit: str | None) -> Path:
+    """Where the `tenta-wpt-driver` binary is.
+
+    `--driver` wins over `$TENTA_WPT_DRIVER`, which wins over the package's own
+    build outputs (`target/release`, then `target/debug`). Nothing shells out to
+    `cargo run`: a driver that rebuilt itself mid-run would make the measured
+    wall clock meaningless.
+    """
+    if explicit:
+        return checked_driver(Path(explicit), "--driver")
+    from_env = os.environ.get("TENTA_WPT_DRIVER")
+    if from_env:
+        return checked_driver(Path(from_env), "$TENTA_WPT_DRIVER")
+    target = WPT_DIR.parent / "target"
+    for candidate in (target / "release" / "tenta-wpt-driver", target / "debug" / "tenta-wpt-driver"):
+        if candidate.is_file():
+            return checked_driver(candidate, str(candidate))
+    raise SystemExit(
+        "no tenta-wpt-driver binary found; build one with "
+        "`cargo build --release -p tenta-browser --features v8 --bin tenta-wpt-driver`, "
+        "or name it with --driver / $TENTA_WPT_DRIVER"
+    )
 
 
 def make_driver(args: argparse.Namespace) -> Driver:
     if args.product == "chromium":
         return ChromiumDriver(args.channel, args.executable)
     if args.product == "tentabrowser":
-        return TentaBrowserDriver()
+        return TentaBrowserDriver(resolve_driver(args.driver))
     raise SystemExit(f"unknown product {args.product}")
 
 
@@ -477,6 +516,11 @@ def main(argv: list[str]) -> int:
             p.add_argument("--max-minutes", type=float, default=0, help="stop starting new tests after N minutes")
             p.add_argument("--channel", help="Playwright channel for chromium (e.g. chrome)")
             p.add_argument("--executable", help="browser executable for chromium")
+            p.add_argument(
+                "--driver",
+                help="tenta-wpt-driver binary for the tentabrowser product "
+                "(default: $TENTA_WPT_DRIVER, then target/release, then target/debug)",
+            )
     args = parser.parse_args(argv)
     if args.command == "checkout":
         ensure_checkout(load_config())

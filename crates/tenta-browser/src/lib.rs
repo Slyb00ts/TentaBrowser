@@ -12,6 +12,10 @@ pub mod engine;
 mod extensions;
 mod hooks;
 mod threads;
+/// The `tenta-wpt-driver` transport (`wpt/run.py --product tentabrowser`).
+/// JavaScript is what the driver runs, so it exists only where an engine does.
+#[cfg(feature = "v8")]
+pub mod wpt;
 
 pub use context::{BrowserContext, ContextOptions, GroupId, PageOptions};
 pub use engine::{

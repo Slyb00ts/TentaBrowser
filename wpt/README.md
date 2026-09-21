@@ -29,10 +29,12 @@ directories and updating expectations.
 
 - `chromium`: Playwright's pinned Chromium (P0). Serves as the control: a
   directory that Chromium fails is suspect before TentaBrowser is blamed.
-- `tentabrowser`: reserved. It will start `tentabrowser serve`, connect over
-  CDP and receive results through the `Tenta.wptResult` binding. The driver
-  contract both products implement is documented on the `Driver` class in
-  `run.py`.
+- `tentabrowser`: the engine itself, driven by `tenta-wpt-driver` (a `[[bin]]`
+  of the `tenta-browser` crate, built with `--features v8`). It replaces
+  `resources/testharnessreport.js` on the wire with its own hook, and the hook
+  posts the result back over `fetch()`. The driver contract both products
+  implement is documented on the `Driver` class in `run.py`; this one is
+  described in `docs/dev/wpt.md`.
 
 ## Pinned WPT commit
 

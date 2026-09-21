@@ -15,9 +15,10 @@
 //
 // Every test runs in a fresh page. The standard `resources/testharnessreport.js`
 // is replaced on the wire by a completion hook that hands the testharness
-// results to the driver through an exposed binding. This is the same contract
-// the future `tentabrowser` product implements natively with its
-// `Tenta.wptResult` binding (docs/spec/15-testing-and-benchmarks.md §6).
+// results to the driver through an exposed binding. The `tentabrowser` product
+// implements the same contract natively, with no binding: its own request
+// interceptor answers that path, and the hook posts the result back with
+// `fetch()` (docs/dev/wpt.md).
 
 import { chromium } from "playwright";
 import { readFileSync, writeFileSync } from "node:fs";

@@ -2277,6 +2277,8 @@ dependencies = [
  "hashbrown 0.16.1",
  "http",
  "parking_lot",
+ "serde",
+ "serde_json",
  "tenta-core",
  "tenta-dom",
  "tenta-js",
@@ -2286,6 +2288,7 @@ dependencies = [
  "tenta-testutil",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "url",
 ]
 
