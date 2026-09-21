@@ -336,4 +336,40 @@ impl ScriptHost for V8ScriptHost {
         };
         driver.start(request, handle)
     }
+
+    /// Hands the request to the driver to end, through the same slot
+    /// [`Self::start_xhr`] took it from.
+    ///
+    /// No driver means nothing was started, hence nothing to terminate: the
+    /// answer is `false`, which is exactly what a driver that does not hold the
+    /// handle says. The two are indistinguishable to the caller on purpose —
+    /// `abort()` is a void method whose steps raise nothing, so "there was
+    /// nothing to end" is not a failure whatever the reason.
+    fn abort_xhr(&self, handle: XhrHandle) -> bool {
+        let Some(driver) = self.host.xhr_driver() else {
+            return false;
+        };
+        driver.abort(handle)
+    }
+
+    /// Arms the timer on the engine's own loop, as page activity, with the
+    /// plain-scope entry the callback needs.
+    ///
+    /// The wrapper is what makes the callback runnable: a timer's task runs from
+    /// the engine's pump with no V8 callback under it, so `with_context` — which
+    /// the listener dispatch inside `task` reaches — would otherwise bootstrap a
+    /// `v8::CallbackScope`, which is undefined behaviour off a callback. The
+    /// guard is the same one [`crate::Engine::settle_xhr`] takes for the
+    /// completion drain, and it is held for the whole of `task` because the whole
+    /// of it is one native entry.
+    fn schedule_background_task(&self, delay_ms: u64, task: Box<dyn FnOnce()>) {
+        let host = Rc::clone(&self.host);
+        self.host.scheduler.set_background_timeout(
+            delay_ms,
+            Box::new(move || {
+                let _native = host.enter_native_dispatch();
+                task();
+            }),
+        );
+    }
 }

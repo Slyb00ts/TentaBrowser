@@ -242,6 +242,20 @@ impl ScriptHost for MockHost {
             "the dispatcher mock starts no XMLHttpRequest",
         ))
     }
+
+    /// `false` for the same reason [`Self::start_xhr`] refuses: this fixture
+    /// never starts a request, so it never holds one to end.
+    fn abort_xhr(&self, _handle: XhrHandle) -> bool {
+        false
+    }
+
+    /// Unreachable, and by the refusal above rather than by luck: a timer is
+    /// armed only for a request that started, and every start here is an `Err`.
+    /// Panicking rather than dropping the task means a future caller cannot have
+    /// its callback vanish silently.
+    fn schedule_background_task(&self, _delay_ms: u64, _task: Box<dyn FnOnce()>) {
+        unreachable!("the dispatcher mock starts no XMLHttpRequest, so it arms no timer");
+    }
 }
 
 struct Fixture {

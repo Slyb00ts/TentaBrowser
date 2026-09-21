@@ -441,7 +441,8 @@ impl XhrResponse {
 /// `readystatechange` is dispatched at it. That is why the record has to outlive
 /// its own wrapper's listeners rather than being rebuilt from them.
 pub struct XhrRecord {
-    /// The *state*, which the five constants name: the response machine writes
+    /// The *state*, which the five constants name: `open()` and `abort()` move it
+    /// between `UNSENT` and `OPENED`, and the response machine writes
     /// `HEADERS_RECEIVED`, `LOADING` and `DONE` as a completion is delivered.
     pub ready_state: u16,
     /// The *request method*, once `open()` has validated and normalised it.
@@ -457,11 +458,12 @@ pub struct XhrRecord {
     /// flight.
     ///
     /// `open()` resets it (the standard's step 11) and `send()` sets it (step
-    /// 10); a completion clears it
-    /// ([`deliver_xhr_completion`]). Its whole purpose is to make a second
-    /// `send()` on an object with a request under way an `InvalidStateError`,
-    /// which is why it is set before the request is built rather than after it
-    /// succeeds.
+    /// 10); every way a request ends clears it — the *request error steps* and
+    /// *handle response end-of-body* both do, which is where the standard puts
+    /// it, and the timeout's own callback reports "nothing is in flight" through
+    /// the same clear. Its whole purpose is to make a second `send()` on an
+    /// object with a request under way an `InvalidStateError`, which is why it is
+    /// set before the request is built rather than after it succeeds.
     pub send_flag: bool,
     /// The *request id*: the identity of the request `send()` most recently
     /// started, and the value a completion is checked against before it is
@@ -472,11 +474,15 @@ pub struct XhrRecord {
     /// run with a request still in flight and leave two of them on one object —
     /// and the response state machine, which writes `ready_state` and `response`
     /// on this record, would then interleave the two answers. The standard closes
-    /// that in `open()`'s step 10 by terminating the abandoned request, which the
-    /// host layer cannot reach because the driver sits on the other side of the
-    /// seam; this id is what stands in for it. It is bumped by `open()` **and**
-    /// by the `send()` that starts a request, carried to the driver in
-    /// [`XhrHandle`](crate::xhr::XhrHandle), and compared in
+    /// that in `open()`'s step 10 by terminating the abandoned request, and this
+    /// engine *also* terminates it there — but a driver is on the other side of
+    /// the seam (`crate::xhr::XhrDriver`), so an answer can already be in its
+    /// table, or in flight towards the drain, when the termination arrives. The
+    /// id is what refuses that answer: it is bumped by `open()` and by the
+    /// `send()` that starts a request, and by the three calls that end one
+    /// without an answer — `open()`'s own step 10, `abort()`, and the `timeout`
+    /// that fires, all three through [`end_xhr_request`] — and it is carried to
+    /// the driver in [`XhrHandle`](crate::xhr::XhrHandle), compared in
     /// [`deliver_xhr_completion`], which discards a completion whose id is no
     /// longer this record's.
     ///
@@ -494,8 +500,15 @@ pub struct XhrRecord {
     /// equality; values are byte sequences because a `ByteString` may hold
     /// obs-text. `open()` empties it (step 11) and nothing else writes it.
     pub author_headers: Vec<(Vec<u8>, Vec<u8>)>,
-    /// The *timeout*, an `unsigned long`. A non-zero value is refused by the
-    /// setter, because nothing here can time a request out.
+    /// The *timeout*, an `unsigned long`.
+    ///
+    /// A plain stored value, and the standard's *timed out* flag with it: the
+    /// setter writes whatever it is given — 0 included, which is how a page
+    /// takes the deadline off a request it has not sent yet — and `send()` arms
+    /// the timer once, from this value, for the request it is starting
+    /// (`arm_xhr_timeout`). Nothing here reads it at the deadline: the timer is
+    /// what carries it, which is what makes a value set *after* `send()`
+    /// govern no request already in flight.
     pub timeout: u32,
     /// *With credentials*. `true` is refused by the setter, because the shared
     /// cookie jar decides on its own whether credentials travel.
@@ -6540,6 +6553,27 @@ impl HostObject {
         if let Some(error) = refusal {
             let outcome = FetchOutcome::Failed(error.message().to_owned());
             deliver_xhr_completion(ctx, DispatchTarget::host(key), request_id, &outcome);
+            return Ok(());
+        }
+
+        // The request's `timeout` is armed now, which is where the standard arms
+        // it — in this method's "Run these steps in parallel" branch: "Wait until
+        // either req's done flag is set or this's timeout is not 0 and this's
+        // timeout milliseconds have passed since now. If req's done flag is
+        // unset, then set this's timed out to true and terminate this's fetch
+        // controller" (<https://xhr.spec.whatwg.org/#the-send()-method>). A
+        // timeout of 0 arms nothing, which is the whole of what "the setter's 0
+        // disarms it" means, and a refused request has nothing to time.
+        //
+        // The value is read here rather than carried by the request: it is the
+        // record's, and the standard reads the *current* one at the deadline. The
+        // deadline itself is fixed here, which is the one place this engine's
+        // timer parts company with that sentence — a page that raises `timeout`
+        // while a request is in flight moves the bound for its next request and
+        // not for this one.
+        let timeout = self.with_xhr(0, |record| record.timeout);
+        if timeout != 0 {
+            arm_xhr_timeout(ctx, DispatchTarget::host(key), key, handle, timeout);
         }
         Ok(())
     }
@@ -6642,21 +6676,23 @@ impl XMLHttpRequestOps for HostObject {
             ));
         }
 
-        // Step 10 ("terminate this's fetch controller") is served by the request
-        // id and not by termination. `send()` leaves the object at `OPENED` for
-        // as long as its request is unanswered, so this step *is* reachable with
-        // a live request, and the standard's own protection against a re-opened
-        // object carrying two of them is to end the first. The host layer cannot
-        // end it here — the driver sits on the other side of the seam
-        // (`crate::xhr::XhrDriver`), so terminating a request is the machinery
-        // `abort()` needs and does not have yet (b-7). What this does instead is
-        // make the abandoned request **invisible**: bumping the record's request
-        // id means the handle the driver still holds for it no longer matches
-        // this record, and `deliver_xhr_completion` discards a completion that
-        // does not match — so no event is fired for the abandoned request and
-        // its response never lands on the object. The task itself does run to
-        // completion; what ends it early is the driver's own `Drop`, with the
-        // navigation.
+        // Step 10: "Terminate this's fetch controller." `send()` leaves the
+        // object at `OPENED` for as long as its request is unanswered, so this
+        // step *is* reachable with a live request, and re-opening an object must
+        // not leave two of them in flight — one of them answering an object that
+        // has moved on. It is terminated through the seam the request left by
+        // (`ScriptHost::abort_xhr`), which is the same machinery `abort()` uses
+        // and the reason the two landed together.
+        //
+        // The termination is not the whole of the protection, and both halves
+        // are needed. The driver is on the other side of the seam, so an answer
+        // can already be in its table when this runs, and an aborted task is
+        // still one whose completion was pushed a moment earlier — so the id
+        // moves on as well, and `deliver_xhr_completion` discards a completion
+        // that does not match it. The id moves first and the driver is asked
+        // after, so the one ordering in which a racing completion could still be
+        // delivered does not exist: by the time the request can stop costing a
+        // socket it is *already* invisible. Both halves are `end_xhr_request`'s.
         //
         // Step 11's *reset associated variables* is otherwise complete here.
         // "Set this's send() flag to unset" and "set this's author request
@@ -6677,18 +6713,16 @@ impl XMLHttpRequestOps for HostObject {
         let key = self
             .event_target_key()
             .ok_or_else(|| JsError::type_error("the receiver is not an event target"))?;
+        let ctx = self.context();
+        end_xhr_request(ctx, key);
         let opened = self.with_xhr_mut(false, |record| {
-            // Step 10's effect, and the one write in this closure that is not
-            // step 11's: an id that has moved on is what makes any request in
-            // flight for this object undeliverable (`XhrRecord::request_id`).
-            record.request_id = record.request_id.wrapping_add(1);
             record.method = Some(normalized);
             record.url = Some(parsed);
             record.send_flag = false;
             record.author_headers.clear();
             record.response = None;
-            let opened = record.ready_state != <HostObject as XMLHttpRequestOps>::OPENED;
-            record.ready_state = <HostObject as XMLHttpRequestOps>::OPENED;
+            let opened = record.ready_state != OPENED;
+            record.ready_state = OPENED;
             opened
         });
         if !opened {
@@ -6700,7 +6734,6 @@ impl XMLHttpRequestOps for HostObject {
         // It is fired here, on this stack, which is what makes a listener
         // registered before the call run before `open()` returns — the same
         // shape `AbortSignal::abort` gives its `abort` event.
-        let ctx = self.context();
         let mut record = EventRecord::new(
             READY_STATE_CHANGE.to_owned(),
             EventKind::Plain,
@@ -6798,21 +6831,15 @@ impl XMLHttpRequestOps for HostObject {
         self.with_xhr(0, |record| record.timeout)
     }
 
-    fn set_timeout(&self, value: u32) -> Result<(), JsError> {
-        // The standard stores any value here and arms it in `send()`, firing a
-        // `timeout` event when the request outlives it. Nothing here can time a
-        // request out yet — a request is in flight now, but the timer that would
-        // interrupt it has not landed — so a non-zero value is refused rather
-        // than stored: keeping it would promise an event that can never fire.
-        // The refusal is lifted where the timer lands (b-7), not before.
-        if value != 0 {
-            return Err(JsError::dom_exception(
-                "NotSupportedError",
-                "this engine cannot time a request out",
-            ));
-        }
+    fn set_timeout(&self, value: u32) {
+        // The standard's setter stores any value here and arms nothing: the
+        // timer it describes is armed by `send()`, and 0 is what makes that
+        // arming a no-op. The setter's one throw — an `InvalidAccessError` for a
+        // synchronous request on a `Window` — is unreachable in this engine,
+        // because `open()` refuses `async = false` for every case, so this
+        // cannot fail and the member is declared without `[Throws]`
+        // (`idl/xhr/XMLHttpRequest.webidl`).
         self.with_xhr_mut((), |record| record.timeout = value);
-        Ok(())
     }
 
     fn with_credentials(&self) -> bool {
@@ -6851,6 +6878,77 @@ impl XMLHttpRequestOps for HostObject {
         let result = self.send_request(body);
         given_back(body);
         result
+    }
+
+    /// The XHR Standard's `abort()` steps, in its order
+    /// (<https://xhr.spec.whatwg.org/#the-abort()-method>).
+    ///
+    ///  1. "Abort this's fetch controller."
+    ///  2. "If this's state is opened with this's send() invoked being true,
+    ///     headers received, or loading, then run the request error steps for
+    ///     this and abort."
+    ///  3. "If this's state is done, then set this's state to unsent and this's
+    ///     response to a network error." — "No readystatechange event is
+    ///     dispatched."
+    ///
+    /// The three steps answer a page's three cases, and the WPT suite pins each.
+    /// An object with a request in flight (`abort-after-send.any.js`) runs step 2
+    /// — `readystatechange` at `DONE`, then `abort`, then `loadend`, all
+    /// synchronous — and then step 3, so the state a caller reads after the call
+    /// is `UNSENT` and not `DONE`. An object whose answer already arrived
+    /// (`abort-after-receive.any.js`) runs step 3 alone: the state goes back to
+    /// `UNSENT`, the response to a network error, and **nothing fires**. An
+    /// object that was opened but never sent (`abort-during-unsent.any.js`)
+    /// matches neither condition and does nothing at all; that is the no-op the
+    /// standard's own wording implies, rather than a refusal.
+    ///
+    /// Step 3 running after step 2 is what makes the state `UNSENT` at the end
+    /// of the first case, and it is easy to read the two as alternatives: the
+    /// condition is evaluated *after* step 2 has set the state to done, so it is
+    /// true for an in-flight request as well. The events step 2 fires still see
+    /// `DONE` — a `loadend` listener reads 4 — and the reset lands when the call
+    /// returns.
+    ///
+    /// The upload object's half of step 2 is deferred with the object itself
+    /// (`idl/xhr/XMLHttpRequest.webidl`), and it is unobservable here: nothing
+    /// this engine sends has a body, so the upload is complete by the time a
+    /// request is in flight and the standard's own upload steps do nothing.
+    ///
+    /// Nothing in these steps raises, which is why the member is declared without
+    /// `[Throws]` and returns `()`.
+    fn abort(&self) {
+        let Some(key) = self.event_target_key() else {
+            return;
+        };
+        let ctx = self.context();
+        let target = DispatchTarget::host(key);
+        // Step 2's condition is read *before* step 2 runs: the request error
+        // steps set the state to done, and step 3 then reads what they left
+        // there.
+        let inflight = self.with_xhr(false, |record| {
+            let state = record.ready_state;
+            (state == OPENED && record.send_flag) || state == HEADERS_RECEIVED || state == LOADING
+        });
+        // Step 1 ("Abort this's fetch controller") and this engine's half of the
+        // guarantee it makes: whatever the driver still holds for this object —
+        // or has already pushed into its table — belongs to a request the object
+        // no longer recognises, and is ended and discarded together
+        // (`end_xhr_request`).
+        end_xhr_request(ctx, key);
+        if inflight {
+            // Step 2. `abort` is the event name the *request error steps* are run
+            // with — the same algorithm a network failure runs with `error` and a
+            // timeout with `timeout` — and `AbortError` is the exception it is
+            // given, which only a synchronous request could have thrown.
+            xhr_request_error_steps(ctx, target, key, "abort");
+        }
+        // Step 3, in the standard's own order: an object that was already done
+        // and one step 2 has just put there both reset, and neither fires an
+        // event for it.
+        if self.with_xhr(false, |record| record.ready_state == DONE) {
+            store_xhr_response(ctx, key, None);
+            set_xhr_state(ctx, key, UNSENT);
+        }
     }
 
     fn status(&self) -> u16 {
@@ -7095,12 +7193,18 @@ impl XMLHttpRequestConstructor for HostObject {
 /// `XMLHttpRequest` share one — so only the record does.
 ///
 /// `request` is the id the object's `send()` stamped on this request. A record
-/// whose id has moved on has abandoned the request — `open()` ran while it was
-/// still in flight, which is the object's step 10 standing in for a termination
-/// this layer cannot perform — and then **nothing** happens: no store, no state
-/// change, no event. The return is `true` in that case, so the caller's fallback
-/// dispatch is suppressed too; a page that re-opened an object must not receive
-/// even a bare `error`/`load` for the request it walked away from.
+/// whose id has moved on has already ended that request — `open()` ran while it
+/// was still in flight, `abort()` ended it, or its `timeout` fired, all three of
+/// which go through `end_xhr_request` — and then **nothing** happens: no store,
+/// no state change, no event. The return is `true` in that case, so the caller's
+/// fallback dispatch is suppressed too; a page that re-opened or aborted an
+/// object must not receive even a bare `error`/`load` for the request it walked
+/// away from.
+///
+/// The id comparison is the whole protection even though those three callers
+/// *also* terminate the request at the driver: a request can complete on the
+/// driver's task between the termination and the drain, and only the id can
+/// refuse the completion that crossed the seam anyway.
 ///
 /// The events are fired synchronously, on this stack, at the object's own event
 /// target key, and the caller holds the native-dispatch guard that makes a
@@ -7125,23 +7229,8 @@ pub fn deliver_xhr_completion(
     }
     match outcome {
         FetchOutcome::Response(data) => xhr_handle_response(ctx, target, key, data),
-        FetchOutcome::Failed(_) => xhr_handle_error(ctx, target, key),
+        FetchOutcome::Failed(_) => xhr_request_error_steps(ctx, target, key, "error"),
     }
-    // The send flag clears when the request finishes, whichever way it finished:
-    // *handle response end-of-body* step 8 and the *request error steps* step 2
-    // both set it to false, and neither of the two handlers above can be reached
-    // without one of them having run.
-    //
-    // The standard clears it *inside* those algorithms — before the
-    // `readystatechange`, `load`/`error` and `loadend` events — where this
-    // clears it after the handler returns. The placement is unobservable, which
-    // is why it is a comment and not a test: both `send()` (step 1) and
-    // `setRequestHeader()` (step 1) read the *state* before the flag, and every
-    // completion has already set the state to `DONE`. Clearing it here rather
-    // than in each handler is what keeps the two from drifting — and it is the
-    // half of a request's lifetime that makes `send()` refuse a second call
-    // while the first is in flight.
-    clear_xhr_send_flag(ctx, key);
     true
 }
 
@@ -7194,26 +7283,186 @@ fn xhr_handle_response(
     // duplicated call, and the standard is what this engine follows.
     fire_xhr_progress(ctx, target, "progress", transmitted, length);
     set_xhr_state(ctx, key, DONE);
+    // *Handle response end-of-body* step 8: the send flag clears once the body
+    // has ended and the state is done (step 7), and before the `readystatechange`
+    // of step 9 that reports it. It is the flag's own half of "this request is
+    // over" — `send()` reads
+    // the state before the flag, so the position is only exactly-the-standard
+    // rather than observable, but the flag has two clearers (`abort()` and a
+    // fired `timeout` clear it through the *request error steps*) and matching
+    // the order is what keeps them from drifting.
+    clear_xhr_send_flag(ctx, key);
     fire_xhr_event(ctx, target, READY_STATE_CHANGE, EventKind::Plain);
     fire_xhr_progress(ctx, target, "load", transmitted, length);
     fire_xhr_progress(ctx, target, "loadend", transmitted, length);
 }
 
-/// The standard's *handle errors* for an object whose request failed: the
-/// *request error steps* with a `NetworkError`.
+/// The standard's *request error steps* for an object whose request failed, with
+/// `event` naming the event that reports it
+/// (<https://xhr.spec.whatwg.org/#request-error-steps>).
 ///
-/// A failure never reaches `HEADERS_RECEIVED` or `LOADING`, and none of these
-/// three events carries a length — the standard fires `error` and `loadend` with
-/// 0 and 0, and fires no `progress` at all.
-fn xhr_handle_error(ctx: &SharedContext, target: DispatchTarget, key: HostKey) {
-    // "Set this's response to a network error" comes before the event, so every
-    // member already reads 0, the empty string and null from inside the
-    // `readystatechange` handler onwards.
-    store_xhr_response(ctx, key, None);
+/// One algorithm and three callers, which is why the name is a parameter rather
+/// than the body of a `handle errors`-shaped function: a network failure runs it
+/// with `error`, a fired `timeout` runs it with `timeout`, and `abort()` runs it
+/// with `abort`. The standard's *handle errors* picks between the last two from
+/// the object's own *timed out* and *aborted* flags; this engine holds neither,
+/// because the timer carries the timeout and `abort()` is the only caller that
+/// runs the steps for an abort — so the choice is made where the cause is known
+/// instead of being re-derived here.
+///
+/// A failure never reaches `HEADERS_RECEIVED` or `LOADING` (only the timeout case
+/// can leave from a later state, and it still reports what a failure reports),
+/// and none of these three events carries a length — the standard fires the named
+/// event and `loadend` with 0 and 0, and fires no `progress` at all. The
+/// `exception` argument the standard's signature carries is not passed: it is
+/// thrown only for a synchronous request, and `open()` refuses `async = false`
+/// for every case.
+///
+/// The upload half of step 6 is not run: this engine has no
+/// `XMLHttpRequestUpload` object yet, so there is no upload object to fire at and
+/// no *upload complete* flag to consult. Later `abort()` callers inherit it — the
+/// member that lands the upload object owes the failing event and its `loadend`
+/// there too (`idl/xhr/XMLHttpRequest.webidl`).
+fn xhr_request_error_steps(ctx: &SharedContext, target: DispatchTarget, key: HostKey, event: &str) {
+    // Steps 1 to 3, in the standard's order — state, send flag, response — all of
+    // them before any event, so every member already reads 0, the empty string
+    // and null from inside the `readystatechange` handler onwards, and a `send()`
+    // from one of these handlers is refused by the *state* rather than by the
+    // flag.
     set_xhr_state(ctx, key, DONE);
+    clear_xhr_send_flag(ctx, key);
+    store_xhr_response(ctx, key, None);
+    // Step 5, then the two progress events of the steps after it.
     fire_xhr_event(ctx, target, READY_STATE_CHANGE, EventKind::Plain);
-    fire_xhr_progress(ctx, target, "error", 0, 0);
+    fire_xhr_progress(ctx, target, event, 0, 0);
     fire_xhr_progress(ctx, target, "loadend", 0, 0);
+}
+
+/// Ends the request `key` currently holds: the driver is told to stop it, and the
+/// record's request id moves on so no completion for it is delivered.
+///
+/// This is the shared half of the three ways a request ends without an answer —
+/// `open()` step 10, `abort()` step 1 and a fired `timeout` — and both halves are
+/// needed. The driver call stops the work, and the id is what refuses an answer
+/// that crossed the seam before the termination landed: `deliver_xhr_completion`
+/// compares the id and discards a mismatched completion, so without the bump a
+/// racing answer would run the whole state machine again on an object that had
+/// already reported the request over.
+///
+/// The two are deliberately ordered id-then-driver: a driver that answers while
+/// `abort` is on the stack pushes a completion the drain will refuse, whereas the
+/// reverse order would leave a window in which a completion that arrived first
+/// could still be delivered. The id is read and bumped under one borrow, and the
+/// driver is called with no record borrow held — `abort` is user code under the
+/// seam and must not be able to re-enter the record table.
+///
+/// The handle is built from the *old* id, because that is the request being
+/// ended: the driver knows the request by the identity it was started with.
+fn end_xhr_request(ctx: &SharedContext, key: HostKey) {
+    let Some(handle) = bump_xhr_request_id(ctx, key) else {
+        // Nothing is in flight, or the record is gone: there is no request to
+        // name and no driver that could hold one.
+        return;
+    };
+    let script = ctx.script.borrow().as_ref().map(Rc::clone);
+    if let Some(script) = script {
+        // The answer is deliberately dropped: "nothing was terminated" is a
+        // normal outcome (`XhrDriver::abort`) and none of the three callers
+        // branches on it — the id is what guarantees no answer arrives either
+        // way.
+        let _ = script.abort_xhr(handle);
+    }
+}
+
+/// Bumps `key`'s request id and returns a handle naming the request it left
+/// behind, or `None` when there is no request to name.
+///
+/// This is the id half of [`end_xhr_request`], split out so the borrow is
+/// visibly scoped to the one read-modify-write: the caller must not hold the
+/// record table across the driver call.
+fn bump_xhr_request_id(ctx: &SharedContext, key: HostKey) -> Option<XhrHandle> {
+    let mut records = ctx.host_records.borrow_mut();
+    let Some(HostRecord::Xhr(record)) = records.get_mut(key) else {
+        return None;
+    };
+    let handle = XhrHandle {
+        target: encode_host(key),
+        request: record.request_id,
+    };
+    record.request_id = record.request_id.wrapping_add(1);
+    Some(handle)
+}
+
+/// Arms the timer that ends a request that outlives `timeout_ms`.
+///
+/// The clock is the page's own, through
+/// [`ScriptHost::schedule_background_task`]: the timer has to fire on the same
+/// loop the page runs on, so a virtual-clock page runs it when the engine
+/// advances to its deadline and a real-clock page runs it when the host blocks
+/// that long. It is scheduled as **background** rather than as tracked work, so
+/// it does not hold the settle open: the request itself already holds it
+/// (`RequestRecord::holds_settle`), and a tracked timer for the same request
+/// would make the page wait out the whole timeout after the answer had already
+/// arrived.
+///
+/// The `handle` is the one `send()` stamped, and the callback re-checks it
+/// against the record before acting: the timer is never cancelled when its
+/// request ends early, so a fired timer for a request the object has moved on
+/// from has to be recognised and ignored rather than run. The callback holds the
+/// context **weakly** for the same reason it is never cancelled — see the
+/// comment at the downgrade.
+fn arm_xhr_timeout(
+    ctx: &SharedContext,
+    target: DispatchTarget,
+    key: HostKey,
+    handle: XhrHandle,
+    timeout_ms: u32,
+) {
+    let script = ctx.script.borrow().as_ref().map(Rc::clone);
+    let Some(script) = script else {
+        return;
+    };
+    // A `Weak`, not a clone: the callback outlives the call that armed it, and it
+    // is stored in the engine's own timer map — `HostContext` -> script host ->
+    // host state -> scheduler -> callback. A strong context there would close
+    // that ring and keep a whole page's engine alive after it was dropped. The
+    // page's own engine holds the context strongly for as long as the page
+    // exists, so the upgrade fails in exactly the two cases there is nothing to
+    // do in: the page is gone, or the timer outlived it.
+    let ctx = Rc::downgrade(ctx);
+    script.schedule_background_task(
+        u64::from(timeout_ms),
+        Box::new(move || {
+            if let Some(ctx) = ctx.upgrade() {
+                xhr_timeout_fired(&ctx, target, key, handle);
+            }
+        }),
+    );
+}
+
+/// The timer callback: ends the request `handle` names if it is still the one in
+/// flight, and reports it as the standard's *handle errors* reports a timeout.
+///
+/// Liveness is the standard's own test read off this engine's record: "req's done
+/// flag is unset" is *the send flag is still set* — the flag is cleared when a
+/// request ends whichever way it ended — and the handle's id is the second half,
+/// because a request that ended and a *new* one that started on the same object
+/// both leave the flag set again. A timer that fires for neither does nothing:
+/// the request it belonged to is over, and the events it would fire have already
+/// been fired by whatever ended it.
+///
+/// The steps run only after the termination, so a completion racing the timer is
+/// discarded by the id like any other abandoned answer.
+fn xhr_timeout_fired(ctx: &SharedContext, target: DispatchTarget, key: HostKey, handle: XhrHandle) {
+    let still_in_flight = match ctx.host_records.borrow().get(key) {
+        Some(HostRecord::Xhr(record)) => record.send_flag && record.request_id == handle.request,
+        Some(_) | None => false,
+    };
+    if !still_in_flight {
+        return;
+    }
+    end_xhr_request(ctx, key);
+    xhr_request_error_steps(ctx, target, key, "timeout");
 }
 
 /// Writes one of the five state constants onto the record, if it is still there.
@@ -7296,8 +7545,10 @@ fn fire_xhr_progress(
 /// is.
 const CONTENT_LENGTH: &[u8] = b"content-length";
 
-/// The three states a delivered response passes through, bound to the constants
-/// the generated trait declares so that no state number is written in this file.
+/// The states a delivered response passes through, bound to the constants the
+/// generated trait declares so that no state number is written in this file.
+const UNSENT: u16 = <HostObject as XMLHttpRequestOps>::UNSENT;
+const OPENED: u16 = <HostObject as XMLHttpRequestOps>::OPENED;
 const HEADERS_RECEIVED: u16 = <HostObject as XMLHttpRequestOps>::HEADERS_RECEIVED;
 const LOADING: u16 = <HostObject as XMLHttpRequestOps>::LOADING;
 const DONE: u16 = <HostObject as XMLHttpRequestOps>::DONE;

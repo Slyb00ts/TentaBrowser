@@ -187,6 +187,46 @@ pub trait ScriptHost {
     /// failed request, never as a request still in flight.
     fn start_xhr(&self, request: XhrRequest, handle: XhrHandle) -> Result<(), FetchStartError>;
 
+    /// Ends the `XMLHttpRequest` request `handle` names, reporting whether one
+    /// was still running under it.
+    ///
+    /// The other direction of [`Self::start_xhr`], and a boundary for the same
+    /// reason: only the backend holds the driver a request was handed to. The
+    /// host layer reaches it from the two places a page ends a request before
+    /// its answer exists — `abort()` and `open()`'s step 10 — and passes the
+    /// same two halves `send()` stamped, so the driver can address the one
+    /// request it holds rather than all of them.
+    ///
+    /// `false` means **nothing was terminated**, for any reason — the same
+    /// shape [`Self::start_xhr`]'s `Err` has — and it is not a failure: an
+    /// object with nothing in flight aborts nothing. `abort()` is a void method
+    /// whose steps raise nothing, so the caller ignores the answer; it exists so
+    /// a driver that is asked to end something it does not hold can say so.
+    fn abort_xhr(&self, handle: XhrHandle) -> bool;
+
+    /// Schedules `task` to run once, `delay_ms` from now, on the page's own
+    /// clock — the one `performance.now()` and `Event.timeStamp` read.
+    ///
+    /// This is the boundary for a timer the *host layer* owns, which is why the
+    /// work is built by the caller and not by the implementation: the scheduler
+    /// belongs to the backend and the host layer holds no clock to arm. The
+    /// first caller is `XMLHttpRequest.timeout`, whose callback has to dispatch
+    /// DOM events at an object the host layer owns
+    /// (<https://xhr.spec.whatwg.org/#the-timeout-attribute>).
+    ///
+    /// `task` is scheduled as **page activity** rather than as a deferral of
+    /// tracked work, whatever the provenance of the task arming it: a request's
+    /// timeout only bounds something else's lifetime, and the request itself
+    /// already holds the settle open (`RequestRecord::holds_settle` in
+    /// `tenta-page`), so a second, tracked copy of that lifetime would hold the
+    /// load chain for a delay the request has already released.
+    ///
+    /// `task` runs with **no script on the stack** — the engine's timer pump is
+    /// not a binding call — so the implementation owes the same plain-scope
+    /// entry every other native dispatch takes, and must be able to run it from
+    /// a task that is a JS timer to no one.
+    fn schedule_background_task(&self, delay_ms: u64, task: Box<dyn FnOnce()>);
+
     /// Settles the promise whose resolver holds the bits `resolver`, reporting
     /// whether a settlement was queued.
     ///

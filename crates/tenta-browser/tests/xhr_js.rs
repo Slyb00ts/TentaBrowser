@@ -299,3 +299,153 @@ async fn a_same_origin_xhr_that_redirects_off_origin_is_a_failure() {
     );
     engine.close();
 }
+
+// ---------------------------------------------------------------------------
+// `abort()` and `timeout`, end to end (b-7)
+// ---------------------------------------------------------------------------
+
+/// An `abort()` that lands before the request reaches the wire.
+///
+/// The page aborts in the very turn that called `send()`. That is a real
+/// in-flight abort and not a no-op: the driver registers the request
+/// synchronously inside `start_xhr`, and only the spawned task that writes it is
+/// still unpolled — the page thread is a single-threaded `LocalSet`, so nothing
+/// can run between `send()` and `abort()` inside one script.
+///
+/// Both halves are the assertion. The event log proves the abort took the
+/// in-flight path: `readyState` is 4 with the request still outstanding, and the
+/// three events are the standard's *request error steps* with `abort` in place of
+/// `error`. `requests_served() == 1` proves the abort stopped the request *before*
+/// the socket rather than after an answer — `/api/never` never answers, so a page
+/// whose abort did nothing would hold the settle open until
+/// `settle.foreground_request_max` and would log no `abort` at all. That makes the
+/// count deterministic rather than a race with the wire: the write provably has
+/// not happened yet.
+///
+/// The object is reset to `UNSENT` *after* the events, which is why the trailing
+/// reading is `0` while the handler saw `4` (`abort-after-send.any.js`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_abort_before_the_request_reaches_the_wire_ends_it() {
+    let (server, _temp) = serve_all(&[(
+        "index.html",
+        "<!doctype html><html><head></head><body>\
+         <div id=\"result\">unset</div>\
+         <script>\
+         var seen = [];\
+         var xhr = new XMLHttpRequest();\
+         xhr.open('GET', '/api/never');\
+         xhr.onreadystatechange = function () { if (xhr.readyState === 4) seen.push('rs' + xhr.readyState + ':' + xhr.status); };\
+         xhr.onload = function () { seen.push('load'); };\
+         xhr.onerror = function () { seen.push('error'); };\
+         xhr.onabort = function () { seen.push('abort@' + xhr.readyState); };\
+         xhr.onloadend = function () { seen.push('loadend'); };\
+         xhr.send();\
+         var inflight = xhr.readyState + ':' + xhr.status;\
+         xhr.abort();\
+         document.getElementById('result').textContent =\
+           seen.join(',') + '|' + inflight + '|' + xhr.readyState + '|' + xhr.status;\
+         </script>\
+         </body></html>",
+    )])
+    .await;
+    let engine = js_engine(SettleConfig::library());
+    let context = support::context(&engine);
+    let page = context
+        .new_page(PageOptions::default())
+        .await
+        .expect("a JavaScript page");
+
+    let navigation = goto_network_idle(&page, &server.url("/index.html")).await;
+    assert_eq!(navigation.settle, SettleState::Settled { busy: false });
+
+    let document = page.take_document().expect("document");
+    assert_eq!(
+        text_of(&document, "#result"),
+        "rs4:0,abort@4,loadend|1:0|0|0",
+        "the request error steps ran with `abort` as the event, `readyState` was \
+         already 4 inside the handlers, `send()` had left the object opened-and-sent, \
+         and `abort()` reset it to UNSENT without firing a second `readystatechange`"
+    );
+    assert_eq!(
+        server.requests_served(),
+        1,
+        "only the document: the aborted request never reached the socket"
+    );
+    engine.close();
+}
+
+/// A request that outlives its `timeout` is reported to the page as a timeout,
+/// and the timer that reports it is the page's own clock.
+///
+/// This is the case an `abort()`-only slice cannot reach: nothing in the page
+/// asks for the request to end, the engine's timer does. It is also the end-to-end
+/// proof that the deadline is the *page's* own and not the transport's — the
+/// engine's loop fires the 200 ms timer while `/api/slow?ms=5000` is still asleep
+/// on the server, so the whole navigation costs the timeout rather than the
+/// response. A test that reached the response instead would log `load` with the
+/// server's `slept_ms` body.
+///
+/// `requests_served() == 2` is what makes it a request that *was* on the wire: the
+/// document and the slow path. The write happens on the first park, a turn before
+/// the timer is even due, so the 5000 ms server sleep is a 25x margin over the
+/// 200 ms deadline rather than a race.
+///
+/// Unlike `abort()`, the timeout leaves the object `DONE` — the standard's
+/// *request error steps* do not reset it, and both `ontimeout` and the trailing
+/// reading see `readyState` 4.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_that_outlives_its_timeout_is_reported_to_the_page() {
+    let (server, _temp) = serve_all(&[(
+        "index.html",
+        "<!doctype html><html><head></head><body>\
+         <div id=\"result\">unset</div>\
+         <script>\
+         var seen = [];\
+         var xhr = new XMLHttpRequest();\
+         xhr.open('GET', '/api/slow?ms=5000');\
+         xhr.timeout = 200;\
+         xhr.onreadystatechange = function () { if (xhr.readyState === 4) seen.push('rs' + xhr.readyState + ':' + xhr.status); };\
+         xhr.onload = function () { seen.push('load:' + xhr.responseText); };\
+         xhr.onerror = function () { seen.push('error'); };\
+         xhr.ontimeout = function () { seen.push('timeout@' + xhr.readyState); };\
+         xhr.onabort = function () { seen.push('abort'); };\
+         xhr.onloadend = function () {\
+           seen.push('loadend');\
+           document.getElementById('result').textContent =\
+             seen.join(',') + '|' + xhr.readyState + '|' + xhr.status;\
+         };\
+         xhr.send();\
+         </script>\
+         </body></html>",
+    )])
+    .await;
+    let engine = js_engine(SettleConfig::library());
+    let context = support::context(&engine);
+    let page = context
+        .new_page(PageOptions::default())
+        .await
+        .expect("a JavaScript page");
+
+    let navigation = goto_network_idle(&page, &server.url("/index.html")).await;
+    assert_eq!(
+        navigation.settle,
+        SettleState::Settled { busy: false },
+        "the request the timeout ended had its settle registration released, so the \
+         machine settled on the timer rather than on `foreground_request_max`"
+    );
+
+    let document = page.take_document().expect("document");
+    assert_eq!(
+        text_of(&document, "#result"),
+        "rs4:0,timeout@4,loadend|4|0",
+        "the timer ran the request error steps with `timeout` as the event, not the \
+         `load` the server's answer would have produced"
+    );
+    assert_eq!(
+        server.requests_served(),
+        2,
+        "the document and the slow path, which really was on the wire when the timeout \
+         ended it"
+    );
+    engine.close();
+}

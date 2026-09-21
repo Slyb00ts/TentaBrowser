@@ -23,10 +23,15 @@
 //! is the object's own identity for one request, which is what lets a
 //! completion that belongs to a request the object has abandoned be discarded
 //! instead of delivered (`deliver_xhr_completion` in the bindings).
+//! [`XhrDriver::abort`] addresses a request by the same two halves — the target
+//! is the object a driver would answer, and the request half is which of that
+//! object's requests is meant — so the handle is one identity for a request in
+//! both directions.
 //!
-//! Neither direction does any work here. `start` only hands the request over,
-//! and the table only stores what it is given: the scheduling belongs to the
-//! driver, and applying a completion belongs to the engine.
+//! Nothing here does any work. `start` only hands the request over, `abort` only
+//! says which request to end, and the table only stores what it is given: the
+//! scheduling belongs to the driver, and applying a completion belongs to the
+//! engine.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -117,7 +122,10 @@ pub struct XhrHandle {
     ///
     /// The engine compares it against the id the object currently holds, and
     /// discards a completion that does not match — see
-    /// [`crate::bindings::host::XhrRecord::request_id`].
+    /// [`crate::bindings::host::XhrRecord::request_id`]. It is also how
+    /// [`XhrDriver::abort`] names the request to end: `open()`, `send()` and
+    /// `abort()` all move the id on, so only the object's *current* request can
+    /// be addressed.
     pub request: u64,
 }
 
@@ -218,6 +226,23 @@ impl XhrCompletions {
 /// What a driver must never do is accept a request and then neither push nor
 /// wake for it: that leaves the object waiting and holds the settle until the
 /// page's own deadline.
+///
+/// # Ending a request early
+///
+/// [`XhrDriver::abort`] is the other direction: the page can end a request it
+/// started, before any answer exists, and the driver has to stop the work rather
+/// than leave it running for an answer nothing will use. It is the
+/// `XMLHttpRequest.abort()` method's first step ("Abort this's fetch
+/// controller", <https://xhr.spec.whatwg.org/#the-abort()-method>) and
+/// `open()`'s step 10, which terminates the request a re-opened object walks
+/// away from.
+///
+/// The engine's own guard against a late answer is separate and stays: the
+/// object's request id moves on when it ends a request, so a completion that
+/// crosses the seam anyway is discarded (`XhrRecord::request_id`,
+/// `deliver_xhr_completion`). A driver that has already pushed a completion
+/// before the abort reached it therefore needs no rollback — the engine is what
+/// refuses it.
 pub trait XhrDriver {
     /// Takes `request`, to be answered at `handle` when it completes.
     ///
@@ -227,6 +252,22 @@ pub trait XhrDriver {
     /// here rather than in the caller because only the driver knows whether it
     /// can serve the request — a cross-origin URL is the first case.
     fn start(&self, request: FetchRequest, handle: XhrHandle) -> Result<(), FetchStartError>;
+
+    /// Ends the request `handle` names, reporting whether a request was still
+    /// running under it.
+    ///
+    /// `false` means **nothing was terminated**, for any reason: no request was
+    /// ever started under this handle, the one that was has already finished, or
+    /// the driver does not hold it any more. That is a normal outcome rather
+    /// than an error — `abort()` may run on an object with nothing in flight —
+    /// so the caller does not branch on it; the engine's discard is what
+    /// guarantees no answer arrives either way.
+    ///
+    /// Ending a request is not the same as answering it: this pushes no
+    /// completion and does not wake the page. A driver that has an answer in
+    /// hand when this arrives may deliver it as usual — the engine's request id
+    /// is what makes it invisible.
+    fn abort(&self, handle: XhrHandle) -> bool;
 }
 
 #[cfg(test)]

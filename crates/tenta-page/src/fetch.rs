@@ -34,17 +34,24 @@
 //! then filtered, which is the one security property this module owns: see
 //! [`NetFetchDriver`] for the two gates and why both are needed.
 //!
-//! XHR's own `abort()` is not here either (b-7), so an abandoned request is
-//! *discarded* when its completion arrives rather than terminated where it
-//! stands — the record's request id is what makes the two distinguishable, and
-//! the discard itself is
-//! [`deliver_xhr_completion`](tenta_js::bindings::host::deliver_xhr_completion)'s.
-//! What this driver owes that arrangement is that the task still lands in
-//! `inflight`, so [`Drop`] ends it with the navigation.
+//! XHR's own `abort()` reaches the transport here, and the same machinery
+//! answers `open()`'s step 10: both are [`XhrDriver::abort`], which names the
+//! request by the handle it was started with and aborts the task that is running
+//! it. That is what makes an abandoned request stop costing a socket rather than
+//! merely having its answer discarded. The id-based discard stays as the second
+//! half — [`deliver_xhr_completion`](tenta_js::bindings::host::deliver_xhr_completion)
+//! refuses a completion for a request the object has moved on from, which is the
+//! half a driver can never supply, and both are what the engine's
+//! `end_xhr_request` performs together.
+//!
+//! What this driver owes that arrangement is that the task lands in `inflight`
+//! with the handle it was started under, so [`XhrDriver::abort`] can find it and
+//! [`Drop`] ends whatever is left with the navigation.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use tenta_core::RequestId;
 use tenta_js::fetch::{
     FetchCompletions, FetchDriver, FetchOutcome, FetchRequest, FetchStartError, FetchedResponse,
 };
@@ -136,12 +143,12 @@ pub(crate) struct NetFetchDriver {
     /// `User-Agent` override that reached the document but not the requests
     /// script made would be a strange half of a profile.
     extra_headers: Vec<(String, String)>,
-    /// Every fetch still running.
+    /// Every request still running, with the handle an XHR can be addressed by.
     ///
     /// Interior mutability because `FetchDriver::start` takes `&self`: the
     /// driver is reached through an `Rc` the engine owns, and the handle has to
     /// be stored anyway for [`Drop`] to abort it.
-    inflight: RefCell<Vec<JoinHandle<()>>>,
+    inflight: RefCell<Vec<Inflight>>,
 }
 
 impl NetFetchDriver {
@@ -167,6 +174,33 @@ impl NetFetchDriver {
             inflight: RefCell::new(Vec::new()),
         }
     }
+}
+
+/// One request the driver is still running, and the handle that can end it.
+///
+/// The two halves are kept together because they are the two halves of one
+/// request's life: the task is what runs, and the handle is what the page names
+/// it by. A `fetch()` has no `abort()` to be named by, so its entry carries
+/// `None` and only [`Drop`] can end it.
+struct Inflight {
+    /// The handle the request was started under, or `None` on the `fetch()`
+    /// route.
+    ///
+    /// Both halves of the handle are compared when a request is looked up — the
+    /// `target` bits are the object that made the request, so two objects that
+    /// hold the same request id are still told apart.
+    xhr: Option<XhrHandle>,
+    /// The settle registration the request holds, which has to be released by
+    /// whoever ends it.
+    ///
+    /// The task releases its own when it finishes, so this is only needed by
+    /// [`XhrDriver::abort`], whose abort drops the task's future *before* that
+    /// line can run. Without it an aborted request would stay counted as a
+    /// foreground request and hold the settle open until the settle machine gave
+    /// up on it (`settle.foreground_request_max`).
+    request_id: RequestId,
+    /// The task running the request.
+    task: JoinHandle<()>,
 }
 
 /// Sends one request and leaves its answer where `delivery` says. Both routes
@@ -271,8 +305,14 @@ impl NetFetchDriver {
         // here costs nothing and keeps this list to the requests actually in
         // flight. The XHR route lands here too, which is what keeps an abandoned
         // request from outliving its navigation.
-        inflight.retain(|handle| !handle.is_finished());
-        inflight.push(handle);
+        inflight.retain(|entry| !entry.task.is_finished());
+        inflight.push(Inflight {
+            // `Delivery` is `Copy`, so the handle the task's closure took is
+            // still available here: the task and the list name the same request.
+            xhr: delivery.xhr(),
+            request_id,
+            task: handle,
+        });
         Ok(())
     }
 }
@@ -293,6 +333,19 @@ enum Delivery {
     Xhr(XhrHandle),
 }
 
+impl Delivery {
+    /// The handle the request can be addressed by, or `None` when it has none.
+    ///
+    /// A `fetch()` is settled by a resolver and has no `abort()`; only an XHR
+    /// object can name its own request, and only its handle can end it.
+    fn xhr(self) -> Option<XhrHandle> {
+        match self {
+            Delivery::Resolver(_) => None,
+            Delivery::Xhr(handle) => Some(handle),
+        }
+    }
+}
+
 impl FetchDriver for NetFetchDriver {
     fn start(&self, request: FetchRequest, resolver: u64) -> Result<(), FetchStartError> {
         self.send(request, ResourceType::Fetch, Delivery::Resolver(resolver))
@@ -305,6 +358,53 @@ impl XhrDriver for NetFetchDriver {
     /// is registered and nothing is sent, so there is nothing to wait for.
     fn start(&self, request: FetchRequest, handle: XhrHandle) -> Result<(), FetchStartError> {
         self.send(request, ResourceType::Xhr, Delivery::Xhr(handle))
+    }
+
+    /// Finds the request by its handle and aborts the task running it.
+    ///
+    /// This is the driver's half of the engine's `end_xhr_request`, and the
+    /// reason a request the page ended stops costing a socket rather than
+    /// completing into a table nothing will deliver from.
+    ///
+    /// The request is **removed** from the list rather than left in it. An
+    /// aborted task's entry would otherwise sit there until the next request
+    /// swept it, and a second `abort()` for the same request would then find a
+    /// finished task and report `false` — a wrong answer for a request this
+    /// driver had itself ended. Removing it makes "the driver no longer holds
+    /// this handle" the truth as soon as the termination lands.
+    ///
+    /// A task already finished is reported as `false` and not aborted: nothing
+    /// is running under it, and its answer is already in the XHR table, where
+    /// the engine's request id is what refuses it. That is the whole of why the
+    /// two guards exist rather than one.
+    ///
+    /// An aborted task never reaches its own `note_request_done`, because
+    /// aborting drops the future before it can, so the settle registration is
+    /// released here instead. Skipping it would leave the request counted as a
+    /// foreground request — the page would hold its settle open for a request
+    /// that is over, until the settle machine reclassified it
+    /// (`settle.foreground_request_max`).
+    ///
+    /// The lookup compares the whole handle. `handle.target` is the object that
+    /// made the request, so an object that has moved on to another request can
+    /// never end one that belongs to a different object, even if the two ids
+    /// happened to match.
+    fn abort(&self, handle: XhrHandle) -> bool {
+        let ended = {
+            let mut inflight = self.inflight.borrow_mut();
+            let Some(index) = inflight.iter().position(|entry| entry.xhr == Some(handle)) else {
+                return false;
+            };
+            inflight.swap_remove(index)
+        };
+        if ended.task.is_finished() {
+            return false;
+        }
+        ended.task.abort();
+        self.tracker
+            .borrow_mut()
+            .note_request_done(ended.request_id);
+        true
     }
 }
 
@@ -321,9 +421,14 @@ impl Drop for NetFetchDriver {
     /// `FixtureServer::open_connections()` returning to its baseline; this
     /// commit asserts the future's drop beneath it and no further, and says so
     /// at the test.
+    ///
+    /// It is also what ends a request the page never abandoned: a navigation
+    /// that arrives while a script's `fetch()` is still running drops the whole
+    /// driver, so the entries left in `inflight` are exactly the requests that
+    /// were still in flight.
     fn drop(&mut self) {
-        for handle in self.inflight.borrow_mut().drain(..) {
-            handle.abort();
+        for entry in self.inflight.borrow_mut().drain(..) {
+            entry.task.abort();
         }
     }
 }
@@ -842,7 +947,7 @@ mod tests {
                 .borrow_mut()
                 .pop()
                 .expect("the request's task is in flight");
-            task.await.expect("the task ends normally");
+            task.task.await.expect("the task ends normally");
 
             let completions = driver.xhrs.take_all();
             assert_eq!(completions.len(), 1, "the request left exactly one answer");
@@ -859,6 +964,119 @@ mod tests {
                 tracker.borrow().pending().foreground_requests,
                 0,
                 "the wake behind the push is what releases the settle"
+            );
+        });
+    }
+
+    /// `abort` ends the task the handle names, and releases the settle
+    /// registration the request was holding.
+    ///
+    /// The release is the half that is easy to miss and expensive to get wrong:
+    /// the task is what normally calls `note_request_done`, and aborting it drops
+    /// its future *before* that line can run. Without the driver's own release the
+    /// registration would stay forever, and the page would hold its settle open
+    /// for a request that is over until the settle machine reclassified it
+    /// (`settle.foreground_request_max`).
+    ///
+    /// The task is aborted before it has been polled once — `spawn_local` only
+    /// queues it — so this is the in-flight case and not a race with the
+    /// transport.
+    #[test]
+    fn aborting_an_xhr_ends_its_task_and_releases_the_settle() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let local = tokio::task::LocalSet::new();
+        local.block_on(&runtime, async {
+            let (tracker, _clock) = tracker();
+            let driver = driver(Rc::clone(&tracker));
+            let handle = XhrHandle {
+                target: 0x0900_0000_0000_0007,
+                request: 2,
+            };
+            let request = FetchRequest::get(
+                url("http://127.0.0.1:1/data.json"),
+                url("http://127.0.0.1:1/page"),
+                Origin::Tracked,
+            );
+            XhrDriver::start(&driver, request, handle).expect("the request is started");
+            assert_eq!(
+                tracker.borrow().pending().foreground_requests,
+                1,
+                "the request is holding the settle open"
+            );
+
+            assert!(
+                XhrDriver::abort(&driver, handle),
+                "a request that is still running reports that it was ended"
+            );
+            assert_eq!(
+                tracker.borrow().pending().foreground_requests,
+                0,
+                "and the registration goes with it, so the page is no longer waiting"
+            );
+            assert!(
+                driver.inflight.borrow().is_empty(),
+                "the ended request is not held any more, so a second `abort()` is a no-op"
+            );
+            assert!(
+                !XhrDriver::abort(&driver, handle),
+                "a handle the driver no longer holds reports nothing was terminated"
+            );
+            assert!(
+                driver.xhrs.take_all().is_empty(),
+                "ending a request is not answering it: no completion is pushed"
+            );
+        });
+    }
+
+    /// A request that has already finished is reported as nothing to end, and its
+    /// settle registration is left alone.
+    ///
+    /// The entry is built by hand rather than driven, because the case is a state
+    /// and not a race: production reaches it whenever an `abort()` arrives after
+    /// the transport answered but before the next `start` swept the finished
+    /// entry out of `inflight`. Calling `note_request_done` again would be
+    /// harmless (`SettleTracker` removes by id and a second removal is a no-op),
+    /// but reporting `true` would not: the engine drops the answer either way, so
+    /// a driver that claimed to have terminated something would be wrong twice —
+    /// once about the termination and once about the `false` the contract
+    /// promises for "nothing was terminated, for any reason".
+    #[test]
+    fn aborting_a_finished_request_reports_nothing_was_terminated() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let local = tokio::task::LocalSet::new();
+        local.block_on(&runtime, async {
+            let (tracker, _clock) = tracker();
+            let driver = driver(Rc::clone(&tracker));
+            let handle = XhrHandle {
+                target: 0x0900_0000_0000_0007,
+                request: 2,
+            };
+            let finished = tokio::task::spawn_local(async {});
+            for _ in 0..100 {
+                if finished.is_finished() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            assert!(finished.is_finished(), "the task under test has ended");
+            driver.inflight.borrow_mut().push(Inflight {
+                xhr: Some(handle),
+                request_id: RequestId(9),
+                task: finished,
+            });
+
+            assert!(
+                !XhrDriver::abort(&driver, handle),
+                "there is nothing running under this handle any more"
+            );
+            assert_eq!(
+                tracker.borrow().pending().foreground_requests,
+                0,
+                "and a finish is not an end: the settle is exactly as it was"
             );
         });
     }
@@ -991,7 +1209,11 @@ mod tests {
                     std::future::pending::<()>().await;
                 }
             });
-            driver.inflight.borrow_mut().push(handle);
+            driver.inflight.borrow_mut().push(Inflight {
+                xhr: None,
+                request_id: RequestId(1),
+                task: handle,
+            });
             // Let the task be polled once, so it is parked on its await rather
             // than still sitting unpolled in the queue.
             tokio::task::yield_now().await;

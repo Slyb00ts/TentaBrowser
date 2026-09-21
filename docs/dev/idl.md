@@ -964,24 +964,37 @@ generated code:
   attributes `open()` sets up, and the response the machine stores with its
   accessors (`status`, `statusText`, `getResponseHeader`,
   `getAllResponseHeaders`, `overrideMimeType`, `responseType`, `responseText`)
-  and its events. Nothing is sent: a completion is delivered to the object
-  through the b-4 seam, and `send()`/`setRequestHeader()` with the driver seam
-  arrive next (`b-5a3`), then the `tenta-net` driver that makes either reachable
-  from a page (`b-6`). `abort()`, `[SameObject] upload` / `XMLHttpRequestUpload`
-  and `responseURL`/`response`/`responseXML` are absent — an inert upload object
-  would invite handlers that can never fire, there is nothing in flight to
-  abort, and the three response readers need conversions this engine has no
-  value for yet. Four narrowings are this engine's own and each refuses
-  synchronously: `open(…, async = false)` throws `NotSupportedError` (the driver
-  is asynchronous and a blocking request would deadlock the page's turn loop), a
+  and its events. It is no longer inert: `send()`/`setRequestHeader()` hand a
+  request to the driver seam (`b-5a3`), the `tenta-net` driver behind
+  `PageEngine::net_request` carries it (`b-6`, `b-6.5`), and `abort()` and the
+  `timeout` attribute end one before its answer arrives (`b-7`).
+  `[SameObject] upload` / `XMLHttpRequestUpload` and
+  `responseURL`/`response`/`responseXML` are the members still absent — an inert
+  upload object would invite handlers that can never fire, and the three
+  response readers need conversions this engine has no value for yet. Five
+  narrowings are this engine's own and each refuses synchronously:
+  `open(…, async = false)` throws `NotSupportedError` (the driver is
+  asynchronous and a blocking request would deadlock the page's turn loop), a
   non-null `username`/`password` throws it (this engine sends no credentialed
   request, and what the network layer does with URL userinfo is unverified),
   `withCredentials = true` throws it (the shared cookie jar decides on its own),
-  and `responseType` accepts only `""` and `"text"`. One further deviation is a
-  transport limit rather than a narrowing: `statusText` reads back as the status
-  code's canonical reason text, because the response has no reason phrase of its
-  own to come from. `idl/xhr/XMLHttpRequest.webidl`'s header carries the same
-  list beside the members it applies to.
+  `responseType` accepts only `""` and `"text"`, and `send()` accepts only the
+  default body (the parameter is declared as the standard's `any` so a body is
+  never silently dropped; the conversion lands with `b-9`). Two further
+  deviations belong to `timeout`, and neither is a narrowing: the deadline is
+  armed **once**, by `send()`, from the value the record holds then, where the
+  standard's wait re-reads `this`'s *timeout* as a live condition — so a value
+  changed mid-flight governs the request already in flight in a browser, and
+  only the next one here;
+  and the standard's *timed out* and *aborted* flags are not held, because the
+  name of the failing event is passed from the one place the cause is known
+  (`xhr_request_error_steps`). One more deviation is a transport limit rather
+  than a narrowing: `statusText` reads back as the status code's canonical
+  reason text, because the response has no reason phrase of its own to come
+  from. The `timeout` setter is declared without `[Throws]`, because its one
+  standard throw needs `synchronous` true, which `open()` never leaves
+  reachable. `idl/xhr/XMLHttpRequest.webidl`'s header carries the same list
+  beside the members it applies to.
 - A *throwing getter* on a dictionary member is treated as an absent member: the
   generated `dictionary_member` maps an empty `Object::get` — the shape a throw
   takes — to `Ok(None)` and the next member lookup then drops the pending

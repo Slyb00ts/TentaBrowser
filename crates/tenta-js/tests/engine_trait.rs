@@ -150,6 +150,10 @@ impl XhrDriver for StubXhrDriver {
     fn start(&self, _request: FetchRequest, _handle: XhrHandle) -> Result<(), FetchStartError> {
         Ok(())
     }
+
+    fn abort(&self, _handle: XhrHandle) -> bool {
+        false
+    }
 }
 
 struct StubFactory {

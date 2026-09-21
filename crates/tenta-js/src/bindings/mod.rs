@@ -1617,6 +1617,20 @@ mod prelude_helpers {
                 "the recording host starts no XMLHttpRequest",
             ))
         }
+
+        /// `false` for the same reason [`Self::start_xhr`] refuses: a host that
+        /// never started a request never holds one to end.
+        fn abort_xhr(&self, _handle: crate::xhr::XhrHandle) -> bool {
+            false
+        }
+
+        /// Unreachable: nothing this host serves arms a timer, so nothing it
+        /// does can schedule a background task. A task that arrived here would
+        /// have to run, so it panics rather than being dropped silently — the
+        /// same shape as this host's other unreachable members.
+        fn schedule_background_task(&self, _delay_ms: u64, _task: Box<dyn FnOnce()>) {
+            unreachable!("no `Body` member arms a timer");
+        }
     }
 
     /// A [`Realm`] with the recording script host installed, which is what lets
@@ -2131,6 +2145,12 @@ mod prelude_helpers {
     /// so the state check answers before the flag check can and script reads
     /// `InvalidStateError` either way. The record is therefore the only place the
     /// clear is visible, and this test is that place.
+    ///
+    /// Each of the completion's two branches clears it inside its own algorithm
+    /// now — *handle response end-of-body* step 8 in `xhr_handle_response`, and
+    /// the *request error steps* step 2 in `xhr_request_error_steps`, which is
+    /// where a fired `timeout` and an `abort()` clear it too. This test reaches
+    /// the `Failed` branch, so the algorithm it pins is the error one.
     #[test]
     fn a_delivered_completion_clears_the_send_flag() {
         use super::host::{HostRecord, deliver_xhr_completion};
@@ -2176,14 +2196,14 @@ mod prelude_helpers {
     /// discarded: nothing is stored, no state changes, and the return is `true`
     /// so the caller fires no fallback event at it either.
     ///
-    /// This is `open()`'s step 10 as this product can serve it. `send()` leaves
-    /// the object at `OPENED` for as long as its request is unanswered, so
-    /// `open()` is reachable with a request in flight; the standard ends that
-    /// request, and the host layer cannot, because the driver sits on the other
-    /// side of the seam (`crate::xhr::XhrDriver`). The record's request id is
-    /// what the abandonment is expressed with instead
-    /// (`HostRecord::Xhr`'s `request_id`), and this is the comparison that reads
-    /// it.
+    /// This is `open()`'s step 10 and `abort()`'s step 1 as this product serves
+    /// them together: both end the request through `end_xhr_request`, which
+    /// terminates it at the driver *and* moves the record's id on. The id is the
+    /// half that has to be read here, because only it refuses an answer that was
+    /// already in the driver's table when the termination landed — the driver is
+    /// on the other side of the seam (`crate::xhr::XhrDriver`), and an answer can
+    /// be pushed a moment before the abort reaches it. This is the comparison
+    /// that reads it (`HostRecord::Xhr`'s `request_id`).
     #[test]
     fn a_completion_for_an_abandoned_request_is_discarded() {
         use super::host::{HostRecord, deliver_xhr_completion};

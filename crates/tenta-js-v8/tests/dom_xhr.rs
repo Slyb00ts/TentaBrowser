@@ -108,6 +108,14 @@ struct Recorder {
     /// completion for a request the object has since abandoned without having to
     /// know the record's own counter.
     starts: RefCell<Vec<(FetchRequest, XhrHandle)>>,
+    /// Every handle an `abort()` named, in order.
+    ///
+    /// The call is recorded whether or not it ended anything: the engine's
+    /// `end_xhr_request` goes through this seam for every `open()` and every
+    /// `abort()`, including the ones with no request in flight, so a test that
+    /// wants to see the termination happen has to see the calls that ended
+    /// nothing too.
+    aborts: RefCell<Vec<XhrHandle>>,
     /// The table a completion is pushed into, exactly as a real driver would.
     table: XhrCompletions,
     /// Answer with a failure instead of a response.
@@ -128,6 +136,35 @@ impl XhrDriver for Recorder {
         };
         self.table.push(handle, outcome);
         Ok(())
+    }
+
+    /// Records the name and ends nothing — **the table is left as it is**.
+    ///
+    /// That is the point of the racing-completion test: a driver which pushed an
+    /// answer a moment before the abort reached it still has that answer in the
+    /// table, and the engine's request id is what refuses it
+    /// ([`deliver_xhr_completion`](tenta_js::bindings::host::deliver_xhr_completion)).
+    /// A recorder that removed the completion here would be testing its own
+    /// rollback rather than the seam's contract.
+    ///
+    /// The answer is `true` when a request was started under this handle and no
+    /// `abort()` has named it yet. That is deliberately the *looser* of the two
+    /// answers a real driver can give: [`start`](Self::start) answers
+    /// synchronously, so this recorder has no notion of a request that has
+    /// finished, while a real driver reports `false` once its task is done. The
+    /// caller drops the answer either way — `abort()` is void and its steps raise
+    /// nothing — so the difference cannot reach a page, and the tests that use it
+    /// assert on *which handles were named* instead.
+    fn abort(&self, handle: XhrHandle) -> bool {
+        let started = self
+            .starts
+            .borrow()
+            .iter()
+            .any(|(_, started)| *started == handle);
+        let mut aborts = self.aborts.borrow_mut();
+        let already = aborts.contains(&handle);
+        aborts.push(handle);
+        started && !already
     }
 }
 
@@ -226,12 +263,17 @@ fn response(status: u16, headers: &[(&str, &str)], body: Option<&[u8]>) -> Fetch
 /// machine has already moved the state, so `progress` of a body is observed at
 /// `LOADING` and the end-of-body one still is, while `load` is observed at
 /// `DONE`.
+///
+/// `timeout` and `abort` are in the list even though the *response* machine
+/// never fires either: they are the two events the *request error steps* fire
+/// under another name (slice d-4b b-7), and a test that watches for them has to
+/// have the listener already registered.
 fn log_every_event(engine: &mut Engine) {
     eval(
         engine,
         r#"
         globalThis.log = [];
-        for (const name of ['readystatechange', 'progress', 'load', 'error', 'loadend']) {
+        for (const name of ['readystatechange', 'progress', 'load', 'error', 'timeout', 'abort', 'loadend']) {
             xhr.addEventListener(name, event => {
                 const progress = event instanceof ProgressEvent;
                 log.push([
@@ -852,7 +894,10 @@ fn a_handler_and_a_listener_for_one_function_stay_two_registrations() {
 ///
 /// `overrideMimeType` is in the list because it now succeeds where the state
 /// allows it: it is not a narrowing any more, only the standard's own
-/// `InvalidStateError` on a state that is loading or done.
+/// `InvalidStateError` on a state that is loading or done. `timeout` is *not* in
+/// the list any more either, for the opposite reason: it refuses nothing at all
+/// in this engine, and [`the_timeout_setter_stores_any_value_and_arms_nothing`]
+/// is where that is asserted.
 #[test]
 fn the_refusing_setters_accept_only_what_this_engine_can_serve() {
     with_page(|engine| {
@@ -868,16 +913,59 @@ fn the_refusing_setters_accept_only_what_this_engine_can_serve() {
                     attempt(() => { xhr.responseType = 'bogus'; }),
                     attempt(() => { xhr.withCredentials = true; }),
                     attempt(() => { xhr.withCredentials = false; }),
-                    attempt(() => { xhr.timeout = 1; }),
-                    attempt(() => { xhr.timeout = 0; }),
                     attempt(() => { xhr.overrideMimeType('text/plain'); }),
                 ];
-                [results.join(','), xhr.responseType, xhr.withCredentials, xhr.timeout].join('|');
+                [results.join(','), xhr.responseType, xhr.withCredentials].join('|');
                 "#
             ),
-            "NotSupportedError,ok,TypeError,NotSupportedError,ok,NotSupportedError,ok,ok|\
-             text|false|0",
+            "NotSupportedError,ok,TypeError,NotSupportedError,ok,ok|text|false",
             "a value the enumeration does not name is a `TypeError`, not a `NotSupportedError`"
+        );
+    });
+}
+
+/// `timeout` is a plain stored `unsigned long`: the setter refuses nothing and
+/// throws nothing, and the value it stores is the one the getter reads back.
+///
+/// The standard's setter can throw exactly one thing — an `InvalidAccessError`
+/// for a synchronous request on a `Window`, step 2 of
+/// <https://xhr.spec.whatwg.org/#the-timeout-attribute> — and this engine cannot
+/// reach it, because `open()` refuses `async = false` for every case. So there is
+/// no value to narrow and nothing to refuse, which is what makes the member
+/// `attribute unsigned long timeout;` with no `[Throws]` in
+/// `idl/xhr/XMLHttpRequest.webidl`.
+///
+/// Storing is all this test can see: the timer the value describes is armed by
+/// `send()` and by nothing else, which is the [next
+/// test](a_request_that_outlives_its_timeout_is_reported_as_a_timeout).
+#[test]
+fn the_timeout_setter_stores_any_value_and_arms_nothing() {
+    with_page(|engine| {
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                const xhr = new XMLHttpRequest();
+                const attempt = f => { try { f(); return 'ok'; } catch (error) { return error.name; } };
+                const stored = [
+                    attempt(() => { xhr.timeout = 0; }),
+                    xhr.timeout,
+                    attempt(() => { xhr.timeout = 1234; }),
+                    xhr.timeout,
+                    // The WebIDL `unsigned long` conversion: a negative number
+                    // wraps and a fraction truncates, and neither throws.
+                    attempt(() => { xhr.timeout = -1; }),
+                    xhr.timeout,
+                    attempt(() => { xhr.timeout = 1.9; }),
+                    xhr.timeout,
+                    // The getter ignores its argument and cannot throw either.
+                    attempt(() => xhr.timeout),
+                ];
+                stored.join('|');
+                "#
+            ),
+            "ok|0|ok|1234|ok|4294967295|ok|1|ok",
+            "the setter stores what the WebIDL conversion produces, without refusing"
         );
     });
 }
@@ -2008,6 +2096,393 @@ fn a_completion_for_a_request_the_object_abandoned_is_discarded() {
             "readystatechange@2,readystatechange@3,progress@3,progress@3,\
              readystatechange@4,load@4,loadend@4",
             "the live request runs the whole response machine"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Ending a request early: `abort()` and `timeout` (slice d-4b b-7)
+// ---------------------------------------------------------------------------
+
+/// `abort()` on a request that is in flight ends it at the driver and reports it
+/// through the standard's *request error steps* with `abort` — synchronously, and
+/// with the state reset behind the events.
+///
+/// The steps are <https://xhr.spec.whatwg.org/#the-abort()-method> steps 1 to 3:
+/// the driver is told to stop the request, the error steps run (`DONE`,
+/// `readystatechange`, `abort`, `loadend`, all with no length), and then the
+/// object is reset to `UNSENT` because step 3's condition is read *after* step 2
+/// has set the state to `DONE`. That last part is what the WPT
+/// `abort-after-send.any.js` asserts when it checks `readyState === 0` after the
+/// event sequence, and it is why `4|...` inside the log and `0` afterwards are
+/// not a contradiction.
+///
+/// The driver's half is asserted separately, because it is the half a page can
+/// never see: the handle the request was started under is the handle `abort()`
+/// named through the seam.
+#[test]
+fn abort_ends_an_in_flight_request_and_fires_the_abort_sequence() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        eval(
+            engine,
+            r#"
+            globalThis.xhr = new XMLHttpRequest();
+            xhr.open('GET', '/never');
+            xhr.send();
+            "#,
+        );
+        log_every_event(engine);
+
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                xhr.abort();
+                [log.join(','), xhr.readyState, xhr.status, xhr.responseText].join('|')
+                "#
+            ),
+            "readystatechange@4:true:false:,\
+             abort@4:true:true:false,0,0,\
+             loadend@4:true:true:false,0,0|\
+             0|0|",
+            "the events see DONE and the state a caller reads afterwards is UNSENT"
+        );
+
+        let starts = recorder.starts.borrow();
+        assert_eq!(starts.len(), 1, "one request was handed over");
+        assert!(
+            recorder.aborts.borrow().contains(&starts[0].1),
+            "the seam was given the handle the request was started under"
+        );
+    });
+}
+
+/// `abort()` on an object that was opened but never sent does nothing observable:
+/// neither of the standard's two conditions holds, so no event fires and the
+/// state stays `OPENED` — the WPT `abort-during-unsent.any.js` case.
+///
+/// The seam is still crossed, and the test asserts that too: ending a request is
+/// `end_xhr_request`'s job whether or not one is in flight, and a handle nothing
+/// was started under is exactly what the driver answers `false` for. What must
+/// *not* happen is an event, a state change or a start.
+#[test]
+fn abort_on_an_opened_request_that_was_never_sent_does_nothing() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        eval(
+            engine,
+            r#"
+            globalThis.xhr = new XMLHttpRequest();
+            xhr.open('GET', '/x');
+            "#,
+        );
+        log_every_event(engine);
+
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                xhr.abort();
+                [log.length, xhr.readyState].join('|')
+                "#
+            ),
+            "0|1",
+            "an opened-but-unsent object is neither in flight nor done"
+        );
+        assert!(
+            recorder.starts.borrow().is_empty(),
+            "no request was ever handed to the driver, so there was none to end"
+        );
+        assert!(
+            !recorder.aborts.borrow().is_empty(),
+            "the seam is still the way a request ends, even when none is in flight"
+        );
+    });
+}
+
+/// `abort()` after the answer has arrived resets the object to `UNSENT` and fires
+/// nothing at all — the WPT `abort-during-done.window.js` case, and the standard's
+/// note on step 3: "No readystatechange event is dispatched."
+///
+/// The response goes with the state, so every response member reads the network
+/// error again: `status` 0, `statusText` empty, `responseText` empty. That is the
+/// observable difference between this case and a bare no-op, and it is the one a
+/// page relies on when it aborts from a `load` handler.
+#[test]
+fn abort_after_the_answer_arrived_resets_the_object_to_unsent_without_events() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        eval(
+            engine,
+            r#"
+            globalThis.xhr = new XMLHttpRequest();
+            xhr.open('GET', '/x');
+            xhr.send();
+            "#,
+        );
+        let handle = recorder.starts.borrow()[0].1;
+        deliver_at(
+            engine,
+            handle,
+            response(200, &[("Content-Type", "text/plain")], Some(b"body")),
+        );
+        assert_eq!(eval(engine, "xhr.readyState"), "4", "the answer arrived");
+        log_every_event(engine);
+
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                xhr.abort();
+                [log.length, xhr.readyState, xhr.status, xhr.statusText, xhr.responseText].join('|')
+                "#
+            ),
+            "0|0|0||",
+            "step 3 resets the state and the response, and fires no event"
+        );
+    });
+}
+
+/// A completion that **races** an `abort()` is discarded: the driver answered
+/// before the termination reached it, so its answer is still in the table when
+/// the abort lands, and nothing of it reaches the page.
+///
+/// This is the reason the engine bumps the request id in `end_xhr_request` as
+/// well as calling the driver: the driver's own termination cannot recall a
+/// completion it has already pushed, and the id is the only thing that can refuse
+/// one. Without the bump this test's drained batch would run the whole response
+/// machine on an object that had already reported the request over.
+///
+/// The abort itself fires its own sequence first, which is what makes the
+/// ordering a real race rather than a hypothetical one: `abort()` has already
+/// moved the state to `UNSENT` by the time the stale completion is drained, so a
+/// delivery here would move it to `DONE` and store a body for the request the
+/// page walked away from.
+#[test]
+fn a_completion_that_races_an_abort_is_discarded() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        // No `hold`: the driver answers at `start`, exactly as one that had
+        // already finished its work when the abort arrived.
+        eval(
+            engine,
+            r#"
+            globalThis.xhr = new XMLHttpRequest();
+            xhr.open('GET', '/x');
+            xhr.send();
+            "#,
+        );
+        log_every_event(engine);
+
+        eval(engine, "xhr.abort()");
+        assert_eq!(
+            eval(engine, "[log.length, xhr.readyState].join('|')"),
+            "3|0",
+            "the abort's own sequence fired, and step 3 reset the object"
+        );
+
+        // The driver's answer was pushed before the abort and the abort did not
+        // remove it, so this is exactly the batch the page's turn loop would
+        // drain next.
+        let raced = recorder.table.take_all();
+        assert_eq!(raced.len(), 1, "the driver had answered already");
+        engine.settle_xhr(raced);
+
+        assert_eq!(
+            eval(
+                engine,
+                "[log.length, xhr.readyState, xhr.status, xhr.responseText].join('|')"
+            ),
+            "3|0|0|",
+            "the stale completion fires nothing, stores nothing and moves nothing"
+        );
+    });
+}
+
+/// A request that outlives its `timeout` is reported through the same *request
+/// error steps* as a network failure, under the name `timeout`.
+///
+/// The standard's `send()` arms this from its parallel branch — "Wait until
+/// either req's done flag is set or this's timeout is not 0 and this's timeout
+/// milliseconds have passed since now. If req's done flag is unset, then set
+/// this's timed out to true and terminate this's fetch controller"
+/// (<https://xhr.spec.whatwg.org/#the-send()-method>) — and the events are the
+/// ones `event-timeout-order.any.js` pins, minus its upload half: `DONE`, then
+/// `timeout`, then `loadend`, with no `progress` of any kind.
+///
+/// The state is **not** reset to `UNSENT`, unlike `abort()`: the standard's
+/// timeout runs the *request error steps* alone, with no step 3 after them, so a
+/// page that reads `readyState` from its `timeout` handler — or after it — sees
+/// `DONE`.
+///
+/// The clock is the engine's own, and `run_event_loop` is what moves it: the
+/// timer is armed as page activity
+/// ([`ScriptHost::schedule_background_task`](tenta_js::dom::events::ScriptHost::schedule_background_task)),
+/// so no test here sleeps and the deadline is exact rather than approximate.
+///
+/// Two halves of the discard are asserted at the end, because they are the two
+/// halves of `end_xhr_request`: the driver was told to end the request, and a
+/// completion that arrives after the timeout anyway is refused.
+#[test]
+fn a_request_that_outlives_its_timeout_is_reported_as_a_timeout() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        eval(
+            engine,
+            r#"
+            globalThis.xhr = new XMLHttpRequest();
+            xhr.open('GET', '/never');
+            xhr.timeout = 5;
+            xhr.send();
+            "#,
+        );
+        log_every_event(engine);
+        assert_eq!(
+            eval(engine, "[log.length, xhr.readyState].join('|')"),
+            "0|1",
+            "nothing has fired: the deadline has not been reached"
+        );
+
+        engine.run_event_loop(8);
+
+        assert_eq!(
+            eval(
+                engine,
+                "[log.join(','), xhr.readyState, xhr.status, xhr.responseText].join('|')"
+            ),
+            "readystatechange@4:true:false:,\
+             timeout@4:true:true:false,0,0,\
+             loadend@4:true:true:false,0,0|\
+             4|0|",
+            "a timeout is the error sequence under another name, and leaves the state DONE"
+        );
+
+        let handle = recorder.starts.borrow()[0].1;
+        assert!(
+            recorder.aborts.borrow().contains(&handle),
+            "the timer ends the request at the driver as well as reporting it"
+        );
+
+        // The driver answers anyway, for the request the timeout has already
+        // ended. It is refused, and the page sees nothing.
+        engine.settle_xhr(vec![hand(
+            handle.target,
+            handle.request,
+            response(200, &[], Some(b"too late")),
+        )]);
+        assert_eq!(
+            eval(
+                engine,
+                "[log.length, xhr.status, xhr.responseText].join('|')"
+            ),
+            "3|0|",
+            "a completion that arrives after the timeout is discarded"
+        );
+    });
+}
+
+/// The other order: a request that answers before its deadline fires no
+/// `timeout` event at all, and the timer that fires afterwards does nothing.
+///
+/// The timer is never cancelled when its request ends early — the standard
+/// describes a wait, not a cancellation — so the callback has to recognise that
+/// its request is over and return. The record is what it reads: the send flag is
+/// cleared by every way a request ends, so a timer whose request has finished
+/// finds no request in flight. This is also what makes a `timeout` that fires
+/// *between* two requests on one object harmless, since the id is checked against
+/// the same read.
+///
+/// `run_event_loop` is called after the delivery, so the timer is reached with
+/// the object already at `DONE` — the state a page would be in if its server had
+/// answered inside the deadline.
+#[test]
+fn a_timer_that_fires_after_the_answer_has_arrived_reports_nothing() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        eval(
+            engine,
+            r#"
+            globalThis.xhr = new XMLHttpRequest();
+            xhr.open('GET', '/fast');
+            xhr.timeout = 1000;
+            xhr.send();
+            "#,
+        );
+        log_every_event(engine);
+
+        let handle = recorder.starts.borrow()[0].1;
+        deliver_at(engine, handle, response(200, &[], None));
+        assert_eq!(eval(engine, "xhr.readyState"), "4", "the answer arrived");
+
+        engine.run_event_loop(8);
+
+        assert_eq!(
+            eval(engine, "log.join(',')"),
+            "readystatechange@2:true:false:,\
+             progress@2:true:true:false,0,0,\
+             readystatechange@4:true:false:,\
+             load@4:true:true:false,0,0,\
+             loadend@4:true:true:false,0,0",
+            "the response machine's events alone: the timer found nothing to report"
+        );
+        assert_eq!(
+            eval(
+                engine,
+                "[xhr.readyState, xhr.status, xhr.responseText].join('|')"
+            ),
+            "4|200|",
+            "and the delivered response is untouched"
+        );
+        assert!(
+            !recorder.aborts.borrow().contains(&handle),
+            "nothing was ended: the request had already finished"
+        );
+    });
+}
+
+/// A `timeout` of 0 arms nothing, so a request with one runs to its own end
+/// whatever the driver's pace.
+///
+/// This is the other half of `the_timeout_setter_stores_any_value_and_arms_nothing`:
+/// the setter stores the 0, and `send()` reads it and arms no timer. The
+/// distinction matters because the standard's condition is "this's timeout is not
+/// 0", so a page takes a deadline *off* a request by setting 0, and a page that
+/// never touched the attribute has exactly the same behaviour.
+#[test]
+fn a_timeout_of_zero_arms_no_timer() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        eval(
+            engine,
+            r#"
+            globalThis.xhr = new XMLHttpRequest();
+            xhr.open('GET', '/never');
+            xhr.timeout = 0;
+            xhr.send();
+            "#,
+        );
+        log_every_event(engine);
+
+        engine.run_event_loop(64);
+
+        assert_eq!(
+            eval(engine, "[log.length, xhr.readyState].join('|')"),
+            "0|1",
+            "no deadline means no timer, so the request is still waiting"
+        );
+        assert!(
+            recorder
+                .aborts
+                .borrow()
+                .iter()
+                .all(|handle| handle.request == 0),
+            "no timer fired, so only `open()`'s step 10 ever named a request"
         );
     });
 }

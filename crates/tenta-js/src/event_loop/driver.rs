@@ -278,6 +278,41 @@ impl Scheduler {
         id
     }
 
+    /// Schedules `callback` to run after `delay_ms`, as **page activity**
+    /// rather than as a deferral of tracked work, whatever the provenance of
+    /// the task scheduling it.
+    ///
+    /// [`Self::set_timeout`] decides that from the current task, and for
+    /// `setTimeout` that is right: a continuation of tracked script is tracked
+    /// work, and the load chain waits for it. A timer that only *bounds*
+    /// something else's lifetime is not. `XMLHttpRequest.timeout` is the first
+    /// of those: the request it bounds already holds the settle open by itself
+    /// (`RequestRecord::holds_settle` in `tenta-page`), so counting a second
+    /// copy of that lifetime would hold the load chain open for a delay the
+    /// request has already released — a request that answered in a millisecond
+    /// under a short `timeout` would delay the page's `load` by the rest of it.
+    ///
+    /// The nesting level is the current one, as [`Self::set_timeout`]'s is, so
+    /// a timer this callback schedules is clamped relative to it either way.
+    pub fn set_background_timeout(&self, delay_ms: u64, callback: Box<dyn FnOnce()>) -> TimerId {
+        let mut shared = self.shared.borrow_mut();
+        let nesting = shared.current_nesting + 1;
+        let now = shared.clock.now();
+        let id = shared.timers.schedule(now, delay_ms, nesting);
+        shared.timer_callbacks.insert(
+            id,
+            TimerCallback::OneShot {
+                nesting,
+                origin: Origin::Background,
+                run: callback,
+            },
+        );
+        // Nothing is counted: a `Background` one-shot's task is its own
+        // queued/finished pair (`fire_due_timers`), where a `Tracked` one has to
+        // be pending from the moment it is scheduled.
+        id
+    }
+
     /// The provenance a timer scheduled right now would carry. Decided once,
     /// here, because the rule is about the *scheduling* task: by the time the
     /// timer fires that task is long gone.

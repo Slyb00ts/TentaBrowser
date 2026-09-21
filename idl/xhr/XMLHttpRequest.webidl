@@ -1,6 +1,6 @@
 // Minimal XMLHttpRequest WebIDL for the P2 package (c) bindings
-// (`docs/spec/05-javascript.md`), slices b-5a, b-5a2 and b-5a3. The member text
-// is copied from the XHR Standard's own IDL index
+// (`docs/spec/05-javascript.md`), slices b-5a, b-5a2, b-5a3 and b-7. The member
+// text is copied from the XHR Standard's own IDL index
 // (<https://xhr.spec.whatwg.org/>), so the names, types and order are the
 // spec's; the members it does not list are the ones this product does not
 // implement.
@@ -14,21 +14,26 @@
 // `crates/tenta-js/src/xhr.rs`), so a page's request reaches a driver only
 // through the seam the host layer owns.
 //
+// `abort()` and the `timeout` attribute are the two ways a request *ends*
+// before its answer arrives, and both are the same machinery seen twice: a
+// request that is in flight is one the driver holds, so ending it is a call
+// through the same seam (`ScriptHost::abort_xhr`), and a request the driver is
+// still holding must not be delivered afterwards however it ended. The timer
+// `timeout` arms is the page's own (`ScriptHost::schedule_background_task`),
+// which is what keeps the deadline on the clock a page's `setTimeout` runs on.
+//
 // Deferred, and not declared here. Each is recorded rather than stubbed, because
 // a declared-but-unimplemented member is the bug class 4a removed:
 //
-//  - `undefined abort()`. The state machine and the send flag are here, so a
-//    request can now be in flight and an `abort()` would have a controller to
-//    terminate — but nothing in this tree can terminate one, because the driver
-//    that owns it is reached through the seam and not yet through an abort
-//    path. The member arrives with that path (b-7, with `open()`'s step 10,
-//    which needs the same machinery); until then the page cannot stop a request
-//    it started.
 //  - `[SameObject] readonly attribute XMLHttpRequestUpload upload`, and the
 //    `XMLHttpRequestUpload` interface with it. The object would be inert — no
 //    upload progress can be reported, because no body is sent — and an inert
 //    target invites handlers that can never fire. This is a deviation from the
-//    standard, recorded rather than implemented.
+//    standard, recorded rather than implemented. `abort()` inherits it: the
+//    *request error steps* fire the failing event and its `loadend` at the
+//    upload object first when the upload is not complete, so the member that
+//    lands the object owes `abort()` that half of the sequence, and a page that
+//    does send a body is the only one that can observe its absence.
 //  - `readonly attribute USVString responseURL`, `readonly attribute any
 //    response` and `readonly attribute Document? responseXML`. The machine and
 //    the text response are here, but `response` needs the response type's
@@ -42,10 +47,19 @@
 // takes the fallible, non-fast-API path" (`idl/dom/AbortSignal.webidl`): a fast
 // callback cannot raise an exception at all, so a refusal written into one would
 // be lost. Every member that can raise is marked: the `open`, `setRequestHeader`
-// and `send` operations, the `overrideMimeType` operation, and the `timeout`,
+// and `send` operations, the `overrideMimeType` operation, and the
 // `withCredentials` and `responseType` setters. The `[Throws]` on an attribute
-// leaves its *getter* fast-API eligible, which is why `timeout` and
-// `withCredentials` still read back as primitives.
+// leaves its *getter* fast-API eligible, which is why `withCredentials` still
+// reads back as a primitive.
+//
+// `abort()` and the `timeout` attribute are declared *without* it, because
+// neither can raise here. Nothing in `abort()`'s steps throws at all, and the
+// standard's own IDL index declares it plain; the `timeout` setter's one throw
+// — an `InvalidAccessError` when `synchronous` is true and the global is a
+// `Window` — is unreachable in this engine, because `open()` refuses
+// `async = false` for every case, so the assertion can never be true. A marker
+// on either would put a member on the fallible path to report a failure it
+// cannot produce.
 //
 // Five deliberate deviations from the standard, all of them narrowings this
 // engine is responsible for:
@@ -75,6 +89,24 @@
 // empty string for a status that has none, because the response the driver
 // hands over carries no reason phrase for the server's own to come from.
 //
+// Two further deviations belong to `timeout`, and neither is a narrowing:
+//
+//  - The deadline is armed **once**, by `send()`, from the value the record
+//    holds at that moment. The standard's wait reads "this's *timeout*" as a
+//    live condition — "Wait until either *req*'s done flag is set or this's
+//    *timeout* is not 0 and this's *timeout* milliseconds have passed since
+//    *now*" — so a value set *after* `send()` governs the request already in
+//    flight in a browser, and only the next request here. The setter's own
+//    steps are the standard's, so the difference is visible only to a page that
+//    changes the value mid-flight.
+//  - The standard's *timed out* and *aborted* flags are not held. They are what
+//    selects the failing event's name inside the one *request error steps*
+//    algorithm; this engine has a distinct caller per cause, so the name is
+//    passed from the one place the cause is known instead
+//    (`xhr_request_error_steps`, `crates/tenta-js/src/bindings/host.rs`). No
+//    page-visible behaviour rests on holding them, because nothing else reads
+//    either flag.
+//
 // `overrideMimeType` is *not* on either list. It stores the MIME type it is
 // given — the `charset` parameter of it is what a text response decodes with —
 // and raises only where the standard raises: an `InvalidStateError` when the
@@ -103,9 +135,10 @@ interface XMLHttpRequest : XMLHttpRequestEventTarget {
   // request
   [Throws] undefined open(ByteString method, USVString url, optional boolean async = true, optional USVString? username = null, optional USVString? password = null);
   [Throws] undefined setRequestHeader(ByteString name, ByteString value);
-  [Throws] attribute unsigned long timeout;
+  attribute unsigned long timeout;
   [Throws] attribute boolean withCredentials;
   [Throws] undefined send(optional any body = null);
+  undefined abort();
 
   // response
   readonly attribute unsigned short status;
