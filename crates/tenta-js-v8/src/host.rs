@@ -184,6 +184,12 @@ impl HostState {
         *self.xhr_driver.borrow_mut() = Some(driver);
     }
 
+    /// The installed `XMLHttpRequest` driver, if there is one. See
+    /// [`Self::set_xhr_driver`] for why a page may not have installed one yet.
+    pub fn xhr_driver(&self) -> Option<Rc<dyn XhrDriver>> {
+        self.xhr_driver.borrow().clone()
+    }
+
     /// Marks the start of an engine entry that runs with no V8 callback on the
     /// stack, so [`V8ScriptHost::with_context`](crate::script_host::V8ScriptHost)
     /// bootstraps a plain `HandleScope`. Pair by dropping the guard.

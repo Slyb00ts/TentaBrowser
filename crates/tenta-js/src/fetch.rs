@@ -22,7 +22,7 @@ use std::rc::Rc;
 use tenta_core::Origin;
 use url::Url;
 
-/// One request a page made through `fetch()`.
+/// One request a page made through `fetch()` or an `XMLHttpRequest`.
 ///
 /// Everything the driver needs is already resolved here: `url` has been
 /// resolved against the document's base URL, and `origin` is the provenance of
@@ -32,12 +32,24 @@ use url::Url;
 pub struct FetchRequest {
     /// The request URL, resolved against the document.
     pub url: Url,
-    /// Always `GET` until `RequestInit` lands: the initializer that could ask
-    /// for another method is refused rather than ignored.
+    /// The request method. `fetch()` is always `GET` until `RequestInit` lands —
+    /// the initializer that could ask for another method is refused rather than
+    /// ignored — while an `XMLHttpRequest`'s is the one `open()` validated and
+    /// normalised.
     pub method: http::Method,
-    /// Always empty in this slice, for the same reason.
+    /// The author request headers, in the order they were authored.
+    ///
+    /// `XMLHttpRequest` is the first producer that fills these: `setRequestHeader`
+    /// combines the page's pairs into them and `send()` hands them over. A
+    /// `fetch()` leaves them empty until `RequestInit` lands. The values are
+    /// `String`s because `tenta-net`'s `Request::header` takes `&str` pairs; an
+    /// XHR value is a byte sequence, so the conversion
+    /// ([`XhrRequest::into_fetch_request`](crate::xhr::XhrRequest::into_fetch_request))
+    /// is the one step where a byte that is not UTF-8 becomes U+FFFD.
     pub headers: Vec<(String, String)>,
-    /// Always `None` in this slice: a body needs `RequestInit`.
+    /// The body, or `None` for a request with none. Both producers leave it
+    /// `None` today: `fetch()` needs `RequestInit` and an `XMLHttpRequest`
+    /// refuses a body rather than dropping it.
     pub body: Option<Vec<u8>>,
     /// The document's URL, or the request URL when the document has none. The
     /// `Referer` a driver sends, and the URL a same-origin test is made

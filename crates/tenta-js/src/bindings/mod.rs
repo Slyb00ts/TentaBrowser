@@ -1599,6 +1599,24 @@ mod prelude_helpers {
             self.settled.borrow_mut().push((resolver, settled));
             true
         }
+
+        /// Refused, because this host backs the `Body` algorithms and none of
+        /// them is an `XMLHttpRequest`: there is no driver behind it for a
+        /// request to reach, and the realm it serves has no page loop to drain
+        /// a completion. It refuses rather than accepting so that a test which
+        /// came to expect a start observes the failure the contract names
+        /// (["`Err` means no request was started for any
+        /// reason"](crate::dom::events::ScriptHost::start_xhr)) instead of
+        /// passing vacuously on a request nothing ever answered.
+        fn start_xhr(
+            &self,
+            _request: crate::xhr::XhrRequest,
+            _target: u64,
+        ) -> Result<(), crate::fetch::FetchStartError> {
+            Err(crate::fetch::FetchStartError::new(
+                "the recording host starts no XMLHttpRequest",
+            ))
+        }
     }
 
     /// A [`Realm`] with the recording script host installed, which is what lets
@@ -2103,5 +2121,52 @@ mod prelude_helpers {
         let (resolver, settled) = script.only_settlement();
         assert_eq!(resolver, 3);
         assert_eq!(settled, Settled::Json(b"{\"a\":1}".to_vec()));
+    }
+
+    /// A delivered completion clears the send flag, whichever way it finished.
+    ///
+    /// This is the half of the flag's lifetime a page cannot observe on its own:
+    /// `send()`'s step 1 refuses anything that is not at `OPENED`, and *every*
+    /// completion — a response and a failure alike — leaves the object at `DONE`,
+    /// so the state check answers before the flag check can and script reads
+    /// `InvalidStateError` either way. The record is therefore the only place the
+    /// clear is visible, and this test is that place.
+    #[test]
+    fn a_delivered_completion_clears_the_send_flag() {
+        use super::host::{HostRecord, deliver_xhr_completion};
+        use crate::dom::events::DispatchTarget;
+        use crate::fetch::FetchOutcome;
+
+        let realm = host_realm();
+        let ctx = realm_context(&realm).expect("the realm is a host context");
+        let host = <HostObject as XMLHttpRequestConstructor>::construct(&realm)
+            .expect("a new XMLHttpRequest is constructible");
+        let HostObject::Host { key, .. } = host else {
+            panic!("an XMLHttpRequest is a host-record wrapper");
+        };
+        {
+            let mut records = ctx.host_records.borrow_mut();
+            let Some(HostRecord::Xhr(record)) = records.get_mut(key) else {
+                panic!("the constructor installs an XMLHttpRequest record");
+            };
+            record.ready_state = <HostObject as XMLHttpRequestOps>::OPENED;
+            record.send_flag = true;
+        }
+
+        let delivered = deliver_xhr_completion(
+            &ctx,
+            DispatchTarget::host(key),
+            &FetchOutcome::Failed("gone".to_owned()),
+        );
+        assert!(delivered, "the record names an XMLHttpRequest");
+
+        let records = ctx.host_records.borrow();
+        let Some(HostRecord::Xhr(record)) = records.get(key) else {
+            panic!("the delivered completion must not remove the record");
+        };
+        assert!(
+            !record.send_flag,
+            "a finished request is no longer in flight, so a re-opened object can be sent"
+        );
     }
 }

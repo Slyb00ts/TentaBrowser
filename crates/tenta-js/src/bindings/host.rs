@@ -51,7 +51,8 @@ use crate::dom::events::{
     dispatch, dispatch_at,
 };
 use crate::event_loop::SharedClock;
-use crate::fetch::{FetchOutcome, FetchedResponse};
+use crate::fetch::{FetchOutcome, FetchStartError, FetchedResponse};
+use crate::xhr::XhrRequest;
 
 /// A document shared between the host objects of one world and the engine that
 /// drives it. Every `HostObject` for the document holds one of these clones, so
@@ -428,10 +429,10 @@ impl XhrResponse {
 ///
 /// The record *is* the standard's request object, reduced to the part this
 /// product's surface implements: the five states, the request `open()` sets up,
-/// the four request attributes, and the response a completion stores. Nothing is
-/// sent yet, so there is still no `send()` flag, no author request headers and no
-/// request body to hold — the fields here are the ones the standard's `open()`
-/// steps and its response machine write.
+/// the four request attributes, the send flag and author request headers
+/// `send()` and `setRequestHeader()` write, and the response a completion
+/// stores. There is still no request body to hold, because a body is refused
+/// rather than stored.
 ///
 /// The record is also the object's *event target key*: an `XMLHttpRequest` is an
 /// `EventTarget` that is neither a node nor the window, so its listeners live
@@ -444,16 +445,31 @@ pub struct XhrRecord {
     pub ready_state: u16,
     /// The *request method*, once `open()` has validated and normalised it.
     ///
-    /// Nothing reads the method or the URL yet. They are *reset associated
-    /// variables* state: steps 2 to 6 validate and normalise them and step 11
-    /// writes them. They are kept because b-5a3 builds the `FetchRequest` out of
-    /// them rather than out of arguments it would have to be handed a second
-    /// time, and because a state machine that forgot what it was opened with
-    /// would not be the standard's.
+    /// `send()` builds the `http::Method` out of this rather than out of an
+    /// argument it would have to be handed a second time, and a state machine
+    /// that forgot what it was opened with would not be the standard's.
     pub method: Option<String>,
     /// The *request URL*: the parsed `url` argument, resolved against the
     /// document's URL.
     pub url: Option<url::Url>,
+    /// The *send() flag*: whether a request started by `send()` is still in
+    /// flight.
+    ///
+    /// `open()` resets it (the standard's step 11) and `send()` sets it (step
+    /// 10); a completion clears it
+    /// ([`deliver_xhr_completion`]). Its whole purpose is to make a second
+    /// `send()` on an object with a request under way an `InvalidStateError`,
+    /// which is why it is set before the request is built rather than after it
+    /// succeeds.
+    pub send_flag: bool,
+    /// The *author request headers*: the header list `setRequestHeader`
+    /// combines into, and the one `send()` hands to the driver.
+    ///
+    /// Names are byte-lowercased the way every header list in this file stores
+    /// them, so Fetch's byte-case-insensitive name comparison is a plain
+    /// equality; values are byte sequences because a `ByteString` may hold
+    /// obs-text. `open()` empties it (step 11) and nothing else writes it.
+    pub author_headers: Vec<(Vec<u8>, Vec<u8>)>,
     /// The *timeout*, an `unsigned long`. A non-zero value is refused by the
     /// setter, because nothing here can time a request out.
     pub timeout: u32,
@@ -602,6 +618,82 @@ impl HeadersGuard {
 /// [`normalize_header_name`] first.
 fn is_forbidden_response_header_name(name: &[u8]) -> bool {
     name == SET_COOKIE || name == b"set-cookie2"
+}
+
+/// The names Fetch forbids as a *request* header outright, byte-lowercased
+/// (<https://fetch.spec.whatwg.org/#forbidden-request-header>). `Accept-Charset`
+/// leads the list; `Via` ends it.
+const FORBIDDEN_REQUEST_HEADER_NAMES: [&[u8]; 21] = [
+    b"accept-charset",
+    b"accept-encoding",
+    b"access-control-request-headers",
+    b"access-control-request-method",
+    b"connection",
+    b"content-length",
+    b"cookie",
+    b"cookie2",
+    b"date",
+    b"dnt",
+    b"expect",
+    b"host",
+    b"keep-alive",
+    b"origin",
+    b"referer",
+    b"set-cookie",
+    b"te",
+    b"trailer",
+    b"transfer-encoding",
+    b"upgrade",
+    b"via",
+];
+
+/// The three names whose *value* decides whether they are forbidden: a page that
+/// may not name a method in the request line can still try to smuggle one past a
+/// proxy that inspects only the headers
+/// (<https://fetch.spec.whatwg.org/#forbidden-request-header>).
+const FORBIDDEN_REQUEST_HEADER_METHOD_OVERRIDES: [&[u8]; 3] = [
+    b"x-http-method",
+    b"x-http-method-override",
+    b"x-method-override",
+];
+
+/// Fetch's *forbidden request-header*, a predicate over the **(name, value)
+/// pair** rather than over the name alone
+/// (<https://fetch.spec.whatwg.org/#forbidden-request-header>, the "A forbidden
+/// request-header is a header name that is a byte-case-insensitive match for one
+/// of: …" definition and its three clauses).
+///
+/// The pair is the point of clause 3: `X-HTTP-Method` is forbidden only when one
+/// of its comma-separated values names a *forbidden method*, so a name-only
+/// predicate would refuse `X-HTTP-Method: PATCH` as well. The method list is
+/// [`FORBIDDEN_METHODS`], the same one `open()` checks, because the two are the
+/// same set in the same standard.
+///
+/// `name` must already be normalized, i.e. byte-lowercased, exactly as
+/// [`is_forbidden_response_header_name`]'s callers leave it: a normalized name
+/// makes Fetch's every byte-case-insensitive match a plain equality, including
+/// the `proxy-` and `sec-` prefixes.
+///
+/// The CORS-unsafe request-header *byte* is deliberately not part of this
+/// predicate. It belongs to the *CORS-safelisted request-header* test, which is
+/// about which headers a cross-origin request may carry without a preflight
+/// rather than about which ones a page may set at all.
+fn is_forbidden_request_header(name: &[u8], value: &[u8]) -> bool {
+    if FORBIDDEN_REQUEST_HEADER_NAMES.contains(&name) {
+        return true;
+    }
+    if name.starts_with(b"proxy-") || name.starts_with(b"sec-") {
+        return true;
+    }
+    // Fetch splits the value the way every other reader of a header value does
+    // and asks whether any part is a forbidden method, so
+    // `X-HTTP-Method: PATCH, TRACE` is forbidden on its second part.
+    FORBIDDEN_REQUEST_HEADER_METHOD_OVERRIDES.contains(&name)
+        && split_header_value(value).iter().any(|part| {
+            FORBIDDEN_METHODS
+                .iter()
+                .any(|method| part.eq_ignore_ascii_case(method))
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -6002,6 +6094,142 @@ impl XMLHttpRequestEventTargetOps for HostObject {
     }
 }
 
+impl HostObject {
+    /// The body of [`XMLHttpRequestOps::send`].
+    ///
+    /// It is a method of its own rather than the body of `send` because the
+    /// argument's stored reference has to be given back on *every* path,
+    /// including the refusals this returns early through — and a single wrapper
+    /// that runs the release after the call is the one shape that cannot miss
+    /// one.
+    ///
+    /// The XHR Standard's `send()` steps are followed in its order
+    /// (<https://xhr.spec.whatwg.org/#the-send()-method>).
+    fn send_request(&self, body: Option<AnyValue>) -> Result<(), JsError> {
+        // Step 1: "If this's state is not opened, then throw an
+        // InvalidStateError."
+        if self.with_xhr(<HostObject as XMLHttpRequestOps>::UNSENT, |record| {
+            record.ready_state
+        }) != <HostObject as XMLHttpRequestOps>::OPENED
+        {
+            return Err(JsError::dom_exception(
+                "InvalidStateError",
+                "the object's state must be opened",
+            ));
+        }
+        // Step 2: "If this's send() flag is set, then throw an
+        // InvalidStateError." The state check catches most of these — a request
+        // that has been answered is at `DONE` — but not a request still in
+        // flight, which is the case the flag exists for.
+        if self.with_xhr(false, |record| record.send_flag) {
+            return Err(JsError::dom_exception(
+                "InvalidStateError",
+                "send() has already been invoked",
+            ));
+        }
+
+        // Step 3: "If this's request method is GET or HEAD, then set body to
+        // null." Deliberately not written as a check: a body is refused at step
+        // 4 whatever the method, so there is never a body for this step to null
+        // and a check would be one nothing can reach. b-9 lands the request-body
+        // conversion and this step with it.
+        //
+        // Step 4: this engine's narrowing. `any` is the standard's declared type
+        // so that `xhr.send('x')` is not silently dropped, and a body is refused
+        // until b-9 can carry one. `undefined` arrived as `None`; `null` is the
+        // prelude's sentinel; anything else is a value the page passed.
+        if body.is_some_and(|value| value.0 != AnyValue::NULL.0) {
+            return Err(JsError::dom_exception(
+                "NotSupportedError",
+                "this engine cannot send a request with a body",
+            ));
+        }
+
+        // Steps 5 to 9 belong to the upload object: step 5 registers a listener
+        // on it, step 6 builds the request, step 7 clears the upload complete
+        // flag, step 8 clears the timed-out flag, and step 9 sets the upload
+        // complete flag for a null body — which is the only body this engine
+        // sends, so that flag's value is settled by a step nothing else reaches.
+        // `XMLHttpRequestUpload` is deferred, so there is no object to hold it;
+        // the request itself is built below, out of the record `open()` wrote,
+        // because it is the host layer that owns the page's half of it.
+
+        // Step 10: "Set this's send() flag." It is set before the request is
+        // built and before `loadstart`, so a `loadstart` listener that re-enters
+        // `send()` already sees it — which is the whole purpose of the flag.
+        let key = self
+            .event_target_key()
+            .ok_or_else(|| JsError::type_error("the receiver is not an event target"))?;
+        let parts = self.with_xhr_mut(None, |record| {
+            record.send_flag = true;
+            Some((
+                record.url.clone()?,
+                record.method.clone()?,
+                record.author_headers.clone(),
+            ))
+        });
+        // A total refusal rather than an `unwrap`: the state check above passed
+        // with the state opened, and only `open()` writes the method and the URL
+        // — together with that state — but nothing here is worth a panic on.
+        let Some((url, method, headers)) = parts else {
+            return Err(JsError::dom_exception(
+                "InvalidStateError",
+                "the object's state must be opened",
+            ));
+        };
+
+        // Step 11: "Fire a progress event named loadstart at this with 0 and 0."
+        // It is the one event `send()` fires itself, and it comes before the
+        // request is handed over, so a listener sees the object as it is about to
+        // make its request. The `fetched` marker Fetch's *fire a progress event*
+        // reads is deliberately not a parameter: nothing in this tree
+        // synthesizes a request from a cached response.
+        let ctx = self.context();
+        fire_xhr_progress(ctx, DispatchTarget::host(key), "loadstart", 0, 0);
+
+        // The request crosses the callback boundary here: the page's half is the
+        // carrier below, and the engine's — the calling task's provenance — is
+        // added by the backend, which is also what holds the driver slot.
+        let initiator = ctx
+            .doc
+            .borrow()
+            .url()
+            .cloned()
+            .unwrap_or_else(|| url.clone());
+        let request = XhrRequest {
+            url,
+            method: http::Method::from_bytes(method.as_bytes())
+                .expect("open() validated the method as HTTP's `token` production"),
+            headers,
+            initiator,
+        };
+        // The borrow of the script slot is taken and released *before* the call:
+        // a driver runs from inside `start_xhr`, and a borrow held across it
+        // would be a re-entrancy alias on the context the driver's page callback
+        // uses — the same rule `release_stored`'s callers state. Binding the
+        // clone to a `let` is what ends the borrow here; leaving the `borrow()`
+        // in the match's scrutinee would hold it until the end of the statement
+        // below, i.e. across the very call it must not span.
+        let script = ctx.script.borrow().as_ref().map(Rc::clone);
+        let refusal = match script {
+            Some(script) => script.start_xhr(request, encode_host(key)).err(),
+            // A world with no script host is a world with no driver either, so
+            // it reports the same refusal the backend does for an empty slot.
+            None => Some(FetchStartError::new("XMLHttpRequest is not available")),
+        };
+
+        // `Err` means no request was started, and what the page observes is the
+        // standard's *request error steps* — exactly the failure sequence b-5a2's
+        // machine implements — so it is driven through that machine rather than
+        // through a second copy of it.
+        if let Some(error) = refusal {
+            let outcome = FetchOutcome::Failed(error.message().to_owned());
+            deliver_xhr_completion(ctx, DispatchTarget::host(key), &outcome);
+        }
+        Ok(())
+    }
+}
+
 impl XMLHttpRequestOps for HostObject {
     fn onreadystatechange(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
         self.event_handler(EventHandlerName::new("onreadystatechange"))
@@ -6099,17 +6327,29 @@ impl XMLHttpRequestOps for HostObject {
             ));
         }
 
-        // Step 10 ("terminate this's fetch controller") and the rest of step 11
-        // have nothing to act on: nothing is sent in this slice, so there is no
-        // request in flight to terminate, no `send()` flag, no author request
-        // headers and no body. The parts of step 11 a record exists for are the
-        // request method and the request URL, which b-5a3 builds its
-        // `FetchRequest` from, and the *response*, which is reset here — "set
-        // this's response to a network error", with the received bytes and the
-        // response object — so that a request whose answer already arrived
-        // answers `0` / `""` / `null` again once it is re-opened. The override
-        // MIME type is deliberately not reset, and the standard says why: it may
-        // be set before `open()` is called.
+        // Step 10 ("terminate this's fetch controller") has nothing to act on
+        // *here*: no driver is installed in this tree, so `send()` cannot leave
+        // a request in flight and there is no controller to terminate. It stops
+        // being a no-op the moment one is installed, because `send()` leaves the
+        // object at `OPENED` for as long as its request is unanswered — so
+        // `open()` is reachable with a live request from then on, and this step
+        // is the standard's own protection against a re-opened object carrying
+        // two of them. Terminating one is the machinery `abort()` needs as well
+        // (b-7), and until it lands the driver's slice has to keep the abandoned
+        // request's completion from being delivered to the object that abandoned
+        // it (b-6).
+        //
+        // Step 11's *reset associated variables* is otherwise complete here.
+        // "Set this's send() flag to unset" and "set this's author request
+        // headers to an empty header list" are the two the record now owns, and
+        // they matter for the same reason the response reset does: re-opening an
+        // object whose request was in flight must leave it able to start a fresh
+        // one, and must not carry the previous request's headers into it. "Set
+        // this's response to a network error" is the third — with the received
+        // bytes and the response object — so that a request whose answer already
+        // arrived answers `0` / `""` / `null` again once it is re-opened. The
+        // override MIME type is deliberately not reset, and the standard says
+        // why: it may be set before `open()` is called.
         //
         // Step 12: "if this's state is not opened, then set this's state to
         // opened and fire an event named readystatechange at this". A second
@@ -6121,6 +6361,8 @@ impl XMLHttpRequestOps for HostObject {
         let opened = self.with_xhr_mut(false, |record| {
             record.method = Some(normalized);
             record.url = Some(parsed);
+            record.send_flag = false;
+            record.author_headers.clear();
             record.response = None;
             let opened = record.ready_state != <HostObject as XMLHttpRequestOps>::OPENED;
             record.ready_state = <HostObject as XMLHttpRequestOps>::OPENED;
@@ -6158,6 +6400,77 @@ impl XMLHttpRequestOps for HostObject {
         dispatched.map(|_| ())
     }
 
+    fn set_request_header(&self, name: &[u8], value: &[u8]) -> Result<(), JsError> {
+        // The XHR Standard's `setRequestHeader(name, value)` steps, in its
+        // order, which is the part of it that is easy to get wrong
+        // (<https://xhr.spec.whatwg.org/#the-setrequestheader()-method>).
+        //
+        // Steps 1 and 2: the state must be opened and the send() flag unset.
+        // They come *before* either argument is looked at, so a bogus name on an
+        // unopened object is an `InvalidStateError` rather than the
+        // `SyntaxError` step 4 would make of it.
+        if self.with_xhr(<HostObject as XMLHttpRequestOps>::UNSENT, |record| {
+            record.ready_state
+        }) != <HostObject as XMLHttpRequestOps>::OPENED
+        {
+            return Err(JsError::dom_exception(
+                "InvalidStateError",
+                "the object's state must be opened",
+            ));
+        }
+        if self.with_xhr(false, |record| record.send_flag) {
+            return Err(JsError::dom_exception(
+                "InvalidStateError",
+                "send() has already been invoked",
+            ));
+        }
+
+        // Steps 3 and 4: normalize the value, then check the pair against
+        // Fetch's *header name* and *header value* definitions. Both checks are
+        // the ones `Headers` already makes — `normalize_header_name` is RFC
+        // 9110's field-name `token` production and `normalize_header_value` is
+        // Fetch's *normalize* followed by its NUL/CR/LF test — so the request
+        // side of that rule reuses them rather than restating either. Only the
+        // exception differs: the standard says `SyntaxError` here, where the
+        // `Headers` mutators throw a `TypeError`.
+        //
+        // Because step 3 normalizes first, the leading-and-trailing half of the
+        // value rule is unreachable from here; the NUL/CR/LF half is not.
+        let context = "Failed to execute 'setRequestHeader' on 'XMLHttpRequest'";
+        let name = normalize_header_name(context, name)
+            .map_err(|_| JsError::dom_exception("SyntaxError", "the header name is not valid"))?;
+        let value = normalize_header_value(context, value)
+            .map_err(|_| JsError::dom_exception("SyntaxError", "the header value is not valid"))?;
+
+        // Step 5: a *forbidden request-header* is dropped silently — no throw,
+        // and nothing stored. The predicate is over the pair, after
+        // normalization, because both halves decide it.
+        if is_forbidden_request_header(&name, &value) {
+            return Ok(());
+        }
+
+        // Step 6: "combine (name, value) in this's author request headers."
+        // Fetch's *combine* joins the new value onto the one already stored
+        // under the name with `", "`, and appends the pair when the name is new.
+        // The name comparison is byte-case-insensitive; every stored name has
+        // been through `normalize_header_name`, so it is a plain equality.
+        self.with_xhr_mut((), |record| {
+            match record
+                .author_headers
+                .iter()
+                .position(|(stored, _)| stored.as_slice() == name.as_slice())
+            {
+                Some(index) => {
+                    let stored = &mut record.author_headers[index].1;
+                    stored.extend_from_slice(b", ");
+                    stored.extend_from_slice(&value);
+                }
+                None => record.author_headers.push((name, value)),
+            }
+        });
+        Ok(())
+    }
+
     fn timeout(&self) -> u32 {
         self.with_xhr(0, |record| record.timeout)
     }
@@ -6165,9 +6478,10 @@ impl XMLHttpRequestOps for HostObject {
     fn set_timeout(&self, value: u32) -> Result<(), JsError> {
         // The standard stores any value here and arms it in `send()`, firing a
         // `timeout` event when the request outlives it. Nothing here can time a
-        // request out — nothing is sent — so a non-zero value is refused rather
+        // request out yet — a request is in flight now, but the timer that would
+        // interrupt it has not landed — so a non-zero value is refused rather
         // than stored: keeping it would promise an event that can never fire.
-        // The refusal is lifted where the attribute is armed, not before.
+        // The refusal is lifted where the timer lands (b-7), not before.
         if value != 0 {
             return Err(JsError::dom_exception(
                 "NotSupportedError",
@@ -6195,6 +6509,25 @@ impl XMLHttpRequestOps for HostObject {
         }
         self.with_xhr_mut((), |record| record.with_credentials = value);
         Ok(())
+    }
+
+    fn send(&self, body: Option<AnyValue>) -> Result<(), JsError> {
+        // The argument's ownership comes first, because every return below owes
+        // it back: the generated glue stored the value (+1 reference) before this
+        // call, so the call owns it. `AnyValue::NULL.0` is the prelude's sentinel
+        // for JavaScript `null` and holds no reference, and an omitted or
+        // explicitly `undefined` argument never reaches here at all — the glue
+        // maps both to `None`.
+        let given_back = |value: Option<AnyValue>| {
+            if let Some(value) = value
+                && value.0 != AnyValue::NULL.0
+            {
+                self.release_stored(value.0);
+            }
+        };
+        let result = self.send_request(body);
+        given_back(body);
+        result
     }
 
     fn status(&self) -> u16 {
@@ -6408,6 +6741,10 @@ impl XMLHttpRequestConstructor for HostObject {
                 ready_state: <HostObject as XMLHttpRequestOps>::UNSENT,
                 method: None,
                 url: None,
+                // Nothing is in flight and nothing has been authored yet, which
+                // is what `open()`'s step 11 would leave the two as well.
+                send_flag: false,
+                author_headers: Vec::new(),
                 timeout: 0,
                 with_credentials: false,
                 response_type: XMLHttpRequestResponseType::EmptyString,
@@ -6447,6 +6784,21 @@ pub fn deliver_xhr_completion(
         FetchOutcome::Response(data) => xhr_handle_response(ctx, target, key, data),
         FetchOutcome::Failed(_) => xhr_handle_error(ctx, target, key),
     }
+    // The send flag clears when the request finishes, whichever way it finished:
+    // *handle response end-of-body* step 8 and the *request error steps* step 2
+    // both set it to false, and neither of the two handlers above can be reached
+    // without one of them having run.
+    //
+    // The standard clears it *inside* those algorithms — before the
+    // `readystatechange`, `load`/`error` and `loadend` events — where this
+    // clears it after the handler returns. The placement is unobservable, which
+    // is why it is a comment and not a test: both `send()` (step 1) and
+    // `setRequestHeader()` (step 1) read the *state* before the flag, and every
+    // completion has already set the state to `DONE`. Clearing it here rather
+    // than in each handler is what keeps the two from drifting — and it is the
+    // half of a request's lifetime that makes `send()` refuse a second call
+    // while the first is in flight.
+    clear_xhr_send_flag(ctx, key);
     true
 }
 
@@ -6525,6 +6877,17 @@ fn xhr_handle_error(ctx: &SharedContext, target: DispatchTarget, key: HostKey) {
 fn set_xhr_state(ctx: &SharedContext, key: HostKey, state: u16) {
     if let Some(HostRecord::Xhr(record)) = ctx.host_records.borrow_mut().get_mut(key) {
         record.ready_state = state;
+    }
+}
+
+/// Clears the send flag, so the object is no longer considered to have a request
+/// in flight.
+///
+/// A completion whose record has already been reclaimed clears nothing, which is
+/// the same no-op every other record write from a completion makes for one.
+fn clear_xhr_send_flag(ctx: &SharedContext, key: HostKey) {
+    if let Some(HostRecord::Xhr(record)) = ctx.host_records.borrow_mut().get_mut(key) {
+        record.send_flag = false;
     }
 }
 

@@ -29,6 +29,8 @@ use crate::bindings::host::{
     HostContext, HostKey, TAG_HOST, TAG_NODE, TAG_WINDOW, decode, encode_event, encode_host,
     encode_node, encode_window,
 };
+use crate::fetch::FetchStartError;
+use crate::xhr::XhrRequest;
 
 #[cfg(test)]
 mod tests;
@@ -156,6 +158,29 @@ pub trait ScriptHost {
     ///
     /// `None` when this world cannot build one.
     fn new_promise(&self) -> Option<PromiseRef>;
+
+    /// Starts an `XMLHttpRequest` the page asked for by calling `send()`.
+    ///
+    /// This is a boundary rather than a convenience for the same reason every
+    /// other member is: the host layer holds no isolate and no scheduler, so it
+    /// can neither name the task's [`Origin`](tenta_core::Origin) nor reach the
+    /// driver slot, and both live in the backend. The host builds an
+    /// [`XhrRequest`] out of the object's own record — the page's half of the
+    /// request — and hands it here; the implementation adds the provenance and
+    /// calls the installed [`XhrDriver`](crate::xhr::XhrDriver).
+    ///
+    /// `target` is the opaque handle bits of the `XMLHttpRequest` object, the
+    /// same encoding [`DispatchTarget::host`] decodes, so the completion a
+    /// driver leaves behind lands at the object that made the request.
+    ///
+    /// # Failure
+    ///
+    /// `Err` means **no request was started**, for any reason: no driver is
+    /// installed, or the driver refused it before sending anything. XHR has no
+    /// promise to reject, so the caller turns the message into the standard's
+    /// *request error steps* — a synchronous report the page observes as a
+    /// failed request, never as a request still in flight.
+    fn start_xhr(&self, request: XhrRequest, target: u64) -> Result<(), FetchStartError>;
 
     /// Settles the promise whose resolver holds the bits `resolver`, reporting
     /// whether a settlement was queued.

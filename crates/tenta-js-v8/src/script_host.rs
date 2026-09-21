@@ -26,6 +26,8 @@ use std::rc::Rc;
 
 use tenta_js::bindings::{Event, EventTarget, Handle, handle_to_v8, value_to_v8};
 use tenta_js::dom::events::{CallbackRef, HostValue, PromiseOutcome, PromiseRef, ScriptHost};
+use tenta_js::fetch::FetchStartError;
+use tenta_js::xhr::XhrRequest;
 
 use crate::host::HostState;
 use crate::promise;
@@ -313,5 +315,25 @@ impl ScriptHost for V8ScriptHost {
             };
             scope.throw_exception(value);
         });
+    }
+
+    /// Adds the engine's half of the request and hands it to the driver.
+    ///
+    /// The split is the point: the host layer built the carrier out of the page's
+    /// own pieces (the method, the URL, the author request headers and the
+    /// initiator), and the one field it cannot name — the calling task's
+    /// [`Origin`](tenta_core::Origin) — comes from the scheduler here, exactly as
+    /// the `fetch` global's does. The driver slot is the backend's too.
+    ///
+    /// No driver is a state a page can be in rather than a panic — `fetch`'s
+    /// precedent, "fetch is not available" — but XHR has no promise to reject, so
+    /// its translation is this `Err`: the caller reports the standard's *request
+    /// error steps* synchronously.
+    fn start_xhr(&self, request: XhrRequest, target: u64) -> Result<(), FetchStartError> {
+        let request = request.into_fetch_request(self.host.scheduler.current_origin());
+        let Some(driver) = self.host.xhr_driver() else {
+            return Err(FetchStartError::new("XMLHttpRequest is not available"));
+        };
+        driver.start(request, target)
     }
 }

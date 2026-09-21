@@ -13,6 +13,8 @@ use super::*;
 use crate::bindings::host::{HostContext, decode};
 use crate::bindings::{AnyValue, Callback, Event, Handle};
 use crate::event_loop::{Clock, MonoTime, SharedClock};
+use crate::fetch::FetchStartError;
+use crate::xhr::XhrRequest;
 
 /// What a mock listener does when invoked, to exercise re-entrant paths.
 #[derive(Clone)]
@@ -226,6 +228,19 @@ impl ScriptHost for MockHost {
     /// [`PromiseRef`] to settle.
     fn settle_promise(&self, _resolver: u64, _outcome: PromiseOutcome<'_>) -> bool {
         false
+    }
+
+    /// Refused, because this fixture starts no requests: its dispatches are
+    /// script's (`EventTarget.dispatchEvent`), and none of them is an
+    /// `XMLHttpRequest` reaching a driver. It refuses rather than accepting, so
+    /// a test that came to expect a request would observe the failure the
+    /// contract names (["`Err` means no request was started for any
+    /// reason"](ScriptHost::start_xhr)) instead of passing vacuously on a start
+    /// nothing ever answered.
+    fn start_xhr(&self, _request: XhrRequest, _target: u64) -> Result<(), FetchStartError> {
+        Err(FetchStartError::new(
+            "the dispatcher mock starts no XMLHttpRequest",
+        ))
     }
 }
 

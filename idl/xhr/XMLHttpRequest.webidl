@@ -1,31 +1,33 @@
 // Minimal XMLHttpRequest WebIDL for the P2 package (c) bindings
-// (`docs/spec/05-javascript.md`), slices b-5a and b-5a2. The member text is
-// copied from the XHR Standard's own IDL index (<https://xhr.spec.whatwg.org/>),
-// so the names, types and order are the spec's; the members it does not list are
-// the ones this product does not implement.
+// (`docs/spec/05-javascript.md`), slices b-5a, b-5a2 and b-5a3. The member text
+// is copied from the XHR Standard's own IDL index
+// (<https://xhr.spec.whatwg.org/>), so the names, types and order are the
+// spec's; the members it does not list are the ones this product does not
+// implement.
 //
-// This file covers the object's first half: the five states of its state
-// machine, the request `open()` sets up, and the response the machine stores,
-// with the accessors and events that go with it. **Nothing is sent**: a
-// completion is delivered to the object through the seam slice b-4 landed, and
-// `send()` and `setRequestHeader()` with the driver seam are the slice after
-// this one (b-5a3).
+// This file covers the object's two halves: the five states of its state
+// machine, the request `open()` sets up and `send()` hands to the engine, the
+// author request headers `setRequestHeader()` combines into, and the response
+// the machine stores, with the accessors and events that go with it. **What a
+// request *is* is the engine's**: `send()` builds one from the record and hands
+// it to the callback boundary (`ScriptHost::start_xhr`,
+// `crates/tenta-js/src/xhr.rs`), so a page's request reaches a driver only
+// through the seam the host layer owns.
 //
 // Deferred, and not declared here. Each is recorded rather than stubbed, because
 // a declared-but-unimplemented member is the bug class 4a removed:
 //
-//  - `undefined send(...)` and `undefined setRequestHeader(ByteString,
-//    ByteString)`. They are the slice after the response half (b-5a3), which is
-//    where the network driver is reached; a `send()` that returned without a
-//    request would leave the object in a state the page cannot distinguish from
-//    a slow response.
-//  - `undefined abort()`. The state machine exists now, but nothing is ever in
-//    flight, so there is no request to terminate and no reason to enter the
-//    `abort` path that would fire an `abort` event. It arrives with `send()`.
+//  - `undefined abort()`. The state machine and the send flag are here, so a
+//    request can now be in flight and an `abort()` would have a controller to
+//    terminate — but nothing in this tree can terminate one, because the driver
+//    that owns it is reached through the seam and not yet through an abort
+//    path. The member arrives with that path (b-7, with `open()`'s step 10,
+//    which needs the same machinery); until then the page cannot stop a request
+//    it started.
 //  - `[SameObject] readonly attribute XMLHttpRequestUpload upload`, and the
 //    `XMLHttpRequestUpload` interface with it. The object would be inert — no
-//    upload progress can be reported before `send()` — and an inert target
-//    invites handlers that can never fire. This is a deviation from the
+//    upload progress can be reported, because no body is sent — and an inert
+//    target invites handlers that can never fire. This is a deviation from the
 //    standard, recorded rather than implemented.
 //  - `readonly attribute USVString responseURL`, `readonly attribute any
 //    response` and `readonly attribute Document? responseXML`. The machine and
@@ -39,13 +41,13 @@
 // `[Throws]` is this repository's spelling for "this member can fail, so it
 // takes the fallible, non-fast-API path" (`idl/dom/AbortSignal.webidl`): a fast
 // callback cannot raise an exception at all, so a refusal written into one would
-// be lost. Every member that can raise is marked: the `open` operation, the
-// `overrideMimeType` operation, and the `timeout`, `withCredentials` and
-// `responseType` setters. The `[Throws]` on an attribute leaves its *getter*
-// fast-API eligible, which is why `timeout` and `withCredentials` still read
-// back as primitives.
+// be lost. Every member that can raise is marked: the `open`, `setRequestHeader`
+// and `send` operations, the `overrideMimeType` operation, and the `timeout`,
+// `withCredentials` and `responseType` setters. The `[Throws]` on an attribute
+// leaves its *getter* fast-API eligible, which is why `timeout` and
+// `withCredentials` still read back as primitives.
 //
-// Four deliberate deviations from the standard, all of them narrowings this
+// Five deliberate deviations from the standard, all of them narrowings this
 // engine is responsible for:
 //
 //  - `open()` refuses `async = false` with a `NotSupportedError`. A synchronous
@@ -62,6 +64,11 @@
 //  - `responseType` accepts only `""` and `"text"`, the two values a decoded
 //    text response can serve; every other value of the (fully declared)
 //    enumeration is refused with a `NotSupportedError`.
+//  - `send()` accepts only the default body. The parameter is declared as the
+//    standard's `any` so that a body argument is never silently dropped, but a
+//    body is refused with a `NotSupportedError` until the request-body
+//    conversion lands (b-9), which narrows the declared type to
+//    `XMLHttpRequestBodyInit?`.
 //
 // One more deviation is a limit of the transport rather than a narrowing:
 // `statusText` reads back as the status code's canonical reason text, and an
@@ -95,8 +102,10 @@ interface XMLHttpRequest : XMLHttpRequestEventTarget {
 
   // request
   [Throws] undefined open(ByteString method, USVString url, optional boolean async = true, optional USVString? username = null, optional USVString? password = null);
+  [Throws] undefined setRequestHeader(ByteString name, ByteString value);
   [Throws] attribute unsigned long timeout;
   [Throws] attribute boolean withCredentials;
+  [Throws] undefined send(optional any body = null);
 
   // response
   readonly attribute unsigned short status;

@@ -7,9 +7,12 @@
 //! XHR completion is an **event dispatch** at the object that made the request,
 //! so its completion names the event target and the engine dispatches there.
 //! The request and the answer are the same data either way, so
-//! [`FetchRequest`], [`FetchOutcome`] and [`FetchStartError`] are reused
-//! verbatim: the driver behind this trait is the same `tenta-net` code path,
-//! and a second request type would only let the two drift.
+//! [`FetchOutcome`] and [`FetchStartError`] are reused verbatim: the driver
+//! behind this trait is the same `tenta-net` code path, and a second answer
+//! type would only let the two drift. The *request* is where the two part
+//! company, because its two halves come from different sides of the callback
+//! boundary — [`XhrRequest`] is the page's half, and the backend turns it into
+//! a [`FetchRequest`] once it has added the engine's.
 //!
 //! `target: u64` is opaque handle bits for the same reason `resolver: u64` is
 //! — a driver must not be able to name a handle type, or the network tier would
@@ -26,7 +29,75 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
+use tenta_core::Origin;
+use url::Url;
+
 use crate::fetch::{FetchOutcome, FetchRequest, FetchStartError};
+
+/// One request an `XMLHttpRequest` object made, ready to become a
+/// [`FetchRequest`].
+///
+/// It exists because the two halves of a request come from different sides of
+/// the callback boundary. The page's halves — the method, the URL and the
+/// author request headers — are the host layer's, which is what builds this; the
+/// request's *provenance* is the engine's, because [`Origin`] is the task's and
+/// the scheduler that knows it is the backend's. So the carrier holds
+/// everything **except** the origin, and the backend adds it
+/// ([`Self::into_fetch_request`]).
+///
+/// The header halves are byte sequences rather than `String`s, unlike
+/// [`FetchRequest`]'s: a `ByteString` value may hold obs-text, and a header list
+/// that had already decoded it would have lost the distinction between a byte
+/// and its replacement before any driver could see it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct XhrRequest {
+    /// The *request URL*, resolved against the document by `open()`.
+    pub url: Url,
+    /// The *request method*, already validated and normalized by `open()`.
+    pub method: http::Method,
+    /// The *author request headers*: names and values as `setRequestHeader`
+    /// combined them. The names are byte-lowercased, like every header name this
+    /// engine stores.
+    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
+    /// The *initiator*: the document's URL, or the request's when the document
+    /// has none. It is what a driver sends as the `Referer` and what a
+    /// same-origin test is made against.
+    pub initiator: Url,
+}
+
+impl XhrRequest {
+    /// The request a network driver is handed, once the backend has supplied the
+    /// provenance this side cannot name.
+    ///
+    /// The body is always `None`: a body is refused by `send()`, so a request
+    /// that got this far has none.
+    ///
+    /// The header conversion is the one lossy step. [`FetchRequest`] carries
+    /// `String`s because `fetch()` was its first producer and its driver is
+    /// `tenta-net`'s `Request::header(&str, &str)`; a value that is not UTF-8
+    /// therefore decodes with U+FFFD. A name is a `token` and so always ASCII,
+    /// so only the value can lose anything, and only for obs-text bytes.
+    pub fn into_fetch_request(self, origin: Origin) -> FetchRequest {
+        let headers = self
+            .headers
+            .into_iter()
+            .map(|(name, value)| {
+                (
+                    String::from_utf8_lossy(&name).into_owned(),
+                    String::from_utf8_lossy(&value).into_owned(),
+                )
+            })
+            .collect();
+        FetchRequest {
+            url: self.url,
+            method: self.method,
+            headers,
+            body: None,
+            initiator: self.initiator,
+            origin,
+        }
+    }
+}
 
 /// One answer waiting to be delivered: the event target it belongs to, and what
 /// to dispatch there.
@@ -171,6 +242,64 @@ mod tests {
             table.take_all(),
             vec![failed("after", 2)],
             "the drain is a boundary, not a subscription"
+        );
+    }
+
+    fn url(text: &str) -> Url {
+        Url::parse(text).expect("a test URL")
+    }
+
+    #[test]
+    fn a_carrier_becomes_the_request_the_driver_is_handed() {
+        let request = XhrRequest {
+            url: url("http://fixture.test/data?x=1"),
+            method: http::Method::POST,
+            headers: vec![(b"x-token".to_vec(), b"abc".to_vec())],
+            initiator: url("http://fixture.test/dir/page.html"),
+        };
+
+        let converted = request.into_fetch_request(Origin::Background);
+
+        assert_eq!(converted.url, url("http://fixture.test/data?x=1"));
+        assert_eq!(converted.method, http::Method::POST);
+        assert_eq!(
+            converted.headers,
+            vec![("x-token".to_owned(), "abc".to_owned())],
+            "the page's headers reach the driver"
+        );
+        assert!(
+            converted.body.is_none(),
+            "a body is refused by `send()`, so none can reach here"
+        );
+        assert_eq!(
+            converted.initiator,
+            url("http://fixture.test/dir/page.html")
+        );
+        assert_eq!(
+            converted.origin,
+            Origin::Background,
+            "the provenance is the caller's, not the carrier's"
+        );
+    }
+
+    #[test]
+    fn a_header_value_that_is_not_utf_8_decodes_with_replacement() {
+        // The one lossy step of the conversion, pinned rather than documented
+        // only: `FetchRequest` carries `String`s because its driver is
+        // `tenta-net`'s `Request::header(&str, &str)`, while an XHR value is a
+        // byte sequence that may hold obs-text.
+        let request = XhrRequest {
+            url: url("http://fixture.test/x"),
+            method: http::Method::GET,
+            headers: vec![(b"x-raw".to_vec(), vec![0xE9, b'a'])],
+            initiator: url("http://fixture.test/x"),
+        };
+
+        let converted = request.into_fetch_request(Origin::Tracked);
+
+        assert_eq!(
+            converted.headers,
+            vec![("x-raw".to_owned(), "\u{fffd}a".to_owned())]
         );
     }
 }

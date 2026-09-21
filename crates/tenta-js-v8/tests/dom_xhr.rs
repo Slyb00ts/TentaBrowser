@@ -1,15 +1,15 @@
 //! Tests for the XHR completion seam, the engine's native dispatch
 //! (`tenta_js::xhr`, slice d-4b b-4), the script-visible `XMLHttpRequest`
-//! object (slice d-4b b-5a) and that object's response state machine and
-//! response members (slice d-4b b-5a2).
+//! object (slice d-4b b-5a), that object's response state machine and response
+//! members (slice d-4b b-5a2) and its request half — `send()`,
+//! `setRequestHeader()` and the driver seam (slice d-4b b-5a3).
 //!
 //! XHR's completion is an **event dispatch**, not a promise settlement, so the
 //! `fetch` seam (`dom_fetch.rs`) cannot be reused verbatim: a driver is handed a
 //! request and the opaque handle bits of an event target, and the answer comes
 //! back as an [`XhrCompletion`] the page's turn loop hands to
 //! [`Engine::settle_xhr`]. Nothing here opens a socket: the driver below is a
-//! recorder, and the response tests hand their completions over directly,
-//! because nothing is sent until b-5a3.
+//! recorder, so a `send()` reaches it and stops there.
 //!
 //! # The property this file exists for
 //!
@@ -28,6 +28,11 @@
 //! object the *script* created is handed a completion the *rust* side built, so
 //! the test has to name that object's handle bits
 //! ([`Engine::global_handle_bits`]) — the one thing a page cannot do for itself.
+//!
+//! The request tests drive the page's own `send()`, and the recorder refuses to
+//! answer unless a test asks it to (`Recorder::hold`), so the object under test
+//! is left in the state `send()` put it in rather than in the state a completion
+//! would have moved it to.
 //!
 //! The tests live here rather than under `crates/tenta-page/tests/` because they
 //! need the V8 glue, and no V8 test may live there.
@@ -88,11 +93,12 @@ fn ok_outcome() -> FetchOutcome {
 /// A driver that records what it was handed and leaves the answer in a table the
 /// test drains itself.
 ///
-/// No surface calls [`XhrDriver::start`] in this slice — the XHR object that
-/// would is b-5 — so the tests here call it directly, which is what makes them a
-/// statement about the *seam* rather than about a surface that does not exist
-/// yet. `fail` elects the outcome every request is answered with, because the
-/// only decision this slice makes about an outcome is which event it becomes.
+/// The XHR object itself reaches this through `send()` (slice b-5a3), so a
+/// request test drives the page and then reads `starts`; the seam tests call
+/// [`XhrDriver::start`] directly, which is what makes them a statement about the
+/// boundary rather than about a surface. `fail` elects the outcome every request
+/// is answered with, and `hold` withholds an answer altogether, which is what
+/// leaves an object in the state `send()` put it in.
 #[derive(Default)]
 struct Recorder {
     /// Every `(request, target)` the driver was started with, in order.
@@ -101,11 +107,16 @@ struct Recorder {
     table: XhrCompletions,
     /// Answer with a failure instead of a response.
     fail: Cell<bool>,
+    /// Record the start and push nothing, so the request never completes.
+    hold: Cell<bool>,
 }
 
 impl XhrDriver for Recorder {
     fn start(&self, request: FetchRequest, target: u64) -> Result<(), FetchStartError> {
         self.starts.borrow_mut().push((request, target));
+        if self.hold.get() {
+            return Ok(());
+        }
         let outcome = match self.fail.replace(false) {
             true => FetchOutcome::Failed("the request failed".to_owned()),
             false => ok_outcome(),
@@ -1382,6 +1393,465 @@ fn a_second_open_clears_the_stored_response_and_leaves_the_state_opened() {
             ),
             "1|1|0|||true|",
             "a re-opened request is the network error again, and is not UNSENT"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// The request half (slice d-4b b-5a3)
+// ---------------------------------------------------------------------------
+
+/// Installs a [`Recorder`] as the engine's XHR driver and hands it back, so a
+/// test can read what a page's `send()` made it do.
+fn install_recorder(engine: &mut Engine) -> Rc<Recorder> {
+    let recorder = Rc::new(Recorder::default());
+    engine.set_xhr_driver(Rc::clone(&recorder) as Rc<dyn XhrDriver>);
+    recorder
+}
+
+/// `send()` on an object that was never opened is an `InvalidStateError`, and
+/// the refusal happens before the driver is reached.
+#[test]
+fn send_before_open_is_an_invalid_state_error() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                globalThis.xhr = new XMLHttpRequest();
+                let outcome;
+                try { xhr.send(); outcome = 'no throw'; }
+                catch (error) { outcome = error.name; }
+                [outcome, xhr.readyState].join('|');
+                "#
+            ),
+            "InvalidStateError|0",
+            "a request that was never opened cannot be sent"
+        );
+        assert!(
+            recorder.starts.borrow().is_empty(),
+            "the refusal comes before anything is handed to a driver"
+        );
+    });
+}
+
+/// A second `send()` while the first request is still in flight is an
+/// `InvalidStateError` — and it is the *send flag* that refuses it, not the
+/// state, because the object is still open.
+///
+/// The driver is held open (`Recorder::hold`) so the first request never
+/// completes; that is what makes the two checks distinguishable.
+#[test]
+fn a_second_send_before_the_first_completes_is_refused() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                globalThis.xhr = new XMLHttpRequest();
+                xhr.open('GET', '/x');
+                xhr.send();
+                let outcome;
+                try { xhr.send(); outcome = 'no throw'; }
+                catch (error) { outcome = error.name; }
+                [outcome, xhr.readyState].join('|');
+                "#
+            ),
+            "InvalidStateError|1",
+            "the flag is what refuses the second call, not the state"
+        );
+        assert_eq!(
+            recorder.starts.borrow().len(),
+            1,
+            "only the first call reached the driver"
+        );
+    });
+}
+
+/// A completion moves the object to `DONE`, so a `send()` after one is the
+/// standard's *state* refusal — step 1, before the send flag is even read.
+///
+/// The flag *is* cleared by a completion ([`deliver_xhr_completion`] does it for
+/// both of its branches), but no page can tell: every completion ends at `DONE`,
+/// so the state check always answers first. The clear is pinned at the record
+/// level instead (`tenta_js::bindings::a_delivered_completion_clears_the_send_flag`),
+/// which is the only place it is observable.
+#[test]
+fn send_after_a_completion_is_refused_by_the_state() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        eval(
+            engine,
+            r#"
+            globalThis.xhr = new XMLHttpRequest();
+            xhr.open('GET', '/x');
+            xhr.send();
+            "#,
+        );
+        deliver(engine, ok_outcome());
+
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                let outcome;
+                try { xhr.send(); outcome = 'no throw'; }
+                catch (error) { outcome = error.name; }
+                [outcome, xhr.readyState].join('|');
+                "#
+            ),
+            "InvalidStateError|4",
+            "a finished request cannot be sent again without being re-opened"
+        );
+    });
+}
+
+/// `send()` fires exactly one event of its own — `loadstart`, a trusted
+/// `ProgressEvent` with no length — and the request it hands the driver carries
+/// the method and URL `open()` set up, the headers `setRequestHeader`
+/// combined, and the document as the initiator.
+#[test]
+fn send_fires_loadstart_and_hands_the_driver_the_request_it_built() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                globalThis.xhr = new XMLHttpRequest();
+                xhr.open('POST', '/submit?x=1');
+                // Registered after `open()` so the `open`'s own
+                // `readystatechange` is not in the log: this test is about what
+                // `send()` fires.
+                globalThis.log = [];
+                for (const name of ['loadstart', 'readystatechange', 'progress',
+                                    'load', 'error', 'loadend']) {
+                    xhr.addEventListener(name, event => log.push([
+                        event.type, event.isTrusted, event.target === xhr,
+                        event instanceof ProgressEvent,
+                        event.lengthComputable, event.loaded, event.total,
+                    ].join(':')));
+                }
+                xhr.setRequestHeader('X-Token', 'abc');
+                xhr.send();
+                [log.join(','), xhr.readyState].join('|');
+                "#
+            ),
+            "loadstart:true:true:true:false:0:0|1",
+            "`loadstart` is the only event `send()` fires, and nothing else has happened yet"
+        );
+
+        let starts = recorder.starts.borrow();
+        assert_eq!(starts.len(), 1, "one `send()` makes one request");
+        let (request, target) = &starts[0];
+        assert_eq!(request.method.as_str(), "POST");
+        assert_eq!(request.url.as_str(), "http://fixture.test/submit?x=1");
+        assert_eq!(
+            request.headers,
+            vec![("x-token".to_owned(), "abc".to_owned())],
+            "the author request headers reach the driver"
+        );
+        assert_eq!(
+            request.initiator.as_str(),
+            "http://fixture.test/dir/page.html",
+            "the document is the initiator, which is what a same-origin test compares"
+        );
+        assert_eq!(
+            *target,
+            target_bits(engine, "xhr"),
+            "the completion is addressed to the object that made the request"
+        );
+    });
+}
+
+/// A body argument is refused with a `NotSupportedError`, while `null`,
+/// `undefined` and an omitted argument are all accepted.
+///
+/// The parameter is declared as the standard's `any` precisely so this refusal
+/// is possible: a zero-parameter `send()` would let WebIDL drop `send('x')`
+/// silently, which is the bug class this repository refuses.
+#[test]
+fn a_body_argument_is_refused_while_null_and_undefined_are_accepted() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                const attempt = send => {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('POST', '/x');
+                    try { send(xhr); return 'ok'; }
+                    catch (error) { return error.name; }
+                };
+                [
+                    attempt(xhr => xhr.send('x')),
+                    attempt(xhr => xhr.send(5)),
+                    attempt(xhr => xhr.send({})),
+                    attempt(xhr => xhr.send([])),
+                    attempt(xhr => xhr.send(new Uint8Array(2))),
+                    attempt(xhr => xhr.send()),
+                    attempt(xhr => xhr.send(undefined)),
+                    attempt(xhr => xhr.send(null)),
+                ].join('|');
+                "#
+            ),
+            "NotSupportedError|NotSupportedError|NotSupportedError|NotSupportedError|\
+             NotSupportedError|ok|ok|ok",
+            "every body but the default one is refused rather than dropped"
+        );
+        assert_eq!(
+            recorder.starts.borrow().len(),
+            3,
+            "the three accepted calls are the three that reached the driver"
+        );
+    });
+}
+
+/// A page with no driver installed gets the standard's failure sequence
+/// synchronously out of `send()`, rather than an object that waits forever.
+///
+/// `fetch`'s precedent treats a missing driver as a state a page can be in
+/// ("fetch is not available"), and XHR's translation of it is the *request error
+/// steps* — there is no promise to reject.
+#[test]
+fn send_without_a_driver_reports_the_failure_sequence() {
+    with_page(|engine| {
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                globalThis.xhr = new XMLHttpRequest();
+                xhr.open('GET', '/x');
+                // Registered after `open()` so its `readystatechange` is not in
+                // the log.
+                globalThis.log = [];
+                for (const name of ['loadstart', 'readystatechange', 'progress',
+                                    'load', 'error', 'loadend']) {
+                    xhr.addEventListener(name, event => log.push(event.type + '@' + xhr.readyState));
+                }
+                xhr.send();
+                [log.join(','), xhr.readyState, xhr.status === 0].join('|');
+                "#
+            ),
+            "loadstart@1,readystatechange@4,error@4,loadend@4|4|true",
+            "no driver is a failed request, reported before `send()` returns"
+        );
+    });
+}
+
+/// `setRequestHeader` checks the state and the send flag *before* it looks at
+/// either argument, so a bogus pair on an unopened object is an
+/// `InvalidStateError` rather than the `SyntaxError` the pair itself earns.
+#[test]
+fn set_request_header_checks_the_state_before_the_arguments() {
+    with_page(|engine| {
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                globalThis.xhr = new XMLHttpRequest();
+                let outcome;
+                try { xhr.setRequestHeader('bad name', 'a\u0000b'); outcome = 'no throw'; }
+                catch (error) { outcome = error.name; }
+                [outcome, xhr.readyState].join('|');
+                "#
+            ),
+            "InvalidStateError|0",
+            "the state check comes first"
+        );
+    });
+}
+
+/// A name that is not an HTTP `token` and a value holding a NUL, CR or LF are
+/// `SyntaxError`s — WebIDL's exception, where the `Headers` mutators over the
+/// same two checks throw a `TypeError`.
+#[test]
+fn set_request_header_refuses_a_bad_name_or_value_with_a_syntax_error() {
+    with_page(|engine| {
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                globalThis.xhr = new XMLHttpRequest();
+                xhr.open('GET', '/x');
+                const attempt = (name, value) => {
+                    try { xhr.setRequestHeader(name, value); return 'ok'; }
+                    catch (error) { return error.name; }
+                };
+                [
+                    attempt('X-Token', 'abc'),
+                    attempt('bad name', 'v'),
+                    attempt('x:', 'v'),
+                    attempt('', 'v'),
+                    attempt('x', 'a\u0000b'),
+                    attempt('x', 'a\nb'),
+                    attempt('x', 'a\rb'),
+                ].join('|');
+                "#
+            ),
+            "ok|SyntaxError|SyntaxError|SyntaxError|SyntaxError|SyntaxError|SyntaxError",
+            "a bad name is reported before a bad value, and both are SyntaxErrors"
+        );
+    });
+}
+
+/// A *forbidden request-header* is dropped silently — no exception, and nothing
+/// stored — and the predicate is over the **(name, value) pair**: `X-HTTP-Method`
+/// is forbidden only when one of its values names a forbidden method.
+#[test]
+fn forbidden_request_headers_are_dropped_silently() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                globalThis.xhr = new XMLHttpRequest();
+                xhr.open('GET', '/x');
+                const attempt = (name, value) => {
+                    try { xhr.setRequestHeader(name, value); return 'ok'; }
+                    catch (error) { return error.name; }
+                };
+                const outcomes = [
+                    attempt('Cookie', 'a=b'),
+                    attempt('HOST', 'example.test'),
+                    attempt('Content-Length', '5'),
+                    attempt('Proxy-Authorization', 'v'),
+                    attempt('Sec-Fetch-Site', 'same-origin'),
+                    attempt('X-HTTP-Method', 'TRACE'),
+                    attempt('X-HTTP-Method-Override', 'PATCH, track'),
+                    attempt('x-method-override', 'CONNECT'),
+                    attempt('X-HTTP-Method', 'PATCH, PATCH'),
+                    attempt('X-Token', 'kept'),
+                ];
+                xhr.send();
+                outcomes.join('|');
+                "#
+            ),
+            "ok|ok|ok|ok|ok|ok|ok|ok|ok|ok",
+            "a forbidden name is dropped rather than thrown"
+        );
+
+        let starts = recorder.starts.borrow();
+        assert_eq!(starts.len(), 1, "the request still went out");
+        assert_eq!(
+            starts[0].0.headers,
+            vec![
+                ("x-http-method".to_owned(), "PATCH, PATCH".to_owned()),
+                ("x-token".to_owned(), "kept".to_owned()),
+            ],
+            "only the two non-forbidden pairs were stored, in the order they were authored"
+        );
+    });
+}
+
+/// The value's leading and trailing HTTP whitespace is stripped before the
+/// driver sees it, and a name already present is *combined* with `", "` — the
+/// comparison being byte-case-insensitive, which is why the two spellings here
+/// land on one entry.
+#[test]
+fn set_request_header_strips_whitespace_and_combines_case_insensitively() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        eval(
+            engine,
+            r#"
+            globalThis.xhr = new XMLHttpRequest();
+            xhr.open('GET', '/x');
+            xhr.setRequestHeader('X-Token', '  one  ');
+            xhr.setRequestHeader('x-token', '\ttwo\t');
+            xhr.setRequestHeader('X-Other', 'v');
+            xhr.send();
+            "#,
+        );
+
+        let starts = recorder.starts.borrow();
+        assert_eq!(
+            starts[0].0.headers,
+            vec![
+                ("x-token".to_owned(), "one, two".to_owned()),
+                ("x-other".to_owned(), "v".to_owned()),
+            ],
+            "the halves are normalized and the repeated name is combined"
+        );
+    });
+}
+
+/// `setRequestHeader` is refused once `send()` has been invoked, because the
+/// request is already under way.
+#[test]
+fn set_request_header_is_refused_once_send_has_been_invoked() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                globalThis.xhr = new XMLHttpRequest();
+                xhr.open('GET', '/x');
+                xhr.send();
+                let outcome;
+                try { xhr.setRequestHeader('X-Token', 'abc'); outcome = 'no throw'; }
+                catch (error) { outcome = error.name; }
+                [outcome, xhr.readyState].join('|');
+                "#
+            ),
+            "InvalidStateError|1",
+            "the author request headers are frozen once the request is under way"
+        );
+    });
+}
+
+/// `open()` clears both the send flag and the author request headers, so
+/// re-opening an object whose request was started leaves it able to make a fresh
+/// one that carries nothing of the old.
+#[test]
+fn open_clears_the_send_flag_and_the_author_request_headers() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                globalThis.xhr = new XMLHttpRequest();
+                const attempt = send => {
+                    try { send(); return 'ok'; }
+                    catch (error) { return error.name; }
+                };
+                xhr.open('GET', '/first');
+                xhr.setRequestHeader('X-Token', 'abc');
+                xhr.send();
+                const refused = attempt(() => xhr.send());
+                xhr.open('GET', '/second');
+                const accepted = attempt(() => xhr.send());
+                [refused, accepted, xhr.readyState].join('|');
+                "#
+            ),
+            "InvalidStateError|ok|1",
+            "re-opening must leave the object able to start a fresh request"
+        );
+
+        let starts = recorder.starts.borrow();
+        assert_eq!(starts.len(), 2, "the re-opened object made its own request");
+        assert_eq!(
+            starts[0].0.headers,
+            vec![("x-token".to_owned(), "abc".to_owned())]
+        );
+        assert_eq!(starts[1].0.url.as_str(), "http://fixture.test/second");
+        assert!(
+            starts[1].0.headers.is_empty(),
+            "the previous request's headers must not carry into the new one"
         );
     });
 }
