@@ -853,6 +853,61 @@ fn a_dispatch_at_the_window_has_the_window_as_its_whole_path() {
     );
 }
 
+/// DOM's *legacy target override* is what lets a dispatch be addressed to one
+/// object while `event.target` reports another, and HTML's `load` at the window
+/// is its only user: `target` has to be the window's `Document`, but the
+/// listener table and the propagation path still have to be the window's, or the
+/// page's `window.addEventListener('load', …)` would never run.
+#[test]
+fn a_legacy_target_override_changes_event_target_but_not_the_path_or_the_listeners() {
+    let f = fixture();
+    add_window(&f.ctx, "x", 1, false);
+    // A listener on an element must not see a window-targeted event, override
+    // or not: the override is script-visible identity, not a second path.
+    add(&f.ctx, f.div, "x", 2, false);
+
+    let path_seen: Rc<RefCell<Vec<u64>>> = Rc::new(RefCell::new(Vec::new()));
+    let target_seen: Rc<RefCell<Option<u64>>> = Rc::new(RefCell::new(None));
+    let seen = (path_seen.clone(), target_seen.clone());
+    let weak = Rc::downgrade(&f.ctx);
+    f.mock.set_path_probe(move |k| {
+        if let Some(ctx) = weak.upgrade() {
+            let events = ctx.events.borrow();
+            if let Some(record) = events.get(k) {
+                *seen.0.borrow_mut() = record.path.clone();
+                *seen.1.borrow_mut() = record.target;
+            }
+        }
+    });
+
+    let override_bits = encode_node_test(f.div);
+    let key = make_event(&f.ctx, "x", false, false);
+    dispatch_at(
+        &f.ctx,
+        DispatchTarget::window().with_target_override(override_bits),
+        key,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(
+        *target_seen.borrow(),
+        Some(override_bits),
+        "the override is what script sees as `event.target`"
+    );
+    assert_eq!(
+        *path_seen.borrow(),
+        vec![encode_window()],
+        "the path still leads with the window, and the override adds no entry"
+    );
+    // The listener ran, and every listener on the path was handed the override
+    // as its current target rather than the element the override names.
+    let calls = f.mock.calls.borrow();
+    assert_eq!(calls.len(), 1, "only the window's own listener ran");
+    assert_eq!(calls[0].0, 1);
+    assert_eq!(calls[0].1, encode_window());
+}
+
 // ---------------------------------------------------------------------------
 // Draining the listeners of nodes a sweep freed
 // ---------------------------------------------------------------------------

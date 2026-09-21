@@ -26,8 +26,8 @@ use std::time::Duration;
 use tenta_core::{Origin, TimerRule};
 use tenta_js::bindings::host::SharedDocument;
 use tenta_js::engine::{
-    EngineClock, EngineWatchdog, PageEngine, PageEngineConfig, PageEngineFactory, ScriptError,
-    ScriptErrorKind, ScriptKind,
+    EngineClock, EngineWatchdog, LifecycleEvent, PageEngine, PageEngineConfig, PageEngineFactory,
+    ScriptError, ScriptErrorKind, ScriptKind,
 };
 use tenta_js::event_loop::{Clock, MonoTime, ProvenanceSink};
 use tenta_js::fetch::{FetchCompletion, FetchDriver};
@@ -118,6 +118,28 @@ impl PageEngine for Engine {
                 kind: failure.kind,
                 message: failure.message,
             })
+    }
+
+    /// Fires one user-agent lifecycle event at the target HTML prescribes,
+    /// under the same [`Origin::Tracked`] scope [`PageEngine::run_script`] runs
+    /// in — and for the same reason.
+    ///
+    /// A lifecycle event is part of loading the document, so the work its
+    /// handlers start belongs to that load and not to the page's own background
+    /// activity. It matters most for `load`, which is the last thing the load
+    /// chain does: a `load` handler that calls `setTimeout` or `fetch` must keep
+    /// a settle waiting for what it queued, or the page is torn down underneath
+    /// the very work the event started. Without this wrapper the timer's parent
+    /// would be the loop default and [`TimerRule::origin_for`] could never
+    /// promote it, whatever the page's rule says.
+    ///
+    /// The scope is `with_origin`'s, so it covers exactly the tasks this
+    /// dispatch queues and restores the previous provenance afterwards, even
+    /// when a listener queued work of its own (`Scheduler::with_origin`).
+    fn dispatch_lifecycle(&mut self, event: LifecycleEvent) {
+        // Cloned out for the same borrow reason `run_script` clones it.
+        let scheduler = self.host.scheduler.clone();
+        scheduler.with_origin(Origin::Tracked, || Engine::dispatch_lifecycle(self, event));
     }
 
     fn set_timer_rule(&mut self, rule: TimerRule) {

@@ -17,7 +17,7 @@ use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use tenta_core::{BudgetKind, Budgets, ContextId, Error, FrameId, PageId, RequestId, Result, Tier};
 use tenta_dom::{Document as DomDocument, SharedDocument, SharedSink};
 use tenta_html::{Encoding, ParseStatus, Parser, ParserOptions, PreloadHint};
-use tenta_js::engine::PageEngineFactory;
+use tenta_js::engine::{LifecycleEvent, PageEngineFactory};
 use tenta_net::policy::cookies::{CookieJar, Site};
 use tenta_net::policy::error_names::ErrorName;
 use tenta_net::request::RequestLimits;
@@ -985,6 +985,36 @@ async fn navigate(
         state.document_navigation_id = generation;
     }
     inner.emit(PageEvent::TierChanged { tier: Tier::Dom });
+
+    // `DOMContentLoaded` reaches page script here: after the parse has run the
+    // `defer` scripts it was holding and handed the tree over, and after the
+    // tree became this page's document — which is the moment HTML puts the
+    // event at. It is fired *not* at the booking point above but here, so a
+    // navigation that is cancelled before it installs never runs a page's
+    // handler for a document it then throws away.
+    //
+    // The booking still comes first, and that order is what makes the event
+    // once-per-navigation: a handler that unwinds out of the dispatch — a
+    // watchdog termination inside a listener — cannot earn a second one. Firing
+    // before any settle turn is what lets a handler that adds a listener for
+    // `load`, or queues a tracked timer, be in place before anything asks
+    // whether the load has finished.
+    //
+    // The tracker borrow above ended at its semicolon: this dispatch runs page
+    // script, and holding settle bookkeeping across it is the one thing this
+    // boundary forbids. `deferred.shared()` is `None` for a page with no
+    // engine, which is exactly the case where there is nothing to dispatch to;
+    // a tree an engine is bound to is still shared here, because
+    // `take_if_owned` above leaves it that way.
+    //
+    // The mid-body timeout below returns after installing a partial document,
+    // so it stays after this point: the event is booked, and a partial document
+    // that ended the load chain is still one page script should hear about.
+    if let Some(document) = deferred.shared() {
+        runtime::with_runtime_for(inner.config.id, document, |runtime| {
+            runtime.dispatch_lifecycle(LifecycleEvent::DomContentLoaded)
+        });
+    }
 
     // If a mid-body timeout occurred while reading the response body,
     // return an error after installing the partial document.
@@ -2046,7 +2076,21 @@ async fn settle_loop(
         // when its parse ends: an `async` script is still part of the
         // document's load chain after that.
         if !tracker.borrow().load_fired() && !tracker.borrow().load_delayed() {
+            // Booked before it is fired, and that order is load-bearing twice
+            // over. It is what makes the event once-per-navigation: a handler
+            // that unwinds out of the dispatch — a watchdog termination inside
+            // a listener — must not be able to earn a second one. And it is
+            // what the settle machine reads: `evaluate` below runs after the
+            // dispatch and must already see the load as fired, while the work
+            // the dispatch queued (a tracked timer, a fetch) is counted in the
+            // same turn, so a `load` handler cannot be torn down underneath the
+            // continuation it starts.
             tracker.borrow_mut().note_load_fired();
+            if let Some(document) = deferred.shared() {
+                runtime::with_runtime_for(page, document, |runtime| {
+                    runtime.dispatch_lifecycle(LifecycleEvent::Load)
+                });
+            }
         }
         // At Tier 1 the condition is evaluated once after install and no
         // mutation can change it. With an engine it is re-evaluated whenever

@@ -162,6 +162,81 @@ async fn a_runaway_timer_callback_does_not_hang_the_navigation() {
     engine.close();
 }
 
+/// A lifecycle handler that never returns must not hang the page thread.
+///
+/// The two lifecycle dispatches are the engine entries the engine does not
+/// bound itself: `tenta-page` routes each through `PageRuntime::bounded`, the
+/// same arm-and-charge the timer pump gets, and this is the test that fails
+/// without it. Each handler mutates the tree before it loops, so the two markers
+/// are the proof the handlers ran at all rather than a hang that happened before
+/// either of them.
+///
+/// Both halves are asserted, because they are bounded by two different call
+/// sites and neither bounds the other. `DOMContentLoaded` is dispatched from
+/// inside `navigate`, `load` from the settle loop — an entry armed in one place
+/// would leave the other spinning. And the `load` marker is the second thing the
+/// terminated `DOMContentLoaded` entry must not have taken with it: one entry's
+/// deadline ending does not end the page, which is the same property the
+/// runaway-timer test above pins for a single entry.
+///
+/// `tokio::time::timeout` turns a regression into a failure rather than a hung
+/// suite, as it does in the sibling tests.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_runaway_lifecycle_handler_does_not_hang_the_navigation() {
+    let (server, _temp) = serve(
+        "<!doctype html><html><head></head><body>\
+         <script>\
+         document.addEventListener('DOMContentLoaded', function () {\
+           document.getElementById('dcl').textContent = 'the parse ran to its end';\
+           while (true) {}\
+         });\
+         window.addEventListener('load', function () {\
+           document.getElementById('loaded').textContent = 'the load chain ran too';\
+         });\
+         </script>\
+         <p id=\"dcl\">the parse has not ended</p>\
+         <p id=\"loaded\">the load chain has not ended</p>\
+         </body></html>",
+    )
+    .await;
+    let engine = js_engine(SettleConfig::library());
+    let context = engine
+        .new_context(ContextOptions {
+            allow_private_network: true,
+            budgets: Some(Budgets::desktop().evaluate_time(Duration::from_millis(100))),
+            ..ContextOptions::default()
+        })
+        .expect("context");
+    let page = context
+        .new_page(PageOptions::default())
+        .await
+        .expect("a JavaScript page");
+
+    let navigation = tokio::time::timeout(
+        Duration::from_secs(10),
+        page.goto(&server.url("/index.html"), Goto::default()),
+    )
+    .await
+    .expect("the navigation returned instead of hanging on the runaway handler")
+    .expect("navigation");
+    assert_eq!(navigation.status, 200);
+
+    let document = page.take_document().expect("document");
+    assert_eq!(
+        text_of(&document, "#dcl"),
+        "the parse ran to its end",
+        "the `DOMContentLoaded` handler ran and mutated the tree before its \
+         deadline terminated it"
+    );
+    assert_eq!(
+        text_of(&document, "#loaded"),
+        "the load chain ran too",
+        "and the terminated entry did not take the rest of the navigation with \
+         it: `load` still fired, under a deadline of its own"
+    );
+    engine.close();
+}
+
 /// The other half of the pair with the runaway-timer test above.
 ///
 /// Under the default 60 s script budget a terminated runaway is survivable:

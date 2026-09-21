@@ -33,7 +33,9 @@ use tenta_core::atom::atoms;
 use tenta_core::{Error, Origin, PageId, Result};
 use tenta_dom::{SharedDocument, SharedSink};
 use tenta_html::{Encoding, Parser};
-use tenta_js::engine::{EngineClock, EngineWatchdog, PageEngine, PageEngineConfig, ScriptKind};
+use tenta_js::engine::{
+    EngineClock, EngineWatchdog, LifecycleEvent, PageEngine, PageEngineConfig, ScriptKind,
+};
 use tenta_js::event_loop::ProvenanceSink;
 use tenta_js::fetch::{FetchCompletions, FetchDriver};
 use tenta_js::xhr::{XhrCompletions, XhrDriver};
@@ -387,6 +389,26 @@ impl PageRuntime {
             );
         }
         outcome
+    }
+
+    /// Fires one user-agent lifecycle event into page script, under the same
+    /// per-entry deadline and budget accounting as the entries [`Self::turn`]
+    /// drives.
+    ///
+    /// This entry runs whatever the page registered for the event, so it is one
+    /// of the entries `run_script` does not bound: an `onload` handler with an
+    /// infinite loop must hang neither the page nor the process. Routing it
+    /// through [`PageRuntime::bounded`] is what arms the page's deadline around
+    /// it and charges the page's cumulative script budget for what it spends,
+    /// exactly as the timer pump and the animation frame are treated.
+    ///
+    /// It is deliberately *not* part of [`Self::turn`]. Both lifecycle events
+    /// are fired once, at moments the settle loop and the parse decide, so
+    /// putting them in a method that runs on every turn would need a flag here
+    /// as well as in the settle machine — two places to keep once-ness in step
+    /// instead of one.
+    pub(crate) fn dispatch_lifecycle(&mut self, event: LifecycleEvent) {
+        self.bounded("lifecycle", |engine| engine.dispatch_lifecycle(event));
     }
 
     /// Whether this turn should reclaim detached nodes: the collector has run
@@ -1013,7 +1035,7 @@ mod tests {
 
     use tenta_core::TimerRule;
     use tenta_dom::Document;
-    use tenta_js::engine::{EngineWatchdog, ScriptError, ScriptKind};
+    use tenta_js::engine::{EngineWatchdog, LifecycleEvent, ScriptError, ScriptKind};
     use tenta_js::fetch::{FetchCompletion, FetchDriver, FetchOutcome};
     use tenta_js::xhr::{XhrCompletion, XhrDriver, XhrHandle};
 
@@ -1039,6 +1061,10 @@ mod tests {
         /// position relative to the fetch drain and the timer pump is pinned
         /// rather than merely commented.
         entries: Rc<RefCell<Vec<&'static str>>>,
+        /// The lifecycle events the page fired at this engine, in order — which
+        /// is what makes "both events reach the engine through the bounded
+        /// entry" observable rather than inferred from the engine's internals.
+        lifecycle: Rc<RefCell<Vec<LifecycleEvent>>>,
     }
 
     impl PageEngine for RecordingEngine {
@@ -1066,6 +1092,11 @@ mod tests {
         fn settle_xhr(&mut self, completions: Vec<XhrCompletion>) {
             self.entries.borrow_mut().push("xhr");
             self.settled_xhr.borrow_mut().push(completions);
+        }
+
+        fn dispatch_lifecycle(&mut self, event: LifecycleEvent) {
+            self.entries.borrow_mut().push("lifecycle");
+            self.lifecycle.borrow_mut().push(event);
         }
 
         fn next_wakeup(&self) -> Option<Duration> {
@@ -1125,6 +1156,7 @@ mod tests {
         /// The runtime's XHR table, for the same reason.
         xhrs: Rc<XhrCompletions>,
         entries: Rc<RefCell<Vec<&'static str>>>,
+        lifecycle: Rc<RefCell<Vec<LifecycleEvent>>>,
     }
 
     impl Harness {
@@ -1137,6 +1169,7 @@ mod tests {
             let fetches = Rc::new(FetchCompletions::new());
             let xhrs = Rc::new(XhrCompletions::new());
             let entries = Rc::new(RefCell::new(Vec::new()));
+            let lifecycle = Rc::new(RefCell::new(Vec::new()));
             let engine = RecordingEngine {
                 document: Rc::clone(&document),
                 trims: Rc::clone(&trims),
@@ -1144,6 +1177,7 @@ mod tests {
                 settled: Rc::clone(&settled),
                 settled_xhr: Rc::clone(&settled_xhr),
                 entries: Rc::clone(&entries),
+                lifecycle: Rc::clone(&lifecycle),
             };
             let runtime = PageRuntime {
                 page: PageId(1),
@@ -1167,6 +1201,7 @@ mod tests {
                 fetches,
                 xhrs,
                 entries,
+                lifecycle,
             }
         }
 
@@ -1376,6 +1411,43 @@ mod tests {
             harness.entries.borrow().as_slice(),
             ["timers"],
             "settle_xhr was not called for an empty table"
+        );
+    }
+
+    /// The lifecycle entry belongs to the page's own moments, not to the turn:
+    /// a turn fires no event, and each explicit call is exactly one engine
+    /// entry — which is what makes the page's deadline arm around it
+    /// (`PageRuntime::bounded`).
+    ///
+    /// Once-ness is deliberately *not* pinned here. This layer has none: it
+    /// fires whatever it is asked to fire, and the settle loop and the parse are
+    /// what decide the moment (`crate::page`). Two calls are therefore two
+    /// entries, and a page that called this every turn would be the caller's
+    /// bug, not this method's.
+    #[test]
+    fn a_lifecycle_dispatch_is_one_bounded_entry_and_no_turn_fires_one() {
+        let mut harness = Harness::new(false);
+
+        assert!(harness.runtime.turn(1).is_none());
+        assert!(
+            harness.lifecycle.borrow().is_empty(),
+            "a turn fires no lifecycle event"
+        );
+
+        harness
+            .runtime
+            .dispatch_lifecycle(LifecycleEvent::DomContentLoaded);
+        harness.runtime.dispatch_lifecycle(LifecycleEvent::Load);
+
+        assert_eq!(
+            harness.lifecycle.borrow().as_slice(),
+            [LifecycleEvent::DomContentLoaded, LifecycleEvent::Load],
+            "each call is one entry, in the order the page fired them"
+        );
+        assert_eq!(
+            harness.entries.borrow().as_slice(),
+            ["timers", "lifecycle", "lifecycle"],
+            "the turn's own entries first, then one lifecycle entry per event"
         );
     }
 }

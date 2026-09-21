@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DOMContentLoaded and load</title>
+</head>
+<body>
+<h1>DOMContentLoaded and load</h1>
+<p id="status">lifecycle: loading</p>
+<!-- The user agent fires both lifecycle events into page script; the page
+     records what each one looked like and in what order they arrived, into a
+     single text node the driver can read back. Each entry is
+     `label=type/target-is-the-document/isTrusted/bubbles/cancelable`, so a
+     missing dispatch, a wrong target, a non-trusted event or the wrong flags
+     each change the string.
+
+     The registrations are deliberately all three shapes a page uses:
+     `document.addEventListener` for `DOMContentLoaded`, `addEventListener` for
+     `load` on the window, and the `window.onload` handler attribute. The fourth
+     entry registers a `load` listener *from inside* the `DOMContentLoaded`
+     handler, which only fires if the two events are dispatched in order. -->
+<script>
+(function () {
+  var entries = [];
+  function note(label, event) {
+    entries.push(label + '=' + [
+      event.type,
+      event.target === document,
+      event.isTrusted,
+      event.bubbles,
+      event.cancelable
+    ].join('/'));
+  }
+  function finish() {
+    document.getElementById('status').textContent = 'lifecycle: ' + entries.join('|');
+  }
+
+  document.addEventListener('DOMContentLoaded', function (event) {
+    note('dcl', event);
+    window.addEventListener('load', function (lateEvent) {
+      note('load-late', lateEvent);
+      finish();
+    });
+  });
+  window.addEventListener('load', function (event) { note('load', event); });
+  window.onload = function (event) { note('onload', event); };
+})();
+</script>
+</body>
+</html>

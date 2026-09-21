@@ -192,3 +192,76 @@ fn chaining_the_window_to_event_target_keeps_its_own_properties() {
         "true,object,function,function,object,object,true,true,function"
     );
 }
+
+/// `window.onload` is an event handler *attribute*, not a plain data property:
+/// assigning it registers a listener in the same table `addEventListener`
+/// writes to, and reading it hands the assigned value back.
+///
+/// This is what HTML's `GlobalEventHandlers` mixin says `onload` is on the
+/// `Window`, and the window is the one interface whose attributes cannot come
+/// from the generated glue — it is the global object rather than an instance of
+/// any template — so the accessor is installed by hand on the global template
+/// (`tenta_js_v8::host::install_window_event_handlers`).
+#[test]
+fn window_onload_is_a_handler_attribute_over_the_listener_table() {
+    assert_eq!(
+        eval(
+            r#"
+            var d = Object.getOwnPropertyDescriptor(window, 'onload');
+            var kind = d === undefined ? 'missing' : (d.get ? 'accessor' : 'data');
+            var calls = 0;
+            function handler() { calls++; }
+            window.onload = handler;
+            var identity = window.onload === handler;
+            window.dispatchEvent(new Event('load'));
+            var afterDispatch = calls;
+            window.onload = null;
+            window.dispatchEvent(new Event('load'));
+            [kind, identity, afterDispatch, calls, String(window.onload)].join(',');
+        "#
+        ),
+        "accessor,true,1,1,null"
+    );
+}
+
+/// WebIDL's `[LegacyTreatNonObjectAsNull]` on `EventHandlerNonNull`: a value that
+/// is not an object deactivates the handler instead of being stored, so
+/// `window.onload = 0` clears it rather than leaving something nothing can call.
+#[test]
+fn a_non_object_assignment_deactivates_the_onload_handler() {
+    assert_eq!(
+        eval(
+            r#"
+            var calls = 0;
+            window.onload = function () { calls++; };
+            window.onload = 0;
+            window.dispatchEvent(new Event('load'));
+            [calls, String(window.onload)].join(',');
+        "#
+        ),
+        "0,null"
+    );
+}
+
+/// HTML registers a handler's listener with an internal callback the page cannot
+/// name, so a handler and a `addEventListener` listener holding the same
+/// function are two independent listeners: neither dedups against the other and
+/// `removeEventListener` cannot remove the handler's.
+#[test]
+fn an_onload_handler_and_a_window_listener_are_two_independent_listeners() {
+    assert_eq!(
+        eval(
+            r#"
+            var calls = [];
+            function handler() { calls.push('handler'); }
+            window.onload = handler;
+            window.addEventListener('load', handler);
+            window.dispatchEvent(new Event('load'));
+            window.removeEventListener('load', handler);
+            window.dispatchEvent(new Event('load'));
+            calls.join(',');
+        "#
+        ),
+        "handler,handler,handler"
+    );
+}

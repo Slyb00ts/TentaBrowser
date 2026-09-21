@@ -1182,6 +1182,54 @@ this file:
 exist here and the union would have to grow an arm and a serializer together.
 `Response.formData()` is likewise absent (`HostValue` has no entry-list value).
 
+### `window.onload` and the two lifecycle dispatches (P2 slice d-8)
+
+The window is the global object, so none of its members can come from the
+generated glue — a generator emits a template per interface, and the global uses
+the one `install_dom` builds. `window.onload` is therefore hand-written, and it
+is an **accessor** rather than a data property: HTML's `on*` attributes are
+`EventHandler` attributes, so a read returns what script assigned and an
+assignment registers a listener in the table `addEventListener` writes to
+(`HostObject::set_event_handler`). Three consequences worth knowing:
+
+- The accessor goes on the **global template**
+  (`host::install_window_event_handlers`, called before `Context::new`), because
+  `Context::global` hands back the global *proxy*: a property installed on the
+  proxy is not the global object's own property, which is what `window.onload`
+  reads.
+- The handler is an ordinary listener carrying HTML's internal callback, so an
+  `onload` handler and the same function passed to `addEventListener('load', …)`
+  are **two independent listeners**: `addEventListener` never dedups against one
+  and `removeEventListener` can never remove one.
+- `[LegacyTreatNonObjectAsNull]` is implemented, so `window.onload = 0`
+  deactivates the handler rather than storing `0`.
+
+Deviation: `GlobalEventHandlers` has many more names and only `onload` is
+installed, because nothing else in the engine fires the event a name would
+receive. `window.onload` is also the first member installed as an accessor
+through the global template; a later one adds its key to the same function.
+
+The events themselves are fired through `PageEngine::dispatch_lifecycle`, whose
+one entry takes a `LifecycleEvent`:
+
+- `DOMContentLoaded` at the `Document`, `bubbles` true and `cancelable` false
+  (HTML "the end");
+- `load` at the `Window` **with the legacy target override flag** (HTML "the
+  load event"), both flags false. DOM's flag makes `targetOverride` the target's
+  associated `Document`, so `event.target` at that dispatch is the document while
+  the listener table and the path are still the window's — which is what makes
+  `window.addEventListener('load', …)` fire.
+
+`DispatchTarget::with_target_override` is the only place that flag is spelled,
+and it is deliberately separate from the target's own handle: the table the
+listeners are keyed by and the path `composedPath()` reports come from the target,
+not from what `event.target` says. `crates/tenta-js/src/dom/events/tests.rs`
+pins the split.
+
+`event.isTrusted` is true for both: they are dispatched through the b-4
+native-dispatch path (`HostState::enter_native_dispatch`), which is also what
+lets them enter V8 with no callback on the stack.
+
 ## Extended attributes
 
 | Attribute | Effect |

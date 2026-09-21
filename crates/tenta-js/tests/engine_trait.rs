@@ -11,8 +11,8 @@ use tenta_core::{Origin, TimerRule};
 use tenta_dom::Document;
 use tenta_js::bindings::host::SharedDocument;
 use tenta_js::engine::{
-    EngineClock, EngineWatchdog, PageEngine, PageEngineConfig, PageEngineFactory, ScriptError,
-    ScriptErrorKind, ScriptKind,
+    EngineClock, EngineWatchdog, LifecycleEvent, PageEngine, PageEngineConfig, PageEngineFactory,
+    ScriptError, ScriptErrorKind, ScriptKind,
 };
 use tenta_js::event_loop::ProvenanceSink;
 use tenta_js::fetch::{FetchCompletion, FetchDriver, FetchOutcome, FetchRequest, FetchStartError};
@@ -30,6 +30,8 @@ struct Recorder {
     settled: usize,
     /// How many the page handed over to dispatch, and at which targets.
     settled_xhr: Vec<u64>,
+    /// The lifecycle events the page fired at this engine, in order.
+    lifecycle: Vec<LifecycleEvent>,
 }
 
 /// The factory is shared across page threads while the engines it builds stay
@@ -90,6 +92,10 @@ impl PageEngine for StubEngine {
         for completion in completions {
             recorder.settled_xhr.push(completion.handle.target);
         }
+    }
+
+    fn dispatch_lifecycle(&mut self, event: LifecycleEvent) {
+        self.recorder.lock().unwrap().lifecycle.push(event);
     }
 
     fn next_wakeup(&self) -> Option<Duration> {
@@ -256,6 +262,16 @@ fn a_page_drives_an_engine_through_the_trait_object_alone() {
         recorder.lock().unwrap().settled_xhr,
         vec![0x11, 0x22],
         "the batch reaches the engine in order, request id and all"
+    );
+
+    // The lifecycle entry is the trait's one other way in, and both of HTML's
+    // events travel the same one.
+    engine.dispatch_lifecycle(LifecycleEvent::DomContentLoaded);
+    engine.dispatch_lifecycle(LifecycleEvent::Load);
+    assert_eq!(
+        recorder.lock().unwrap().lifecycle,
+        vec![LifecycleEvent::DomContentLoaded, LifecycleEvent::Load],
+        "the engine is told which event, in the order the page fired them"
     );
 
     let watchdog = engine.watchdog().expect("the stub can be interrupted");

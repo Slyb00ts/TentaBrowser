@@ -706,10 +706,22 @@ impl From<NodeRef> for TargetKey {
 /// A dispatch walks a path of these, the target first; the target is also the
 /// only entry whose key is used for script-visible identity, so this type is
 /// introduced at the call site and reused as the head of the path.
+///
+/// The two are not always the *same* handle: DOM's dispatch algorithm takes a
+/// `targetOverride` that is the given target for every dispatch but one, and
+/// [`DispatchTarget::with_target_override`] is how the exception is spelled.
 #[derive(Clone, Copy)]
 pub struct DispatchTarget {
     target: TargetKey,
     bits: u64,
+    /// What `event.target` reports, when DOM's *legacy target override* makes
+    /// it something other than the target the dispatch is addressed to.
+    ///
+    /// It is deliberately separate from `bits`: `bits` still says which object
+    /// the listener table is keyed by and what the propagation path leads with,
+    /// so overriding the script-visible target cannot change which listeners
+    /// run or what `composedPath()` returns.
+    target_override: Option<u64>,
 }
 
 impl DispatchTarget {
@@ -718,6 +730,7 @@ impl DispatchTarget {
         DispatchTarget {
             target: TargetKey::Node(node),
             bits: encode_node(node),
+            target_override: None,
         }
     }
 
@@ -726,6 +739,28 @@ impl DispatchTarget {
         DispatchTarget {
             target: TargetKey::Window,
             bits: encode_window(),
+            target_override: None,
+        }
+    }
+
+    /// Makes `event.target` report `bits` instead of this target's own handle —
+    /// DOM's *legacy target override*, which the dispatch algorithm applies
+    /// when its caller passes the legacy target override flag.
+    ///
+    /// Note DOM step 1: "Let targetOverride be target, if legacy target override
+    /// flag is not given, and target's associated Document otherwise. [HTML]
+    /// legacy target override flag is only used by HTML and only when target is
+    /// a Window object." So the one caller is HTML's `load` at the window, where
+    /// the override is the window's `Document`.
+    ///
+    /// Everything else about the dispatch is unchanged: the target still keys
+    /// the listener table, and the propagation path still leads with it — which
+    /// is why the window's own listeners fire and `composedPath()` still reports
+    /// the window, exactly as the standard's path construction says.
+    pub fn with_target_override(self, bits: u64) -> DispatchTarget {
+        DispatchTarget {
+            target_override: Some(bits),
+            ..self
         }
     }
 
@@ -740,6 +775,7 @@ impl DispatchTarget {
         DispatchTarget {
             target: TargetKey::Host(key),
             bits: encode_host(key),
+            target_override: None,
         }
     }
 
@@ -1095,7 +1131,10 @@ pub fn dispatch_at(
         }
         record.flags.dispatch = true;
         record.is_trusted = trusted;
-        record.target = Some(target.bits);
+        // The legacy target override decides what script sees as `event.target`;
+        // everything below — the listener table and the path — stays keyed by
+        // the target itself.
+        record.target = Some(target.target_override.unwrap_or(target.bits));
         record.flags.stop_propagation = false;
         record.flags.stop_immediate = false;
         record.type_.clone()

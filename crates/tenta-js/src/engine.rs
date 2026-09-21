@@ -58,6 +58,23 @@ pub enum ScriptKind {
     Classic,
 }
 
+/// A lifecycle event the user agent fires into page script once per document.
+///
+/// Both variants are the HTML standard's own fire-and-forget events, and the
+/// page only ever reports them: the target, the order and the flags are fixed
+/// by the standard rather than by the caller, which is why this is a closed
+/// enum rather than a type string. See [`PageEngine::dispatch_lifecycle`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
+pub enum LifecycleEvent {
+    /// `DOMContentLoaded`, at the `Document`, once the document has been parsed
+    /// and its `defer` scripts have run (HTML "the end").
+    DomContentLoaded,
+    /// `load`, at the `Window`, once nothing delays the document's load chain
+    /// any more (HTML "the load event").
+    Load,
+}
+
 /// Why a script did not run to completion.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
@@ -128,8 +145,28 @@ pub struct PageEngineConfig {
 /// that crosses threads is the watchdog an engine hands out, which is `Send`
 /// for exactly that reason.
 ///
-/// `document` and `run_script` are the two methods that touch page state;
+/// `document`, [`PageEngine::run_script`] and
+/// [`PageEngine::dispatch_lifecycle`] are the methods that touch page state;
 /// everything else advances or interrogates the engine's own queues.
+///
+/// # Why this trait grew one entry after being frozen
+///
+/// It was declared frozen when it was written, and [`PageEngine::dispatch_lifecycle`]
+/// is the one sanctioned exception, made because the alternative is a broken
+/// engine rather than an unfinished one: the page books `DOMContentLoaded` and
+/// `load` for its settle machine but has no way to deliver either to script, so
+/// `window.onload` never runs and the WPT harness's own `window` `load` handler
+/// — which is what makes `all_loaded` true — can never fire. That is not a
+/// missing feature a page can work around; it is the engine failing to do what
+/// HTML says it does.
+///
+/// One entry serves both events rather than one each, because the two differ
+/// only in *what* is fired, never in *how*: the target, the flags and the
+/// trusted-ness of each are fixed by the standard and are a function of the
+/// event, so a second entry would duplicate the dispatch seam and the
+/// native-dispatch guard for no information. The enum is the vocabulary the
+/// growth spends, so a later lifecycle event is a variant rather than another
+/// method.
 pub trait PageEngine {
     /// The document this engine is bound to — the same handle the parser
     /// writes into, so a paused parse and running script see one tree.
@@ -139,6 +176,34 @@ pub trait PageEngine {
     /// checkpoint. A [`ScriptError`] is a page-level failure the caller
     /// reports and survives; it is not an engine failure.
     fn run_script(&mut self, source: &str, kind: ScriptKind) -> Result<(), ScriptError>;
+
+    /// Fires one user-agent lifecycle event at the target HTML prescribes, as a
+    /// real DOM event the page can observe: it reaches `on*` handlers and
+    /// `addEventListener` listeners alike, its `isTrusted` is true (the user
+    /// agent, not script, fired it), and it supports `dispatchEvent` semantics
+    /// — `preventDefault`, `stopPropagation` and a propagation path.
+    ///
+    /// The standard fixes everything about the event but its moment, so the
+    /// caller supplies only which one to fire:
+    ///
+    /// - `DOMContentLoaded` is dispatched at the `Document`, bubbles, and is not
+    ///   cancelable (HTML "the end").
+    /// - `load` is dispatched at the `Window` with the legacy target override
+    ///   flag set — so `event.target` is the document — and is neither bubbling
+    ///   nor cancelable (HTML "the load event").
+    ///
+    /// # What the caller owes it
+    ///
+    /// This entry runs **page script**, so the caller must bound it the way it
+    /// bounds a timer callback (`tenta_page::PageRuntime`), and must not hold a
+    /// borrow of the shared document or of any settle bookkeeping across the
+    /// call — the first rule of this boundary.
+    ///
+    /// Once-ness is the caller's, not this method's: a listener that calls
+    /// `dispatchEvent(new Event('load'))` re-enters this path legitimately, so
+    /// nothing here remembers what it has fired. The caller's own bookkeeping
+    /// (`SettleTracker`) is what guarantees the document sees each event once.
+    fn dispatch_lifecycle(&mut self, event: LifecycleEvent);
 
     /// Applies the page's timer provenance rule. Called once at creation, and
     /// again whenever the page's settle configuration changes.

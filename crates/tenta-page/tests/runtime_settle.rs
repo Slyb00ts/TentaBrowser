@@ -17,6 +17,7 @@ mod support;
 use std::time::Duration;
 
 use tenta_core::Origin;
+use tenta_js::engine::LifecycleEvent;
 use tenta_page::{Settle, SettleConfig, SettleState};
 
 use support::Harness;
@@ -122,6 +123,40 @@ async fn a_tracked_deferral_from_inline_script_holds_the_settle_until_it_runs() 
         "the engine reported the script's timer as tracked"
     );
     assert!(harness.has("#tail"));
+}
+
+/// The page hands its engine the two user-agent lifecycle events, once each and
+/// in the order HTML fires them (d-8).
+///
+/// The stub has no script to serve one to, so what this asserts is the page's
+/// own decision — which is the half the engine cannot make: `DOMContentLoaded`
+/// belongs at the end of the parse and `load` at the end of the load chain, and
+/// it is the page that knows where those moments are.
+///
+/// The page carries a tracked deferral, so the settle loop runs more than one
+/// turn. That is what makes the "once each" part a statement about the loop and
+/// not about a single iteration: a machine that re-fired on every evaluation
+/// would show the events repeated here.
+#[tokio::test(flavor = "current_thread")]
+async fn both_lifecycle_events_reach_the_engine_once_each_in_order() {
+    let harness = Harness::new(&body(
+        "<script>setTimeout(mutate timer,0)</script><p id=tail>after</p>",
+    ));
+    let navigation = harness
+        .settle(Settle::NetworkIdle)
+        .await
+        .expect("navigation");
+
+    assert_eq!(navigation.settle, settled(false));
+    assert!(
+        harness.record.lock().unwrap().has_marker("timer"),
+        "the deferral ran, so the loop really did run more than one turn"
+    );
+    assert_eq!(
+        harness.record.lock().unwrap().lifecycle,
+        vec![LifecycleEvent::DomContentLoaded, LifecycleEvent::Load],
+        "the parse's end came before the load chain's, and each fired exactly once"
+    );
 }
 
 /// The same page under a rule that makes the timer activity: it is the page's

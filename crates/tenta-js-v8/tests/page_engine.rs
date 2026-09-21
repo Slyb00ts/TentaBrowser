@@ -18,7 +18,8 @@ use tenta_dom::{Document, Mutation};
 use tenta_html::QualName;
 use tenta_js::bindings::host::SharedDocument;
 use tenta_js::engine::{
-    EngineClock, PageEngine, PageEngineConfig, PageEngineFactory, ScriptErrorKind, ScriptKind,
+    EngineClock, LifecycleEvent, PageEngine, PageEngineConfig, PageEngineFactory, ScriptErrorKind,
+    ScriptKind,
 };
 use tenta_js_v8::V8EngineFactory;
 use tenta_net::CookieJar;
@@ -711,6 +712,106 @@ fn a_terminated_frame_callback_ends_the_opportunity_before_the_next_runaway() {
     assert!(
         !second_completed_later,
         "and that frame's fresh deadline stopped it too"
+    );
+}
+
+/// Records, for whichever lifecycle events the page sees, `type | target===document
+/// | isTrusted | bubbles | cancelable` into an attribute on `#target`.
+///
+/// The page can only be asked what it saw one value at a time — there is no
+/// `evaluate`, so nothing crosses back — and the shared document is what the
+/// Rust side can read.
+const RECORD_LIFECYCLE: &str = "\
+const el = document.querySelector('#target'); \
+const see = (name) => (e) => el.setAttribute(name, \
+    [e.type, e.target === document, e.isTrusted, e.bubbles, e.cancelable].join('|')); \
+document.addEventListener('DOMContentLoaded', see('data-dcl')); \
+window.addEventListener('load', see('data-load'));";
+
+#[test]
+fn dispatch_lifecycle_fires_both_events_at_their_targets_with_their_flags() {
+    let (document, target) = test_document();
+    let mut engine = engine_over(&document);
+    engine
+        .run_script(RECORD_LIFECYCLE, ScriptKind::Classic)
+        .expect("the registering script runs");
+
+    engine.dispatch_lifecycle(LifecycleEvent::DomContentLoaded);
+    engine.dispatch_lifecycle(LifecycleEvent::Load);
+
+    let doc = document.borrow();
+    // HTML "the end": `DOMContentLoaded` is fired at the Document with its
+    // bubbles attribute initialised to true, and nothing makes it cancelable.
+    assert_eq!(
+        doc.attribute_str(target, "data-dcl"),
+        Some("DOMContentLoaded|true|true|true|false"),
+        "DOMContentLoaded is a trusted, bubbling event at the document"
+    );
+    // HTML "the load event": fired at the Window with the legacy target
+    // override flag set, which makes `target` the window's document while the
+    // listener table stays the window's — hence the window listener above.
+    assert_eq!(
+        doc.attribute_str(target, "data-load"),
+        Some("load|true|true|false|false"),
+        "load is trusted, does not bubble, and reports the document as its target"
+    );
+}
+
+#[test]
+fn a_lifecycle_dispatch_leaves_no_work_owed() {
+    // The page layer's settle loop fires the events and evaluates its own state
+    // in the same turn, so a dispatch that left work behind would be read as a
+    // page that is still loading.
+    let (document, _target) = test_document();
+    let mut engine = engine_over(&document);
+    engine
+        .run_script(RECORD_LIFECYCLE, ScriptKind::Classic)
+        .expect("the registering script runs");
+
+    engine.dispatch_lifecycle(LifecycleEvent::DomContentLoaded);
+    engine.dispatch_lifecycle(LifecycleEvent::Load);
+
+    // Every script entry leaves a microtask checkpoint owed, dispatching
+    // included, so drain it before asking what the dispatch left behind — the
+    // question is whether the dispatch queued work of its own.
+    engine.run_microtasks();
+    assert_eq!(
+        engine.pump_due_timers(10),
+        0,
+        "the dispatch queued no timer"
+    );
+    assert_eq!(engine.next_wakeup(), None, "nothing is owed afterwards");
+}
+
+#[test]
+fn a_load_listener_added_by_a_domcontentloaded_handler_still_runs() {
+    // The order the page layer fires in is what makes this work: a handler that
+    // registers for the next event is how a real page does post-parse work, and
+    // it only sees `load` if `DOMContentLoaded` completed first.
+    let (document, target) = test_document();
+    let mut engine = engine_over(&document);
+    engine
+        .run_script(
+            "const el = document.querySelector('#target'); \
+             document.addEventListener('DOMContentLoaded', () => { \
+                 window.addEventListener('load', () => el.setAttribute('data-late', 'ran')); \
+             });",
+            ScriptKind::Classic,
+        )
+        .expect("the registering script runs");
+
+    engine.dispatch_lifecycle(LifecycleEvent::DomContentLoaded);
+    assert_eq!(
+        document.borrow().attribute_str(target, "data-late"),
+        None,
+        "the late listener has not run yet"
+    );
+
+    engine.dispatch_lifecycle(LifecycleEvent::Load);
+    assert_eq!(
+        document.borrow().attribute_str(target, "data-late"),
+        Some("ran"),
+        "a listener registered during DOMContentLoaded still receives load"
     );
 }
 

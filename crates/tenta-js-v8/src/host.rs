@@ -25,14 +25,14 @@ use std::rc::Rc;
 
 use tenta_core::Origin;
 use tenta_js::bindings::host::{
-    HostObject, realm_context, refused_request_init_member, request_from_init,
+    EventHandlerNonNull, HostObject, realm_context, refused_request_init_member, request_from_init,
 };
 use tenta_js::bindings::{
     AddEventListenerOptionsOrBoolean, Event, EventListener, EventListenerOptionsOrBoolean,
     EventTargetOps, JsError, RequestInit, string_from_v8, throw_js_error, throw_type_error,
     value_from_v8, value_to_v8, world_realm,
 };
-use tenta_js::dom::events::{HostValue, PromiseOutcome, PromiseRef, ScriptHost};
+use tenta_js::dom::events::{EventHandlerName, HostValue, PromiseOutcome, PromiseRef, ScriptHost};
 use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId};
 use tenta_js::fetch::FetchDriver;
 use tenta_js::xhr::XhrDriver;
@@ -297,6 +297,113 @@ fn install_window_event_target(scope: &mut v8::PinScope, global: v8::Local<v8::O
         window_remove_event_listener,
     );
     define(scope, global, "dispatchEvent", window_dispatch_event);
+}
+
+/// Installs the window's event handler IDL attributes — the `on*` properties
+/// HTML gives the `Window` — on the global template.
+///
+/// This is the window's counterpart of [`install_window_event_target`] and it
+/// has to happen *earlier*, because it cannot be done afterwards: the window is
+/// the global object, and `Context::global` hands back the global **proxy**
+/// rather than the global object, so an accessor installed there would be a
+/// property of the proxy and not of the object a page's `window.onload`
+/// reads. The template is the only seam that reaches the object itself, so the
+/// accessor goes on before `Context::new` builds that object.
+///
+/// `onload` is the only one installed, and it is here because without it the
+/// engine cannot complete a page: `window.onload = f` is the oldest way to
+/// defer work to the end of a load, and it must reach the same listener table
+/// `addEventListener` writes to. The handler it registers is an ordinary
+/// listener carrying HTML's internal callback — see
+/// [`HostObject::set_event_handler`] — so a page's `onload` function and the
+/// same function passed to `addEventListener('load', …)` are two independent
+/// listeners, exactly as the standard says.
+///
+/// `window.onload` is a member of HTML's `GlobalEventHandlers` mixin, which the
+/// `Window` interface includes; the rest of that mixin's names are not
+/// installed yet, because nothing in the engine fires the events they name.
+pub fn install_window_event_handlers(
+    scope: &mut v8::PinScope,
+    global_template: v8::Local<v8::ObjectTemplate>,
+) {
+    let getter = v8::FunctionTemplate::builder(window_onload_getter)
+        .length(0)
+        .build(scope);
+    let setter = v8::FunctionTemplate::builder(window_onload_setter)
+        .length(1)
+        .build(scope);
+    let key = v8::String::new(scope, "onload").expect("the member name fits the V8 string limit");
+    global_template.set_accessor_property(
+        key.into(),
+        Some(getter),
+        Some(setter),
+        v8::PropertyAttribute::NONE,
+    );
+}
+
+/// `window.onload`'s getter: the value the page last assigned, or `null`.
+///
+/// `null` rather than `undefined` for an unset handler, which is what the
+/// WebIDL getter steps of an `EventHandler` attribute return: the value is
+/// stored as a nullable callback, and the conversion back turns "no handler"
+/// into the null value.
+fn window_onload_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let host = match window_host(scope) {
+        Ok(host) => host,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    match host.event_handler(EventHandlerName::new("onload")) {
+        Ok(Some(handler)) => match value_to_v8(scope, handler.bits()) {
+            Ok(value) => rv.set(value),
+            Err(error) => throw_js_error(scope, &error),
+        },
+        Ok(None) => rv.set(v8::null(scope).into()),
+        Err(error) => throw_js_error(scope, &error),
+    }
+}
+
+/// `window.onload`'s setter, which is a listener registration.
+///
+/// `[LegacyTreatNonObjectAsNull]` is why a non-object deactivates the handler
+/// rather than being stored: WebIDL's `EventHandlerNonNull` converts a value
+/// that is not an object to null, and a null handler unregisters the listener
+/// the previous assignment registered ([`HostObject::set_event_handler`]).
+/// Assignment is otherwise total — the listener it registers never collides
+/// with the page's own, so nothing here can fail for a duplicate.
+fn window_onload_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let raw = args.get(0);
+    let value = if raw.is_object() {
+        match value_from_v8(scope, raw) {
+            Ok(bits) => Some(EventHandlerNonNull::from_bits(bits)),
+            Err(error) => {
+                throw_js_error(scope, &error);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    let host = match window_host(scope) {
+        Ok(host) => host,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    if let Err(error) = host.set_event_handler(EventHandlerName::new("onload"), value) {
+        throw_js_error(scope, &error);
+    }
 }
 
 /// Chains the global object's prototype to `EventTarget.prototype`.

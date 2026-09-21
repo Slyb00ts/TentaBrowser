@@ -24,11 +24,11 @@ use std::sync::Once;
 use tenta_js::bindings::WrapperWorld;
 use tenta_js::bindings::host::{
     HostContext, HostObject, SharedContext, SharedDocument, deliver_xhr_completion, encode_host,
-    insert_fetched_response,
+    encode_node, insert_fetched_response,
 };
 use tenta_js::bindings::{Handle, handle_from_v8, handle_to_v8};
 use tenta_js::dom::events::{DispatchTarget, EventKind, EventRecord, ScriptHost, dispatch_at};
-use tenta_js::engine::ScriptErrorKind;
+use tenta_js::engine::{LifecycleEvent, ScriptErrorKind};
 use tenta_js::event_loop::{Clock, EventLoop, FiringRelease, MonoTime};
 use tenta_js::fetch::{FetchCompletion, FetchOutcome};
 use tenta_js::xhr::XhrCompletion;
@@ -403,6 +403,10 @@ impl Engine {
         v8::scope!(let scope, &mut bootstrap_scope);
 
         let global_template = v8::ObjectTemplate::new(scope);
+        // The window's `on*` handler attributes are accessors, so they have to
+        // be on the template the global object is built from rather than added
+        // to the object afterwards (`host::install_window_event_handlers`).
+        host::install_window_event_handlers(scope, global_template);
         // This one template outlives the block: the window's prototype chain is
         // chained to `EventTarget.prototype` once the context exists
         // (`host::install_window_prototype`).
@@ -1318,6 +1322,111 @@ impl Engine {
             if orphaned {
                 dom.ctx.events.borrow_mut().remove(event_key);
             }
+        }
+    }
+
+    /// Fires one user-agent lifecycle event — `DOMContentLoaded` or `load` — as
+    /// a real DOM event at the target HTML prescribes.
+    ///
+    /// The shape is [`Self::settle_xhr`]'s, because the constraint is the same
+    /// one: this entry runs from the page's own code with **no V8 callback on
+    /// the stack**, so it marks itself through
+    /// [`HostState::enter_native_dispatch`] and
+    /// [`V8ScriptHost::with_context`](script_host::V8ScriptHost) opens a plain
+    /// `HandleScope`. The guard covers the record building and the dispatch, so
+    /// the two scope choices cannot disagree.
+    ///
+    /// The two targets and the four flags are HTML's, not this method's
+    /// choices, and each is stated where it is set:
+    ///
+    /// - `DOMContentLoaded` is fired at the `Document`, with `bubbles` true and
+    ///   `cancelable` false (HTML "the end": "Fire an event named
+    ///   DOMContentLoaded at the Document object, with its bubbles attribute
+    ///   initialized to true").
+    /// - `load` is fired at the `Window` with the **legacy target override
+    ///   flag** (HTML "the load event"), both attributes left at their `Event`
+    ///   constructor defaults, which are false. The flag's effect is DOM's: with
+    ///   it set, `targetOverride` is the target's associated `Document`, so
+    ///   `event.target` at that dispatch is the document rather than the window.
+    ///
+    /// A `load` handler that queues work is the reason this method is entered
+    /// under the caller's [`Origin::Tracked`](tenta_core::Origin) scope rather
+    /// than left at the loop's default: the event is part of loading the
+    /// document, so the `setTimeout` it schedules is a deferral of that load and
+    /// not background activity, exactly as it is for a script the page handed
+    /// out (`crate::page_engine`).
+    ///
+    /// Nothing here remembers what it has fired: once-ness belongs to the
+    /// caller's settle bookkeeping, and a listener may legitimately re-enter
+    /// this path by calling `dispatchEvent`.
+    pub fn dispatch_lifecycle(&mut self, event: LifecycleEvent) {
+        // Runs page script, so it starts with nothing pending, like every other
+        // way in.
+        self.discard_stray_termination();
+        let Some(dom) = &self.dom else {
+            return;
+        };
+        let document_ref = {
+            let document = dom.ctx.doc.borrow();
+            document.node_ref(document.document_node())
+        };
+        let (target, type_, bubbles, cancelable) = match event {
+            LifecycleEvent::DomContentLoaded => (
+                DispatchTarget::node(document_ref),
+                "DOMContentLoaded",
+                true,
+                false,
+            ),
+            LifecycleEvent::Load => (
+                // HTML fires `load` at the window *with the legacy target
+                // override flag set*, which is what makes `event.target` the
+                // window's document rather than the window
+                // (`DispatchTarget::with_target_override`). The listener table
+                // is unaffected: a `window` listener still fires.
+                DispatchTarget::window().with_target_override(encode_node(document_ref)),
+                "load",
+                false,
+                false,
+            ),
+            // `LifecycleEvent` is `#[non_exhaustive]`, so a variant added in
+            // `tenta-js` cannot fail this match at compile time. Firing nothing
+            // is the only honest answer: inventing an event the page did not
+            // ask for would make a *wrong* event observable where a missing one
+            // is at least visible as missing. The assertion is what turns that
+            // silence into a test failure the moment such a variant is added.
+            other => {
+                debug_assert!(
+                    false,
+                    "no implementation for the lifecycle event {other:?}: the backend has to \
+                     learn a target and its flags before `tenta-js` may add one"
+                );
+                return;
+            }
+        };
+        let mut record = EventRecord::new(type_.to_owned(), EventKind::Plain, dom.ctx.time_stamp());
+        record.bubbles = bubbles;
+        record.cancelable = cancelable;
+        record.flags.initialized = true;
+        let event_key = dom.ctx.events.borrow_mut().insert(record);
+        // Held for the whole entry, as in the XHR drain: the flag is what makes
+        // `with_context` take the plain-scope path, and it must describe the
+        // entry rather than one statement of it. The guard restores whatever it
+        // found on the way out — or on unwind.
+        let _native = self.host.enter_native_dispatch();
+        // `trusted` is true: the user agent fired this, not script. It is what
+        // makes `event.isTrusted` report true to the listener.
+        let _ = dispatch_at(&dom.ctx, target, event_key, true);
+        // Remove the transient record unless a listener made a wrapper for it
+        // (in which case the world's dead-event sweep owns its removal), exactly
+        // as the XHR drain does.
+        let orphaned = dom
+            .ctx
+            .events
+            .borrow()
+            .get(event_key)
+            .is_some_and(|record| !record.has_wrapper);
+        if orphaned {
+            dom.ctx.events.borrow_mut().remove(event_key);
         }
     }
 

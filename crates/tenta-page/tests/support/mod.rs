@@ -22,7 +22,8 @@ use tenta_core::{Budgets, ContextId, Error, Origin, PageId, Result, Tier, TimerR
 use tenta_dom::{Document as DomDocument, Mutation, SharedDocument};
 use tenta_html::QualName;
 use tenta_js::engine::{
-    EngineWatchdog, PageEngine, PageEngineConfig, PageEngineFactory, ScriptError, ScriptKind,
+    EngineWatchdog, LifecycleEvent, PageEngine, PageEngineConfig, PageEngineFactory, ScriptError,
+    ScriptKind,
 };
 use tenta_js::event_loop::{Clock, EventLoop, ProvenanceSink, Scheduler};
 use tenta_js::fetch::{FetchCompletion, FetchDriver};
@@ -188,6 +189,11 @@ pub struct Record {
     /// Whether a `block` command has been reached and is waiting to be
     /// terminated. What a test polls to sequence two pages against each other.
     pub blocked: bool,
+    /// Every user-agent lifecycle event the page fired at this engine, in
+    /// order. The stub has no page script to serve one to, so what a test
+    /// asserts is the page's own decision: which event, how many times, and in
+    /// which order.
+    pub lifecycle: Vec<LifecycleEvent>,
 }
 
 pub type Recorder = Arc<Mutex<Record>>;
@@ -479,6 +485,18 @@ impl PageEngine for StubEngine {
             completions.is_empty(),
             "the stub page never starts an XHR, so no completion can arrive"
         );
+    }
+
+    /// Records the event the page fired. The stub has no page script to serve
+    /// it to, so what is observable here is the page's decision alone — which
+    /// is exactly the half the page owns: the moment, the order and the count.
+    ///
+    /// The origin scope is deliberately not applied here. A real backend wraps
+    /// this entry in `Origin::Tracked` so a handler's `setTimeout` defers the
+    /// load (`tenta_js::engine::PageEngine::dispatch_lifecycle`); the stub has
+    /// no handler and so nothing to attribute.
+    fn dispatch_lifecycle(&mut self, event: LifecycleEvent) {
+        self.context.record.lock().unwrap().lifecycle.push(event);
     }
 
     fn next_wakeup(&self) -> Option<Duration> {
