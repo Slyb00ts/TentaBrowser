@@ -27,25 +27,27 @@ use url::Url;
 use super::SequenceOfSequenceOfUsvStringOrRecordOfUsvStringToUsvStringOrUsvString as ParamsInit;
 use super::{
     AbortControllerConstructor, AbortControllerOps, AbortSignal, AbortSignalOps,
-    AddEventListenerOptionsOrBoolean, AnyValue, Blob, BlobConstructor, BlobOps, BlobPart,
-    BlobPropertyBag, BufferSourceOrUsvString, CSSStyleDeclaration, CSSStyleDeclarationOps,
-    Callback, CharacterDataOps, Comment, CommentOps, CustomEventConstructor, CustomEventInit,
-    CustomEventOps, DOMTokenList, DOMTokenListOps, DocumentFragment, DocumentFragmentOps,
-    DocumentOps, Element, ElementOps, EndingType, Event, EventConstructor, EventInit,
-    EventListener, EventListenerOptionsOrBoolean, EventOps, EventTarget, EventTargetOps,
-    FileConstructor, FileOps, FilePropertyBag, HTMLAnchorElementOps, HTMLButtonElementOps,
-    HTMLCollection, HTMLCollectionOps, HTMLDivElementOps, HTMLElement, HTMLElementOps,
+    AddEventListenerOptionsOrBoolean, AnyValue, Blob, BlobConstructor, BlobOps, BlobOrUsvString,
+    BlobPart, BlobPropertyBag, BufferSourceOrUsvString, CSSStyleDeclaration,
+    CSSStyleDeclarationOps, Callback, CharacterDataOps, Comment, CommentOps,
+    CustomEventConstructor, CustomEventInit, CustomEventOps, DOMTokenList, DOMTokenListOps,
+    DocumentFragment, DocumentFragmentOps, DocumentOps, Element, ElementOps, EndingType, Event,
+    EventConstructor, EventInit, EventListener, EventListenerOptionsOrBoolean, EventOps,
+    EventTarget, EventTargetOps, FileConstructor, FileOps, FileOrUsvString, FilePropertyBag,
+    FormDataConstructor, FormDataOps, HTMLAnchorElementOps, HTMLButtonElementOps, HTMLCollection,
+    HTMLCollectionOps, HTMLDivElementOps, HTMLElement, HTMLElementOps, HTMLFormElement,
     HTMLFormElementOps, HTMLIFrameElementOps, HTMLImageElementOps, HTMLInputElementOps,
     HTMLLabelElementOps, HTMLOptionElementOps, HTMLParagraphElementOps, HTMLScriptElementOps,
     HTMLSelectElementOps, HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps,
-    Handle, Headers, HeadersConstructor, HeadersInit, HeadersOps, JsError, MouseEventConstructor,
-    MouseEventInit, MouseEventOps, Node, NodeList, NodeListOps, NodeOps, ProgressEventConstructor,
-    ProgressEventInit, ProgressEventOps, Promise, Realm, RequestInit, ResponseConstructor,
-    ResponseInit, ResponseOps, ResponseType, SVGElementOps, Text, TextDecodeOptions,
-    TextDecoderConstructor, TextDecoderOps, TextDecoderOptions, TextEncoderConstructor,
-    TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps, URLConstructor, URLOps,
-    URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps, XMLHttpRequestConstructor,
-    XMLHttpRequestEventTargetOps, XMLHttpRequestOps, XMLHttpRequestResponseType,
+    Handle, Headers, HeadersConstructor, HeadersInit, HeadersOps, IterableEntries, JsError,
+    MouseEventConstructor, MouseEventInit, MouseEventOps, Node, NodeList, NodeListOps, NodeOps,
+    ProgressEventConstructor, ProgressEventInit, ProgressEventOps, Promise, Realm, RequestInit,
+    ResponseConstructor, ResponseInit, ResponseOps, ResponseType, SVGElementOps, Text,
+    TextDecodeOptions, TextDecoderConstructor, TextDecoderOps, TextDecoderOptions,
+    TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
+    URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
+    XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps, XMLHttpRequestOps,
+    XMLHttpRequestResponseType,
 };
 use crate::dom::events::{
     CallbackRef, DispatchTarget, EventHandlerName, EventKey, EventKind, EventRecord, EventSlab,
@@ -167,19 +169,25 @@ impl Default for SnapshotSlab {
 
 // ---------------------------------------------------------------------------
 // Host records: URL, URLSearchParams, Headers, AbortController, AbortSignal,
-// Response, TextDecoder, TextEncoder, XMLHttpRequest, Blob and File
+// Response, TextDecoder, TextEncoder, XMLHttpRequest, Blob, File and FormData
 // ---------------------------------------------------------------------------
 
 /// A key into a world's [`HostSlab`]; the payload of a [`TAG_HOST`] handle.
 pub type HostKey = GenKey;
 
-/// The generational slab of live `URL`, `URLSearchParams`, `Headers` and
-/// `XMLHttpRequest` records for one world.
+/// The generational slab of live `URL`, `URLSearchParams`, `Headers`,
+/// `XMLHttpRequest`, `Blob`, `File` and `FormData` records for one world.
 ///
 /// It is a [`GenSlab`] rather than a [`SnapshotSlab`] because a host record has
 /// no document row to live in and no other referent: the wrapper is its owner,
 /// so the world frees the record when the wrapper is finalized, exactly as it
 /// frees an event record. A snapshot, by contrast, belongs to the context.
+///
+/// "The wrapper is its owner" is the default and not the rule: a record a
+/// second record points at — a URL's query object, a signal's controller, a
+/// `Response`'s headers, a `FormData`'s entries — outlives its wrapper and is
+/// freed by whichever of the two dies second
+/// ([`reclaim_host_record`]).
 pub type HostSlab = GenSlab<HostRecord>;
 
 /// The state behind one JS-owned host object that is not a node.
@@ -206,6 +214,8 @@ pub enum HostRecord {
     Blob(BlobRecord),
     /// A `File`, which is a `Blob` with a name and a modification time.
     File(FileRecord),
+    /// A `FormData`: its entry list, and nothing else.
+    FormData(FormDataRecord),
 }
 
 impl HostRecord {
@@ -226,6 +236,7 @@ impl HostRecord {
             HostRecord::Xhr(_) => "XMLHttpRequest",
             HostRecord::Blob(_) => "Blob",
             HostRecord::File(_) => "File",
+            HostRecord::FormData(_) => "FormData",
         }
     }
 }
@@ -587,6 +598,89 @@ pub struct FileRecord {
     pub name: String,
     /// The `lastModified`, in milliseconds since the Unix Epoch.
     pub last_modified: i64,
+    /// Whether this record still has a live wrapper. See
+    /// [`UrlRecord::has_wrapper`], and [`FileRecord::owners`] for the second
+    /// half of the rule.
+    pub has_wrapper: bool,
+    /// The `FormData` records whose entry lists hold this `File`, by key.
+    ///
+    /// This is the direction HTML's *create an entry* forces on a record's
+    /// lifetime. Where a host record that only its wrapper can reach is freed
+    /// when that wrapper is finalized, a `File` an entry list holds must outlive
+    /// the *page's* reference to it — `formData.get(name)` has to answer with
+    /// the same bytes after the value it was given has been dropped — and it
+    /// must be freed once nothing holds it at all. So a file record is free
+    /// exactly when [`FileRecord::is_free`] says so: no live wrapper **and** no
+    /// owner.
+    ///
+    /// A `Vec` and not an `Option<HostKey>` because one `File` object can be
+    /// appended to several `FormData`s, and each of them has to be able to let
+    /// go of it independently. A key appears at most once per owner, which
+    /// [`FileRecord::add_owner`] guarantees, and a mutation that drops the last
+    /// entry naming a key takes the owner out
+    /// ([`relinquish_files`]) rather than counting entries: an entry list
+    /// holding the same `File` under two names is one reference here.
+    ///
+    /// A stale key — one whose `FormData` record has been freed — must be
+    /// ignored rather than chased, for the same reason
+    /// [`SignalRecord::controller`] may be stale: the generation in the key is
+    /// what makes "the record is gone" and "the slot holds something else"
+    /// distinguishable, and the reading side asks the slab.
+    pub owners: Vec<HostKey>,
+}
+
+impl FileRecord {
+    /// Records that the `FormData` at `owner` holds this `File`, once.
+    fn add_owner(&mut self, owner: HostKey) {
+        if !self.owners.contains(&owner) {
+            self.owners.push(owner);
+        }
+    }
+
+    /// Drops every reference the `FormData` at `owner` held to this `File`.
+    fn remove_owner(&mut self, owner: HostKey) {
+        self.owners.retain(|held| *held != owner);
+    }
+
+    /// Whether nothing refers to this record any more: neither a live wrapper
+    /// nor an entry list. See [`FileRecord::owners`].
+    fn is_free(&self) -> bool {
+        !self.has_wrapper && self.owners.is_empty()
+    }
+}
+
+/// A `FormData` record: the standard's *entry list*, and nothing else
+/// (<https://xhr.spec.whatwg.org/#concept-formdata-entry-list>).
+///
+/// The list is the whole of the object's state. Its *values* are not bytes but
+/// keys — see [`EntryValue::File`] — because `FormDataEntryValue` is
+/// `(File or USVString)` and a browser keeps the `File` *object* the page
+/// passed, so two reads of one entry have to answer with one object. A copy of
+/// the bytes would be a different `File`.
+#[derive(Debug)]
+pub struct FormDataRecord {
+    /// The entries, in insertion order, duplicates and all: `append` adds an
+    /// entry without looking at the names already present, and the order is
+    /// observable through every iterator.
+    pub list: Vec<(String, EntryValue)>,
+}
+
+/// One entry's *value*: the `FormDataEntryValue` union, stored the way the
+/// host keeps each half.
+///
+/// The `File` half is a record key rather than a `FileRecord` so that the
+/// record's identity survives: the wrapper world memoises one wrapper per
+/// handle, so `formData.get('k')` twice is one JavaScript object, and the
+/// `File` a page passed in stays that same object
+/// (`wpt/checkout/xhr/formdata/set-blob.any.js`'s `assert_file_identity`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntryValue {
+    /// The `USVString` half: a scalar value string.
+    String(String),
+    /// The `File` half, held as the key of the `File` record it names. That
+    /// key is one of the record's [`FileRecord::owners`], which is what keeps
+    /// the record alive while this entry holds it.
+    File(HostKey),
 }
 
 /// An `AbortController` record.
@@ -1638,6 +1732,17 @@ impl HostObject {
     fn with_file<R>(&self, default: R, f: impl FnOnce(&FileRecord) -> R) -> R {
         if let HostObject::Host { ctx, key } = self
             && let Some(HostRecord::File(record)) = ctx.host_records.borrow().get(*key)
+        {
+            return f(record);
+        }
+        default
+    }
+
+    /// Reads the `FormData` this host stands for, or returns `default` when the
+    /// host is not one or its record has been reclaimed.
+    fn with_form_data<R>(&self, default: R, f: impl FnOnce(&FormDataRecord) -> R) -> R {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::FormData(record)) = ctx.host_records.borrow().get(*key)
         {
             return f(record);
         }
@@ -4406,12 +4511,15 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
         // A response holds no pair list of its own; its headers do.
         HostRecord::Response(_) => return None,
         // Neither encoding record holds one either, and neither does an
-        // `XMLHttpRequest`, a `Blob` or a `File`.
+        // `XMLHttpRequest`, a `Blob`, a `File` or a `FormData` — whose entry
+        // list is a list of *entries*, not a pair list the URL Standard's form
+        // would read.
         HostRecord::TextDecoder(_)
         | HostRecord::TextEncoder
         | HostRecord::Xhr(_)
         | HostRecord::Blob(_)
-        | HostRecord::File(_) => return None,
+        | HostRecord::File(_)
+        | HostRecord::FormData(_) => return None,
     };
     match params.url {
         Some(owner) => match slab.get(owner)? {
@@ -4425,7 +4533,8 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
             | HostRecord::TextEncoder
             | HostRecord::Xhr(_)
             | HostRecord::Blob(_)
-            | HostRecord::File(_) => None,
+            | HostRecord::File(_)
+            | HostRecord::FormData(_) => None,
         },
         None => Some(params.list.clone()),
     }
@@ -4522,8 +4631,13 @@ enum HostLink {
     Xhr,
     /// The record is a `Blob`, which links to nothing.
     Blob,
-    /// The record is a `File`, which links to nothing.
-    File,
+    /// The record is a `File` holding the keys of the `FormData` records whose
+    /// entry lists hold it — the reverse of [`HostLink::FormData`], and the
+    /// reason a file record is not freed by its wrapper's death alone.
+    File(Vec<HostKey>),
+    /// The record is a `FormData` holding the distinct keys of the `File`
+    /// records its entry list names, which it owns.
+    FormData(Vec<HostKey>),
 }
 
 /// What freeing host records took out of the world: the record slots that left
@@ -4580,6 +4694,9 @@ fn free_record(slab: &mut HostSlab, key: HostKey, out: &mut ReclaimedHost) {
 /// own wrapper for as long as the controller's record does. A `Response` and the
 /// `Headers` it created are the same shape read the other way round: the response
 /// *owns* the headers, which every read of `response.headers` answers with.
+/// A `FormData` and the `File` records its entries name are the same shape with
+/// more than one file and more than one owner: the entry list owns every file it
+/// holds, and each file lists the entry lists that hold it.
 ///
 /// Either wrapper of a pair may be collected first, so this clears the link that
 /// pointed at the dying record and frees a record only once nothing else refers
@@ -4597,7 +4714,16 @@ fn free_record(slab: &mut HostSlab, key: HostKey, out: &mut ReclaimedHost) {
 ///  - the headers' wrapper dies: the headers stay while the response that owns
 ///    them lives, and are freed at once for a headers a page built;
 ///  - the response's wrapper dies: the response's record goes, and its headers
-///    go with them unless the headers' own wrapper is still alive.
+///    go with them unless the headers' own wrapper is still alive;
+///  - a `File`'s wrapper dies: the file stays while a `FormData` entry list
+///    still holds its key, and is freed at once otherwise;
+///  - the `FormData`'s wrapper dies: the entry list goes, and every file it
+///    held loses this owner and is freed unless another owner holds it.
+///
+/// The `File`/`FormData` pair is the one where *both* records can be reachable
+/// by script at once and neither points at the other exclusively: the entry
+/// list holds the file's key, and the file holds the keys of the lists that
+/// hold it, so each side's reclamation finishes the other's.
 ///
 /// Freeing a record that is still pointed at would be observable — the object
 /// would write into a recycled slot, or a second `abort()` would reach a signal
@@ -4618,7 +4744,8 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         Some(HostRecord::TextEncoder) => HostLink::TextEncoder,
         Some(HostRecord::Xhr(_)) => HostLink::Xhr,
         Some(HostRecord::Blob(_)) => HostLink::Blob,
-        Some(HostRecord::File(_)) => HostLink::File,
+        Some(HostRecord::File(record)) => HostLink::File(record.owners.clone()),
+        Some(HostRecord::FormData(record)) => HostLink::FormData(file_keys(&record.list)),
         None => return freed,
     };
     match link {
@@ -4630,14 +4757,45 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         // else points at its record, and its own state (no stored value, not
         // even an interned one) frees with it. Its *listeners* are keyed by the
         // record's key, so the caller drains them from the freed key. A `Blob`
-        // and a `File` are the same shape again: nothing but their own wrapper
-        // can reach either, and a `File` owns no second record.
-        HostLink::TextDecoder
-        | HostLink::TextEncoder
-        | HostLink::Xhr
-        | HostLink::Blob
-        | HostLink::File => {
+        // is the same shape again: nothing but its own wrapper can reach it, and
+        // it owns no second record.
+        HostLink::TextDecoder | HostLink::TextEncoder | HostLink::Xhr | HostLink::Blob => {
             free_record(slab, key, &mut freed);
+        }
+        // A file record is the shape a `FormData` entry list makes two-way: its
+        // own wrapper's death is not enough to free it while a live `FormData`
+        // still holds its key, because `formData.get(name)` has to keep
+        // answering with it — the same record, hence the same object. So the
+        // flag is cleared here and the record is freed only if no entry list
+        // holds it either. The owner keys are read as *live*: a key whose
+        // `FormData` record is gone is stale, which is what the generation in
+        // the key is for, and `slab.get` answers `None` for it.
+        HostLink::File(owners) => {
+            if let Some(HostRecord::File(record)) = slab.get_mut(key) {
+                record.has_wrapper = false;
+            }
+            let still_owned = owners.iter().any(|owner| slab.get(*owner).is_some());
+            if !still_owned {
+                free_record(slab, key, &mut freed);
+            }
+        }
+        // A `FormData` record has no second referent — nothing script can reach
+        // leads to it but its own wrapper — so its wrapper's death is its
+        // record's death. The `File` records its entry list held are the other
+        // half of the pair above: it gives up its ownership of each, and a
+        // record that no other entry list and no wrapper holds any more is free
+        // with it. The keys are deduplicated because an entry list may name one
+        // `File` under several names, and it is one owner either way.
+        HostLink::FormData(files) => {
+            free_record(slab, key, &mut freed);
+            for file in files {
+                if let Some(HostRecord::File(record)) = slab.get_mut(file) {
+                    record.remove_owner(key);
+                }
+                if matches!(slab.get(file), Some(HostRecord::File(record)) if record.is_free()) {
+                    free_record(slab, file, &mut freed);
+                }
+            }
         }
         // The headers record a response owns outlives its own wrapper, because
         // `[SameObject]` requires the next read of `response.headers` to answer
@@ -6815,16 +6973,14 @@ impl FileConstructor for HostObject {
         // when it is not. The member's own type is `long long`, so a `Date`
         // converts through `ToNumber` like any other `long long` member.
         let last_modified = options.last_modified.unwrap_or_else(now_epoch_ms);
-        let key = ctx
-            .host_records
-            .borrow_mut()
-            .insert(HostRecord::File(FileRecord {
-                // Step 4: the new `File` refers to the same byte sequence and
-                // size its `Blob` half does.
-                blob: BlobRecord { bytes, blob_type },
-                name: file_name.to_string(),
-                last_modified,
-            }));
+        // Step 4: the new `File` refers to the same byte sequence and size its
+        // `Blob` half does.
+        let key = insert_file_record(
+            &ctx,
+            BlobRecord { bytes, blob_type },
+            file_name,
+            last_modified,
+        );
         Ok(HostObject::host_record(ctx, key))
     }
 }
@@ -6841,6 +6997,477 @@ impl FileOps for HostObject {
         // Unreachable default, like `Response.status`: only a `File` wrapper can
         // reach an accessor carrying `File`'s signature.
         self.with_file(0, |file| file.last_modified)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FormData
+// ---------------------------------------------------------------------------
+
+/// Inserts a `File` record that nothing refers to yet: no wrapper has been
+/// adopted for it and no entry list holds it, so nothing keeps it alive but the
+/// caller's own use of the key.
+///
+/// A wrapper marks a record as wrapped when it is created or adopted
+/// (`crates/tenta-js-v8/src/world.rs`), and an entry list that names one becomes
+/// one of its [`FileRecord::owners`]. Both of those are how a live record
+/// survives; this is the state a record is born in.
+///
+/// The `File` constructor and HTML's *create an entry* are the two producers,
+/// and they agree on every field — the constructor's step 4, "the new `File`
+/// object refers to the same byte sequence and size as the `Blob`", is `blob`,
+/// and the two members left are the name and the modification time each caller
+/// computes for itself. This is the one place the record's fields are written,
+/// so a field added to [`FileRecord`] cannot be forgotten by one of them.
+fn insert_file_record(
+    ctx: &SharedContext,
+    blob: BlobRecord,
+    name: &str,
+    last_modified: i64,
+) -> HostKey {
+    ctx.host_records
+        .borrow_mut()
+        .insert(HostRecord::File(FileRecord {
+            blob,
+            name: name.to_string(),
+            last_modified,
+            has_wrapper: false,
+            owners: Vec::new(),
+        }))
+}
+
+/// The distinct `File` records an entry list names.
+///
+/// Deduplicated because ownership is per `FormData` and not per entry: a list
+/// that names one `File` under two names holds one reference to it, so giving it
+/// up once is the whole of what a mutation owes the record. The key's own
+/// generation makes the deduplication exact rather than best-effort.
+fn file_keys(list: &[(String, EntryValue)]) -> Vec<HostKey> {
+    let mut keys: Vec<HostKey> = Vec::new();
+    for (_, value) in list {
+        if let EntryValue::File(key) = value
+            && !keys.contains(key)
+        {
+            keys.push(*key);
+        }
+    }
+    keys
+}
+
+/// The `FormDataEntryValue` a stored entry value converts to.
+///
+/// The `File` half becomes a handle, which is what makes the identity rule hold
+/// with no extra state: the wrapper world keeps one wrapper per handle, so the
+/// object `get` answers with is the object `getAll` and the pair iterator answer
+/// with, and it is the object the page passed in when the entry kept it.
+fn entry_to_union(value: &EntryValue) -> FileOrUsvString {
+    match value {
+        EntryValue::String(text) => FileOrUsvString::UsvString(text.clone()),
+        EntryValue::File(key) => FileOrUsvString::File(Handle::from_bits(encode_host(*key))),
+    }
+}
+
+/// The `Blob` or `File` record a `Blob`-declared argument names.
+enum BlobSource {
+    /// The argument named a `Blob` record, which is never a `File`, so the entry
+    /// always mints one.
+    Blob { bytes: Vec<u8>, blob_type: String },
+    /// The argument named a `File` record, whose key is the object the entry
+    /// keeps when no `filename` is given, and whose `lastModified` the minted
+    /// replacement copies.
+    File {
+        key: HostKey,
+        bytes: Vec<u8>,
+        blob_type: String,
+        last_modified: i64,
+    },
+}
+
+/// Resolves the `Blob` or `File` record `handle` names, or refuses it.
+///
+/// This is the brand check the generated `(Blob or USVString)` union cannot
+/// perform, for exactly the reasons [`blob_bytes_of`] records: the union's
+/// `Blob` arm is lowered to the test `value.is_object()` — *every* object, not a
+/// brand check — and the V8 `WrapperWorld::handle` ignores the interface name it
+/// is handed, so the conversion succeeds for any wrapper carrying a host
+/// pointer. What this function adds to that reasoning is the direction the entry
+/// needs: it has to say *which* of the two records the argument named, because
+/// that decides the entry's identity and its `lastModified`.
+///
+/// The tag test is not redundant with the record lookup. A window handle carries
+/// no key at all — `encode_window` is the tag alone — so reading its `host_key`
+/// and looking that up would ask for slab slot 0.
+///
+/// `context` names the operation that failed, so that `append` and `set` report
+/// themselves rather than reporting `FormData` at large.
+fn blob_source_of(
+    ctx: &SharedContext,
+    handle: Handle<Blob>,
+    context: &str,
+) -> Result<BlobSource, JsError> {
+    let decoded = decode(handle.bits());
+    let source = if decoded.tag == TAG_HOST {
+        ctx.host_records
+            .borrow()
+            .get(decoded.host_key())
+            .and_then(|record| match record {
+                HostRecord::Blob(blob) => Some(BlobSource::Blob {
+                    bytes: blob.bytes.clone(),
+                    blob_type: blob.blob_type.clone(),
+                }),
+                HostRecord::File(file) => Some(BlobSource::File {
+                    key: decoded.host_key(),
+                    bytes: file.blob.bytes.clone(),
+                    blob_type: file.blob.blob_type.clone(),
+                    last_modified: file.last_modified,
+                }),
+                _ => None,
+            })
+    } else {
+        None
+    };
+    source
+        .ok_or_else(|| JsError::type_error(format!("{context}: the value is not a Blob or a File")))
+}
+
+/// The `File` record a new entry holds for a `Blob`-declared value.
+///
+/// HTML's *create an entry* is the algorithm, and its own note states the rule
+/// these two branches are: "these operations will create a new File object if
+/// either filename is given or the passed Blob is not a File object. In those
+/// cases, the identity of the passed Blob object is not kept." When no new
+/// object is created the value *is* the argument, which is the identity
+/// `wpt/checkout/xhr/formdata/set-blob.any.js`'s `assert_file_identity` pins to
+/// the record.
+///
+/// Two details the algorithm leaves to be read off the corpus, both from that
+/// same directory:
+///
+/// - A minted `File` gets "the current date and time represented as the number
+///   of milliseconds since the Unix Epoch" — the `File` constructor's default
+///   for an absent `lastModified`, which is what *create an entry* names because
+///   it gives no third argument. `set-blob.any.js` pins it within 200 ms of
+///   `Date.now()` and `append.any.js`'s "testFormDataAppendEmptyBlob" within two
+///   seconds, so [`now_epoch_ms`] — the same clock both of those read — is the
+///   only source that satisfies both.
+/// - A `File` source **with** a `filename` keeps the source's `lastModified`
+///   rather than taking the clock: `set-blob.any.js`'s "file with lastModified
+///   and custom name" asserts `lastModified === 123` on a source built with
+///   `{ lastModified: 123 }`, while its name becomes the `filename`
+///   (`assert_equals(file2.name, "custom name")`) exactly as the algorithm says.
+fn entry_file(
+    ctx: &SharedContext,
+    handle: Handle<Blob>,
+    filename: Option<&str>,
+    context: &str,
+) -> Result<HostKey, JsError> {
+    let source = blob_source_of(ctx, handle, context)?;
+    // The one case in which the argument itself becomes the entry's value, and
+    // therefore the one case in which no record is inserted at all.
+    if let BlobSource::File { key, .. } = &source
+        && filename.is_none()
+    {
+        return Ok(*key);
+    }
+    let (bytes, blob_type, last_modified) = match source {
+        BlobSource::Blob { bytes, blob_type } => (bytes, blob_type, now_epoch_ms()),
+        BlobSource::File {
+            bytes,
+            blob_type,
+            last_modified,
+            ..
+        } => (bytes, blob_type, last_modified),
+    };
+    // The algorithm's second step is the name: `filename` when it is given, and
+    // `"blob"` when it is not. Both cases reach here — a `File` source with a
+    // `filename` took the second branch of *create an entry*, and every `Blob`
+    // source took its first.
+    Ok(insert_file_record(
+        ctx,
+        BlobRecord { bytes, blob_type },
+        filename.unwrap_or("blob"),
+        last_modified,
+    ))
+}
+
+/// The entry value a `(Blob or USVString)` argument and an optional `filename`
+/// make: HTML's *create an entry* read from the value half alone, with the name
+/// half supplied by the caller.
+///
+/// The string arm is already the standard's "convert value into a scalar value
+/// string": the union's conversion ran `string_from_v8`, which is where
+/// `append("k", undefined)` becomes `"undefined"` and `append("k", null)`
+/// becomes `"null"` (`append.any.js`'s "testFormDataAppendUndefined1" and
+/// "testFormDataAppendNull1").
+fn entry_value(
+    ctx: &SharedContext,
+    value: BlobOrUsvString,
+    filename: Option<&str>,
+    context: &str,
+) -> Result<EntryValue, JsError> {
+    match value {
+        BlobOrUsvString::UsvString(text) => Ok(EntryValue::String(text)),
+        BlobOrUsvString::Blob(handle) => Ok(EntryValue::File(entry_file(
+            ctx, handle, filename, context,
+        )?)),
+    }
+}
+
+/// Gives back the `File` records a mutation has dropped from an entry list.
+///
+/// "Dropped" is computed against the list *after* the mutation rather than
+/// counted per entry: an entry list may name one `File` under several names, and
+/// what a record's owner list holds is the `FormData`, once. A record nothing
+/// refers to any more — no owner and no live wrapper — is freed here, which is
+/// the one thing a plain drop of the old list could not do.
+fn relinquish_files<'a>(
+    slab: &mut HostSlab,
+    owner: HostKey,
+    dropped: impl Iterator<Item = &'a HostKey>,
+) {
+    // The freed keys are collected but unused: a `File` owns no interned value
+    // and is not an event target, so there is nothing for `reclaim_host_record`'s
+    // caller to drain on its behalf. `GenSlab::remove` bumps the generation, so
+    // a key reached twice here frees at most one record.
+    let mut freed = ReclaimedHost::default();
+    for file in dropped {
+        if let Some(HostRecord::File(record)) = slab.get_mut(*file) {
+            record.remove_owner(owner);
+        }
+        if matches!(slab.get(*file), Some(HostRecord::File(record)) if record.is_free()) {
+            free_record(slab, *file, &mut freed);
+        }
+    }
+}
+
+/// Applies a mutation to the entry list of the `FormData` at `key`, keeping
+/// every `File` record's ownership in step with the list.
+///
+/// Every mutating operation goes through this, so that "the list no longer names
+/// this key" and "this `FormData` is no longer an owner of that record" cannot
+/// drift apart: `append` and `set` register the keys the new list holds, and a
+/// key the list has given up is relinquished and freed if nothing else holds it.
+fn mutate_form_data(
+    slab: &mut HostSlab,
+    key: HostKey,
+    f: impl FnOnce(&mut Vec<(String, EntryValue)>),
+) {
+    let (before, after) = {
+        let Some(HostRecord::FormData(record)) = slab.get_mut(key) else {
+            return;
+        };
+        let before = file_keys(&record.list);
+        f(&mut record.list);
+        let after = file_keys(&record.list);
+        (before, after)
+    };
+    for file in &after {
+        if let Some(HostRecord::File(record)) = slab.get_mut(*file) {
+            record.add_owner(key);
+        }
+    }
+    relinquish_files(
+        slab,
+        key,
+        before.iter().filter(|file| !after.contains(file)),
+    );
+}
+
+impl FormDataConstructor for HostObject {
+    fn construct(
+        realm: &Realm,
+        form: Option<Handle<HTMLFormElement>>,
+        _submitter: Option<Option<Handle<HTMLElement>>>,
+    ) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        // The standard's step 3 reads `submitter` only *inside* its `form`
+        // non-null branch, so a `submitter` without a `form` is ignored exactly
+        // as it is here — the argument still converts (WebIDL converts every
+        // argument), and a value that is not an `HTMLElement` still throws.
+        //
+        // A non-null `form` needs HTML's *constructing the entry list*, which
+        // walks a form's submittable elements in tree order. That is the part
+        // this engine cannot do, and refusing it by name is the direction slice
+        // b-6.5 chose for `RequestInit`'s unserved members: a `FormData` quietly
+        // built from no form would be an empty object where the page asked for
+        // the form's fields.
+        if form.is_some() {
+            return Err(JsError::dom_exception(
+                "NotSupportedError",
+                "this engine cannot construct a FormData from a form",
+            ));
+        }
+        // Nothing is inserted before this point, so a refused construction
+        // leaves the slab exactly as it found it.
+        let key = ctx
+            .host_records
+            .borrow_mut()
+            .insert(HostRecord::FormData(FormDataRecord { list: Vec::new() }));
+        Ok(HostObject::host_record(ctx, key))
+    }
+}
+
+impl HostObject {
+    /// Appends one entry to the `FormData` this host stands for.
+    ///
+    /// `append` never looks at the names already in the list — the standard's
+    /// step is "append an entry ... to this's entry list" and nothing else — so
+    /// the order of the entries is the order of the calls, duplicates and all.
+    fn append_entry(&self, name: &str, value: EntryValue) {
+        let HostObject::Host { ctx, key } = self else {
+            return;
+        };
+        mutate_form_data(&mut ctx.host_records.borrow_mut(), *key, |list| {
+            list.push((name.to_owned(), value));
+        });
+    }
+
+    /// The standard's *set an entry*: the first entry named `name` takes the new
+    /// value in place, every *other* entry named `name` is removed, and a name
+    /// the list does not hold at all is appended.
+    ///
+    /// In place is what makes the position observable: `set` on an existing name
+    /// leaves the entry where it was, where a remove-then-append pair would move
+    /// it to the end. The final append is the step that makes `set` usable on a
+    /// fresh `FormData`, which is `set.any.js`'s "testFormDataSet1" — without it
+    /// the call would be a silent no-op and `get` would answer `null`.
+    fn set_entry(&self, name: &str, value: EntryValue) {
+        let HostObject::Host { ctx, key } = self else {
+            return;
+        };
+        mutate_form_data(&mut ctx.host_records.borrow_mut(), *key, |list| {
+            let mut replaced = false;
+            list.retain_mut(|(entry_name, entry_value)| {
+                if entry_name != name {
+                    return true;
+                }
+                if replaced {
+                    return false;
+                }
+                replaced = true;
+                *entry_value = value.clone();
+                true
+            });
+            if !replaced {
+                list.push((name.to_owned(), value));
+            }
+        });
+    }
+}
+
+impl FormDataOps for HostObject {
+    fn append_2(&self, name: &str, value: BlobOrUsvString) -> Result<(), JsError> {
+        let value = entry_value(
+            self.context(),
+            value,
+            None,
+            "Failed to execute 'append' on 'FormData'",
+        )?;
+        self.append_entry(name, value);
+        Ok(())
+    }
+
+    fn append_3(
+        &self,
+        name: &str,
+        blob_value: Handle<Blob>,
+        filename: Option<&str>,
+    ) -> Result<(), JsError> {
+        let file = entry_file(
+            self.context(),
+            blob_value,
+            filename,
+            "Failed to execute 'append' on 'FormData'",
+        )?;
+        self.append_entry(name, EntryValue::File(file));
+        Ok(())
+    }
+
+    fn delete(&self, name: &str) {
+        let HostObject::Host { ctx, key } = self else {
+            return;
+        };
+        // Every entry named `name`, and only those: the standard's step is
+        // "remove all the entries ... whose name is name".
+        mutate_form_data(&mut ctx.host_records.borrow_mut(), *key, |list| {
+            list.retain(|(entry_name, _)| entry_name != name);
+        });
+    }
+
+    fn get(&self, name: &str) -> Result<Option<FileOrUsvString>, JsError> {
+        // The *first* entry named `name`, absent as `null`: the generated glue
+        // turns `None` into `null` for the nullable return type, which is what
+        // `get.any.js`'s "testFormDataGetNull1" asserts.
+        Ok(self.with_form_data(None, |record| {
+            record
+                .list
+                .iter()
+                .find(|(entry_name, _)| entry_name == name)
+                .map(|(_, value)| entry_to_union(value))
+        }))
+    }
+
+    fn get_all(&self, name: &str) -> Result<Vec<FileOrUsvString>, JsError> {
+        // Every entry named `name`, in list order, as an empty sequence when
+        // there are none.
+        Ok(self.with_form_data(Vec::new(), |record| {
+            record
+                .list
+                .iter()
+                .filter(|(entry_name, _)| entry_name == name)
+                .map(|(_, value)| entry_to_union(value))
+                .collect()
+        }))
+    }
+
+    fn has(&self, name: &str) -> bool {
+        self.with_form_data(false, |record| {
+            record.list.iter().any(|(entry_name, _)| entry_name == name)
+        })
+    }
+
+    fn set_2(&self, name: &str, value: BlobOrUsvString) -> Result<(), JsError> {
+        let value = entry_value(
+            self.context(),
+            value,
+            None,
+            "Failed to execute 'set' on 'FormData'",
+        )?;
+        self.set_entry(name, value);
+        Ok(())
+    }
+
+    fn set_3(
+        &self,
+        name: &str,
+        blob_value: Handle<Blob>,
+        filename: Option<&str>,
+    ) -> Result<(), JsError> {
+        let file = entry_file(
+            self.context(),
+            blob_value,
+            filename,
+            "Failed to execute 'set' on 'FormData'",
+        )?;
+        self.set_entry(name, EntryValue::File(file));
+        Ok(())
+    }
+
+    fn iterable_entries(&self) -> Result<IterableEntries<String, FileOrUsvString>, JsError> {
+        // One snapshot, taken when the iteration begins, which the generated
+        // `@@iterator`, `entries`, `keys`, `values` and `forEach` all view. A
+        // mutation *during* iteration is therefore not observed, where WebIDL's
+        // default iterator for a pair `iterable` is live — the deviation the
+        // declaration's header records as deviation 3, and the test
+        // `crates/tenta-js-v8/tests/dom_formdata.rs` pins the slice that fixes
+        // it has to flip.
+        Ok(self.with_form_data(Vec::new(), |record| {
+            record
+                .list
+                .iter()
+                .map(|(name, value)| (name.clone(), entry_to_union(value)))
+                .collect()
+        }))
     }
 }
 

@@ -395,7 +395,31 @@ Notes on the shape of the generated code:
   build a plain array from one call to it and hand that array to the prelude's
   `array_iterator`, which calls the captured `%Array.prototype.values%` on it.
   One hook call feeds all three, so a collection mutated between two of them
-  cannot be observed half-way. The returned object is an Array Iterator, not an
+  cannot be observed half-way.
+  **The consequence is that a mutation *during* one iteration is not observed
+  either: the generated iterator is a snapshot, where WebIDL's pair iterator
+  prototype object wraps the live list.** The whole result of
+  `iterable_entries()` is materialized into an array before the first entry is
+  yielded, and every subsequent `next()` reads that array, so a `delete` further
+  down the list does not skip an entry — the deleted pair is still yielded —
+  and an `append` is never reached, where
+  <https://webidl.spec.whatwg.org/#es-iterator-prototype-object> steps 4.6–4.7
+  require the iterator to re-read the underlying list's index on each step and
+  its `[[ArrayLike]]` to be the list itself.
+  `wpt/checkout/xhr/formdata/iteration.any.js` is the operational contract for
+  the three behaviors a snapshot cannot produce, and all three fail here:
+  "Iteration skips elements removed while iterating", "Removing elements already
+  iterated over causes an element to be skipped during iteration", and
+  "Appending a value pair during iteration causes it to be reached during
+  iteration". This is not `FormData`'s: `Headers` and `URLSearchParams` carry the
+  same snapshot, and the same three behaviors are pinned for them by
+  `wpt/checkout/fetch/api/headers/headers-basic.any.js` and by the
+  `urlsearchparams-*` files. Making it live means one live iterator object per
+  pair `iterable` in `crates/tenta-idl/src/codegen/v8.rs`, which is a slice of
+  its own; until then the snapshot is deliberate and
+  `crates/tenta-js-v8/tests/dom_formdata.rs`'s
+  `iteration_views_a_snapshot_so_a_mutation_during_it_is_not_observed` pins it,
+  so the live-iterator slice has to come back and flip that test. The returned object is an Array Iterator, not an
   interface-branded one: `Object.prototype.toString.call(box.entries())` is
   `"[object Array Iterator]"`. `@@iterator` is installed from the *same*
   `FunctionTemplate` as `entries`, which is what makes the two the same function
@@ -486,7 +510,8 @@ cargo run -p tenta-idl -- gen --idl idl/toy --out /tmp/generated
 
 An interface whose instances are host records rather than wrapper-world nodes —
 `URL`/`URLSearchParams`, `Headers`, `AbortController`/`AbortSignal`,
-`TextEncoder`/`TextDecoder`, `Response`, `XMLHttpRequest`, `Blob`/`File` — uses
+`TextEncoder`/`TextDecoder`, `Response`, `XMLHttpRequest`, `Blob`/`File`,
+`FormData` — uses
 the same generated glue as a node-backed interface, and differs from it in three
 places outside the generator:
 
@@ -504,6 +529,29 @@ places outside the generator:
   to discover the list. `Blob`/`File` also needed a `with_*` reader on
   `HostObject` — one per shape a member reads — which is a design choice rather
   than a site the compiler forces.
+- **A record the host *owns* needs an owner list, not just `has_wrapper`.**
+  `Response` and its `Headers` were the first pair where one host record holds
+  another's key, and the protocol was: the wrapper is the owner, so a record is
+  freed when its wrapper dies. `FormData` breaks that assumption — the entry
+  list holds a `File` that the page *also* holds, so the record must outlive
+  both, and either may die first. `FileRecord` therefore carries two independent
+  facts (`crates/tenta-js/src/bindings/host.rs`): `has_wrapper: bool`, set when
+  a wrapper is created for it and cleared only when that wrapper is finalized,
+  and `owners: Vec<HostKey>`, the records that hold the key in an entry list.
+  `FileRecord::is_free()` is `!has_wrapper && owners.is_empty()` and is the only
+  reclamation test. `owners` is a `Vec`, not an `Option<HostKey>`, because a
+  file may sit in two `FormData`s at once, and it is a *set* (insertion
+  idempotent) because one list may hold the same file twice under one name.
+  `HostLink::File` carries the owner list and `HostLink::FormData` carries the
+  files its entry list references, so the two records can be reclaimed in either
+  order: a dying `FormData` frees itself and then drops its ownership from each
+  file (freeing any that has no wrapper and no other owner), and a dying `File`
+  wrapper clears `has_wrapper` and frees itself only if nothing still owns it.
+  Every mutation point is a reclamation point — `delete`, `set`'s
+  replace-and-remove-others, and the entry list's own death — and
+  `HostObject::mutate_form_data` is the single function that computes the before
+  and after key sets and does both halves, so a new mutating member cannot
+  forget one.
 - a member that hands a JavaScript value back needs the engine, and the record
   has no isolate. `ScriptHost` (`crates/tenta-js/src/dom/events/mod.rs`) is that
   boundary: `build_value` interns a value and returns bits, `release_value`
@@ -543,9 +591,11 @@ and its arm order is load-bearing: the union's first arm with no test of its own
 becomes the fallback, so `(BufferSource or USVString)` converts by
 `is_array_buffer() || is_shared_array_buffer() || is_array_buffer_view()` and
 falls back to `USVString` (`ToString`) for everything else. Only three of the
-standard's six arm types are declared here — `ReadableStream` and `FormData` do
-not exist in this repository, and `Blob` exists (`idl/fileapi/Blob.webidl`) but
-is deliberately not added to `BodyInit` — and dropping `URLSearchParams` does
+standard's six arm types are declared here — `ReadableStream` does not exist in
+this repository, and `Blob` (`idl/fileapi/Blob.webidl`) and `FormData`
+(`idl/xhr/FormData.webidl`) do but are deliberately not added to `BodyInit`
+(neither a single-object body nor a multipart serializer exists for them) — and
+dropping `URLSearchParams` does
 **not** cost nothing observable, which
 an earlier revision of this paragraph claimed. It is an object with no
 buffer-source shape, so it does reach the `USVString` arm whose conversion calls
@@ -976,6 +1026,162 @@ first observable here and both are pinned in
   arguments are `optional` and the existing `Response.length` assertion in
   `dom_response.rs` passes for the same reason.
 
+### `FormData`: a host record owned in two directions (P2 `d-4b`)
+
+`idl/xhr/FormData.webidl` declares `FormData`, the `FormDataEntryValue`
+typedef, and nothing else. `idl/xhr/` is already in `tenta-js/build.rs`'s
+directory list (`XMLHttpRequest.webidl` is there), so this is a second
+declaration lowered from a named directory rather than a new entry in it. The
+generated names follow `naming::snake_stem`, which splits `FormData` into
+`form_data` (not `formdata`): `form_data_ops.rs`, `form_data_v8.rs`,
+`form_data_register.rs`, and the installer `install_form_data`, called in
+`install_dom` (`crates/tenta-js-v8/src/lib.rs`) immediately after `install_file`
+because this interface mints a `File`.
+
+The entry list is the record, and the record is host-side:
+
+```rust
+struct FormDataRecord { list: Vec<(String, EntryValue)> }
+enum EntryValue { String(String), File(HostKey) }
+```
+
+`FormDataRecord::interface_name()` answers `"FormData"` through the shared
+`TAG_HOST`, so the new variant follows the recipe in "JS-owned host objects and
+the promise seam" above: a `HostRecord` variant, an `interface_name()` arm, both
+`host_pairs` arms (it is `None` — a `FormData` has no paired record), a
+`HostLink` arm, a `reclaim_host_record` arm, a `with_form_data` reader, and no
+marking in either of `crates/tenta-js-v8/src/world.rs`'s two `has_wrapper`
+sites (`WrapperWorld::wrapper`'s `TAG_HOST` arm and `WrapperWorld::adopt`):
+a `FormData` is never freed by anything but its own wrapper's death, so neither
+match assigns it a flag — the record is *owned*, not *owning*.
+
+**Two-way ownership is the whole of this slice's new machinery.** `Response`
+introduced the one-way case (a `Headers` record's validity depended on its
+wrapper), `Blob`/`File` added `has_wrapper`, and `FormData` needs the second
+half: a `File` record can be reached through *its own* wrapper or through an
+entry list, and either may be finalized first. `FileRecord` carries both facts —
+`has_wrapper: bool` (set by `WrapperWorld::wrapper` and `WrapperWorld::adopt` in
+`crates/tenta-js-v8/src/world.rs`, cleared when the wrapper's finalizer runs)
+and `owners: Vec<HostKey>` (insertion-idempotent, one entry per owning
+`FormData` record) — and `FileRecord::is_free()` is
+`!self.has_wrapper && self.owners.is_empty()`. `owners` is a `Vec` because one
+file can be an entry of two lists at once and of one list twice.
+`HostLink::File(Vec<HostKey>)` carries the owners out of a dying `File` wrapper
+and `HostLink::FormData(Vec<HostKey>)` carries the files out of a dying entry
+list, so `reclaim_host_record` reclaims in either order and both orders converge
+on "every record with no wrapper and no owner is freed". Both are pinned:
+`one_file_can_be_owned_by_two_entry_lists` and
+`a_collected_entry_list_frees_the_files_it_minted`
+(`crates/tenta-js-v8/tests/dom_formdata.rs`). Every mutating member is also a
+reclamation point, and `HostObject::mutate_form_data`
+(`crates/tenta-js/src/bindings/host.rs`) is the single function that computes the
+before/after key sets, re-registers the surviving owners and relinquishes the
+dropped ones, so `delete`, `set`'s replace-and-remove-others and the list's own
+death cannot diverge.
+
+**The identity table, as implemented** (HTML's *create an entry*, which the IDL
+header quotes verbatim). The free functions `blob_source_of` and `entry_file`
+(`crates/tenta-js/src/bindings/host.rs`) are the two that decide it:
+
+| value argument | `filename` | resulting entry value |
+|----------------|-----------|-----------------------|
+| `USVString` | absent | the string, via `ToString` (so `undefined` → `"undefined"`, `null` → `"null"`) |
+| `File` | absent | **the argument itself** — `FormData` records the file's key, so `get()` returns the same object (`set-blob.any.js`'s `assert_file_identity`) |
+| `File` | given | a **new** `File`: bytes and `type` copied from the source, `name` = `filename`, `lastModified` **copied from the source** |
+| `Blob` (not a `File`) | absent | a **new** `File`: bytes and `type` copied, `name` = `"blob"`, `lastModified` = **now** |
+| `Blob` (not a `File`) | given | a **new** `File`: bytes and `type` copied, `name` = `filename`, `lastModified` = **now** |
+| any other object | either | `TypeError` (deviation 2) |
+
+`lastModified` is a `File`-only attribute, so it is not "copied" on the `Blob`
+rows — it is minted, and `now_epoch_ms()` is the system clock, consistent with
+`File`'s own default. The two WPT windows agreed on this before it was written:
+`append.any.js`'s `testFormDataAppendEmptyBlob` uses `>= now - 2000 && <= now`
+and `set-blob.any.js`'s file-blob case narrows the same window to 200 ms.
+`lastModified` is *carried* on the `File`-with-filename row because
+`set-blob.any.js` requires `file2.lastModified === 123` for a source constructed
+with that value; a browser's *create an entry* does not say so explicitly, but
+the standard's `new File(bytes, name, { type, lastModified })` step is what makes
+it true there too. The empty-`Blob` row is pinned exactly as
+`append.any.js` writes it — `name === "blank.txt"`, `type === ""`, `size === 0`,
+`instanceof File` — in `a_filename_mints_a_file_copying_the_sources_last_modified`.
+
+**The overloads, and the one departure from the standard's IDL text.** The
+generated names are `append_2`/`append_3` and `set_2`/`set_3`, and the
+dispatcher is `match args.length()` (`crates/tenta-idl/src/codegen/v8.rs`'s
+`overload_dispatch`) — arity alone, with an unrecognised count throwing
+`TypeError`. That is why the file declares the *value* parameter of the
+two-argument form as `(Blob or USVString)` instead of the standard's separate
+`USVString` and `Blob blobValue` overloads: WebIDL's own algorithm
+(<https://webidl.spec.whatwg.org/#es-overloads>) chooses between them on the
+*distinguishing argument's value* — a platform object at that index picks the
+`Blob` arm — and an arity dispatcher cannot, so it would send
+`append("file-1", file)` to the `USVString` overload and store
+`"[object File]"`. Four of `set-blob.any.js`'s six subtests fail under the
+standard's pair; the union declaration restores the standard's semantics for
+every input a browser distinguishes. The cost is deviation 2 below, and the
+fix, if the generator ever grows value-based overload resolution, is this file's
+own text.
+
+**`FormDataEntryValue` is return-only, so the union brand-check trap does not
+bite.** `BlobPart` (§ above) and `XMLHttpRequestBodyInit` needed a check because
+a *wrong acceptance* on an argument produces a silently different object. Here
+the `File or USVString` union appears in `get`, `getAll` and the pair
+`iterable`, all return positions, where the host writes the arm itself; the
+argument positions use `Blob or USVString`, whose `Blob` arm is `is_object()`
+and is therefore a hole a `Blob` or a `FormData` or a node wrapper can fall
+through. `EntryValue` cannot represent a non-Blob, non-`File` object, and
+`blob_source_of` is what refuses one.
+
+The deviations the declarations create are recorded in
+`idl/xhr/FormData.webidl`'s header and restated here for a reader who has only
+this file:
+
+1. **`new FormData(form, submitter)` is refused with a `NotSupportedError`.**
+   The form arm needs HTML's *constructing the entry list*, which walks a form's
+   submittable elements; `HTMLFormElement` exists in this repository's IDL as a
+   name only, with no `type`, `files` or `value` to read. `new FormData()` is
+   the standard's and is served. The refusal's *reach* is wider than the
+   declaration's, because `WrapperWorld::handle` ignores the interface name it
+   is handed: `new FormData(null)`, `new FormData("x")`, `new FormData({})` and
+   `new FormData(new Date())` all fail earlier, in `handle_from_v8`, with the
+   `TypeError` WebIDL's own argument conversion raises (and `constructor.any.js`
+   requires for `null`), but a *node wrapper* that the host does recognise —
+   `new FormData(document.body)` — reaches the host and is refused with the
+   `NotSupportedError` above where a browser raises a `TypeError`. Both throw;
+   the name differs. Pinned by `constructing_from_a_form_is_refused_by_name`,
+   which asserts the five names in that order.
+2. **A non-`Blob`, non-`File` object value throws where a browser stringifies.**
+   Same shape as `BlobPart`'s deviation 3, and the same rationale — a wrong
+   refusal says so, a wrong acceptance silently changes the object. Pinned by
+   `a_wrapper_backed_value_that_is_not_a_blob_is_refused`, which appends a
+   `URL`, a `Headers`, a node wrapper (`document.body`), `{}` and a `Date` and
+   asserts a `TypeError` for each: the first three carry a host pointer and are
+   refused by `blob_source_of`, the last two fail earlier in
+   `handle_from_v8`. A browser takes the `USVString` arm for all five and stores
+   `"[object URL]"`, `"[object Headers]"`, `"[object HTMLBodyElement]"`,
+   `"[object Object]"` and the date string.
+3. **A mutation during iteration is not observed: a pair iterator is a
+   snapshot.** Shared with every landed pair `iterable` and recorded under
+   "Notes on the shape of the generated code" above, with
+   `wpt/checkout/xhr/formdata/iteration.any.js`'s three subtests named. Pinned
+   by `iteration_views_a_snapshot_so_a_mutation_during_it_is_not_observed`,
+   which a live-iterator slice has to come back and flip.
+4. **An entry's value can be collected while the `FormData` still holds it, so
+   a later read can mint a new wrapper for the same record.** A browser's entry
+   list holds the `File` object, which keeps it uncollectable; here the entry
+   holds the record's key and the record outlives its wrapper (that is what
+   makes a read work at all), but the *wrapper* is collectable once the page
+   drops it. Narrow and latent — observing the difference requires holding the
+   first object, which keeps it alive — and the property `set-blob.any.js`
+   actually pins (`assert_file_identity`: two `get`s are the same object) holds.
+   Recorded, not worked around.
+
+`FormData` is deliberately **not** added to `BodyInit` or
+`XMLHttpRequestBodyInit`, so `fetch(url, { body: fd })` and
+`xhr.send(fd)` are unchanged by this slice; multipart serialization does not
+exist here and the union would have to grow an arm and a serializer together.
+`Response.formData()` is likewise absent (`HostValue` has no entry-list value).
+
 ## Extended attributes
 
 | Attribute | Effect |
@@ -1103,8 +1309,9 @@ generated code:
 - `Response` declares the part of `Body` a constructor-built response can
   serve — `bodyUsed`, `json()`, `text()` — and leaves out `body`,
   `arrayBuffer()`, `blob()`, `bytes()`, `formData()` and `textStream()`, because
-  every one of them reads a `ReadableStream` (or `FormData`, which does not
-  exist here; `Blob` now does, but `blob()` and `bytes()` need the value kinds
+  every one of them reads a `ReadableStream` (or `FormData`, which now exists
+  but needs multipart parsing; `Blob` and `FormData` both now exist, but
+  `blob()` and `bytes()` need the value kinds
   below rather than a declaration). `Response.body` arrives with Streams
   (`d-5b`). Its static
   `error()`, `redirect()` and `json()` and its `clone()` are absent too:
@@ -1133,7 +1340,8 @@ generated code:
   `withCredentials = true` throws it (the shared cookie jar decides on its own),
   `responseType` accepts only `""` and `"text"`, and `send()`'s body is declared
   as `XMLHttpRequestBodyInit` and narrowed to the two arms `BodyInit` is —
-  `(BufferSource or USVString)` — because `FormData` exists nowhere here and the
+  `(BufferSource or USVString)` — because `FormData` has an entry list but no
+  multipart serializer and the
   `Blob` arm is deliberately not added by this slice (a `Blob` now exists, but
   widening `BodyInit` is a change to the send path rather than a declaration)
   and the `Document` arm needs a `tenta-dom` entry point that serialises a whole

@@ -709,6 +709,16 @@ impl Engine {
                 .expect("install the Blob interface");
             tenta_js::bindings::install_file::<HostObject>(scope, global_template, &mut registry)
                 .expect("install the File interface");
+            // `FormData` roots at `Object` too, and it is installed after `File`
+            // for a reason that is not a prototype chain: one of its operations
+            // *mints* a `File` (`host.rs`'s `entry_file`), and the wrapper it
+            // hands the page is created from the template this call caches.
+            tenta_js::bindings::install_form_data::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the FormData interface");
         }
 
         let local = v8::Context::new(

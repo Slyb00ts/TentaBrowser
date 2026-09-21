@@ -492,14 +492,20 @@ impl WrapperWorld for V8World {
             let mut records = self.ctx.host_records.borrow_mut();
             let record = records.get_mut(key)?;
             // A record that another record's key can point at — a URL its query
-            // object, a signal its controller, the headers a response created —
-            // has to be told it has a wrapper again, because its record
-            // outlives its own wrapper and its reclamation frees it only once no
-            // live counterpart refers to it.
+            // object, a signal its controller, the headers a response created, a
+            // `File` a `FormData` entry list — has to be told it has a wrapper
+            // again, because its record outlives its own wrapper and its
+            // reclamation frees it only once no live counterpart refers to it.
+            //
+            // A `File` is the one of those whose flag is read by something other
+            // than reclamation: a `FormData` mutation frees a file record the
+            // moment nothing holds it, so a wrapper that did not mark its record
+            // would let the entry list free a record the page is still holding.
             match record {
                 HostRecord::Url(url) => url.has_wrapper = true,
                 HostRecord::Signal(signal) => signal.has_wrapper = true,
                 HostRecord::Headers(headers) => headers.has_wrapper = true,
+                HostRecord::File(file) => file.has_wrapper = true,
                 HostRecord::Params(_)
                 | HostRecord::Controller(_)
                 | HostRecord::Response(_)
@@ -507,7 +513,7 @@ impl WrapperWorld for V8World {
                 | HostRecord::TextEncoder
                 | HostRecord::Xhr(_)
                 | HostRecord::Blob(_)
-                | HostRecord::File(_) => {}
+                | HostRecord::FormData(_) => {}
             }
             interface_name = record.interface_name();
             host = Box::new(HostObject::host_record(self.ctx.clone(), key));
@@ -719,14 +725,20 @@ impl WrapperWorld for V8World {
             record.has_wrapper = true;
         } else if decoded.tag == TAG_HOST {
             let key = decoded.host_key();
-            // The same marking for a `URL`, whose record outlives its wrapper
-            // while a query object of it lives.
+            // The same marking for the records that outlive their own wrapper: a
+            // `URL` while a query object of it lives, and a `File` while a
+            // `FormData` entry list holds it. The `File` case is not optional
+            // here: the entry list frees a file record as soon as nothing holds
+            // it, so an unmarked record could be freed while this very wrapper is
+            // alive.
             let mut records = self.ctx.host_records.borrow_mut();
             let record = records
                 .get_mut(key)
                 .ok_or_else(|| JsError::type_error("adopt: the host record is gone"))?;
-            if let HostRecord::Url(url) = record {
-                url.has_wrapper = true;
+            match record {
+                HostRecord::Url(url) => url.has_wrapper = true,
+                HostRecord::File(file) => file.has_wrapper = true,
+                _ => {}
             }
         } else {
             return Err(JsError::type_error(
