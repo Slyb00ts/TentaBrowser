@@ -65,8 +65,17 @@ pub struct XhrRequest {
     pub method: http::Method,
     /// The *author request headers*: names and values as `setRequestHeader`
     /// combined them. The names are byte-lowercased, like every header name this
-    /// engine stores.
+    /// engine stores. `send()` appends a `Content-Type` to this list when the
+    /// body inferred one and the author set none.
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
+    /// The *request body*, once `send()` has converted the argument and dropped
+    /// it for a `GET` or a `HEAD`; `None` is the standard's null body.
+    ///
+    /// It arrives here as bytes rather than as a source, because the conversion
+    /// is the host layer's and its result is what the request carries: the two
+    /// steps that come between — the header list `setRequestHeader` built and the
+    /// `Content-Type` the body infers — are settled before this is built.
+    pub body: Option<Vec<u8>>,
     /// The *initiator*: the document's URL, or the request's when the document
     /// has none. It is what a driver sends as the `Referer` and what a
     /// same-origin test is made against.
@@ -77,8 +86,10 @@ impl XhrRequest {
     /// The request a network driver is handed, once the backend has supplied the
     /// provenance this side cannot name.
     ///
-    /// The body is always `None`: a body is refused by `send()`, so a request
-    /// that got this far has none.
+    /// The body crosses as it is: `tenta-net` derives `Content-Length` from the
+    /// bytes itself, so a length is never authored here — it is a *forbidden
+    /// request-header name*, and a second one would be a duplicate rather than a
+    /// preference.
     ///
     /// The header conversion is this conversion's one lossy step, and it is
     /// [`header_pairs`] — the same function `fetch()`'s initializer reaches its
@@ -89,7 +100,7 @@ impl XhrRequest {
             url: self.url,
             method: self.method,
             headers,
-            body: None,
+            body: self.body,
             initiator: self.initiator,
             origin,
         }
@@ -357,6 +368,7 @@ mod tests {
             url: url("http://fixture.test/data?x=1"),
             method: http::Method::POST,
             headers: vec![(b"x-token".to_vec(), b"abc".to_vec())],
+            body: Some(b"a=1&b=2".to_vec()),
             initiator: url("http://fixture.test/dir/page.html"),
         };
 
@@ -369,9 +381,10 @@ mod tests {
             vec![("x-token".to_owned(), "abc".to_owned())],
             "the page's headers reach the driver"
         );
-        assert!(
-            converted.body.is_none(),
-            "a body is refused by `send()`, so none can reach here"
+        assert_eq!(
+            converted.body,
+            Some(b"a=1&b=2".to_vec()),
+            "the bytes `send()` converted reach the driver unchanged"
         );
         assert_eq!(
             converted.initiator,
@@ -381,6 +394,28 @@ mod tests {
             converted.origin,
             Origin::Background,
             "the provenance is the caller's, not the carrier's"
+        );
+    }
+
+    /// The null body crosses as `None` rather than as an empty body, because the
+    /// two are not the same request: `tenta-net` derives a `Content-Length` from
+    /// the bytes it is given, and a request with no body must carry none.
+    #[test]
+    fn a_carrier_with_no_body_becomes_a_request_with_no_body() {
+        let request = XhrRequest {
+            url: url("http://fixture.test/data"),
+            method: http::Method::GET,
+            headers: Vec::new(),
+            body: None,
+            initiator: url("http://fixture.test/data"),
+        };
+
+        let converted = request.into_fetch_request(Origin::Tracked);
+
+        assert!(converted.body.is_none());
+        assert!(
+            converted.headers.is_empty(),
+            "no `Content-Type` was inferred"
         );
     }
 
@@ -394,6 +429,7 @@ mod tests {
             url: url("http://fixture.test/x"),
             method: http::Method::GET,
             headers: vec![(b"x-raw".to_vec(), vec![0xE9, b'a'])],
+            body: None,
             initiator: url("http://fixture.test/x"),
         };
 

@@ -1,8 +1,9 @@
 //! Tests for the XHR completion seam, the engine's native dispatch
 //! (`tenta_js::xhr`, slice d-4b b-4), the script-visible `XMLHttpRequest`
 //! object (slice d-4b b-5a), that object's response state machine and response
-//! members (slice d-4b b-5a2) and its request half — `send()`,
-//! `setRequestHeader()` and the driver seam (slice d-4b b-5a3).
+//! members (slice d-4b b-5a2), its request half — `send()`,
+//! `setRequestHeader()` and the driver seam (slice d-4b b-5a3) — and the request
+//! body `send()` accepts (slice d-4b b-9).
 //!
 //! XHR's completion is an **event dispatch**, not a promise settlement, so the
 //! `fetch` seam (`dom_fetch.rs`) cannot be reused verbatim: a driver is handed a
@@ -1707,14 +1708,196 @@ fn send_fires_loadstart_and_hands_the_driver_the_request_it_built() {
     });
 }
 
-/// A body argument is refused with a `NotSupportedError`, while `null`,
-/// `undefined` and an omitted argument are all accepted.
-///
-/// The parameter is declared as the standard's `any` precisely so this refusal
-/// is possible: a zero-parameter `send()` would let WebIDL drop `send('x')`
-/// silently, which is the bug class this repository refuses.
+/// A `USVString` body arrives as its UTF-8 bytes and the request carries
+/// `text/plain;charset=UTF-8` — Fetch's *extract a body with type* for the string
+/// arm, written into the author request headers by `send()` step 4's sub-step 6
+/// — its `Otherwise`
+/// (<https://xhr.spec.whatwg.org/#the-send()-method>).
 #[test]
-fn a_body_argument_is_refused_while_null_and_undefined_are_accepted() {
+fn a_string_body_becomes_utf_8_bytes_and_infers_the_text_plain_content_type() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        eval(
+            engine,
+            r#"
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/submit');
+            xhr.send('a=1&café');
+            "#,
+        );
+
+        let starts = recorder.starts.borrow();
+        assert_eq!(starts.len(), 1, "a body is sent, not refused");
+        let request = &starts[0].0;
+        assert_eq!(
+            request.body.as_deref(),
+            Some("a=1&café".as_bytes()),
+            "the string crosses as its UTF-8 encoding, not as a lossy form"
+        );
+        assert_eq!(
+            request.headers,
+            vec![(
+                "content-type".to_owned(),
+                "text/plain;charset=UTF-8".to_owned()
+            )],
+            "the type the string arm infers is written into the request's headers"
+        );
+    });
+}
+
+/// A buffer-source body crosses byte for byte and infers no `Content-Type` at
+/// all: Fetch's `BufferSource` arm produces bytes and a null type, and `send()`
+/// step 4's sub-step 6 writes nothing for a null `extractedContentType`.
+#[test]
+fn a_buffer_source_body_carries_its_bytes_and_infers_no_content_type() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        eval(
+            engine,
+            r#"
+            const xhr = new XMLHttpRequest();
+            xhr.open('PUT', '/upload');
+            xhr.send(new Uint8Array([0x00, 0xFF, 0x80, 0x41]));
+            "#,
+        );
+
+        let starts = recorder.starts.borrow();
+        assert_eq!(starts.len(), 1);
+        let request = &starts[0].0;
+        assert_eq!(
+            request.body.as_deref(),
+            Some([0x00u8, 0xFF, 0x80, 0x41].as_slice()),
+            "every byte survives, including the ones that are not UTF-8"
+        );
+        assert!(
+            request.headers.is_empty(),
+            "a buffer source infers no type, so no header is written"
+        );
+    });
+}
+
+/// An author `Content-Type` survives the body step, under any casing: the
+/// inferred-type write, step 4's sub-step 6, is the `Otherwise` of sub-step 5's
+/// "If originalAuthorContentType is non-null", so it is only reached when the
+/// author set none. `setRequestHeader` byte-lowercases the name, which is why the
+/// survival does not depend on how the page spelled it.
+#[test]
+fn an_author_content_type_survives_the_inferred_one() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        eval(
+            engine,
+            r#"
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/submit');
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.send('{"a":1}');
+            "#,
+        );
+
+        let starts = recorder.starts.borrow();
+        let request = &starts[0].0;
+        assert_eq!(
+            request.headers,
+            vec![("content-type".to_owned(), "application/json".to_owned())],
+            "the author's value is kept and the inferred one is not written"
+        );
+        assert_eq!(request.body.as_deref(), Some(b"{\"a\":1}".as_slice()));
+    });
+}
+
+/// A `URLSearchParams` body falls to the `USVString` arm, because
+/// `XMLHttpRequestBodyInit` declares no arm for it: the arm cannot be declared
+/// until the generator's `union_test` can brand-check a platform object rather
+/// than testing `value.is_object()` for every object.
+///
+/// **The bytes are right and the inferred type is not**, and the assertion below
+/// pins the engine's *actual* behaviour so that a slice which adds the brand
+/// check is forced back here. `URLSearchParams`'s stringifier *is* the
+/// `application/x-www-form-urlencoded` serializer, so the body is exactly what a
+/// browser sends; the type is `text/plain;charset=UTF-8`, where the standard's
+/// own `URLSearchParams` branch of *extract a body with type* sets
+/// `application/x-www-form-urlencoded;charset=UTF-8`. The deviation is recorded
+/// in full in `idl/xhr/XMLHttpRequest.webidl`.
+#[test]
+fn a_url_search_params_body_serializes_but_infers_the_plain_text_type() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        eval(
+            engine,
+            r#"
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/submit');
+            xhr.send(new URLSearchParams('a=1&b=two'));
+            "#,
+        );
+
+        let starts = recorder.starts.borrow();
+        let request = &starts[0].0;
+        assert_eq!(
+            request.body.as_deref(),
+            Some(b"a=1&b=two".as_slice()),
+            "the stringifier is the serializer, so the bytes are the standard's"
+        );
+        assert_eq!(
+            request.headers,
+            vec![(
+                "content-type".to_owned(),
+                "text/plain;charset=UTF-8".to_owned()
+            )],
+            "the recorded deviation: the standard says \
+             `application/x-www-form-urlencoded;charset=UTF-8` here, and saying \
+             so needs a branded `URLSearchParams` arm that this engine has not got"
+        );
+    });
+}
+
+/// `send('x')` on a `GET` and on a `HEAD` is not a refusal and not a body: step 3
+/// ("If this's request method is `GET` or `HEAD`, then set body to null") drops it
+/// before step 4 can convert it, so the request the driver is handed is the one
+/// the same call would have made with no argument at all.
+#[test]
+fn a_get_and_a_head_drop_the_body_before_it_reaches_the_step_that_converts_it() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        eval(
+            engine,
+            r#"
+            for (const method of ['GET', 'HEAD']) {
+                const xhr = new XMLHttpRequest();
+                xhr.open(method, '/search?q=1');
+                xhr.send('q=1');
+            }
+            "#,
+        );
+
+        let starts = recorder.starts.borrow();
+        assert_eq!(starts.len(), 2, "both requests were made");
+        for (request, method) in starts.iter().zip(["GET", "HEAD"]) {
+            assert_eq!(request.0.method.as_str(), method);
+            assert!(
+                request.0.body.is_none(),
+                "{method} dropped the body at step 3"
+            );
+            assert!(
+                request.0.headers.is_empty(),
+                "and step 4 never ran, so no `Content-Type` was inferred"
+            );
+        }
+    });
+}
+
+/// The three ways a page spells the default body — an omitted argument,
+/// `undefined` and `null` — are all the null body, and none of them is a refusal
+/// or an empty body. The declared union's `null` is converted by the generated
+/// glue into the same `None` an omitted argument produces.
+#[test]
+fn an_omitted_undefined_and_null_body_are_all_the_null_body() {
     with_page(|engine| {
         let recorder = install_recorder(engine);
         recorder.hold.set(true);
@@ -1729,25 +1912,89 @@ fn a_body_argument_is_refused_while_null_and_undefined_are_accepted() {
                     catch (error) { return error.name; }
                 };
                 [
-                    attempt(xhr => xhr.send('x')),
-                    attempt(xhr => xhr.send(5)),
-                    attempt(xhr => xhr.send({})),
-                    attempt(xhr => xhr.send([])),
-                    attempt(xhr => xhr.send(new Uint8Array(2))),
                     attempt(xhr => xhr.send()),
                     attempt(xhr => xhr.send(undefined)),
                     attempt(xhr => xhr.send(null)),
                 ].join('|');
                 "#
             ),
-            "NotSupportedError|NotSupportedError|NotSupportedError|NotSupportedError|\
-             NotSupportedError|ok|ok|ok",
-            "every body but the default one is refused rather than dropped"
+            "ok|ok|ok",
+            "the default body is accepted in all three of its spellings"
+        );
+
+        let starts = recorder.starts.borrow();
+        assert_eq!(starts.len(), 3, "each call reached the driver");
+        for (request, _) in starts.iter() {
+            assert!(request.body.is_none(), "the null body is not an empty body");
+            assert!(
+                request.headers.is_empty(),
+                "and a null body infers no `Content-Type`"
+            );
+        }
+    });
+}
+
+/// The `USVString` arm converts by WebIDL's `ToString`, which is why a number is
+/// stringified rather than refused: `send(5)` sends the byte `5`.
+///
+/// A `Symbol` is the one value `ToString` refuses, and what this engine does with
+/// it is **two things at once**, which is a recorded deviation rather than the
+/// standard's single throw. The standard converts an operation's arguments before
+/// its steps run, so a body whose conversion throws leaves `send()` with nothing
+/// to do; here the conversion is
+/// [`string_from_v8`](../../../tenta-idl/src/codegen/prelude.rs), which is
+/// infallible — it calls V8's `to_rust_string_lossy`, so a failing `to_string`
+/// yields `""` and leaves the exception pending. `send_request` therefore *runs*,
+/// starts a request with an empty body, and the `TypeError` V8 is still holding is
+/// thrown to the page when the binding returns.
+///
+/// The assertion below pins that pair, and the defect is deliberately not fixed
+/// here: it is the shared `DOMString`/`USVString` conversion rather than `send()`
+/// — `document.title = Symbol()` throws its `TypeError` and stores the empty
+/// string for the same reason — so the fix is `string_from_v8` becoming fallible,
+/// which rewrites every generated call site and therefore needs a generator slice
+/// with its own goldens.
+#[test]
+fn a_number_body_is_stringified_and_a_symbol_starts_a_request_before_it_throws() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                const number = new XMLHttpRequest();
+                number.open('POST', '/x');
+                number.send(5);
+
+                const symbol = new XMLHttpRequest();
+                symbol.open('POST', '/x');
+                let thrown;
+                try { symbol.send(Symbol('s')); thrown = 'no throw'; }
+                catch (error) { thrown = error.name; }
+                [thrown, symbol.readyState].join('|');
+                "#
+            ),
+            "TypeError|1",
+            "the symbol's `ToString` fails, and the state is the one `send()` left"
+        );
+
+        let starts = recorder.starts.borrow();
+        assert_eq!(
+            starts.len(),
+            2,
+            "the recorded deviation: the refused call started a request anyway"
         );
         assert_eq!(
-            recorder.starts.borrow().len(),
-            3,
-            "the three accepted calls are the three that reached the driver"
+            starts[0].0.body.as_deref(),
+            Some(b"5".as_slice()),
+            "`5` is stringified per WebIDL, not dropped"
+        );
+        assert_eq!(
+            starts[1].0.body.as_deref(),
+            Some(b"".as_slice()),
+            "the symbol's failed conversion reached `send_request` as the empty \
+             string, which is the half of the deviation a page can see on the wire"
         );
     });
 }

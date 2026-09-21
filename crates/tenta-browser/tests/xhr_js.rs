@@ -449,3 +449,110 @@ async fn a_request_that_outlives_its_timeout_is_reported_to_the_page() {
     );
     engine.close();
 }
+
+// ---------------------------------------------------------------------------
+// The request body, end to end (b-9)
+// ---------------------------------------------------------------------------
+
+/// What the **server** received when a page sent a body: the bytes themselves,
+/// the `Content-Type` that came with them, and the `Content-Length` the transport
+/// derived.
+///
+/// The evidence is the fixture server's own `/api/echo`, which answers with the
+/// method, the body and the header map it read off the wire — so the assertions
+/// below are about the request rather than about what a page could read back from
+/// its own object. `summarise` picks four fields out of that reply; the header
+/// names are the `http` crate's, so they are byte-lowercased, and a missing one is
+/// reported as `none` rather than as an empty string.
+///
+/// The two bodies are the two arms `XMLHttpRequestBodyInit` declares, and they are
+/// asked for different things:
+///
+///  * the `USVString` body must arrive as its UTF-8 bytes **and** bring
+///    `text/plain;charset=UTF-8`, which `send()` step 4's sub-step 6 writes into
+///    the author request headers because the page set none;
+///  * the `Uint8Array` body must arrive byte for byte and bring **no**
+///    `Content-Type` at all. The NUL is the interesting byte: it is what a
+///    text-shaped transport would truncate or drop, so the summary renders it as
+///    `<NUL>` and reports the server's own byte count beside it.
+///
+/// `Content-Length` is asserted from the server's side because no page can author
+/// it: it is a *forbidden request-header name*, and `tenta-net` derives it from the
+/// body's length (`tenta-page`'s `net_request` deliberately sets none). A `cl=`
+/// that matches the bytes is therefore the proof that the body reached the socket
+/// as bytes rather than as something the transport re-encoded.
+///
+/// Both requests are issued in the same turn, so both are registered before the
+/// settle machine looks; the page keys its two replies by name and only renders
+/// once both have arrived, which is what keeps the assertion independent of the
+/// order two concurrent answers come back in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_server_receives_the_body_and_the_content_type_that_goes_with_it() {
+    let (server, _temp) = serve_all(&[(
+        "index.html",
+        "<!doctype html><html><head></head><body>\
+         <div id=\"result\">unset</div>\
+         <script>\
+         var summarise = function (text) {\
+           var reply = JSON.parse(text);\
+           var headers = reply.headers;\
+           var body = reply.body;\
+           var field = function (name) {\
+             return Object.prototype.hasOwnProperty.call(headers, name) ? headers[name] : 'none';\
+           };\
+           return [\
+             reply.method,\
+             body.length + ':' + body.split(String.fromCharCode(0)).join('<NUL>'),\
+             'ct=' + field('content-type'),\
+             'cl=' + field('content-length'),\
+           ].join('/');\
+         };\
+         var replies = { text: null, bytes: null };\
+         var render = function () {\
+           if (replies.text !== null && replies.bytes !== null) {\
+             document.getElementById('result').textContent =\
+               replies.text + '|' + replies.bytes;\
+           }\
+         };\
+         var text = new XMLHttpRequest();\
+         text.open('POST', '/api/echo');\
+         text.onload = function () { replies.text = summarise(text.responseText); render(); };\
+         text.send('hello=world');\
+         var bytes = new XMLHttpRequest();\
+         bytes.open('POST', '/api/echo');\
+         bytes.onload = function () { replies.bytes = summarise(bytes.responseText); render(); };\
+         bytes.send(new Uint8Array([65, 0, 66]));\
+         </script>\
+         </body></html>",
+    )])
+    .await;
+    let engine = js_engine(SettleConfig::library());
+    let context = support::context(&engine);
+    let page = context
+        .new_page(PageOptions::default())
+        .await
+        .expect("a JavaScript page");
+
+    let navigation = goto_network_idle(&page, &server.url("/index.html")).await;
+    assert_eq!(
+        navigation.settle,
+        SettleState::Settled { busy: false },
+        "both requests were out of the request table when the loop judged the machine"
+    );
+
+    let document = page.take_document().expect("document");
+    assert_eq!(
+        text_of(&document, "#result"),
+        "POST/11:hello=world/ct=text/plain;charset=UTF-8/cl=11|\
+         POST/3:A<NUL>B/ct=none/cl=3",
+        "the string body arrived as its UTF-8 bytes with the type `send()` inferred, \
+         and the buffer body arrived byte for byte with no type at all — both with the \
+         length the transport derived from the bytes it was handed"
+    );
+    assert_eq!(
+        server.requests_served(),
+        3,
+        "the document and the two POSTs, so both bodies provably went over the wire"
+    );
+    engine.close();
+}

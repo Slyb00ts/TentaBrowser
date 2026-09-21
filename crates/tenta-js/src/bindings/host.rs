@@ -432,8 +432,10 @@ impl XhrResponse {
 /// product's surface implements: the five states, the request `open()` sets up,
 /// the four request attributes, the send flag and author request headers
 /// `send()` and `setRequestHeader()` write, and the response a completion
-/// stores. There is still no request body to hold, because a body is refused
-/// rather than stored.
+/// stores. The request body is not one of the record's fields: `send()` converts
+/// its argument and writes the resulting bytes straight into the
+/// [`XhrRequest`] it hands the driver, so nothing has to hold a body between two
+/// calls.
 ///
 /// The record is also the object's *event target key*: an `XMLHttpRequest` is an
 /// `EventTarget` that is neither a node nor the window, so its listeners live
@@ -5541,19 +5543,20 @@ const TEXT_PLAIN_UTF8: &str = "text/plain;charset=UTF-8";
 /// (`<https://fetch.spec.whatwg.org/#concept-bodyinit-extract>`).
 ///
 /// This is the whole of the rule for the two arms a body can arrive as, so it is
-/// **one function and not one per caller**. Its two callers today are the
-/// `Response` constructor's step 4 and the `fetch()` initializer's body step;
-/// both then append the type to their own header list when it is non-null and
+/// **one function and not one per caller**. Its three callers are the `Response`
+/// constructor's step 4, the `fetch()` initializer's body step and `send()`'s;
+/// each then writes the type into its own header list when it is non-null and
 /// that list has no `Content-Type`, which is the second half of the standard's
-/// step and belongs to each caller's own list.
+/// step and belongs to each caller's own list
+/// ([`set_inferred_content_type`]).
 ///
-/// `send(body)` (`b-9`) needs the same step for WebIDL's
-/// `XMLHttpRequestBodyInit?`, whose servable arms are this same pair — which is
-/// why the function takes the generated union and the *union-to-bytes* half
-/// stands alone, while "which member set does this interface accept" is the
-/// caller's declared member type and not something this decides.
+/// `send(body)` needs the same step for WebIDL's `XMLHttpRequestBodyInit?`, whose
+/// servable arms are this same pair — which is why the function takes the
+/// generated union and the *union-to-bytes* half stands alone, while "which
+/// member set does this interface accept" is the caller's declared member type
+/// and not something this decides.
 ///
-/// One deviation reaches both callers: a `URLSearchParams` body falls to the
+/// One deviation reaches all three callers: a `URLSearchParams` body falls to the
 /// `UsvString` arm because `BufferSourceOrUsvString` has no arm for it. Its
 /// stringifier *is* the `application/x-www-form-urlencoded` serializer, so the
 /// bytes are right, and the type this returns is `text/plain;charset=UTF-8`
@@ -5566,6 +5569,42 @@ fn extract_body(body: BufferSourceOrUsvString) -> (Vec<u8>, Option<&'static str>
         BufferSourceOrUsvString::BufferSource(bytes) => (bytes, None),
         BufferSourceOrUsvString::UsvString(text) => (text.into_bytes(), Some(TEXT_PLAIN_UTF8)),
     }
+}
+
+/// Writes `Content-Type: body_type` into `headers` when [`extract_body`] inferred
+/// a type for the body and the list does not already name the header.
+///
+/// This is the second half of every body step in this file, and it is **one
+/// function for the same reason [`extract_body`] is one**: three sites run it —
+/// the `Response` constructor's step 6, the `fetch()` initializer's body step and
+/// `send()`'s body step — and a copy per site is exactly how the three drift. The
+/// two standards spell the write differently: Fetch's `Request` constructor
+/// *appends* (`Content-Type`, *type*) to the request's headers
+/// (<https://fetch.spec.whatwg.org/#dom-request>), while XHR's `send()` *sets* it
+/// in the author request headers (<https://xhr.spec.whatwg.org/#the-send()-method>,
+/// step 4). Both are conditioned on the list not already holding the name, so for
+/// this engine they are one rule.
+///
+/// A list that already has the name keeps it, under any casing — every header name
+/// this file stores is byte-lowercased. That condition is what makes an author
+/// `setRequestHeader('Content-Type', …)` survive the body step.
+///
+/// A *buffer source* body infers no type at all, so it appends none; `None` is
+/// therefore a no-op rather than a mistake.
+fn set_inferred_content_type(headers: &mut HeaderList, body_type: Option<&'static str>) {
+    let Some(body_type) = body_type else {
+        return;
+    };
+    if headers
+        .iter()
+        .any(|(name, _)| name.as_slice() == CONTENT_TYPE)
+    {
+        return;
+    }
+    // A list write, not a guarded append: both standards write the pair straight
+    // into the header list, and `Content-Type` is not a name either guard would
+    // refuse anyway.
+    headers.push((CONTENT_TYPE.to_vec(), body_type.as_bytes().to_vec()));
 }
 
 /// The Encoding Standard's *UTF-8 decode* as this engine models it: the bytes
@@ -5767,13 +5806,7 @@ impl ResponseConstructor for HostObject {
                     "{context}: a response with a null body status cannot have a body"
                 )));
             }
-            if let Some(body_type) = body_type
-                && !list.iter().any(|(name, _)| name.as_slice() == CONTENT_TYPE)
-            {
-                // A list append, not a guarded one: the standard appends this
-                // pair to the *header list* directly.
-                list.push((CONTENT_TYPE.to_vec(), body_type.as_bytes().to_vec()));
-            }
+            set_inferred_content_type(&mut list, body_type);
             body_bytes = Some(bytes);
         }
 
@@ -6125,22 +6158,7 @@ pub fn request_from_init(
     let body = match body {
         Some(body) => {
             let (bytes, body_type) = extract_body(body);
-            if let Some(body_type) = body_type
-                && !headers
-                    .iter()
-                    .any(|(name, _)| name.as_slice() == CONTENT_TYPE)
-            {
-                // The standard appends this pair to `this's headers` — the
-                // request's `Headers` object, so through the guarded append —
-                // where the `Response` constructor appends to its *header list*
-                // directly. The two come to the same thing here: `Content-Type`
-                // is neither a *forbidden request-header name* nor a `proxy-` or
-                // `sec-` name, so the `"request"` guard permits it, and the
-                // request's list has no `Headers` record for a guarded append to
-                // find. A `Content-Type` the page wrote is what the `any` above
-                // finds, under any casing — names are stored lowercased.
-                headers.push((CONTENT_TYPE.to_vec(), body_type.as_bytes().to_vec()));
-            }
+            set_inferred_content_type(&mut headers, body_type);
             Some(bytes)
         }
         None => None,
@@ -6412,15 +6430,16 @@ impl XMLHttpRequestEventTargetOps for HostObject {
 impl HostObject {
     /// The body of [`XMLHttpRequestOps::send`].
     ///
-    /// It is a method of its own rather than the body of `send` because the
-    /// argument's stored reference has to be given back on *every* path,
-    /// including the refusals this returns early through — and a single wrapper
-    /// that runs the release after the call is the one shape that cannot miss
-    /// one.
-    ///
     /// The XHR Standard's `send()` steps are followed in its order
     /// (<https://xhr.spec.whatwg.org/#the-send()-method>).
-    fn send_request(&self, body: Option<AnyValue>) -> Result<(), JsError> {
+    ///
+    /// The argument arrives already converted: WebIDL converts an operation's
+    /// arguments before its steps run, so `body` is whatever the generated glue
+    /// made of the declared `XMLHttpRequestBodyInit?` — an owned `Vec<u8>` or
+    /// `String`, no stored reference to hand back. That is why this is a plain
+    /// method rather than the release-wrapping one it used to be, and why a
+    /// conversion that fails is the glue's to raise rather than this function's.
+    fn send_request(&self, body: Option<BufferSourceOrUsvString>) -> Result<(), JsError> {
         // Step 1: "If this's state is not opened, then throw an
         // InvalidStateError."
         if self.with_xhr(<HostObject as XMLHttpRequestOps>::UNSENT, |record| {
@@ -6443,31 +6462,27 @@ impl HostObject {
             ));
         }
 
-        // Step 3: "If this's request method is GET or HEAD, then set body to
-        // null." Deliberately not written as a check: a body is refused at step
-        // 4 whatever the method, so there is never a body for this step to null
-        // and a check would be one nothing can reach. b-9 lands the request-body
-        // conversion and this step with it.
-        //
-        // Step 4: this engine's narrowing. `any` is the standard's declared type
-        // so that `xhr.send('x')` is not silently dropped, and a body is refused
-        // until b-9 can carry one. `undefined` arrived as `None`; `null` is the
-        // prelude's sentinel; anything else is a value the page passed.
-        if body.is_some_and(|value| value.0 != AnyValue::NULL.0) {
-            return Err(JsError::dom_exception(
-                "NotSupportedError",
-                "this engine cannot send a request with a body",
-            ));
-        }
+        // Steps 3 and 4 are written below rather than here: step 3 compares the
+        // request's method and step 4 reads its author request headers, and both
+        // are on the record this method reads once the send flag is set — so the
+        // two steps run there, in their own order and before the request is
+        // handed over.
 
-        // Steps 5 to 9 belong to the upload object: step 5 registers a listener
-        // on it, step 6 builds the request, step 7 clears the upload complete
-        // flag, step 8 clears the timed-out flag, and step 9 sets the upload
-        // complete flag for a null body — which is the only body this engine
-        // sends, so that flag's value is settled by a step nothing else reaches.
-        // `XMLHttpRequestUpload` is deferred, so there is no object to hold it;
-        // the request itself is built below, out of the record `open()` wrote,
-        // because it is the host layer that owns the page's half of it.
+        // Steps 5 to 9 belong to the upload object: step 5 sets the upload
+        // listener flag when the object has a listener, step 6 builds the
+        // request, step 7 clears the upload complete flag, step 8 clears the
+        // timed-out flag, and step 9 sets the upload complete flag when the
+        // request body is null. With a body now expressible step 9's condition is
+        // live rather than settled by a step nothing reaches: a request that
+        // carries a body leaves the flag clear, and that is the flag `abort()`'s
+        // half of the *request error steps* reads. `XMLHttpRequestUpload` is
+        // deferred, so there is no object to hold either flag and no listener for
+        // step 5 to register — which is the deviation the IDL header records for
+        // a page that sends a body: the standard fires `loadstart`, `progress`,
+        // `load` and `loadend` at the upload object while such a request is
+        // transmitted and this engine fires none of them. The request itself is
+        // built below, out of the record `open()` wrote, because it is the host
+        // layer that owns the page's half of it.
 
         // Step 10: "Set this's send() flag." It is set before the request is
         // built and before `loadstart`, so a `loadstart` listener that re-enters
@@ -6500,6 +6515,39 @@ impl HostObject {
             ));
         };
 
+        // Step 3: "If this's request method is `GET` or `HEAD`, then set body to
+        // null." The comparison is on the method as HTTP reads it, the same one
+        // the `fetch()` initializer makes, rather than on the string `open()`
+        // stored: `open()` validated that string against HTTP's `token`
+        // production, so the conversion here is total and `expect` is not a
+        // reachable panic.
+        let method = http::Method::from_bytes(method.as_bytes())
+            .expect("open() validated the method as HTTP's `token` production");
+        let body = match method {
+            http::Method::GET | http::Method::HEAD => None,
+            _ => body,
+        };
+
+        // The tail of step 4 — its own sub-steps 5 and 6. Sub-step 5 is "If
+        // originalAuthorContentType is non-null", whose only branch is the
+        // `charset` rewrite recorded as a deviation in the IDL header; sub-step 6
+        // is its `Otherwise` — "Otherwise, if extractedContentType is not null,
+        // set (`Content-Type`, extractedContentType) in this's author request
+        // headers" — which is the rule implemented here, and the reason an author
+        // `Content-Type` survives: that `Otherwise` is only reached when the
+        // author set none. `set_inferred_content_type` is the same one function
+        // the `Response` constructor and the `fetch()` initializer run. It writes
+        // into the copy step 10 took off the record rather than into the record's
+        // own list: nothing reads the author request headers again once the send
+        // flag is set — `setRequestHeader` throws on it, and `open()` clears it —
+        // so the write reaches the request, which is the only place it is read.
+        let mut headers = headers;
+        let body = body.map(|body| {
+            let (bytes, body_type) = extract_body(body);
+            set_inferred_content_type(&mut headers, body_type);
+            bytes
+        });
+
         // Step 11: "Fire a progress event named loadstart at this with 0 and 0."
         // It is the one event `send()` fires itself, and it comes before the
         // request is handed over, so a listener sees the object as it is about to
@@ -6520,9 +6568,9 @@ impl HostObject {
             .unwrap_or_else(|| url.clone());
         let request = XhrRequest {
             url,
-            method: http::Method::from_bytes(method.as_bytes())
-                .expect("open() validated the method as HTTP's `token` production"),
+            method,
             headers,
+            body,
             initiator,
         };
         // The borrow of the script slot is taken and released *before* the call:
@@ -6861,23 +6909,14 @@ impl XMLHttpRequestOps for HostObject {
         Ok(())
     }
 
-    fn send(&self, body: Option<AnyValue>) -> Result<(), JsError> {
-        // The argument's ownership comes first, because every return below owes
-        // it back: the generated glue stored the value (+1 reference) before this
-        // call, so the call owns it. `AnyValue::NULL.0` is the prelude's sentinel
-        // for JavaScript `null` and holds no reference, and an omitted or
-        // explicitly `undefined` argument never reaches here at all — the glue
-        // maps both to `None`.
-        let given_back = |value: Option<AnyValue>| {
-            if let Some(value) = value
-                && value.0 != AnyValue::NULL.0
-            {
-                self.release_stored(value.0);
-            }
-        };
-        let result = self.send_request(body);
-        given_back(body);
-        result
+    fn send(&self, body: Option<Option<BufferSourceOrUsvString>>) -> Result<(), JsError> {
+        // The outer `None` is an omitted argument and the inner one the IDL's
+        // nullable `body`; the declared union is converted by the generated glue,
+        // which makes all three of an absent argument, `undefined` and `null` the
+        // same `None` — so both nulls are the null body step 3 keeps, and there is
+        // nothing to release: the conversion produced an owned `Vec<u8>` or
+        // `String` rather than a stored reference.
+        self.send_request(body.flatten())
     }
 
     /// The XHR Standard's `abort()` steps, in its order
@@ -6910,9 +6949,13 @@ impl XMLHttpRequestOps for HostObject {
     /// returns.
     ///
     /// The upload object's half of step 2 is deferred with the object itself
-    /// (`idl/xhr/XMLHttpRequest.webidl`), and it is unobservable here: nothing
-    /// this engine sends has a body, so the upload is complete by the time a
-    /// request is in flight and the standard's own upload steps do nothing.
+    /// (`idl/xhr/XMLHttpRequest.webidl`). The standard fires the failing event and
+    /// its `loadend` at the upload object first, but only when the upload is not
+    /// complete, and that flag is set by `send()` step 9 exactly when the request
+    /// has no body — so the half is unobservable for a bodyless request and
+    /// **observable for one that carries a body**, which `send()` now accepts.
+    /// This engine fires neither event at any point, so a page that sends a body
+    /// and aborts sees two events where a browser fires four.
     ///
     /// Nothing in these steps raises, which is why the member is declared without
     /// `[Throws]` and returns `()`.

@@ -536,11 +536,21 @@ becomes the fallback, so `(BufferSource or USVString)` converts by
 `is_array_buffer() || is_shared_array_buffer() || is_array_buffer_view()` and
 falls back to `USVString` (`ToString`) for everything else. Only three of the
 standard's six arm types exist here — `ReadableStream`, `Blob` and `FormData` do
-not — and dropping `URLSearchParams` costs nothing observable, because it is an
-object with no buffer-source shape, so it reaches the `USVString` arm whose
-conversion calls its stringifier, which for `URLSearchParams` *is* its
-form-encoded serialization. The union is declared in
-`idl/fetch/Response.webidl`, whose header records what the interface leaves out.
+not — and dropping `URLSearchParams` does **not** cost nothing observable, which
+an earlier revision of this paragraph claimed. It is an object with no
+buffer-source shape, so it does reach the `USVString` arm whose conversion calls
+its stringifier, and `URLSearchParams`'s stringifier *is* its form-encoded
+serialization — so the **bytes** are right. What is wrong is the body *type*:
+Fetch's *extract a body with type* gives `URLSearchParams`
+`application/x-www-form-urlencoded;charset=UTF-8` and everything else the scalar
+value string branch's `text/plain;charset=UTF-8`, and both the `Response`
+constructor and `XMLHttpRequest.send()` write that type into their headers
+(`crates/tenta-js/src/bindings/host.rs`). The union is declared in
+`idl/fetch/Response.webidl`, and narrowed the same way a second time in
+`idl/xhr/XMLHttpRequest.webidl` for `XMLHttpRequestBodyInit`; each header records
+what its interface leaves out. `crates/tenta-js-v8/tests/dom_xhr.rs`'s
+`a_url_search_params_body_serializes_but_infers_the_plain_text_type` pins the XHR
+half so an arm added later has to come back and flip it.
 
 `Headers`' guard is part of the same slice. `HeadersGuard`
 (`crates/tenta-js/src/bindings/host.rs`) now has `None` and `Response`, split
@@ -966,8 +976,9 @@ generated code:
   `getAllResponseHeaders`, `overrideMimeType`, `responseType`, `responseText`)
   and its events. It is no longer inert: `send()`/`setRequestHeader()` hand a
   request to the driver seam (`b-5a3`), the `tenta-net` driver behind
-  `PageEngine::net_request` carries it (`b-6`, `b-6.5`), and `abort()` and the
-  `timeout` attribute end one before its answer arrives (`b-7`).
+  `PageEngine::net_request` carries it (`b-6`, `b-6.5`), `abort()` and the
+  `timeout` attribute end one before its answer arrives (`b-7`), and `send()`
+  carries a request body (`b-9`).
   `[SameObject] upload` / `XMLHttpRequestUpload` and
   `responseURL`/`response`/`responseXML` are the members still absent — an inert
   upload object would invite handlers that can never fire, and the three
@@ -978,9 +989,28 @@ generated code:
   non-null `username`/`password` throws it (this engine sends no credentialed
   request, and what the network layer does with URL userinfo is unverified),
   `withCredentials = true` throws it (the shared cookie jar decides on its own),
-  `responseType` accepts only `""` and `"text"`, and `send()` accepts only the
-  default body (the parameter is declared as the standard's `any` so a body is
-  never silently dropped; the conversion lands with `b-9`). Two further
+  `responseType` accepts only `""` and `"text"`, and `send()`'s body is declared
+  as `XMLHttpRequestBodyInit` and narrowed to the two arms `BodyInit` is —
+  `(BufferSource or USVString)` — because `Blob`/`FormData` exist nowhere here
+  and the `Document` arm needs a `tenta-dom` entry point that serialises a whole
+  document plus the HTML-versus-XML choice. `b-9` is what makes the body move:
+  the converted bytes reach the driver (`XhrRequest.body`), `GET`/`HEAD` drop the
+  body at step 3 before the conversion's own step, and the type the body infers is
+  written into the author request headers only when the author set none — the
+  `Otherwise` of step 4's sub-step 5, with `set_inferred_content_type` shared
+  with the `Response` constructor and `fetch()`'s initializer. Two deviations come
+  with the body. The inferred type for a `URLSearchParams` body is
+  `text/plain;charset=UTF-8` where the standard's own branch sets
+  `application/x-www-form-urlencoded;charset=UTF-8`: the bytes are right, because
+  that object's stringifier *is* the serializer, and the `Response`/`BodyInit`
+  paragraph above carries the whole story and the reason the arm cannot be
+  declared. And step 4's `charset` rewrite is not implemented: when the author
+  *has* set a `Content-Type` and the body is a string, the standard parses it and
+  re-serialises the whole type with its `charset` replaced by `UTF-8`, which
+  `parse_mime_type` cannot do because it reduces a MIME type to its essence and
+  its `charset` and drops every other parameter — so an author
+  `Content-Type: text/plain;charset=iso-8859-1` survives as written here where a
+  browser rewrites it. Two further
   deviations belong to `timeout`, and neither is a narrowing: the deadline is
   armed **once**, by `send()`, from the value the record holds then, where the
   standard's wait re-reads `this`'s *timeout* as a live condition — so a value
@@ -1001,6 +1031,20 @@ generated code:
   exception. An exception from the *last* member read does survive to the
   caller. Pre-existing and interface-agnostic (`TextDecoderOptions` behaves the
   same way); the fix belongs in `dictionary_member` and is not made here.
+- A *failing string conversion* runs the operation anyway. `string_from_v8`
+  (`crates/tenta-idl/src/codegen/prelude.rs`) is infallible — it reads V8's
+  `to_rust_string_lossy`, so a `to_string` that fails yields the empty string and
+  leaves the exception pending, which V8 then throws at the call site when the
+  binding returns. WebIDL converts an operation's arguments *before* its steps
+  run, so the standard never reaches the steps at all. `send(Symbol())` is where
+  `b-9` made the pair reachable: it starts a real request with an empty body and
+  `text/plain;charset=UTF-8` and *then* throws the `TypeError`. Pre-existing and
+  interface-agnostic — `document.title = Symbol()` throws its `TypeError` and
+  stores the empty string for the same reason — so the fix is `string_from_v8`
+  becoming fallible, which rewrites every generated call site and needs a
+  generator slice with its own goldens; it is not made here, and
+  `a_number_body_is_stringified_and_a_symbol_starts_a_request_before_it_throws`
+  (`crates/tenta-js-v8/tests/dom_xhr.rs`) pins the pair until it is.
 
 ## References
 
