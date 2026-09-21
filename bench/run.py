@@ -340,9 +340,13 @@ def fmt_mb(summary: dict | None, key: str = "p50") -> str:
 
 
 def markdown_table(rows: list[dict]) -> str:
-    # Check if any row has engine_overhead_ms or ttfr_ms_adjusted
-    has_engine_overhead = any("engine_overhead_ms" in r.get("summary", {}) and r.get("summary", {})["engine_overhead_ms"] for r in rows)
-    has_adjusted_ttfr = any("ttfr_ms_adjusted" in r.get("summary", {}) and r.get("summary", {})["ttfr_ms_adjusted"] for r in rows)
+    # Check if any row has engine_overhead_ms or ttfr_ms_adjusted.
+    # `or {}`, not `r.get("summary", {})`: a row that ran nothing carries
+    # `"summary": None` (see the no-samples row above), and a default only
+    # applies when the key is *absent*, so the two-argument form would test
+    # membership against `None` and raise.
+    has_engine_overhead = any((r.get("summary") or {}).get("engine_overhead_ms") for r in rows)
+    has_adjusted_ttfr = any((r.get("summary") or {}).get("ttfr_ms_adjusted") for r in rows)
 
     if has_engine_overhead and has_adjusted_ttfr:
         # Both metrics: engine overhead for search and adjusted TTFR for cold-fetch
