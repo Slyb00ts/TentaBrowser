@@ -1084,12 +1084,15 @@ impl Document {
     /// The data of a text or CDATA node. The slice may point into a shared
     /// rope chunk or into the open buffer.
     pub fn text_data(&self, id: NodeId) -> Option<&str> {
-        if !self.kind(id).is_character_data() {
+        if !self.kind(id).is_character_data_subclass() {
             return None;
         }
         match self.kind(id) {
             NodeKind::Comment => {
                 Some(&self.arena.comments[self.arena.nodes.data[self.index(id)].get()])
+            }
+            NodeKind::ProcessingInstruction => {
+                Some(&self.arena.pis[self.arena.nodes.data[self.index(id)].get()].data)
             }
             _ => {
                 let data = self.arena.nodes.data[self.index(id)];
@@ -1515,6 +1518,12 @@ impl Document {
     }
 
     /// Creates a detached processing instruction.
+    ///
+    /// Infallible because its callers are the parsers, which have already
+    /// enforced the XML `Name` production on the target and the `?>` rule on
+    /// the data. A caller taking the pair from script must validate first:
+    /// [`validate_processing_instruction_target`] and
+    /// [`validate_processing_instruction_data`].
     pub fn create_processing_instruction(&mut self, target: &str, data: &str) -> NodeId {
         let node = self.arena.alloc_pi(PiData {
             target: target.to_owned(),
@@ -2647,7 +2656,7 @@ impl Document {
     }
 
     fn set_text(&mut self, node: NodeId, text: &str) -> Result<()> {
-        if !self.kind(node).is_character_data() {
+        if !self.kind(node).is_character_data_subclass() {
             return Err(hierarchy_request("only character data nodes hold text"));
         }
         let old_value = self.text_data(node).unwrap_or_default().to_owned();
@@ -2655,6 +2664,10 @@ impl Document {
             NodeKind::Comment => {
                 let data = self.arena.nodes.data[self.index(node)];
                 self.arena.comments[data.get()] = text.to_owned();
+            }
+            NodeKind::ProcessingInstruction => {
+                let data = self.arena.nodes.data[self.index(node)];
+                self.arena.pis[data.get()].data = text.to_owned();
             }
             _ if self.is_owned_text(node) => {
                 // The node already owns its buffer: rewrite it in place.
@@ -2689,7 +2702,7 @@ impl Document {
     /// Fails with `IndexSizeError` when `offset` is greater than the node's
     /// length; `count` is clamped to the end of the data.
     pub fn substring_data(&self, node: NodeId, offset: u32, count: u32) -> Result<String> {
-        if !self.kind(node).is_character_data() {
+        if !self.kind(node).is_character_data_subclass() {
             return Err(hierarchy_request("only character data nodes hold text"));
         }
         let data = self.text_data(node).unwrap_or_default();
@@ -2722,7 +2735,7 @@ impl Document {
         count: u32,
         data: &str,
     ) -> Result<()> {
-        if !self.kind(node).is_character_data() {
+        if !self.kind(node).is_character_data_subclass() {
             return Err(hierarchy_request("only character data nodes hold text"));
         }
         let current = self.text_data(node).unwrap_or_default();
@@ -2746,7 +2759,7 @@ impl Document {
     /// (<https://dom.spec.whatwg.org/#dom-characterdata-appenddata>). Unlike
     /// the other splice operations this cannot fail on a character-data node.
     pub fn append_data(&mut self, node: NodeId, data: &str) -> Result<()> {
-        if !self.kind(node).is_character_data() {
+        if !self.kind(node).is_character_data_subclass() {
             return Err(hierarchy_request("only character data nodes hold text"));
         }
         let length = utf16_len(self.text_data(node).unwrap_or_default());
@@ -3211,11 +3224,174 @@ impl Drop for Document {
 /// Errors surface as `tenta_core::Error`; this alias keeps signatures short.
 pub type DomResult<T> = std::result::Result<T, Error>;
 
+/// XML 1.0's `NameStartChar` production, the set a `Name` may begin with.
+///
+/// It is deliberately not the WebIDL/DOM `Name` regex: that one accepts every
+/// code point at or above U+0080, while XML excludes the two blocks U+00D7
+/// (MULTIPLICATION SIGN) and U+00F7 (DIVISION SIGN) sit in, and the SVG/MathML
+/// symbol ranges. `dom/nodes/Document-createProcessingInstruction.js` pins the
+/// difference with `"×A"` and `"A×"`, both of which must throw.
+fn is_xml_name_start(c: char) -> bool {
+    matches!(c,
+        ':' | 'A'..='Z' | '_' | 'a'..='z'
+        | '\u{C0}'..='\u{D6}' | '\u{D8}'..='\u{F6}' | '\u{F8}'..='\u{2FF}'
+        | '\u{370}'..='\u{37D}' | '\u{37F}'..='\u{1FFF}'
+        | '\u{200C}'..='\u{200D}' | '\u{2070}'..='\u{218F}'
+        | '\u{2C00}'..='\u{2FEF}' | '\u{3001}'..='\u{D7FF}'
+        | '\u{F900}'..='\u{FDCF}' | '\u{FDF0}'..='\u{FFFD}'
+        | '\u{10000}'..='\u{EFFFF}')
+}
+
+/// XML 1.0's `NameChar`: a `NameStartChar` plus the four continuation ranges.
+fn is_xml_name_char(c: char) -> bool {
+    is_xml_name_start(c)
+        || matches!(c,
+            '-' | '.' | '0'..='9' | '\u{B7}'
+            | '\u{0300}'..='\u{036F}' | '\u{203F}'..='\u{2040}')
+}
+
+/// Validates a processing instruction target against XML 1.0's `Name`
+/// production (<https://www.w3.org/TR/xml/#NT-Name>).
+///
+/// The DOM Standard's `createProcessingInstruction` step is "if `target` does
+/// not match the `Name` production, throw an `InvalidCharacterError`"; it is
+/// the XML production and not the DOM one, and the difference is observable:
+/// U+00B7 is a legal `NameChar` but not a legal `NameStartChar`, so it may
+/// appear anywhere but first.
+///
+/// Unlike [`Document::create_element`]'s check, this one applies to HTML
+/// documents too — the factory is an XML-name factory wherever it runs.
+pub fn validate_processing_instruction_target(target: &str) -> Result<()> {
+    let mut chars = target.chars();
+    match chars.next() {
+        Some(first) if is_xml_name_start(first) => {}
+        _ => {
+            return Err(Error::invalid(format!(
+                "processing instruction target {target:?} is not an XML Name"
+            )));
+        }
+    }
+    if let Some(bad) = chars.find(|c| !is_xml_name_char(*c)) {
+        return Err(Error::invalid(format!(
+            "processing instruction target {target:?} contains {bad:?}, which is not an XML name character"
+        )));
+    }
+    Ok(())
+}
+
+/// Validates a processing instruction's data: it may not contain `?>`.
+///
+/// The `?>` sequence would terminate the instruction in any serialisation, so
+/// the DOM Standard refuses it at creation time with an
+/// `InvalidCharacterError`.
+pub fn validate_processing_instruction_data(data: &str) -> Result<()> {
+    if data.contains("?>") {
+        return Err(Error::invalid(
+            "processing instruction data cannot contain \"?>\"",
+        ));
+    }
+    Ok(())
+}
+
+/// Validates a doctype's name.
+///
+/// The DOM Standard delegates this to the XML `Name` production, but no
+/// implementation enforces that: `dom/nodes/DOMImplementation-createDocumentType.html`
+/// expects `edi:<` and `edi:"` to be accepted, and `dom/nodes/name-validation.html`
+/// derives its model directly — a name is invalid exactly when it contains NUL,
+/// ASCII whitespace or `>`. Empty is valid (`validDoctypes` starts with `''`).
+pub fn validate_doctype_name(name: &str) -> Result<()> {
+    if let Some(bad) = name
+        .chars()
+        .find(|c| matches!(c, '\0' | '>' | '\t' | '\n' | '\u{C}' | '\r' | ' '))
+    {
+        return Err(Error::invalid(format!(
+            "doctype name contains {bad:?}, which the doctype name production forbids"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::mutation::Mutation;
     use tenta_core::atom::atoms;
+
+    /// The target cases `dom/nodes/Document-createProcessingInstruction.js`
+    /// pins, verbatim, plus the reason each is where it is.
+    #[test]
+    fn processing_instruction_targets_follow_the_xml_name_production() {
+        for invalid in [
+            "", "0", "A\u{0}", "\u{C}", "\\A", "\u{B7}A", "\u{D7}A", "A\u{D7}",
+        ] {
+            assert!(
+                validate_processing_instruction_target(invalid).is_err(),
+                "{invalid:?} must not be an XML Name"
+            );
+        }
+        // U+00B7 is a NameChar that is not a NameStartChar, which is exactly
+        // the case the DOM Standard's own `Name` regex gets wrong.
+        for valid in ["a", "a0", "xml:fail", "A\u{B7}A", ":_x", "\u{D8}y"] {
+            assert!(
+                validate_processing_instruction_target(valid).is_ok(),
+                "{valid:?} must be an XML Name"
+            );
+        }
+    }
+
+    #[test]
+    fn processing_instruction_data_rejects_the_terminator() {
+        assert!(validate_processing_instruction_data("x").is_ok());
+        assert!(validate_processing_instruction_data("?").is_ok());
+        assert!(validate_processing_instruction_data(">").is_ok());
+        assert!(validate_processing_instruction_data("a?>b").is_err());
+        assert!(validate_processing_instruction_data("?>").is_err());
+    }
+
+    /// The doctype rule `dom/nodes/name-validation.html` derives: invalid
+    /// exactly on NUL, ASCII whitespace and `>`; everything else, empty and
+    /// `edi:<` included, is a legal name.
+    #[test]
+    fn doctype_names_reject_only_the_parser_terminators() {
+        assert!(validate_doctype_name("").is_ok());
+        assert!(validate_doctype_name("html").is_ok());
+        assert!(validate_doctype_name("edi:<").is_ok());
+        assert!(validate_doctype_name("edi:>").is_err());
+        assert!(validate_doctype_name("edi:a ").is_err());
+        for bad in ["\0", "\t", "\n", "\u{C}", "\r", " ", ">"] {
+            assert!(
+                validate_doctype_name(&format!("a{bad}b")).is_err(),
+                "{bad:?} must be invalid inside a doctype name"
+            );
+        }
+    }
+
+    /// A processing instruction's `data` is read and written through the same
+    /// accessors a text node's is, which is the whole reason
+    /// `is_character_data_subclass` exists.
+    #[test]
+    fn processing_instruction_data_is_character_data() {
+        let mut document = Document::new();
+        let pi = document.create_processing_instruction("target", "value");
+        assert_eq!(document.text_data(pi), Some("value"));
+        assert_eq!(
+            document.processing_instruction(pi),
+            Some(("target", "value"))
+        );
+
+        document
+            .mutate(Mutation::SetText {
+                node: pi,
+                text: "other".to_owned(),
+            })
+            .expect("set text");
+        assert_eq!(
+            document.processing_instruction(pi),
+            Some(("target", "other"))
+        );
+        assert_eq!(document.substring_data(pi, 1, 3).unwrap(), "the");
+    }
 
     fn tree() -> (Document, Vec<NodeId>) {
         let mut document = Document::new();

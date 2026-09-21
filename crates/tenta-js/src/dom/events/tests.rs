@@ -295,11 +295,11 @@ fn fixture() -> Fixture {
     let div = document.node_ref(div);
 
     let clock = SharedClock::new(Clock::virtual_at(MonoTime::ZERO));
-    let ctx = Rc::new(HostContext::new(
+    let ctx = HostContext::new(
         Rc::new(RefCell::new(document)),
         clock,
         tenta_net::CookieJar::new(),
-    ));
+    );
     let mock = MockHost::new();
     *mock.ctx.borrow_mut() = Rc::downgrade(&ctx);
     *ctx.script.borrow_mut() = Some(mock.clone() as Rc<dyn ScriptHost>);
@@ -626,7 +626,7 @@ fn target_and_current_target_are_set_then_cleared() {
 }
 
 fn encode_node_test(node: NodeRef) -> u64 {
-    crate::bindings::host::encode_node(node)
+    crate::bindings::host::encode_node(0, node)
 }
 
 // ---------------------------------------------------------------------------
@@ -1083,7 +1083,7 @@ fn a_host_target_is_its_own_listener_bucket() {
         .expect("listener added");
 
     let key = make_event(&f.ctx, "abort", false, false);
-    dispatch_at(&f.ctx, DispatchTarget::host(first), key, true).unwrap();
+    dispatch_at(&f.ctx, DispatchTarget::host(f.ctx.slot, first), key, true).unwrap();
 
     assert_eq!(
         f.mock
@@ -1097,7 +1097,7 @@ fn a_host_target_is_its_own_listener_bucket() {
     );
     assert_eq!(
         f.ctx.events.borrow().get(key).unwrap().target,
-        Some(crate::bindings::host::encode_host(first)),
+        Some(crate::bindings::host::encode_host(f.ctx.slot, first)),
         "script sees the host's own handle as the target"
     );
 

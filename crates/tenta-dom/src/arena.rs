@@ -42,6 +42,21 @@ impl NodeKind {
     pub const fn is_character_data(self) -> bool {
         matches!(self, NodeKind::Text | NodeKind::Comment | NodeKind::CData)
     }
+
+    /// Whether the node is a `CharacterData` subclass in the DOM Standard, and
+    /// so carries the `data`/`length`/splice surface.
+    ///
+    /// This is `is_character_data` plus `ProcessingInstruction`: a processing
+    /// instruction's `data` is its own string field, not a text rope span, so
+    /// the two predicates differ only in how the payload is read and written
+    /// ([`crate::Document::text_data`] and [`crate::Document::set_text`]).
+    #[inline]
+    pub const fn is_character_data_subclass(self) -> bool {
+        matches!(
+            self,
+            NodeKind::Text | NodeKind::Comment | NodeKind::CData | NodeKind::ProcessingInstruction
+        )
+    }
 }
 
 /// Per-node bit flags. Bit values are internal; use the accessors.
@@ -1008,5 +1023,11 @@ mod tests {
         assert!(NodeKind::Text.is_character_data());
         assert!(NodeKind::Comment.is_character_data());
         assert!(!NodeKind::Element.is_character_data());
+        // A processing instruction carries data, but not in the text rope: it
+        // is a `CharacterData` subclass without being `is_character_data`.
+        assert!(!NodeKind::ProcessingInstruction.is_character_data());
+        assert!(NodeKind::ProcessingInstruction.is_character_data_subclass());
+        assert!(NodeKind::Text.is_character_data_subclass());
+        assert!(!NodeKind::Element.is_character_data_subclass());
     }
 }

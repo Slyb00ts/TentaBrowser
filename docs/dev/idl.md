@@ -1182,6 +1182,156 @@ this file:
 exist here and the union would have to grow an arm and a serializer together.
 `Response.formData()` is likewise absent (`HostValue` has no entry-list value).
 
+### A second document: the handle slot (P2 slice d-9)
+
+`DOMImplementation.createHTMLDocument`/`createDocument` return a document that
+did not exist before, so the engine has to hold more than one document. This is
+the slice that made `NodeRef`'s lack of a document id visible: a handle is
+`tag:4 | doc_slot:12 | node_id:32 | generation:16`, and the slot — the field next
+to the tag, which every encoder used to pass a literal `0` for — is what says
+*which* document a node id belongs to.
+
+- **The slot is twelve bits, and the tag paid for them.** The field was eight
+  bits while a world could hold one document, and eight is not enough: the widest
+  `dom/nodes` file, `DOMImplementation-createDocument.html`, mints over four
+  hundred documents in one page (its 214-row table runs three `createDocument`
+  calls for each of the 105 rows that expect no exception). The four bits came
+  off the tag because that is the one field nothing outside the handle's own
+  encoders pins: a node's `node_id` is the arena's `u32` index and its
+  `generation` is a `u16` in both the arena and `NodeRef`, while ten tags are in
+  use and `TAG_HOST` already multiplexes the host-owned classes by a record
+  field rather than by a tag. `MAX_DOCUMENT_SLOT` is the ceiling, so a caller
+  does not have to know the layout to know the limit.
+- **Running out is an error, not an abort.** `DocumentSet::next_slot` returns
+  `Option<u16>` and `HostContext::new_child`/`HostObject::mint_document` are
+  fallible, so the document past the ceiling is a catchable
+  `QuotaExceededError` `DOMException`. The eight-bit version panicked on
+  `u8::try_from`, and it panicked *inside a V8 callback*, where the unwinder
+  cannot start: `fatal runtime error: failed to initiate panic, error 5`,
+  `abort()`, and every test the WPT driver had in flight died with the process.
+  A page that loops over `createHTMLDocument` is a page, not a crash.
+  `exhausting_the_document_slots_is_a_catchable_error_and_not_an_abort` asserts
+  the exact ceiling, and `a_page_can_hold_more_documents_than_a_byte_of_slot_would_allow`
+  asserts that six hundred of them stay *usable* — a wider field whose bits
+  collided would resolve handles in the wrong arena.
+- **`DocumentSet` is the registry.** One per wrapper world, shared by `Rc`
+  (`crates/tenta-js/src/bindings/host.rs`). Slot 0 is the page's context, held
+  **weakly** through the `Rc::new_cyclic` that built it, so the set never keeps
+  the page alive; slots 1 and up are held **strongly** and nothing points back
+  at the set from them, so the graph is a tree with no cycle. A minted context is
+  retained for the world's life: freeing a slot would let a stale handle resolve
+  to whatever took the slot, and the slot cannot also carry a generation.
+- **`HostContext` gained `slot` and `documents`,** and `HostObject::slot()` reads
+  the slot off `self.context()`. That is deliberate: the slot is a property of
+  the *context* a host was built in, not of the host, so all ~126 host
+  constructors stayed unchanged and only the encoders (`encode_node`,
+  `encode_collection`, `encode_host`, …) take it. A set of host constructors that
+  each had to remember a slot would be a defect waiting to happen.
+- **Receiving a foreign handle is `HostObject::anchor_of`,** which resolves
+  `decoded.slot` through the set and validates the generation against that
+  document's arena. A slot that names no context is a `TypeError` — the same
+  answer the wrapper world gives when it refuses to instantiate a wrapper. The
+  three members that take a node *argument* each layer their own rule over it
+  (`same_document_node`, `child_argument`, and `contains`'s `false`), because a
+  node of another document means something different to each of them; see the
+  adoption deviation below.
+- **`V8World::wrapper` routes by `decoded.slot`** and looks its host up in that
+  document's slabs (snapshots, events, host records), and
+  `reclaim_dead_bookkeeping` takes the `DocumentSet` rather than one context for
+  the same reason: `WorldState.dead` is a list of `(slot, NodeId)` pairs, because
+  a finalizer cannot borrow a document and only the slot can say which document
+  to unmark. Teardown's `wrapped_node_ids` loop follows the same per-slot rule.
+- **`Document.createElement` lowercases only in an HTML document.** Its step is
+  "if this is an HTML document, set localName to localName in ASCII lowercase",
+  and `DOMImplementation-createDocument.html` reads
+  `doc.createElement("DIV").localName` back as `"DIV"` from the XML document it
+  minted. The namespace is the HTML namespace either way, which the same step
+  also says.
+- **Interfaces named for the first time here.** `DocumentType`,
+  `ProcessingInstruction` and `DOMImplementation` are ordinary generated
+  interfaces; the world's node arm had to learn to name the first two
+  (`NodeKind::DocType => "DocumentType"`,
+  `NodeKind::ProcessingInstruction => "ProcessingInstruction"`) because both
+  node kinds already existed in the arena and both were being wrapped as the
+  `Node` shell. `ProcessingInstruction` needed `tenta_dom` work too: the six
+  `CharacterData` splice entry points guarded on "is a text-ish node", so a
+  processing instruction's `data` was unreachable. They now guard on
+  `NodeKind::is_character_data_subclass`, which is `Text | Comment | CData |
+  ProcessingInstruction`.
+- **`DOMImplementation` is a `HostRecord` variant with no state,** and that is
+  the reason the slot exists at all: the record's key alone cannot say which
+  document an implementation belongs to, because two documents' slabs are
+  independent and their first key is the same number.
+  `HostContext::implementation` caches the key per context, which is what makes
+  `[SameObject]` hold and a second document's implementation a different object.
+- **`WindowProxy` is deliberately left undeclared.** `Document.defaultView` is
+  typed `WindowProxy?` in the DOM Standard and `WindowProxy` is not an IDL
+  interface there either. The generator turns an undeclared name into an opaque
+  interface marker with a trait method and `Handle<WindowProxy>`, and
+  `V8World::wrapper` ignores the interface name it is handed, so
+  `handle_to_v8::<WindowProxy>(encode_window())` reaches the `TAG_WINDOW` arm and
+  answers the global object — which is what makes `document.defaultView ===
+  window` true rather than merely truthy. The cost is that `window instanceof
+  WindowProxy` is `false`; no test in `dom/nodes` asks for it.
+- **`defaultView` is non-null exactly on slot 0.** The world was built over the
+  one document the engine navigated, so the page's document is its browsing
+  context's active document and every minted document is detached. When a second
+  browsing context arrives the test has to become "is this the document a window
+  was installed over".
+
+Deviations, all recorded in `idl/dom/dom.webidl`:
+
+1. **`createDocument` returns `Document`, not `XMLDocument`.** There is no
+   `XMLDocument` interface and no XML-specific document prototype, so the
+   standard's `Object.getPrototypeOf(doc) === XMLDocument.prototype` cannot hold.
+2. **`createDocument`'s `qualifiedName` is `DOMString?`,** where the standard says
+   `[LegacyNullToEmptyString] DOMString`. The generator does not implement that
+   extended attribute; a nullable parameter is observationally the same, because
+   the standard's own step reads "if qualifiedName is the empty string" and the
+   WPT file decides with `qualifiedName === null || String(qualifiedName) === ""`.
+3. **No adoption: a node cannot move between documents.** The third deviation is
+   the one that reaches beyond `DOMImplementation`. Here a node's document *is*
+   the arena the node lives in and a handle names that arena by its slot, so
+   adopting would mean moving a subtree into another arena — assigning it new
+   node ids there — and re-keying every wrapper over the moved nodes. Two
+   consequences:
+
+   - A `doctype` argument to `createDocument` is **reproduced, not moved**. The
+     new document gets a doctype with the same `name`/`publicId`/`systemId` owned
+     by itself, but `doc.doctype === doctype` is false and the argument doctype
+     stays where it was, even when it already had a parent — the standard's step
+     is an append, which adopts and is not fallible, so refusing would fail every
+     assertion in a row of `DOMImplementation-createDocument.html` rather than
+     the single identity one.
+   - An insertion of a **node from another document** is refused with a
+     `NotSupportedError`, which is the same refusal the `FormData` constructor
+     already makes for a `form` argument. `Node.contains` needs no refusal: a
+     node of another tree is not an inclusive ancestor of anything here, so the
+     answer is `false`.
+
+   The refusal is not politeness, it is the only safe answer. A `NodeRef` carries
+   no document id of its own beyond the slot, so a foreign node id used in this
+   arena names an unrelated node — a wrong-node write — or nothing at all, which
+   is a panic out of the arena's own accessors. `dom/nodes` found both: `contains`
+   walked `parent` with a foreign id and the abort below killed the WPT driver's
+   whole process, four seconds in, and the insertion path was refused only by the
+   accident that the foreign id happened not to be live here.
+
+   ```
+   panicked at crates/tenta-dom/src/document.rs:716:32:
+   fatal runtime error: failed to initiate panic, error 5, aborting
+   ```
+
+   So `HostObject::same_document_node` (insertions), `HostObject::child_argument`
+   (a `removeChild`/`insertBefore`/`replaceChild` reference that claims to be a
+   child — a foreign one is a `NotFoundError`, which is what the standard says
+   too) and `contains` each test the slot before any id reaches the arena. Pinned
+   by `a_node_of_another_document_is_never_indexed_in_this_arena`, which also
+   checks the page's tree for corruption rather than only the return value.
+   A later adopt slice changes that test deliberately;
+   `Node-mutation-adoptNode.html`'s "simple append of foreign div with text" is
+   the subtest it will turn green.
+
 ### `window.onload` and the two lifecycle dispatches (P2 slice d-8)
 
 The window is the global object, so none of its members can come from the

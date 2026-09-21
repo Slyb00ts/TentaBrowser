@@ -131,6 +131,25 @@ interface Element : Node {
 interface Document : Node {
   readonly attribute Element? documentElement;
 
+  // d-9: the document-side surface the `dom/nodes` gate reads. `doctype` is the
+  // document's first child doctype (`DocumentType`); `implementation` is the
+  // document's own `DOMImplementation` (`[SameObject]`, one per document);
+  // `defaultView` is the window of the browsing context the document is the
+  // active document of, and null for a document with none — which is every
+  // document `DOMImplementation` mints in this tree.
+  readonly attribute DocumentType? doctype;
+  [SameObject] readonly attribute DOMImplementation implementation;
+  readonly attribute WindowProxy? defaultView;
+
+  // The three members the HTML Standard defines beside `characterSet`
+  // (HTML §4.2.3): `charset` and `inputEncoding` are two more spellings of the
+  // same encoding name, and `contentType` is the MIME type the document was
+  // created with — which is what distinguishes an HTML document from the XML
+  // one `DOMImplementation.createDocument` mints.
+  readonly attribute DOMString charset;
+  readonly attribute DOMString inputEncoding;
+  readonly attribute DOMString contentType;
+
   // Phase 4a: document conveniences the frameworks read on load.
   readonly attribute HTMLElement? body;
   readonly attribute HTMLElement? head;
@@ -173,6 +192,12 @@ interface Document : Node {
   [NewObject] Element createElement(DOMString localName);
   [NewObject] Text createTextNode(DOMString data);
   [NewObject] Comment createComment(DOMString data);
+
+  // d-9: the processing-instruction factory. `target` is validated against
+  // XML's `Name` production and `data` against the `?>` sequence, both with an
+  // `InvalidCharacterError`; see the host implementation for the two rules and
+  // the WPT file that pins them.
+  [Throws, NewObject] ProcessingInstruction createProcessingInstruction(DOMString target, DOMString data);
 
   // Phase 4b-3: fragment and namespace-aware creation. Frameworks batch node
   // inserts into a DocumentFragment (React range insertion, Vue fragment
@@ -219,6 +244,100 @@ interface DOMTokenList {
   [Throws] boolean toggle(DOMString token, optional boolean force);
   [Throws] boolean replace(DOMString token, DOMString newToken);
   attribute DOMString value;
+};
+
+// d-9: `DocumentType` and `ProcessingInstruction` — the two node kinds the
+// `tenta-dom` arena already had (`NodeKind::DocType`, `NodeKind::ProcessingInstruction`)
+// and the JS surface was missing entirely. Both are real node types: their
+// wrappers are node wrappers, their handles point into the arena, and their
+// members read the arena's own per-kind payloads.
+[Exposed=Window]
+interface DocumentType : Node {
+  readonly attribute DOMString name;
+  readonly attribute DOMString publicId;
+  readonly attribute DOMString systemId;
+};
+
+// `ProcessingInstruction` is a `CharacterData` subclass in the DOM Standard, so
+// `data`, `length` and the six splice operations come from the parent and the
+// target is the only member it adds.
+[Exposed=Window]
+interface ProcessingInstruction : CharacterData {
+  readonly attribute DOMString target;
+};
+
+// d-9: `DOMImplementation`. `document.implementation` was the single largest
+// missing member of the `dom/nodes` gate (488 + 136 + 117 of 3215 failing
+// subtests reach it through `documentElement`, `hasFeature` and
+// `createHTMLDocument` respectively).
+//
+// An implementation is a per-document object with no state of its own, and its
+// three factories build *real* nodes and documents in `tenta_dom` arenas rather
+// than stand-ins: `createDocumentType` mints a doctype in the implementation's
+// own document, and `createHTMLDocument` mints a whole second document with its
+// own doctype, `html`/`head`/`title`/`body` and URL (`about:blank`).
+//
+// Three declarations here differ from the DOM Standard's text, and all are
+// recorded deviations rather than oversights:
+//
+//  - `createDocument` returns `Document` where the standard says `XMLDocument`.
+//    This tree has no `XMLDocument` interface and no XML-specific document
+//    prototype, so the standard's `Object.getPrototypeOf(doc) ===
+//    XMLDocument.prototype` cannot hold here; every document is an
+//    HTML-document-shaped `tenta_dom::Document` registered in the same arena
+//    registry.
+//  - `createDocument`'s `namespace` and `qualifiedName` are spelled
+//    `DOMString?` where the standard says `optional DOMString?` and
+//    `[LegacyNullToEmptyString] DOMString`. The generator does not implement
+//    that extended attribute, and a nullable parameter is observationally the
+//    same for this operation: the standard's own step reads "if qualifiedName is
+//    the empty string" after the conversion, and
+//    `DOMImplementation-createDocument.html` decides whether to expect a
+//    document element from `qualifiedName === null || String(qualifiedName)
+//    === ""` — the same two cases. Dropping `optional` from `namespace` changes
+//    no call `dom/nodes` makes: `createDocument()` and `createDocument('')` must
+//    both throw a `TypeError`, and both still do, because `qualifiedName` is
+//    required.
+//  - There is no *adoption*: a node cannot move between documents. This is the
+//    one deviation that reaches beyond `DOMImplementation`, and it is why the
+//    two above are shaped the way they are. A node's document here *is* the
+//    arena the node lives in, and a handle names that arena by its slot, so
+//    adopting would mean moving a subtree into another arena — assigning it new
+//    node ids there — and re-keying every wrapper over the moved nodes. Two
+//    consequences, both measured against `dom/nodes`:
+//
+//    * a `doctype` argument to `createDocument` is *reproduced* in the new
+//      document's arena rather than moved. The new document gets a doctype with
+//      the same name/publicId/systemId owned by itself, but
+//      `doc.doctype === doctype` does not hold and the argument doctype stays
+//      where it was, whether or not it already had a parent.
+//      `DOMImplementation-createDocument.html` asserts the identity, so the rows
+//      that pass a doctype fail one assertion each; the alternative — throwing
+//      when the argument is already in a tree — would fail every assertion in
+//      the row, for a step the standard makes an *append* (which adopts) and not
+//      fallible.
+//    * an insertion of a node from another document — `appendChild`,
+//      `insertBefore` and `replaceChild`, whose standard algorithms adopt the
+//      node into the parent's document as their first step — is refused with a
+//      `NotSupportedError` instead of writing a foreign node id into this
+//      arena, where it would name an unrelated node or none at all. The same
+//      refusal the `FormData` constructor already makes for a `form` argument.
+//      `Node-mutation-adoptNode.html`'s "simple append of foreign div with
+//      text", which asserts `div.ownerDocument === document` afterwards, is the
+//      subtest this records as failing. `Node.contains` needs no refusal: a node
+//      of another tree is not an inclusive ancestor of anything here, and the
+//      answer is `false`. See `HostObject::same_document_node`.
+[Exposed=Window]
+interface DOMImplementation {
+  // The DOM Standard declares this with no parameters at all ("useless; always
+  // returns true"), which is what lets
+  // `dom/nodes/DOMImplementation-hasFeature.html` call it with zero, one and
+  // two arguments and expect `true` every time. Declaring two required
+  // parameters would turn six of its rows into `TypeError`s.
+  boolean hasFeature();
+  [NewObject] DocumentType createDocumentType(DOMString qualifiedName, DOMString publicId, DOMString systemId);
+  [NewObject] Document createDocument(DOMString? namespace, DOMString? qualifiedName, optional DocumentType? doctype);
+  [NewObject] Document createHTMLDocument(optional DOMString title);
 };
 
 // Phase 3d: HTMLElement — the interface HTML-namespace element wrappers get.

@@ -726,10 +726,10 @@ pub struct DispatchTarget {
 
 impl DispatchTarget {
     /// Dispatches at `node`, whose handle bits carry the generation script sees.
-    pub fn node(node: NodeRef) -> DispatchTarget {
+    pub fn node(slot: u16, node: NodeRef) -> DispatchTarget {
         DispatchTarget {
             target: TargetKey::Node(node),
-            bits: encode_node(node),
+            bits: encode_node(slot, node),
             target_override: None,
         }
     }
@@ -771,10 +771,10 @@ impl DispatchTarget {
     /// `controller.signal` handed script: the world memoises one wrapper per
     /// handle, so `event.target` resolves back to the *same* object the page
     /// holds, which is what the WPT `abort` event test compares.
-    pub fn host(key: HostKey) -> DispatchTarget {
+    pub fn host(slot: u16, key: HostKey) -> DispatchTarget {
         DispatchTarget {
             target: TargetKey::Host(key),
-            bits: encode_host(key),
+            bits: encode_host(slot, key),
             target_override: None,
         }
     }
@@ -810,12 +810,12 @@ impl DispatchTarget {
     pub fn from_bits(bits: u64) -> Option<DispatchTarget> {
         let decoded = decode(bits);
         match decoded.tag {
-            TAG_NODE => Some(DispatchTarget::node(NodeRef::new(
-                decoded.node_id,
-                u32::from(decoded.generation),
-            ))),
+            TAG_NODE => Some(DispatchTarget::node(
+                decoded.slot,
+                NodeRef::new(decoded.node_id, u32::from(decoded.generation)),
+            )),
             TAG_WINDOW => Some(DispatchTarget::window()),
-            TAG_HOST => Some(DispatchTarget::host(decoded.host_key())),
+            TAG_HOST => Some(DispatchTarget::host(decoded.slot, decoded.host_key())),
             _ => None,
         }
     }
@@ -1105,7 +1105,7 @@ pub fn dispatch(
     key: EventKey,
     trusted: bool,
 ) -> Result<bool, JsError> {
-    dispatch_at(ctx, DispatchTarget::node(target), key, trusted)
+    dispatch_at(ctx, DispatchTarget::node(ctx.slot, target), key, trusted)
 }
 
 /// Dispatches `key` at `target`, walking the path from the window down to the
@@ -1152,7 +1152,7 @@ pub fn dispatch_at(
         path.push(target);
         if let TargetKey::Node(node) = target.target {
             for ancestor in doc.ancestors(node.id) {
-                path.push(PathEntry::node(doc.node_ref(ancestor)));
+                path.push(PathEntry::node(ctx.slot, doc.node_ref(ancestor)));
             }
             path.push(PathEntry::window());
         }
@@ -1168,7 +1168,7 @@ pub fn dispatch_at(
         }
     };
 
-    let event_bits = encode_event(key);
+    let event_bits = encode_event(ctx.slot, key);
     let script = ctx.script.borrow().clone();
 
     if let Some(script) = script {

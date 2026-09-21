@@ -239,7 +239,7 @@ impl PageEngine for Engine {
         // synchronously — the browser's replacement for an exposed `gc()`.
         self.isolate.low_memory_notification();
         if let Some(dom) = &self.dom {
-            world::reclaim_dead_bookkeeping(&dom.state, &dom.ctx);
+            world::reclaim_dead_bookkeeping(&dom.state, &dom.ctx.documents);
             dom.ctx.drain_swept_listeners();
         }
     }

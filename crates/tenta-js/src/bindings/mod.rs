@@ -54,6 +54,9 @@ include!(concat!(env!("OUT_DIR"), "/html_template_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_target_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/comment_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/document_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/document_type_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/processing_instruction_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/dom_implementation_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_collection_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_list_ops.rs"));
@@ -105,6 +108,12 @@ include!(concat!(
 include!(concat!(env!("OUT_DIR"), "/event_target_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/comment_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/document_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/document_type_register.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/processing_instruction_register.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/dom_implementation_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_collection_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_list_register.rs"));
@@ -182,6 +191,12 @@ include!(concat!(env!("OUT_DIR"), "/event_target_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/comment_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/document_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/document_type_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/processing_instruction_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/dom_implementation_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/element_v8.rs"));
 #[cfg(feature = "v8")]
@@ -1133,11 +1148,7 @@ mod prelude_helpers {
     fn host_realm() -> Realm {
         let document = Rc::new(RefCell::new(Document::new()));
         let clock = SharedClock::new(Clock::virtual_at(MonoTime::ZERO));
-        let context: Realm = Rc::new(HostContext::new(
-            document,
-            clock,
-            tenta_net::CookieJar::new(),
-        ));
+        let context: Realm = HostContext::new(document, clock, tenta_net::CookieJar::new());
         context
     }
 
@@ -2188,7 +2199,7 @@ mod prelude_helpers {
 
         let delivered = deliver_xhr_completion(
             &ctx,
-            DispatchTarget::host(key),
+            DispatchTarget::host(ctx.slot, key),
             3,
             &FetchOutcome::Failed("gone".to_owned()),
         );
@@ -2244,7 +2255,7 @@ mod prelude_helpers {
 
         let delivered = deliver_xhr_completion(
             &ctx,
-            DispatchTarget::host(key),
+            DispatchTarget::host(ctx.slot, key),
             2,
             &FetchOutcome::Response(crate::fetch::FetchedResponse {
                 url: "http://origin.test/x".to_owned(),

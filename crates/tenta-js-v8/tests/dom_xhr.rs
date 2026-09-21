@@ -76,7 +76,7 @@ fn document() -> (Rc<RefCell<Document>>, u64) {
         })
         .expect("append <body>");
 
-    let body_bits = encode_node(document.node_ref(body));
+    let body_bits = encode_node(0, document.node_ref(body));
     (Rc::new(RefCell::new(document)), body_bits)
 }
 

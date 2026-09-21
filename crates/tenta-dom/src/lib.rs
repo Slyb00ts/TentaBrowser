@@ -25,7 +25,11 @@ pub mod sink;
 pub mod text;
 
 pub use arena::{DocTypeData, NodeFlags, NodeKind, PiData, StyleHandle, WrapperSlot};
-pub use document::{Document, MemoryReport, NodeHandle, ReadyState, StopPredicate, SweepStats};
+pub use document::{
+    Document, MemoryReport, NodeHandle, ReadyState, StopPredicate, SweepStats,
+    validate_doctype_name, validate_processing_instruction_data,
+    validate_processing_instruction_target,
+};
 pub use interner::{DocInterner, LocalName};
 pub use mutation::{
     Mutation, MutationObserverSink, MutationRecord, NoopObserverSink, RecordingObserverSink,

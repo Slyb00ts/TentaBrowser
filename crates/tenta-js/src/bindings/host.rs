@@ -11,7 +11,7 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::time::SystemTime;
 
 use tenta_core::atom::atoms;
@@ -30,8 +30,9 @@ use super::{
     AddEventListenerOptionsOrBoolean, AnyValue, Blob, BlobConstructor, BlobOps, BlobOrUsvString,
     BlobPart, BlobPropertyBag, BufferSourceOrUsvString, CSSStyleDeclaration,
     CSSStyleDeclarationOps, Callback, CharacterDataOps, Comment, CommentOps,
-    CustomEventConstructor, CustomEventInit, CustomEventOps, DOMTokenList, DOMTokenListOps,
-    DocumentFragment, DocumentFragmentOps, DocumentOps, Element, ElementOps, EndingType, Event,
+    CustomEventConstructor, CustomEventInit, CustomEventOps, DOMImplementation,
+    DOMImplementationOps, DOMTokenList, DOMTokenListOps, DocumentFragment, DocumentFragmentOps,
+    DocumentOps, DocumentType, DocumentTypeOps, Element, ElementOps, EndingType, Event,
     EventConstructor, EventInit, EventListener, EventListenerOptionsOrBoolean, EventOps,
     EventTarget, EventTargetOps, FileConstructor, FileOps, FileOrUsvString, FilePropertyBag,
     FormDataConstructor, FormDataOps, HTMLAnchorElementOps, HTMLButtonElementOps, HTMLCollection,
@@ -41,13 +42,13 @@ use super::{
     HTMLSelectElementOps, HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps,
     Handle, Headers, HeadersConstructor, HeadersInit, HeadersOps, IterableEntries, JsError,
     MouseEventConstructor, MouseEventInit, MouseEventOps, Node, NodeList, NodeListOps, NodeOps,
-    ProgressEventConstructor, ProgressEventInit, ProgressEventOps, Promise, Realm, RequestInit,
-    ResponseConstructor, ResponseInit, ResponseOps, ResponseType, SVGElementOps, Text,
-    TextDecodeOptions, TextDecoderConstructor, TextDecoderOps, TextDecoderOptions,
-    TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
-    URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
-    XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps, XMLHttpRequestOps,
-    XMLHttpRequestResponseType,
+    ProcessingInstruction, ProcessingInstructionOps, ProgressEventConstructor, ProgressEventInit,
+    ProgressEventOps, Promise, Realm, RequestInit, ResponseConstructor, ResponseInit, ResponseOps,
+    ResponseType, SVGElementOps, Text, TextDecodeOptions, TextDecoderConstructor, TextDecoderOps,
+    TextDecoderOptions, TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor,
+    UIEventInit, UIEventOps, URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor,
+    URLSearchParamsOps, WindowProxy, XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps,
+    XMLHttpRequestOps, XMLHttpRequestResponseType,
 };
 use crate::dom::events::{
     CallbackRef, DispatchTarget, EventHandlerName, EventKey, EventKind, EventRecord, EventSlab,
@@ -216,6 +217,16 @@ pub enum HostRecord {
     File(FileRecord),
     /// A `FormData`: its entry list, and nothing else.
     FormData(FormDataRecord),
+    /// A `DOMImplementation`, which has no state at all: it is a per-document
+    /// object whose whole identity is the record's key, so that
+    /// `document.implementation === document.implementation` holds while a
+    /// second document's implementation is a different object.
+    ///
+    /// This record was the reason the host needed a document *slot*: the key
+    /// alone cannot say which document an implementation belongs to, because
+    /// two documents' slabs are independent and their first minted key is the
+    /// same number.
+    Implementation,
 }
 
 impl HostRecord {
@@ -237,6 +248,7 @@ impl HostRecord {
             HostRecord::Blob(_) => "Blob",
             HostRecord::File(_) => "File",
             HostRecord::FormData(_) => "FormData",
+            HostRecord::Implementation => "DOMImplementation",
         }
     }
 }
@@ -1059,11 +1071,99 @@ fn decode_bytes(
     }
 }
 
+/// Every document one wrapper world spans, indexed by the handle's document
+/// slot.
+///
+/// A world is built over exactly one document — the page the engine navigated —
+/// and that document's context is slot 0. `DOMImplementation.createHTMLDocument`
+/// and `createDocument` mint *further* documents, each with its own arena and
+/// its own context, and each takes the next slot. The slot is what a handle's
+/// `doc_slot` field carries, so a node handle from a minted document resolves in
+/// the right arena and never aliases a node id of the page's.
+///
+/// The set is shared by every context of the world (`Rc`), so a minted
+/// document's own implementation can mint the next one. Two ownership rules
+/// keep that sharing from becoming a reference cycle:
+///
+///  - Slot 0 is held **weakly**. The engine and the wrapper world own the page's
+///    context strongly and outlive the set, so the set must not be a second
+///    owner of it — and it cannot be, because `Rc::new_cyclic` hands the context
+///    its own `Weak` before the `Rc` exists.
+///  - Slots 1 and up are held **strongly**, and nothing holds the slot-0
+///    context back through them: a minted context's only pointer to the rest of
+///    the world is this shared set, which the page's context also owns. So the
+///    graph is a tree rooted at the page's context's `Rc<DocumentSet>`, with no
+///    back edge.
+///
+/// A minted context is therefore retained for the life of the world, even after
+/// script drops every reference to its document. That is a bounded retention —
+/// one arena per `createHTMLDocument`/`createDocument` call — and it is the only
+/// owner those contexts have: freeing a slot would let a stale handle resolve to
+/// whatever took the slot, which is exactly what the generation bits in a node
+/// handle exist to prevent and which the slot cannot also carry.
+///
+/// The retention is bounded by the slot field, and a page that asks for more
+/// documents than the field holds gets an error, not a panic: see
+/// [`Self::next_slot`].
+pub struct DocumentSet {
+    root: RefCell<Weak<HostContext>>,
+    minted: RefCell<Vec<SharedContext>>,
+}
+
+impl DocumentSet {
+    /// The context for `slot`, or `None` when no document holds it — a handle
+    /// whose slot was never minted, or whose page context has been torn down.
+    pub fn get(&self, slot: u16) -> Option<SharedContext> {
+        match slot {
+            0 => self.root.borrow().upgrade(),
+            slot => self.minted.borrow().get(usize::from(slot) - 1).cloned(),
+        }
+    }
+
+    /// Every live context in slot order: the page's first, then the minted ones.
+    pub fn all(&self) -> Vec<SharedContext> {
+        self.root
+            .borrow()
+            .upgrade()
+            .into_iter()
+            .chain(self.minted.borrow().iter().cloned())
+            .collect()
+    }
+
+    /// The slot the next minted context will take, or `None` once the field is
+    /// full.
+    ///
+    /// Exhaustion is a page's own doing and it is recoverable: a page that
+    /// loops over `createHTMLDocument` without bound must not be able to abort
+    /// the process, so the caller turns `None` into a `DOMException` — the
+    /// engine's "the quota has been exceeded" — and the page's script sees a
+    /// throw. The ceiling is far above any real page: the widest `dom/nodes`
+    /// file mints a few hundred.
+    fn next_slot(&self) -> Option<u16> {
+        let slot = self.minted.borrow().len() + 1;
+        u16::try_from(slot)
+            .ok()
+            .filter(|slot| u64::from(*slot) <= DOC_SLOT_MASK)
+    }
+
+    /// Registers a minted context at the slot [`Self::next_slot`] named.
+    fn install(&self, ctx: SharedContext) {
+        self.minted.borrow_mut().push(ctx);
+    }
+}
+
 /// The shared host context: document, snapshots, event state and the script
 /// callback boundary for one wrapper world.
 pub struct HostContext {
     /// The document all hosts point to.
     pub doc: SharedDocument,
+    /// This context's document slot in its world's [`DocumentSet`]. Slot 0 is
+    /// the page; every other value names a document a `DOMImplementation`
+    /// minted.
+    pub slot: u16,
+    /// Every document context of this world, this one included. See
+    /// [`DocumentSet`] for the ownership rules.
+    pub documents: Rc<DocumentSet>,
     /// The snapshot slab for static collections.
     pub snapshots: RefCell<SnapshotSlab>,
     /// The event listeners registered on this world's nodes.
@@ -1106,14 +1206,34 @@ pub struct HostContext {
     /// sent on the next request, which is the whole point of the member. The
     /// jar's policy is the context's policy, not the world's.
     pub cookies: CookieJar,
+    /// The key of this document's `DOMImplementation` record, once script has
+    /// asked for `document.implementation`.
+    ///
+    /// The record is created lazily and cached here, which is what
+    /// `[SameObject]` requires; it is created *per context*, so a minted
+    /// document's implementation is a different object from the page's, as
+    /// `dom/nodes/DOMImplementation-createHTMLDocument-with-saved-implementation.html`
+    /// asserts.
+    pub implementation: RefCell<Option<HostKey>>,
 }
 
 impl HostContext {
-    /// Builds a fresh context over `doc`, timestamping events against `clock`,
-    /// with empty event state, the context's cookie jar, and no script host yet.
-    pub fn new(doc: SharedDocument, clock: SharedClock, cookies: CookieJar) -> Self {
-        Self {
+    /// Builds the page's context: slot 0 of a fresh [`DocumentSet`], over `doc`,
+    /// timestamping events against `clock`, with empty event state, the
+    /// context's cookie jar, and no script host yet.
+    ///
+    /// The slot-0 context is handed to the wrapper world and the engine, and
+    /// both own it; the set holds it weakly, which is why the context is built
+    /// through `Rc::new_cyclic` — the set needs the context's own `Weak` before
+    /// the `Rc` exists.
+    pub fn new(doc: SharedDocument, clock: SharedClock, cookies: CookieJar) -> SharedContext {
+        Rc::new_cyclic(|weak| Self {
             doc,
+            slot: 0,
+            documents: Rc::new(DocumentSet {
+                root: RefCell::new(weak.clone()),
+                minted: RefCell::new(Vec::new()),
+            }),
             snapshots: RefCell::new(SnapshotSlab::new()),
             listeners: RefCell::new(ListenerTable::new()),
             handlers: RefCell::new(HashMap::new()),
@@ -1123,7 +1243,44 @@ impl HostContext {
             clock,
             click_in_progress: RefCell::new(HashSet::new()),
             cookies,
-        }
+            implementation: RefCell::new(None),
+        })
+    }
+
+    /// Builds a context for a document a `DOMImplementation` minted, in this
+    /// world's [`DocumentSet`], and returns it.
+    ///
+    /// The child inherits the parts of a context that belong to the *world*
+    /// rather than to one document: the loop's clock, the context's cookie jar,
+    /// and the installed script host. The rest — the snapshot, event, listener
+    /// and host-record slabs — starts empty, because those are keyed by handles
+    /// whose slots name this document and would otherwise collide with the
+    /// page's.
+    ///
+    /// The error is the field being full, which only a page that mints documents
+    /// in a loop can cause: see [`DocumentSet::next_slot`].
+    pub fn new_child(&self, doc: SharedDocument) -> Result<SharedContext, JsError> {
+        let slot = self
+            .documents
+            .next_slot()
+            .ok_or_else(document_slots_exhausted)?;
+        let ctx = Rc::new(Self {
+            doc,
+            slot,
+            documents: self.documents.clone(),
+            snapshots: RefCell::new(SnapshotSlab::new()),
+            listeners: RefCell::new(ListenerTable::new()),
+            handlers: RefCell::new(HashMap::new()),
+            events: RefCell::new(EventSlab::new()),
+            host_records: RefCell::new(HostSlab::new()),
+            script: RefCell::new(self.script.borrow().clone()),
+            clock: self.clock.clone(),
+            click_in_progress: RefCell::new(HashSet::new()),
+            cookies: self.cookies.clone(),
+            implementation: RefCell::new(None),
+        });
+        self.documents.install(ctx.clone());
+        Ok(ctx)
     }
 
     /// Milliseconds since the loop origin, for `Event.timeStamp` — the same
@@ -1488,6 +1645,120 @@ impl HostObject {
         }
     }
 
+    /// This host's document slot — the slot every handle it makes must carry.
+    ///
+    /// It is the context's slot and not a field of the host, because a host is
+    /// built *inside* one context: a node from a second document always reaches
+    /// the world through that document's own context, either as the context
+    /// `wrapper` was asked for or as the context the operation ran on.
+    fn slot(&self) -> u16 {
+        self.context().slot
+    }
+
+    /// Resolves a `TAG_NODE` handle to the document it names and the live node
+    /// id inside it.
+    ///
+    /// This is the receiving half of the document slot: a handle produced by
+    /// another document resolves in *that* document's arena through the world's
+    /// [`DocumentSet`], never through this host's. A handle whose slot names no
+    /// document, or whose node is stale, is a `TypeError` — the same answer a
+    /// wrapper world gives when it refuses to instantiate a wrapper, because
+    /// the only way to hold such a handle is to have held a wrapper for it.
+    fn anchor_of(&self, bits: u64) -> Result<(SharedDocument, NodeId), JsError> {
+        let decoded = decode(bits);
+        if decoded.tag != TAG_NODE {
+            return Err(JsError::type_error("the value is not a node of this world"));
+        }
+        let ctx = self
+            .context()
+            .documents
+            .get(decoded.slot)
+            .ok_or_else(|| JsError::type_error("the node's document is gone"))?;
+        let doc = ctx.doc.clone();
+        {
+            let doc = doc.borrow();
+            if !doc.is_live(decoded.node_id)
+                || doc.node_ref(decoded.node_id).generation as u16 != decoded.generation
+            {
+                return Err(JsError::type_error("the node is stale"));
+            }
+        }
+        Ok((doc, decoded.node_id))
+    }
+
+    /// The id of a `Node` argument that belongs to *this* host's document.
+    ///
+    /// A node of another document is refused rather than indexed, because a
+    /// handle carries no document id of its own beyond the slot: the id of a
+    /// node in another arena means some unrelated node here — a wrong-node write
+    /// — or, when it is past the end of this arena, a panic out of the arena's
+    /// own accessors. That panic is what `dom/nodes` found once a page could hold
+    /// two documents, and it aborted the WPT driver's whole process.
+    ///
+    /// The refusal is not the DOM Standard's answer to the *operation*, which is
+    /// valid: the standard's insertion algorithms adopt the node into the
+    /// parent's document first, and
+    /// `dom/nodes/Node-mutation-adoptNode.html` asserts exactly that
+    /// (`document.body.appendChild(div)` on a `createHTMLDocument` div, then
+    /// `div.ownerDocument === document`). Adoption is what this engine does not
+    /// have — a node's document *is* the arena it lives in, so adopting would
+    /// have to move the subtree into another arena and re-key every wrapper over
+    /// it — so the operations that need it report `NotSupportedError` in place
+    /// of doing something arbitrary. See deviation 3 in `idl/dom/dom.webidl`.
+    fn same_document_node(&self, handle: Handle<Node>) -> Result<NodeId, JsError> {
+        let decoded = decode(handle.bits());
+        if decoded.tag != TAG_NODE {
+            return Err(JsError::type_error("the argument is not a Node"));
+        }
+        if decoded.slot != self.slot() {
+            return Err(JsError::dom_exception(
+                "NotSupportedError",
+                "the node belongs to another document, and this engine cannot \
+                 adopt it into this one",
+            ));
+        }
+        self.anchor_of(handle.bits()).map(|(_, id)| id)
+    }
+
+    /// The id of a `Node` argument the caller claims is a child of this node.
+    ///
+    /// A node of another document is not a child of this one and cannot be, so
+    /// the standard's own "if child's parent is not parent, throw a
+    /// `NotFoundError`" already covers it. Testing the slot first is what keeps
+    /// the arena's `parent` lookup from being handed an id out of a different
+    /// arena.
+    fn child_argument(&self, handle: Handle<Node>) -> Result<NodeId, JsError> {
+        let decoded = decode(handle.bits());
+        if decoded.tag != TAG_NODE {
+            return Err(JsError::type_error("the argument is not a Node"));
+        }
+        if decoded.slot != self.slot() {
+            return Err(JsError::dom_exception(
+                "NotFoundError",
+                "the node is not a child of this node",
+            ));
+        }
+        self.anchor_of(handle.bits()).map(|(_, id)| id)
+    }
+
+    /// Gives a freshly built `document` a context of its own in this world and
+    /// returns the `TAG_NODE` handle bits of its document node.
+    ///
+    /// The context is what makes the document reachable: its slot is what every
+    /// handle made from its nodes carries, so the wrapper world can find the
+    /// arena a handle means. The set owns the context from here on, which is
+    /// why the local clone can be dropped at the end of this call.
+    fn mint_document(&self, document: Document) -> Result<u64, JsError> {
+        let ctx = self.context();
+        let shared: SharedDocument = Rc::new(RefCell::new(document));
+        let child = ctx.new_child(shared)?;
+        let node = {
+            let doc = child.doc.borrow();
+            doc.node_ref(doc.document_node())
+        };
+        Ok(encode_node(child.slot, node))
+    }
+
     /// Reads the event record this host stands for, or returns `default` when
     /// the host is not an `Event` or the record has been reclaimed.
     fn with_event<R>(&self, default: R, f: impl FnOnce(&EventRecord) -> R) -> R {
@@ -1785,18 +2056,21 @@ impl HostObject {
     /// The opaque handle bits this host stands for, tagged by variant so a node
     /// and its `NodeList` (and a recycled slot) never share a key.
     pub fn handle_bits(&self) -> u64 {
+        let slot = self.slot();
         match self {
-            HostObject::Node { node, .. } => encode_node(*node),
-            HostObject::NodeList { owner, .. } => encode_collection(*owner),
-            HostObject::HtmlCollection { owner, .. } => encode_html_collection(*owner),
-            HostObject::StaticNodeList { key, .. } => encode_snapshot(TAG_STATIC_NODE_LIST, *key),
-            HostObject::StaticHtmlCollection { key, .. } => {
-                encode_snapshot(TAG_STATIC_HTML_COLLECTION, *key)
+            HostObject::Node { node, .. } => encode_node(slot, *node),
+            HostObject::NodeList { owner, .. } => encode_collection(slot, *owner),
+            HostObject::HtmlCollection { owner, .. } => encode_html_collection(slot, *owner),
+            HostObject::StaticNodeList { key, .. } => {
+                encode_snapshot(slot, TAG_STATIC_NODE_LIST, *key)
             }
-            HostObject::Event { key, .. } => encode_event(*key),
-            HostObject::TokenList { owner, .. } => encode_token_list(*owner),
-            HostObject::Style { owner, .. } => encode_style(*owner),
-            HostObject::Host { key, .. } => encode_host(*key),
+            HostObject::StaticHtmlCollection { key, .. } => {
+                encode_snapshot(slot, TAG_STATIC_HTML_COLLECTION, *key)
+            }
+            HostObject::Event { key, .. } => encode_event(slot, *key),
+            HostObject::TokenList { owner, .. } => encode_token_list(slot, *owner),
+            HostObject::Style { owner, .. } => encode_style(slot, *owner),
+            HostObject::Host { key, .. } => encode_host(slot, *key),
             HostObject::Window { .. } => encode_window(),
         }
     }
@@ -1839,9 +2113,11 @@ impl HostObject {
     /// the receiver was not what the template's signature promised.
     fn dispatch_target(&self) -> Option<DispatchTarget> {
         match self {
-            HostObject::Node { node, .. } => Some(DispatchTarget::node(*node)),
+            HostObject::Node { node, .. } => Some(DispatchTarget::node(self.slot(), *node)),
             HostObject::Window { .. } => Some(DispatchTarget::window()),
-            _ => self.event_target_key().map(DispatchTarget::host),
+            _ => self
+                .event_target_key()
+                .map(|key| DispatchTarget::host(self.slot(), key)),
         }
     }
 
@@ -1989,7 +2265,7 @@ impl HostObject {
     fn style_handle(&self) -> Result<Handle<CSSStyleDeclaration>, JsError> {
         let (doc, id) = self.anchor();
         let owner = doc.borrow().node_ref(id);
-        Ok(Handle::from_bits(encode_style(owner)))
+        Ok(Handle::from_bits(encode_style(self.slot(), owner)))
     }
 
     /// The anchored element's `style` attribute parsed into its declaration
@@ -2038,7 +2314,7 @@ impl HostObject {
         let target = step(&doc, id);
         target
             .is_some()
-            .then(|| Handle::from_bits(encode_node(doc.node_ref(target))))
+            .then(|| Handle::from_bits(encode_node(self.slot(), doc.node_ref(target))))
     }
 }
 
@@ -2046,7 +2322,7 @@ impl NodeOps for HostObject {
     fn child_nodes(&self) -> Result<Handle<NodeList>, JsError> {
         let (doc, id) = self.anchor();
         let owner = doc.borrow().node_ref(id);
-        Ok(Handle::from_bits(encode_collection(owner)))
+        Ok(Handle::from_bits(encode_collection(self.slot(), owner)))
     }
 
     fn first_child(&self) -> Result<Option<Handle<Node>>, JsError> {
@@ -2091,7 +2367,7 @@ impl NodeOps for HostObject {
         let doc = doc.borrow();
         let document_node = doc.document_node();
         Ok((id != document_node)
-            .then(|| Handle::from_bits(encode_node(doc.node_ref(document_node)))))
+            .then(|| Handle::from_bits(encode_node(self.slot(), doc.node_ref(document_node)))))
     }
 
     fn is_connected(&self) -> bool {
@@ -2115,8 +2391,18 @@ impl NodeOps for HostObject {
         let Some(other) = other else {
             return Ok(false);
         };
-        let other_id = node_argument(other)?;
+        // A node of another document is not this tree's, so it is not an
+        // inclusive ancestor of anything here. Its id must not reach
+        // `doc.ancestors`, which walks `parent` in *this* arena.
+        let decoded = decode(other.bits());
+        if decoded.tag != TAG_NODE {
+            return Err(JsError::type_error("the argument is not a Node"));
+        }
         let (doc, self_id) = self.anchor();
+        if decoded.slot != self.slot() {
+            return Ok(false);
+        }
+        let other_id = decoded.node_id;
         let doc = doc.borrow();
         Ok(other_id == self_id || doc.ancestors(other_id).any(|ancestor| ancestor == self_id))
     }
@@ -2126,7 +2412,7 @@ impl NodeOps for HostObject {
         let doc = doc.borrow();
         let parent = doc.parent(id);
         Ok((parent.is_some() && doc.kind(parent) == NodeKind::Element)
-            .then(|| Handle::from_bits(encode_node(doc.node_ref(parent)))))
+            .then(|| Handle::from_bits(encode_node(self.slot(), doc.node_ref(parent)))))
     }
 
     fn parent_node(&self) -> Result<Option<Handle<Node>>, JsError> {
@@ -2143,9 +2429,12 @@ impl NodeOps for HostObject {
         let kind = doc.kind(id);
         Ok(match kind {
             NodeKind::Document | NodeKind::DocType => None,
-            NodeKind::Text | NodeKind::CData | NodeKind::Comment => {
-                Some(doc.text_data(id).unwrap_or("").to_owned())
-            }
+            // A `ProcessingInstruction` is a `CharacterData` subclass, so its
+            // `textContent` is its `data`, exactly like a comment's.
+            NodeKind::Text
+            | NodeKind::CData
+            | NodeKind::Comment
+            | NodeKind::ProcessingInstruction => Some(doc.text_data(id).unwrap_or("").to_owned()),
             NodeKind::Element | NodeKind::Fragment | NodeKind::ShadowRoot => {
                 let mut result = String::new();
                 for child_id in doc.descendants(id) {
@@ -2157,7 +2446,6 @@ impl NodeOps for HostObject {
                 }
                 Some(result)
             }
-            NodeKind::ProcessingInstruction => Some(String::new()),
         })
     }
 
@@ -2167,7 +2455,10 @@ impl NodeOps for HostObject {
         let kind = doc.kind(id);
 
         match kind {
-            NodeKind::Text | NodeKind::CData | NodeKind::Comment => {
+            NodeKind::Text
+            | NodeKind::CData
+            | NodeKind::Comment
+            | NodeKind::ProcessingInstruction => {
                 let text = value.unwrap_or("");
                 drop(doc);
                 let mut doc = self.anchor().0.borrow_mut();
@@ -2199,7 +2490,7 @@ impl NodeOps for HostObject {
                 }
                 Ok(())
             }
-            NodeKind::Document | NodeKind::DocType | NodeKind::ProcessingInstruction => {
+            NodeKind::Document | NodeKind::DocType => {
                 // No-op for Document and similar
                 Ok(())
             }
@@ -2210,7 +2501,10 @@ impl NodeOps for HostObject {
         let (doc, id) = self.anchor();
         let doc = doc.borrow();
         match doc.kind(id) {
-            NodeKind::Text | NodeKind::CData | NodeKind::Comment => {
+            NodeKind::Text
+            | NodeKind::CData
+            | NodeKind::Comment
+            | NodeKind::ProcessingInstruction => {
                 Ok(Some(doc.text_data(id).unwrap_or("").to_owned()))
             }
             _ => Ok(None),
@@ -2221,7 +2515,10 @@ impl NodeOps for HostObject {
         let (doc, id) = self.anchor();
         let doc = doc.borrow();
         match doc.kind(id) {
-            NodeKind::Text | NodeKind::CData | NodeKind::Comment => {
+            NodeKind::Text
+            | NodeKind::CData
+            | NodeKind::Comment
+            | NodeKind::ProcessingInstruction => {
                 let text = value.unwrap_or("");
                 drop(doc);
                 let mut doc = self.anchor().0.borrow_mut();
@@ -2240,7 +2537,7 @@ impl NodeOps for HostObject {
 
     fn append_child(&self, node: Handle<Node>) -> Result<Handle<Node>, JsError> {
         let (doc, self_id) = self.anchor();
-        let child_id = node_argument(node)?;
+        let child_id = self.same_document_node(node)?;
 
         let mut doc = doc.borrow_mut();
         doc.mutate(Mutation::Append {
@@ -2260,10 +2557,10 @@ impl NodeOps for HostObject {
         child: Option<Handle<Node>>,
     ) -> Result<Handle<Node>, JsError> {
         let (doc, self_id) = self.anchor();
-        let node_id = node_argument(node)?;
+        let node_id = self.same_document_node(node)?;
 
         let before = child
-            .map(node_argument)
+            .map(|child| self.child_argument(child))
             .transpose()?
             .unwrap_or(NodeId::NONE);
 
@@ -2281,7 +2578,7 @@ impl NodeOps for HostObject {
 
     fn remove_child(&self, child: Handle<Node>) -> Result<Handle<Node>, JsError> {
         let (doc, _) = self.anchor();
-        let child_id = node_argument(child)?;
+        let child_id = self.child_argument(child)?;
 
         let mut doc = doc.borrow_mut();
         doc.mutate(Mutation::Remove { child: child_id })
@@ -2297,8 +2594,8 @@ impl NodeOps for HostObject {
         child: Handle<Node>,
     ) -> Result<Handle<Node>, JsError> {
         let (doc, self_id) = self.anchor();
-        let new_child = node_argument(node)?;
-        let old_child = node_argument(child)?;
+        let new_child = self.same_document_node(node)?;
+        let old_child = self.child_argument(child)?;
 
         let mut doc = doc.borrow_mut();
         doc.mutate(Mutation::ReplaceChild {
@@ -2324,7 +2621,10 @@ impl NodeOps for HostObject {
         };
 
         let doc = doc.borrow();
-        Ok(Handle::from_bits(encode_node(doc.node_ref(new_id))))
+        Ok(Handle::from_bits(encode_node(
+            self.slot(),
+            doc.node_ref(new_id),
+        )))
     }
 }
 
@@ -2341,13 +2641,16 @@ impl ElementOps for HostObject {
     fn children(&self) -> Result<Handle<HTMLCollection>, JsError> {
         let (doc, id) = self.anchor();
         let owner = doc.borrow().node_ref(id);
-        Ok(Handle::from_bits(encode_html_collection(owner)))
+        Ok(Handle::from_bits(encode_html_collection(
+            self.slot(),
+            owner,
+        )))
     }
 
     fn class_list(&self) -> Result<Handle<DOMTokenList>, JsError> {
         let (doc, id) = self.anchor();
         let owner = doc.borrow().node_ref(id);
-        Ok(Handle::from_bits(encode_token_list(owner)))
+        Ok(Handle::from_bits(encode_token_list(self.slot(), owner)))
     }
 
     fn closest(&self, selectors: &str) -> Result<Option<Handle<Element>>, JsError> {
@@ -2355,6 +2658,7 @@ impl ElementOps for HostObject {
         let doc = doc.borrow();
         match doc.closest(id, selectors) {
             Ok(Some(result_id)) => Ok(Some(Handle::from_bits(encode_node(
+                self.slot(),
                 doc.node_ref(result_id),
             )))),
             Ok(None) => Ok(None),
@@ -2368,7 +2672,7 @@ impl ElementOps for HostObject {
         Ok(doc
             .element_children(id)
             .next()
-            .map(|child| Handle::from_bits(encode_node(doc.node_ref(child)))))
+            .map(|child| Handle::from_bits(encode_node(self.slot(), doc.node_ref(child)))))
     }
 
     fn get_elements_by_class_name(
@@ -2398,6 +2702,7 @@ impl ElementOps for HostObject {
         let ctx = self.context();
         let key = ctx.snapshots.borrow_mut().insert(descendants);
         Ok(Handle::from_bits(encode_snapshot(
+            self.slot(),
             TAG_STATIC_HTML_COLLECTION,
             key,
         )))
@@ -2427,6 +2732,7 @@ impl ElementOps for HostObject {
                     let ctx = self.context();
                     let key = ctx.snapshots.borrow_mut().insert(vec![]);
                     return Ok(Handle::from_bits(encode_snapshot(
+                        self.slot(),
                         TAG_STATIC_HTML_COLLECTION,
                         key,
                     )));
@@ -2444,6 +2750,7 @@ impl ElementOps for HostObject {
         let ctx = self.context();
         let key = ctx.snapshots.borrow_mut().insert(descendants);
         Ok(Handle::from_bits(encode_snapshot(
+            self.slot(),
             TAG_STATIC_HTML_COLLECTION,
             key,
         )))
@@ -2502,7 +2809,7 @@ impl ElementOps for HostObject {
         Ok(doc
             .element_children(id)
             .last()
-            .map(|child| Handle::from_bits(encode_node(doc.node_ref(child)))))
+            .map(|child| Handle::from_bits(encode_node(self.slot(), doc.node_ref(child)))))
     }
 
     fn matches(&self, selectors: &str) -> bool {
@@ -2522,6 +2829,7 @@ impl ElementOps for HostObject {
         let doc = doc.borrow();
         match doc.query_selector(id, selectors) {
             Ok(Some(result_id)) => Ok(Some(Handle::from_bits(encode_node(
+                self.slot(),
                 doc.node_ref(result_id),
             )))),
             Ok(None) => Ok(None),
@@ -2545,6 +2853,7 @@ impl ElementOps for HostObject {
                 let ctx = self.context();
                 let key = ctx.snapshots.borrow_mut().insert(refs);
                 Ok(Handle::from_bits(encode_snapshot(
+                    self.slot(),
                     TAG_STATIC_NODE_LIST,
                     key,
                 )))
@@ -2696,14 +3005,20 @@ impl DocumentOps for HostObject {
     fn children(&self) -> Result<Handle<HTMLCollection>, JsError> {
         let (doc, id) = self.anchor();
         let owner = doc.borrow().node_ref(id);
-        Ok(Handle::from_bits(encode_html_collection(owner)))
+        Ok(Handle::from_bits(encode_html_collection(
+            self.slot(),
+            owner,
+        )))
     }
 
     fn create_comment(&self, data: &str) -> Result<Handle<Comment>, JsError> {
         let (doc, _) = self.anchor();
         let mut doc = doc.borrow_mut();
         let id = doc.create_comment(data);
-        Ok(Handle::from_bits(encode_node(doc.node_ref(id))))
+        Ok(Handle::from_bits(encode_node(
+            self.slot(),
+            doc.node_ref(id),
+        )))
     }
 
     fn create_event(&self, interface: &str) -> Result<Handle<Event>, JsError> {
@@ -2742,7 +3057,7 @@ impl DocumentOps for HostObject {
         let ctx = self.context();
         let record = EventRecord::new(String::new(), kind, ctx.time_stamp());
         let key = ctx.events.borrow_mut().insert(record);
-        Ok(Handle::from_bits(encode_event(key)))
+        Ok(Handle::from_bits(encode_event(self.slot(), key)))
     }
 
     fn create_element(&self, local_name: &str) -> Result<Handle<Element>, JsError> {
@@ -2763,8 +3078,17 @@ impl DocumentOps for HostObject {
         }
         let (doc, _) = self.anchor();
         let mut doc = doc.borrow_mut();
-        // HTML element names are lowercased.
-        let atom = tenta_core::atom::Atom::new(&local_name.to_ascii_lowercase());
+        // "If this is an HTML document, set localName to localName in ASCII
+        // lowercase" — the lowercasing is conditional on the document, so an
+        // XML document a `DOMImplementation` minted keeps the case it was
+        // given (`dom/nodes/DOMImplementation-createDocument.html` reads
+        // `doc.createElement("DIV").localName` back as `"DIV"`). The namespace
+        // is the HTML namespace either way, which is what the same step says.
+        let atom = if doc.is_html_document() {
+            Atom::new(&local_name.to_ascii_lowercase())
+        } else {
+            Atom::new(local_name)
+        };
         // A `<template>` owns a separate contents fragment; the create path must
         // request it so a script-created template matches a parsed one and its
         // `.content` resolves.
@@ -2775,14 +3099,20 @@ impl DocumentOps for HostObject {
         let id = doc
             .create_element(QualName::new(atoms::NS_HTML, atom), Vec::new(), flags)
             .map_err(|e| mutation_error(&e))?;
-        Ok(Handle::from_bits(encode_node(doc.node_ref(id))))
+        Ok(Handle::from_bits(encode_node(
+            self.slot(),
+            doc.node_ref(id),
+        )))
     }
 
     fn create_document_fragment(&self) -> Result<Handle<DocumentFragment>, JsError> {
         let (doc, _) = self.anchor();
         let mut doc = doc.borrow_mut();
         let id = doc.create_fragment();
-        Ok(Handle::from_bits(encode_node(doc.node_ref(id))))
+        Ok(Handle::from_bits(encode_node(
+            self.slot(),
+            doc.node_ref(id),
+        )))
     }
 
     fn create_element_ns(
@@ -2805,14 +3135,20 @@ impl DocumentOps for HostObject {
         let id = doc
             .create_element(name, Vec::new(), flags)
             .map_err(|e| mutation_error(&e))?;
-        Ok(Handle::from_bits(encode_node(doc.node_ref(id))))
+        Ok(Handle::from_bits(encode_node(
+            self.slot(),
+            doc.node_ref(id),
+        )))
     }
 
     fn create_text_node(&self, data: &str) -> Result<Handle<Text>, JsError> {
         let (doc, _) = self.anchor();
         let mut doc = doc.borrow_mut();
         let id = doc.create_text(data);
-        Ok(Handle::from_bits(encode_node(doc.node_ref(id))))
+        Ok(Handle::from_bits(encode_node(
+            self.slot(),
+            doc.node_ref(id),
+        )))
     }
 
     fn document_element(&self) -> Result<Option<Handle<Element>>, JsError> {
@@ -2820,7 +3156,80 @@ impl DocumentOps for HostObject {
         let doc = doc.borrow();
         Ok(doc
             .document_element()
-            .map(|id| Handle::from_bits(encode_node(doc.node_ref(id)))))
+            .map(|id| Handle::from_bits(encode_node(self.slot(), doc.node_ref(id)))))
+    }
+
+    fn doctype(&self) -> Result<Option<Handle<DocumentType>>, JsError> {
+        // The document's *first child* doctype, not any descendant: the DOM
+        // Standard's `doctype` is "the child of this that is a doctype", so a
+        // doctype nested anywhere else is invisible. The arena already refuses
+        // to insert one anywhere but the document
+        // (`Document::validate_insert`), so this is the tree-order read.
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        let doctype = doc
+            .children(id)
+            .find(|child| doc.kind(*child) == NodeKind::DocType);
+        Ok(doctype.map(|id| Handle::from_bits(encode_node(self.slot(), doc.node_ref(id)))))
+    }
+
+    fn implementation(&self) -> Result<Handle<DOMImplementation>, JsError> {
+        let ctx = self.context();
+        Ok(Handle::from_bits(encode_host(
+            ctx.slot,
+            implementation_key(ctx),
+        )))
+    }
+
+    fn default_view(&self) -> Result<Option<Handle<WindowProxy>>, JsError> {
+        // The window of the browsing context this document is the active
+        // document of, or null when it is not any context's active document.
+        //
+        // Slot 0 is exactly that distinction in this tree: the wrapper world is
+        // built over the one document the engine navigated, so the page's
+        // document is the active document of the world's browsing context and
+        // every document a `DOMImplementation` minted is a detached, never-
+        // navigated document with no context at all. When a second browsing
+        // context (an `<iframe>`, a Worker's owner) arrives, it will have to
+        // arrive with its own world and this test will have to become "is this
+        // context's document the one a window was installed over".
+        let ctx = self.context();
+        Ok((ctx.slot == 0).then(|| Handle::from_bits(encode_window())))
+    }
+
+    fn charset(&self) -> Result<String, JsError> {
+        Ok(self.context().doc.borrow().encoding().to_owned())
+    }
+
+    fn input_encoding(&self) -> Result<String, JsError> {
+        Ok(self.context().doc.borrow().encoding().to_owned())
+    }
+
+    fn content_type(&self) -> Result<String, JsError> {
+        Ok(self.context().doc.borrow().content_type().to_owned())
+    }
+
+    fn create_processing_instruction(
+        &self,
+        target: &str,
+        data: &str,
+    ) -> Result<Handle<ProcessingInstruction>, JsError> {
+        // The two refusals are the DOM Standard's, and neither is a stubbing:
+        // both rules are enforced here because the arena's infallible factory
+        // is also the parsers' entry, and the parsers have already applied
+        // them. See `tenta_dom::validate_processing_instruction_target` for
+        // why the target rule is XML's `Name` and not the DOM's own regex.
+        tenta_dom::validate_processing_instruction_target(target)
+            .map_err(|error| invalid_character_error(&error))?;
+        tenta_dom::validate_processing_instruction_data(data)
+            .map_err(|error| invalid_character_error(&error))?;
+        let (doc, _) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        let id = doc.create_processing_instruction(target, data);
+        Ok(Handle::from_bits(encode_node(
+            self.slot(),
+            doc.node_ref(id),
+        )))
     }
 
     fn body(&self) -> Result<Option<Handle<HTMLElement>>, JsError> {
@@ -2832,7 +3241,7 @@ impl DocumentOps for HostObject {
         Ok(doc
             .body()
             .filter(|id| doc.namespace(*id) == Some(atoms::NS_HTML))
-            .map(|id| Handle::from_bits(encode_node(doc.node_ref(id)))))
+            .map(|id| Handle::from_bits(encode_node(self.slot(), doc.node_ref(id)))))
     }
 
     fn head(&self) -> Result<Option<Handle<HTMLElement>>, JsError> {
@@ -2841,7 +3250,7 @@ impl DocumentOps for HostObject {
         Ok(doc
             .head()
             .filter(|id| doc.namespace(*id) == Some(atoms::NS_HTML))
-            .map(|id| Handle::from_bits(encode_node(doc.node_ref(id)))))
+            .map(|id| Handle::from_bits(encode_node(self.slot(), doc.node_ref(id)))))
     }
 
     fn ready_state(&self) -> Result<String, JsError> {
@@ -2857,7 +3266,7 @@ impl DocumentOps for HostObject {
         let (doc, _) = self.anchor();
         let doc = doc.borrow();
         let active = doc.body().or_else(|| doc.document_element());
-        Ok(active.map(|id| Handle::from_bits(encode_node(doc.node_ref(id)))))
+        Ok(active.map(|id| Handle::from_bits(encode_node(self.slot(), doc.node_ref(id)))))
     }
 
     fn title(&self) -> Result<String, JsError> {
@@ -3065,7 +3474,7 @@ impl DocumentOps for HostObject {
         Ok(doc
             .element_children(id)
             .next()
-            .map(|child| Handle::from_bits(encode_node(doc.node_ref(child)))))
+            .map(|child| Handle::from_bits(encode_node(self.slot(), doc.node_ref(child)))))
     }
 
     fn get_element_by_id(&self, element_id: &str) -> Result<Option<Handle<Element>>, JsError> {
@@ -3073,7 +3482,7 @@ impl DocumentOps for HostObject {
         let doc = doc.borrow();
         Ok(doc
             .get_element_by_id(element_id)
-            .map(|id| Handle::from_bits(encode_node(doc.node_ref(id)))))
+            .map(|id| Handle::from_bits(encode_node(self.slot(), doc.node_ref(id)))))
     }
 
     fn get_elements_by_class_name(
@@ -3102,6 +3511,7 @@ impl DocumentOps for HostObject {
         let ctx = self.context();
         let key = ctx.snapshots.borrow_mut().insert(descendants);
         Ok(Handle::from_bits(encode_snapshot(
+            self.slot(),
             TAG_STATIC_HTML_COLLECTION,
             key,
         )))
@@ -3130,6 +3540,7 @@ impl DocumentOps for HostObject {
                     let ctx = self.context();
                     let key = ctx.snapshots.borrow_mut().insert(vec![]);
                     return Ok(Handle::from_bits(encode_snapshot(
+                        self.slot(),
                         TAG_STATIC_HTML_COLLECTION,
                         key,
                     )));
@@ -3147,6 +3558,7 @@ impl DocumentOps for HostObject {
         let ctx = self.context();
         let key = ctx.snapshots.borrow_mut().insert(descendants);
         Ok(Handle::from_bits(encode_snapshot(
+            self.slot(),
             TAG_STATIC_HTML_COLLECTION,
             key,
         )))
@@ -3158,7 +3570,7 @@ impl DocumentOps for HostObject {
         Ok(doc
             .element_children(id)
             .last()
-            .map(|child| Handle::from_bits(encode_node(doc.node_ref(child)))))
+            .map(|child| Handle::from_bits(encode_node(self.slot(), doc.node_ref(child)))))
     }
 
     fn query_selector(&self, selectors: &str) -> Result<Option<Handle<Element>>, JsError> {
@@ -3166,6 +3578,7 @@ impl DocumentOps for HostObject {
         let doc = doc.borrow();
         match doc.query_selector(id, selectors) {
             Ok(Some(result_id)) => Ok(Some(Handle::from_bits(encode_node(
+                self.slot(),
                 doc.node_ref(result_id),
             )))),
             Ok(None) => Ok(None),
@@ -3188,12 +3601,224 @@ impl DocumentOps for HostObject {
                 let ctx = self.context();
                 let key = ctx.snapshots.borrow_mut().insert(refs);
                 Ok(Handle::from_bits(encode_snapshot(
+                    self.slot(),
                     TAG_STATIC_NODE_LIST,
                     key,
                 )))
             }
             Err(e) => Err(JsError::syntax_error(e.to_string())),
         }
+    }
+}
+
+impl DocumentTypeOps for HostObject {
+    fn name(&self) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        Ok(doc
+            .borrow()
+            .doctype(id)
+            .map(|d| d.name.clone())
+            .unwrap_or_default())
+    }
+
+    fn public_id(&self) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        Ok(doc
+            .borrow()
+            .doctype(id)
+            .map(|d| d.public_id.clone())
+            .unwrap_or_default())
+    }
+
+    fn system_id(&self) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        Ok(doc
+            .borrow()
+            .doctype(id)
+            .map(|d| d.system_id.clone())
+            .unwrap_or_default())
+    }
+}
+
+impl ProcessingInstructionOps for HostObject {
+    fn target(&self) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        Ok(doc
+            .borrow()
+            .processing_instruction(id)
+            .map(|(target, _)| target.to_owned())
+            .unwrap_or_default())
+    }
+}
+
+impl DOMImplementationOps for HostObject {
+    /// The DOM Standard retired feature detection: `hasFeature` "must return
+    /// true", whatever it is asked. `dom/nodes/DOMImplementation-hasFeature.html`
+    /// asserts exactly that for 130 argument lists, including the empty ones and
+    /// the deliberately bogus features, so the method declares no parameters at
+    /// all and has nothing to inspect.
+    fn has_feature(&self) -> bool {
+        true
+    }
+
+    fn create_document_type(
+        &self,
+        qualified_name: &str,
+        public_id: &str,
+        system_id: &str,
+    ) -> Result<Handle<DocumentType>, JsError> {
+        tenta_dom::validate_doctype_name(qualified_name)
+            .map_err(|error| invalid_character_error(&error))?;
+        // The doctype is created in the *implementation's own document*, which
+        // is the document the implementation came from: `document.implementation`
+        // makes a node the page's arena owns, so appending it to `document`
+        // later is a plain tree mutation with no cross-arena move.
+        let (doc, _) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        let id = doc.create_doctype(qualified_name, public_id, system_id);
+        Ok(Handle::from_bits(encode_node(
+            self.slot(),
+            doc.node_ref(id),
+        )))
+    }
+
+    fn create_document(
+        &self,
+        namespace: Option<&str>,
+        qualified_name: Option<&str>,
+        doctype: Option<Option<Handle<DocumentType>>>,
+    ) -> Result<Handle<super::Document>, JsError> {
+        // The root element name is validated exactly as `createElementNS`
+        // validates it, which is what the standard's "validate and extract"
+        // step says and what `name-validation.html` pins: `createDocument`
+        // must throw the same `InvalidCharacterError`s.
+        //
+        // A `null` qualified name means "no root element", the same as the empty
+        // string: `DOMImplementation-createDocument.html` decides with
+        // `qualifiedName === null || String(qualifiedName) === ""`. The
+        // parameter is nullable for that reason — the standard spells it
+        // `[LegacyNullToEmptyString] DOMString`, which the generator does not
+        // implement, and a nullable parameter is observationally the same here
+        // (see `idl/dom/dom.webidl`).
+        let name = match qualified_name {
+            None => None,
+            Some("") => None,
+            Some(qualified_name) => Some(validate_and_extract(namespace, qualified_name)?),
+        };
+
+        // The doctype is *reproduced*, not adopted. The DOM Standard appends the
+        // argument node into the new document, which moves it out of wherever it
+        // was and keeps its identity; a node in this tree belongs to one arena
+        // and its handle names that arena's slot, so moving it would have to
+        // rewrite a handle script already holds. The copy keeps every attribute
+        // (`name`, `publicId`, `systemId`) and the
+        // `doc.doctype.ownerDocument === doc` invariant, and loses only the
+        // object identity — the third deviation recorded in the IDL header.
+        //
+        // A doctype that already has a parent is reproduced too, rather than
+        // refused: the standard's step is an append, which adopts, and it is not
+        // fallible, so `DOMImplementation-createDocument.html` expects no throw
+        // for a doctype that is already associated with a document.
+        let doctype_data = match doctype.flatten() {
+            Some(handle) => {
+                let (doc, id) = self.anchor_of(handle.bits())?;
+                let doc = doc.borrow();
+                let Some(data) = doc.doctype(id) else {
+                    return Err(JsError::type_error(
+                        "createDocument: the doctype is not a DocumentType of this world",
+                    ));
+                };
+                Some(data.clone())
+            }
+            None => None,
+        };
+
+        let mut document = tenta_dom::Document::new();
+        document.set_url(Some(about_blank()));
+        document.set_content_type(content_type_for_namespace(namespace));
+        if let Some(data) = doctype_data {
+            let copy = document.create_doctype(&data.name, &data.public_id, &data.system_id);
+            document
+                .mutate(Mutation::Append {
+                    parent: document.document_node(),
+                    child: copy,
+                })
+                .map_err(|error| mutation_error(&error))?;
+        }
+        if let Some((ns, prefix, local)) = name {
+            let element = document.create_element(
+                QualName {
+                    ns,
+                    prefix,
+                    local: Atom::new(local),
+                },
+                Vec::new(),
+                ElementFlags::default(),
+            );
+            let element = element.map_err(|error| mutation_error(&error))?;
+            document
+                .mutate(Mutation::Append {
+                    parent: document.document_node(),
+                    child: element,
+                })
+                .map_err(|error| mutation_error(&error))?;
+        }
+
+        Ok(Handle::from_bits(self.mint_document(document)?))
+    }
+
+    fn create_html_document(
+        &self,
+        title: Option<&str>,
+    ) -> Result<Handle<super::Document>, JsError> {
+        // The HTML Standard's "create an HTML document" algorithm: a document
+        // with the HTML tree `<!doctype html><html><head>[<title>]</head><body>`,
+        // whose URL is `about:blank`, whose encoding is the UTF-8 default (not
+        // the calling document's — the WPT file that pins this is served as
+        // windows-1252 on purpose), and whose title is the argument.
+        let mut document = tenta_dom::Document::new();
+        document.set_url(Some(about_blank()));
+
+        let doctype = document.create_doctype("html", "", "");
+        let html = document.create_html_element(atoms::HTML);
+        let head = document.create_html_element(atoms::HEAD);
+        let body = document.create_html_element(atoms::BODY);
+        let parent = document.document_node();
+        for child in [doctype, html] {
+            document
+                .mutate(Mutation::Append { parent, child })
+                .map_err(|error| mutation_error(&error))?;
+        }
+        for child in [head, body] {
+            document
+                .mutate(Mutation::Append {
+                    parent: html,
+                    child,
+                })
+                .map_err(|error| mutation_error(&error))?;
+        }
+        if let Some(title) = title {
+            // The title is the text child of a `<title>` element; the argument
+            // itself is not normalized (the "strip and collapse" step applies to
+            // the *getter*), which is what `DOMImplementation-createHTMLDocument.js`
+            // checks: `"foo  bar baz"` reads back verbatim through `firstChild.data`.
+            let title_element = document.create_html_element(atoms::TITLE);
+            let text = document.create_text(title);
+            document
+                .mutate(Mutation::Append {
+                    parent: head,
+                    child: title_element,
+                })
+                .map_err(|error| mutation_error(&error))?;
+            document
+                .mutate(Mutation::Append {
+                    parent: title_element,
+                    child: text,
+                })
+                .map_err(|error| mutation_error(&error))?;
+        }
+
+        Ok(Handle::from_bits(self.mint_document(document)?))
     }
 }
 
@@ -3210,7 +3835,10 @@ impl NodeListOps for HostObject {
                 if let Some(node_ref) = refs.get(index as usize) {
                     let doc = ctx.doc.borrow();
                     if let Ok(id) = doc.resolve(*node_ref) {
-                        return Ok(Some(Handle::from_bits(encode_node(doc.node_ref(id)))));
+                        return Ok(Some(Handle::from_bits(encode_node(
+                            self.slot(),
+                            doc.node_ref(id),
+                        ))));
                     }
                 }
                 Ok(None)
@@ -3222,7 +3850,7 @@ impl NodeListOps for HostObject {
                 Ok(doc
                     .children(id)
                     .nth(index as usize)
-                    .map(|child| Handle::from_bits(encode_node(doc.node_ref(child)))))
+                    .map(|child| Handle::from_bits(encode_node(self.slot(), doc.node_ref(child)))))
             }
         }
     }
@@ -3324,7 +3952,10 @@ impl HTMLCollectionOps for HostObject {
                 if let Some(node_ref) = refs.get(index as usize) {
                     let doc = ctx.doc.borrow();
                     if let Ok(id) = doc.resolve(*node_ref) {
-                        return Ok(Some(Handle::from_bits(encode_node(doc.node_ref(id)))));
+                        return Ok(Some(Handle::from_bits(encode_node(
+                            self.slot(),
+                            doc.node_ref(id),
+                        ))));
                     }
                 }
                 Ok(None)
@@ -3336,7 +3967,7 @@ impl HTMLCollectionOps for HostObject {
                 Ok(doc
                     .element_children(id)
                     .nth(index as usize)
-                    .map(|child| Handle::from_bits(encode_node(doc.node_ref(child)))))
+                    .map(|child| Handle::from_bits(encode_node(self.slot(), doc.node_ref(child)))))
             }
         }
     }
@@ -3371,7 +4002,10 @@ impl HTMLCollectionOps for HostObject {
                             .map(|id_attr| id_attr == name)
                             .unwrap_or(false)
                     {
-                        return Ok(Some(Handle::from_bits(encode_node(doc.node_ref(id)))));
+                        return Ok(Some(Handle::from_bits(encode_node(
+                            self.slot(),
+                            doc.node_ref(id),
+                        ))));
                     }
                 }
                 Ok(None)
@@ -3387,7 +4021,7 @@ impl HTMLCollectionOps for HostObject {
                             .map(|id_attr| id_attr == name)
                             .unwrap_or(false)
                     })
-                    .map(|child| Handle::from_bits(encode_node(doc.node_ref(child)))))
+                    .map(|child| Handle::from_bits(encode_node(self.slot(), doc.node_ref(child)))))
             }
         }
     }
@@ -4216,7 +4850,10 @@ impl HTMLTemplateElementOps for HostObject {
         let contents = doc.template_contents(id).ok_or_else(|| {
             JsError::dom_exception("InvalidStateError", "template has no contents fragment")
         })?;
-        Ok(Handle::from_bits(encode_node(doc.node_ref(contents))))
+        Ok(Handle::from_bits(encode_node(
+            self.slot(),
+            doc.node_ref(contents),
+        )))
     }
 }
 
@@ -4491,6 +5128,68 @@ fn serialize_pairs(list: &[(String, String)]) -> String {
     serializer.finish()
 }
 
+/// The key of `ctx`'s `DOMImplementation` record, creating it on first use.
+///
+/// Caching the key on the context is what `[SameObject]` requires of
+/// `document.implementation`. The cache is re-checked against the slab because
+/// a record is freed when its wrapper is collected: the next read after a
+/// collection has to mint a fresh record rather than answer with a stale key,
+/// and a stale key would resolve to whatever took the slot.
+fn implementation_key(ctx: &HostContext) -> HostKey {
+    if let Some(key) = *ctx.implementation.borrow()
+        && ctx.host_records.borrow().get(key).is_some()
+    {
+        return key;
+    }
+    let key = ctx
+        .host_records
+        .borrow_mut()
+        .insert(HostRecord::Implementation);
+    *ctx.implementation.borrow_mut() = Some(key);
+    key
+}
+
+/// The URL every `DOMImplementation`-minted document has, until it is navigated
+/// (which nothing in this tree can do to one).
+fn about_blank() -> Url {
+    "about:blank"
+        .parse()
+        .expect("`about:blank` is a valid URL in every URL Standard")
+}
+
+/// The `contentType` of a document `createDocument` mints: the MIME type the
+/// namespace names, which is also what makes the document an XML document for
+/// `Document::is_html_document` (every one of the three contains "xml" except
+/// the SVG one, which is deliberately not an HTML document either).
+fn content_type_for_namespace(namespace: Option<&str>) -> &'static str {
+    match namespace {
+        Some("http://www.w3.org/1999/xhtml") => "application/xhtml+xml",
+        Some("http://www.w3.org/2000/svg") => "image/svg+xml",
+        _ => "application/xml",
+    }
+}
+
+/// Maps a `tenta_dom` validation failure onto the `InvalidCharacterError` the
+/// DOM Standard reports for a name it refuses.
+fn invalid_character_error(error: &tenta_core::Error) -> JsError {
+    JsError::dom_exception("InvalidCharacterError", &error.to_string())
+}
+
+/// The error a `DOMImplementation` factory reports when the world's document
+/// slot field is full.
+///
+/// The DOM Standard has no name for "this engine cannot hold another document",
+/// so this borrows the one DOMException name that means "a resource this engine
+/// accounts for is exhausted". It is a plain, catchable JavaScript exception and
+/// never an abort: a page that mints documents in a loop loses the documents it
+/// asked for past the ceiling, and nothing else.
+fn document_slots_exhausted() -> JsError {
+    JsError::dom_exception(
+        "QuotaExceededError",
+        "the engine cannot hold another document in this browsing context",
+    )
+}
+
 /// The pair list of the `URLSearchParams` at `key`, or `None` when the key names
 /// no such record.
 ///
@@ -4519,6 +5218,7 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
         | HostRecord::Xhr(_)
         | HostRecord::Blob(_)
         | HostRecord::File(_)
+        | HostRecord::Implementation
         | HostRecord::FormData(_) => return None,
     };
     match params.url {
@@ -4534,7 +5234,8 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
             | HostRecord::Xhr(_)
             | HostRecord::Blob(_)
             | HostRecord::File(_)
-            | HostRecord::FormData(_) => None,
+            | HostRecord::FormData(_)
+            | HostRecord::Implementation => None,
         },
         None => Some(params.list.clone()),
     }
@@ -4602,7 +5303,7 @@ fn url_search_params(ctx: &HostContext, key: HostKey) -> Result<Handle<URLSearch
             params_key
         }
     };
-    Ok(Handle::from_bits(encode_host(params_key)))
+    Ok(Handle::from_bits(encode_host(ctx.slot, params_key)))
 }
 
 /// The link a host record holds to its counterpart, read out before either is
@@ -4638,6 +5339,8 @@ enum HostLink {
     /// The record is a `FormData` holding the distinct keys of the `File`
     /// records its entry list names, which it owns.
     FormData(Vec<HostKey>),
+    /// The record is a `DOMImplementation`, which links to nothing.
+    Implementation,
 }
 
 /// What freeing host records took out of the world: the record slots that left
@@ -4746,6 +5449,7 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         Some(HostRecord::Blob(_)) => HostLink::Blob,
         Some(HostRecord::File(record)) => HostLink::File(record.owners.clone()),
         Some(HostRecord::FormData(record)) => HostLink::FormData(file_keys(&record.list)),
+        Some(HostRecord::Implementation) => HostLink::Implementation,
         None => return freed,
     };
     match link {
@@ -4759,7 +5463,11 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         // record's key, so the caller drains them from the freed key. A `Blob`
         // is the same shape again: nothing but its own wrapper can reach it, and
         // it owns no second record.
-        HostLink::TextDecoder | HostLink::TextEncoder | HostLink::Xhr | HostLink::Blob => {
+        HostLink::TextDecoder
+        | HostLink::TextEncoder
+        | HostLink::Xhr
+        | HostLink::Blob
+        | HostLink::Implementation => {
             free_record(slab, key, &mut freed);
         }
         // A file record is the shape a `FormData` entry list makes two-way: its
@@ -5606,7 +6314,7 @@ impl AbortControllerConstructor for HostObject {
 impl AbortControllerOps for HostObject {
     fn signal(&self) -> Result<Handle<AbortSignal>, JsError> {
         self.with_controller(None, |record| Some(record.signal))
-            .map(|signal| Handle::from_bits(encode_host(signal)))
+            .map(|signal| Handle::from_bits(encode_host(self.slot(), signal)))
             // The template's signature brand check makes this unreachable: only a
             // controller wrapper can reach the getter, and the record it was
             // built over lives exactly as long as that wrapper does.
@@ -5725,7 +6433,7 @@ impl AbortControllerOps for HostObject {
         record.flags.initialized = true;
         record.is_trusted = true;
         let event_key = ctx.events.borrow_mut().insert(record);
-        let dispatched = dispatch_at(ctx, DispatchTarget::host(signal), event_key, true);
+        let dispatched = dispatch_at(ctx, DispatchTarget::host(ctx.slot, signal), event_key, true);
         // Remove the transient record unless a listener made a wrapper for it
         // (in which case the world's dead-event sweep owns its removal).
         let orphaned = ctx
@@ -6215,7 +6923,7 @@ impl ResponseOps for HostObject {
         // answers with the record the first read did — and the wrapper world
         // revives the same wrapper for it while that wrapper lives.
         self.with_response(None, |record| Some(record.headers))
-            .map(|headers| Handle::from_bits(encode_host(headers)))
+            .map(|headers| Handle::from_bits(encode_host(self.slot(), headers)))
             .ok_or_else(|| JsError::type_error("headers: the receiver is not a Response"))
     }
 
@@ -6919,7 +7627,7 @@ impl BlobOps for HostObject {
         // The result is a `Blob` even when the receiver was a `File`: `File`
         // declares no `slice()` of its own, and the standard's `Blob` return
         // type is what the inherited member answers with.
-        Ok(Handle::from_bits(encode_host(new_key)))
+        Ok(Handle::from_bits(encode_host(ctx.slot, new_key)))
     }
 
     fn text(&self) -> Result<Promise<String>, JsError> {
@@ -7060,10 +7768,10 @@ fn file_keys(list: &[(String, EntryValue)]) -> Vec<HostKey> {
 /// with no extra state: the wrapper world keeps one wrapper per handle, so the
 /// object `get` answers with is the object `getAll` and the pair iterator answer
 /// with, and it is the object the page passed in when the entry kept it.
-fn entry_to_union(value: &EntryValue) -> FileOrUsvString {
+fn entry_to_union(slot: u16, value: &EntryValue) -> FileOrUsvString {
     match value {
         EntryValue::String(text) => FileOrUsvString::UsvString(text.clone()),
-        EntryValue::File(key) => FileOrUsvString::File(Handle::from_bits(encode_host(*key))),
+        EntryValue::File(key) => FileOrUsvString::File(Handle::from_bits(encode_host(slot, *key))),
     }
 }
 
@@ -7403,7 +8111,7 @@ impl FormDataOps for HostObject {
                 .list
                 .iter()
                 .find(|(entry_name, _)| entry_name == name)
-                .map(|(_, value)| entry_to_union(value))
+                .map(|(_, value)| entry_to_union(self.slot(), value))
         }))
     }
 
@@ -7415,7 +8123,7 @@ impl FormDataOps for HostObject {
                 .list
                 .iter()
                 .filter(|(entry_name, _)| entry_name == name)
-                .map(|(_, value)| entry_to_union(value))
+                .map(|(_, value)| entry_to_union(self.slot(), value))
                 .collect()
         }))
     }
@@ -7465,7 +8173,7 @@ impl FormDataOps for HostObject {
             record
                 .list
                 .iter()
-                .map(|(name, value)| (name.clone(), entry_to_union(value)))
+                .map(|(name, value)| (name.clone(), entry_to_union(self.slot(), value)))
                 .collect()
         }))
     }
@@ -7725,7 +8433,7 @@ impl HostObject {
         // reads is deliberately not a parameter: nothing in this tree
         // synthesizes a request from a cached response.
         let ctx = self.context();
-        fire_xhr_progress(ctx, DispatchTarget::host(key), "loadstart", 0, 0);
+        fire_xhr_progress(ctx, DispatchTarget::host(ctx.slot, key), "loadstart", 0, 0);
 
         // The request crosses the callback boundary here: the page's half is the
         // carrier below, and the engine's — the calling task's provenance — is
@@ -7752,7 +8460,7 @@ impl HostObject {
         // below, i.e. across the very call it must not span.
         let script = ctx.script.borrow().as_ref().map(Rc::clone);
         let handle = XhrHandle {
-            target: encode_host(key),
+            target: encode_host(ctx.slot, key),
             request: request_id,
         };
         let refusal = match script {
@@ -7770,7 +8478,12 @@ impl HostObject {
         // `loadstart` listener had re-opened the object meanwhile.
         if let Some(error) = refusal {
             let outcome = FetchOutcome::Failed(error.message().to_owned());
-            deliver_xhr_completion(ctx, DispatchTarget::host(key), request_id, &outcome);
+            deliver_xhr_completion(
+                ctx,
+                DispatchTarget::host(ctx.slot, key),
+                request_id,
+                &outcome,
+            );
             return Ok(());
         }
 
@@ -7791,7 +8504,13 @@ impl HostObject {
         // not for this one.
         let timeout = self.with_xhr(0, |record| record.timeout);
         if timeout != 0 {
-            arm_xhr_timeout(ctx, DispatchTarget::host(key), key, handle, timeout);
+            arm_xhr_timeout(
+                ctx,
+                DispatchTarget::host(ctx.slot, key),
+                key,
+                handle,
+                timeout,
+            );
         }
         Ok(())
     }
@@ -7960,7 +8679,7 @@ impl XMLHttpRequestOps for HostObject {
         record.flags.initialized = true;
         record.is_trusted = true;
         let event_key = ctx.events.borrow_mut().insert(record);
-        let dispatched = dispatch_at(ctx, DispatchTarget::host(key), event_key, true);
+        let dispatched = dispatch_at(ctx, DispatchTarget::host(ctx.slot, key), event_key, true);
         // Remove the transient record unless a listener made a wrapper for it
         // (in which case the world's dead-event sweep owns its removal).
         let orphaned = ctx
@@ -8134,7 +8853,7 @@ impl XMLHttpRequestOps for HostObject {
             return;
         };
         let ctx = self.context();
-        let target = DispatchTarget::host(key);
+        let target = DispatchTarget::host(ctx.slot, key);
         // Step 2's condition is read *before* step 2 runs: the request error
         // steps set the state to done, and step 3 then reads what they left
         // there.
@@ -8599,7 +9318,7 @@ fn bump_xhr_request_id(ctx: &SharedContext, key: HostKey) -> Option<XhrHandle> {
         return None;
     };
     let handle = XhrHandle {
-        target: encode_host(key),
+        target: encode_host(ctx.slot, key),
         request: record.request_id,
     };
     record.request_id = record.request_id.wrapping_add(1);
@@ -9130,6 +9849,11 @@ impl HostObject {
 /// This is a check of the tag, not of the interface: what "a `Node`" means in
 /// the tree — `Document`, `Text`, `Element` and the rest — is decided by the
 /// arena, which rejects an id it never issued.
+///
+/// The *slot* check lives with the callers instead, because what a wrong slot
+/// means is per operation: [`HostObject::same_document_node`] and
+/// [`HostObject::child_argument`] are the two answers, and
+/// [`NodeOps::contains`]'s is a third.
 fn node_argument(handle: Handle<Node>) -> Result<NodeId, JsError> {
     let decoded = decode(handle.bits());
     if decoded.tag != TAG_NODE {
@@ -9387,12 +10111,31 @@ fn element_tag_name(doc: &Document, id: NodeId) -> String {
     }
 }
 
-/// The bit layout of a DOM wrapper handle: `tag:8 | doc_slot:8 | node_id:32 |
-/// generation:16` (`docs/spec/04-dom-and-css.md` §1, `NodeRef`). The document
-/// slot is always zero until a world spans more than one document.
-const TAG_SHIFT: u32 = 56;
+/// The bit layout of a DOM wrapper handle: `tag:4 | doc_slot:12 | node_id:32 |
+/// generation:16`, over the `NodeRef` of `docs/spec/04-dom-and-css.md` §1.
+///
+/// The document slot was eight bits until a world could hold more than one
+/// document, and the four bits it gave up are the tag's: ten tags are in use,
+/// `TAG_HOST` multiplexes the host-owned classes by a record field rather than
+/// by a tag, and a node's generation and id are the two fields whose width the
+/// arena's own types (`u32` and `u16`) pin.
+///
+/// The slot is 12 bits because a page's *demand* is wider than eight: the
+/// largest `dom/nodes` file, `DOMImplementation-createDocument.html`, mints
+/// over four hundred documents in one page (its 214-row table runs a
+/// three-document test for each row that expects no exception). See
+/// `DocumentSet` for what happens when even 12 bits run out.
+const TAG_SHIFT: u32 = 60;
 const DOC_SLOT_SHIFT: u32 = 48;
 const NODE_ID_SHIFT: u32 = 16;
+/// The document slot's width, and so its mask: bits 48..=59.
+const DOC_SLOT_MASK: u64 = (1 << (TAG_SHIFT - DOC_SLOT_SHIFT)) - 1;
+
+/// The highest document slot a handle's `doc_slot` field can carry. Slot 0 is
+/// the page's own document, so a world can mint at most this many documents
+/// before [`DocumentSet::next_slot`] runs out and a `DOMImplementation` factory
+/// starts throwing instead of returning a document.
+pub const MAX_DOCUMENT_SLOT: u16 = DOC_SLOT_MASK as u16;
 
 /// Handle tag for a single node.
 pub const TAG_NODE: u8 = 0;
@@ -9420,15 +10163,22 @@ pub const TAG_WINDOW: u8 = 8;
 /// Handle tag for a JS-owned host object that is not a node: a `URL`, a
 /// `URLSearchParams` or a `Headers`, keyed into the host-record slab. The
 /// interface is named by the *record*, not by the tag, because all three share
-/// this one tag — the tag is 8 bits of a handle and there is no room for one
+/// this one tag — the tag is 4 bits of a handle and there is no room for one
 /// per class.
 pub const TAG_HOST: u8 = 9;
+
+/// The tag field's width. Every tag has to be below this, and the four bits the
+/// document slot took from the tag are why `TAG_HOST` multiplexes by record.
+pub const TAG_WIDTH: u32 = 64 - TAG_SHIFT;
 
 /// A handle decoded back into its parts.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct DecodedHandle {
     /// [`TAG_NODE`], [`TAG_NODE_LIST`], [`TAG_HTML_COLLECTION`], or snapshot tags.
     pub tag: u8,
+    /// The document slot the payload belongs to: 0 is the page, and every other
+    /// value names a document a `DOMImplementation` minted.
+    pub slot: u16,
     /// For node handles: the node id. For snapshot handles: the snapshot index.
     pub node_id: NodeId,
     /// For node handles: the node generation. For snapshot handles: the snapshot generation.
@@ -9480,83 +10230,93 @@ impl DecodedHandle {
     }
 }
 
-/// Packs a `tag` and a node reference into the opaque handle bits a wrapper
-/// world keys on.
-fn pack(tag: u8, node: NodeRef) -> u64 {
+/// Packs a `tag`, a document slot and a node reference into the opaque handle
+/// bits a wrapper world keys on.
+///
+/// The slot is masked rather than checked: every caller builds it from a
+/// [`DocumentSet`] that never hands out a slot wider than the field, and
+/// `DocumentSet::next_slot` is where running out is turned into an error.
+fn pack(tag: u8, slot: u16, node: NodeRef) -> u64 {
     // TODO(phase 1): the arena generation is `u32`; the low 16 bits are enough
-    // to catch slot reuse within a page. Widen alongside the `doc_slot` tag
-    // when a world spans more than one document.
+    // to catch slot reuse within a page.
     let generation = node.generation as u16;
     ((tag as u64) << TAG_SHIFT)
-        | (0u64 << DOC_SLOT_SHIFT)
+        | (((slot as u64) & DOC_SLOT_MASK) << DOC_SLOT_SHIFT)
         | ((node.id.raw() as u64) << NODE_ID_SHIFT)
         | (generation as u64)
 }
 
-/// Packs a node reference into a [`TAG_NODE`] handle.
-pub fn encode_node(node: NodeRef) -> u64 {
-    pack(TAG_NODE, node)
+/// Packs a node reference into a [`TAG_NODE`] handle, in document `slot`.
+pub fn encode_node(slot: u16, node: NodeRef) -> u64 {
+    pack(TAG_NODE, slot, node)
 }
 
 /// Packs a list owner's reference into a [`TAG_NODE_LIST`] handle.
-pub fn encode_collection(owner: NodeRef) -> u64 {
-    pack(TAG_NODE_LIST, owner)
+pub fn encode_collection(slot: u16, owner: NodeRef) -> u64 {
+    pack(TAG_NODE_LIST, slot, owner)
 }
 
 /// Packs a collection owner's reference into a [`TAG_HTML_COLLECTION`] handle.
-pub fn encode_html_collection(owner: NodeRef) -> u64 {
-    pack(TAG_HTML_COLLECTION, owner)
+pub fn encode_html_collection(slot: u16, owner: NodeRef) -> u64 {
+    pack(TAG_HTML_COLLECTION, slot, owner)
 }
 
 /// Packs a token-list owner's reference into a [`TAG_TOKEN_LIST`] handle.
-pub fn encode_token_list(owner: NodeRef) -> u64 {
-    pack(TAG_TOKEN_LIST, owner)
+pub fn encode_token_list(slot: u16, owner: NodeRef) -> u64 {
+    pack(TAG_TOKEN_LIST, slot, owner)
 }
 
 /// Packs a style declaration owner's reference into a [`TAG_STYLE`] handle.
-pub fn encode_style(owner: NodeRef) -> u64 {
-    pack(TAG_STYLE, owner)
+pub fn encode_style(slot: u16, owner: NodeRef) -> u64 {
+    pack(TAG_STYLE, slot, owner)
 }
 
 /// Packs the window into a [`TAG_WINDOW`] handle. Every window handle is
 /// identical, which is what lets a listener compare `currentTarget` against the
 /// global object.
+///
+/// The bits carry document slot 0 because they carry no payload at all: the
+/// window is the global object of the realm `wrapper` answers from, whichever
+/// slot the world was asked for. A document with no browsing context has no
+/// window, so nothing ever asks for one in a minted slot.
 pub fn encode_window() -> u64 {
     (TAG_WINDOW as u64) << TAG_SHIFT
 }
 
-/// Packs a snapshot tag and key into handle bits.
-pub fn encode_snapshot(tag: u8, key: SnapshotKey) -> u64 {
+/// Packs a snapshot tag and key into handle bits, in document `slot`.
+pub fn encode_snapshot(slot: u16, tag: u8, key: SnapshotKey) -> u64 {
     ((tag as u64) << TAG_SHIFT)
-        | (0u64 << DOC_SLOT_SHIFT)
+        | (((slot as u64) & DOC_SLOT_MASK) << DOC_SLOT_SHIFT)
         | ((key.index as u64) << NODE_ID_SHIFT)
         | (key.generation as u64)
 }
 
-/// Packs an [`EventKey`] into [`TAG_EVENT`] handle bits.
-pub fn encode_event(key: EventKey) -> u64 {
+/// Packs an [`EventKey`] into [`TAG_EVENT`] handle bits, in document `slot`.
+pub fn encode_event(slot: u16, key: EventKey) -> u64 {
     ((TAG_EVENT as u64) << TAG_SHIFT)
-        | (0u64 << DOC_SLOT_SHIFT)
+        | (((slot as u64) & DOC_SLOT_MASK) << DOC_SLOT_SHIFT)
         | ((key.index as u64) << NODE_ID_SHIFT)
         | (key.generation as u64)
 }
 
-/// Packs a [`HostKey`] into [`TAG_HOST`] handle bits.
+/// Packs a [`HostKey`] into [`TAG_HOST`] handle bits, in document `slot`.
 ///
 /// The bits are the object's identity: the wrapper world keeps one wrapper per
 /// handle, so two accesses that produce the same key produce the same JS object.
 /// That is what makes `url.searchParams === url.searchParams` hold.
-pub fn encode_host(key: HostKey) -> u64 {
+pub fn encode_host(slot: u16, key: HostKey) -> u64 {
     ((TAG_HOST as u64) << TAG_SHIFT)
-        | (0u64 << DOC_SLOT_SHIFT)
+        | (((slot as u64) & DOC_SLOT_MASK) << DOC_SLOT_SHIFT)
         | ((key.index as u64) << NODE_ID_SHIFT)
         | (key.generation as u64)
 }
 
-/// Splits handle bits back into their tag, node id and generation.
+/// Splits handle bits back into their tag, document slot, node id and
+/// generation.
 pub fn decode(bits: u64) -> DecodedHandle {
     DecodedHandle {
         tag: (bits >> TAG_SHIFT) as u8,
+        slot: ((bits >> DOC_SLOT_SHIFT) & DOC_SLOT_MASK) as u16,
         node_id: NodeId(((bits >> NODE_ID_SHIFT) & 0xFFFF_FFFF) as u32),
         generation: (bits & 0xFFFF) as u16,
     }

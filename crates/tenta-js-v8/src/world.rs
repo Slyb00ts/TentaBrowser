@@ -24,8 +24,9 @@ use tenta_core::NodeId;
 use tenta_core::atom::atoms;
 use tenta_dom::NodeKind;
 use tenta_js::bindings::host::{
-    HostObject, HostRecord, SharedContext, TAG_EVENT, TAG_HOST, TAG_HTML_COLLECTION, TAG_NODE_LIST,
-    TAG_STYLE, TAG_TOKEN_LIST, TAG_WINDOW, decode, encode_window, reclaim_host_record,
+    DocumentSet, HostObject, HostRecord, SharedContext, TAG_EVENT, TAG_HOST, TAG_HTML_COLLECTION,
+    TAG_NODE_LIST, TAG_STYLE, TAG_TOKEN_LIST, TAG_WINDOW, decode, encode_window,
+    reclaim_host_record,
 };
 use tenta_js::bindings::{
     InterfaceDescriptor, InterfaceRegistry, WRAPPER_HOST_FIELD, WRAPPER_TAG, WrapperWorld,
@@ -65,7 +66,12 @@ pub struct WorldState {
     /// borrow), so it only records the id here; the ids are drained at a safe
     /// point outside any finalizer (see `V8World::wrapper` and the engine's
     /// teardown).
-    dead: Vec<NodeId>,
+    ///
+    /// The entry is a `(slot, id)` pair and not a bare id because two documents
+    /// of one world keep independent arenas: node 5 of the page and node 5 of a
+    /// document `DOMImplementation` minted are different nodes, and clearing
+    /// the wrong one's bit would leave the right one pinned.
+    dead: Vec<(u16, NodeId)>,
     /// Snapshot wrapper handles (tagged with TAG_STATIC_NODE_LIST or TAG_STATIC_HTML_COLLECTION)
     /// that a finalizer has collected, awaiting cleanup of their slab entries.
     dead_snapshots: Vec<u64>,
@@ -133,15 +139,14 @@ impl WorldState {
     /// to the same node id, so `HAS_WRAPPER` is a single bit shared by both. An
     /// id is surfaced only once no live host still anchors to it, so collecting
     /// one of a node's wrappers never clears the bit while the other is alive.
-    pub fn take_dead(&mut self) -> Vec<NodeId> {
+    pub fn take_dead(&mut self) -> Vec<(u16, NodeId)> {
         let dead = std::mem::take(&mut self.dead);
         dead.into_iter()
-            .filter(|id| {
+            .filter(|(slot, id)| {
                 !self.hosts.keys().any(|bits| {
-                    decode(*bits)
-                        .node_anchor()
-                        .map(|nid| nid == *id)
-                        .unwrap_or(false)
+                    let decoded = decode(*bits);
+                    decoded.slot == *slot
+                        && decoded.node_anchor().map(|nid| nid == *id).unwrap_or(false)
                 })
             })
             .collect()
@@ -155,15 +160,14 @@ impl WorldState {
     /// running its finalizer, so its bit would otherwise never be cleared. Ids
     /// may repeat (a node and its `NodeList`, or a dead id still anchored);
     /// `set_has_wrapper(false)` is idempotent, so the caller need not dedup.
-    pub fn wrapped_node_ids(&self) -> Vec<NodeId> {
+    pub fn wrapped_node_ids(&self) -> Vec<(u16, NodeId)> {
         self.dead
             .iter()
             .copied()
-            .chain(
-                self.hosts
-                    .keys()
-                    .filter_map(|bits| decode(*bits).node_anchor()),
-            )
+            .chain(self.hosts.keys().filter_map(|bits| {
+                let decoded = decode(*bits);
+                decoded.node_anchor().map(|id| (decoded.slot, id))
+            }))
             .collect()
     }
 
@@ -369,37 +373,61 @@ pub fn reclaim_dead_hosts(state: &mut WorldState, ctx: &SharedContext, dead_host
 /// Call it where no document borrow is held and outside any finalizer: a
 /// finalizer records ids only precisely because this is the safe point to
 /// borrow the document ([`WorldState::take_dead`]).
-pub fn reclaim_dead_bookkeeping(state: &RefCell<WorldState>, ctx: &SharedContext) {
+///
+/// It takes the world's [`DocumentSet`] rather than one context because a dead
+/// wrapper's slot says which document it belonged to, and the slab a snapshot,
+/// event or host record has to leave is the one that document's context owns.
+pub fn reclaim_dead_bookkeeping(state: &RefCell<WorldState>, documents: &DocumentSet) {
     {
         let mut state_mut = state.borrow_mut();
         let dead = state_mut.take_dead();
-        if !dead.is_empty() {
-            let mut doc = ctx.doc.borrow_mut();
-            for id in dead {
-                doc.set_has_wrapper(id, false);
+        for (slot, id) in dead {
+            // A dead node wrapper's document is the one its slot names, which
+            // is the page's for slot 0 and the minted document's otherwise. A
+            // slot whose context has already gone has nothing to clear.
+            if let Some(ctx) = documents.get(slot) {
+                ctx.doc.borrow_mut().set_has_wrapper(id, false);
             }
         }
 
         // Remove dead snapshot wrappers' slab entries and disarm their
-        // tombstone `Weak`s.
+        // tombstone `Weak`s. The entry lives in the slab of the context the
+        // handle's slot names, because a snapshot is keyed per context.
         let dead_snapshot_bits = state_mut.take_dead_snapshots();
         for bits in dead_snapshot_bits {
-            let snapshot_key = decode(bits).snapshot_key();
-            ctx.snapshots.borrow_mut().remove(snapshot_key);
+            let decoded = decode(bits);
+            let snapshot_key = decoded.snapshot_key();
+            if let Some(ctx) = documents.get(decoded.slot) {
+                ctx.snapshots.borrow_mut().remove(snapshot_key);
+            }
             state_mut.wrappers.remove(&bits);
         }
 
         // Remove dead event wrappers' event-slab records, release any interned
         // `CustomEvent` detail they owned, and disarm tombstone `Weak`s.
         let dead_event_bits = state_mut.take_dead_events();
-        reclaim_dead_events(&mut state_mut, &ctx.events, dead_event_bits);
+        for bits in dead_event_bits {
+            let decoded = decode(bits);
+            // A record whose context is gone owns nothing that outlives it: the
+            // whole slab went with the context.
+            if let Some(ctx) = documents.get(decoded.slot) {
+                reclaim_dead_events(&mut state_mut, &ctx.events, vec![bits]);
+            }
+        }
 
         // Remove dead JS-owned host object wrappers' host-record slab entries,
         // following the link each holds to its counterpart (a URL and its query
         // object, a controller and its signal) and giving up what the freed
         // records owned.
         let dead_host_bits = state_mut.take_dead_hosts();
-        reclaim_dead_hosts(&mut state_mut, ctx, dead_host_bits);
+        for bits in dead_host_bits {
+            let decoded = decode(bits);
+            if let Some(ctx) = documents.get(decoded.slot) {
+                reclaim_dead_hosts(&mut state_mut, &ctx, vec![bits]);
+            } else {
+                state_mut.wrappers.remove(&bits);
+            }
+        }
     }
 }
 
@@ -419,7 +447,7 @@ impl WrapperWorld for V8World {
         // `handle_to_v8` (which removes the wrapper-world slot around this
         // call). Wrapper creation only instantiates a template and attaches a
         // host — it never runs script or a getter — so re-entry cannot happen.
-        reclaim_dead_bookkeeping(&self.state, &self.ctx);
+        reclaim_dead_bookkeeping(&self.state, &self.ctx.documents);
 
         // Fast path: a live wrapper for this handle is revived and reused, so a
         // host is created at most once per live id. The borrow is released with
@@ -436,6 +464,14 @@ impl WrapperWorld for V8World {
 
         // Decode the tagged, generational handle.
         let decoded = decode(handle);
+
+        // The context the handle's document slot names. Slot 0 is the page's,
+        // which the world was built over; every other slot is a document a
+        // `DOMImplementation` minted, and its context owns the slabs a
+        // snapshot, event or host record of that document lives in. A slot that
+        // names no context is a handle to a document that is gone, which is the
+        // same `None` a reclaimed slab entry produces.
+        let ctx = self.ctx.documents.get(decoded.slot)?;
 
         // Pick the interface name and host. For snapshots, validate the slab entry
         // still exists. For nodes, validate the handle isn't stale.
@@ -459,15 +495,15 @@ impl WrapperWorld for V8World {
             // TAG_STATIC_NODE_LIST
             interface_name = "NodeList";
             let key = decoded.snapshot_key();
-            let _ = self.ctx.snapshots.borrow().get(key)?; // Snapshot was reclaimed or never existed
-            host = Box::new(HostObject::static_node_list(self.ctx.clone(), key));
+            let _ = ctx.snapshots.borrow().get(key)?; // Snapshot was reclaimed or never existed
+            host = Box::new(HostObject::static_node_list(ctx.clone(), key));
             kind = WrapperKind::Snapshot;
         } else if decoded.tag == 4 {
             // TAG_STATIC_HTML_COLLECTION
             interface_name = "HTMLCollection";
             let key = decoded.snapshot_key();
-            let _ = self.ctx.snapshots.borrow().get(key)?;
-            host = Box::new(HostObject::static_html_collection(self.ctx.clone(), key));
+            let _ = ctx.snapshots.borrow().get(key)?;
+            host = Box::new(HostObject::static_html_collection(ctx.clone(), key));
             kind = WrapperKind::Snapshot;
         } else if decoded.tag == TAG_EVENT {
             let key = decoded.event_key();
@@ -476,12 +512,12 @@ impl WrapperWorld for V8World {
             // thrown TypeError — an event wrapper is created right after
             // `createEvent`, while the record is alive, so this holds.
             interface_name = {
-                let mut events = self.ctx.events.borrow_mut();
+                let mut events = ctx.events.borrow_mut();
                 let record = events.get_mut(key)?;
                 record.has_wrapper = true;
                 record.kind.interface_name()
             };
-            host = Box::new(HostObject::event(self.ctx.clone(), key));
+            host = Box::new(HostObject::event(ctx.clone(), key));
             kind = WrapperKind::Event;
         } else if decoded.tag == TAG_HOST {
             // A JS-owned host object. The tag does not name the interface — every
@@ -489,7 +525,7 @@ impl WrapperWorld for V8World {
             // (reclaimed with its previous wrapper) is the same `None` the event
             // arm returns.
             let key = decoded.host_key();
-            let mut records = self.ctx.host_records.borrow_mut();
+            let mut records = ctx.host_records.borrow_mut();
             let record = records.get_mut(key)?;
             // A record that another record's key can point at — a URL its query
             // object, a signal its controller, the headers a response created, a
@@ -513,17 +549,18 @@ impl WrapperWorld for V8World {
                 | HostRecord::TextEncoder
                 | HostRecord::Xhr(_)
                 | HostRecord::Blob(_)
-                | HostRecord::FormData(_) => {}
+                | HostRecord::FormData(_)
+                | HostRecord::Implementation => {}
             }
             interface_name = record.interface_name();
-            host = Box::new(HostObject::host_record(self.ctx.clone(), key));
+            host = Box::new(HostObject::host_record(ctx.clone(), key));
             kind = WrapperKind::Host;
         } else {
             // Live node handle, anchored to the node's id.
             kind = WrapperKind::Node;
             let node_id = decoded.node_id;
             let node = {
-                let doc = self.ctx.doc.borrow();
+                let doc = ctx.doc.borrow();
                 if !doc.is_live(node_id)
                     || doc.node_ref(node_id).generation as u16 != decoded.generation
                 {
@@ -541,7 +578,7 @@ impl WrapperWorld for V8World {
             } else if decoded.tag == TAG_STYLE {
                 "CSSStyleDeclaration"
             } else {
-                let doc = self.ctx.doc.borrow();
+                let doc = ctx.doc.borrow();
                 match doc.kind(node_id) {
                     // HTML-namespace elements get the `HTMLElement` prototype
                     // (which carries `click()`), with `<iframe>` refined to
@@ -573,20 +610,25 @@ impl WrapperWorld for V8World {
                     NodeKind::Text => "Text",
                     NodeKind::Comment => "Comment",
                     NodeKind::Fragment => "DocumentFragment",
+                    // The two kinds `dom/nodes` reads most: a doctype and a
+                    // processing instruction each have an interface of their
+                    // own, and neither is a `Node`-only shell.
+                    NodeKind::DocType => "DocumentType",
+                    NodeKind::ProcessingInstruction => "ProcessingInstruction",
                     _ => "Node",
                 }
             };
 
             host = Box::new(if decoded.tag == TAG_NODE_LIST {
-                HostObject::node_list(self.ctx.clone(), node)
+                HostObject::node_list(ctx.clone(), node)
             } else if decoded.tag == TAG_HTML_COLLECTION {
-                HostObject::html_collection(self.ctx.clone(), node)
+                HostObject::html_collection(ctx.clone(), node)
             } else if decoded.tag == TAG_TOKEN_LIST {
-                HostObject::token_list(self.ctx.clone(), node)
+                HostObject::token_list(ctx.clone(), node)
             } else if decoded.tag == TAG_STYLE {
-                HostObject::style(self.ctx.clone(), node)
+                HostObject::style(ctx.clone(), node)
             } else {
-                HostObject::node(self.ctx.clone(), node)
+                HostObject::node(ctx.clone(), node)
             });
         }
 
@@ -604,7 +646,7 @@ impl WrapperWorld for V8World {
         // touch the document.
         if kind == WrapperKind::Node {
             let node_id = decoded.node_id;
-            self.ctx.doc.borrow_mut().set_has_wrapper(node_id, true);
+            ctx.doc.borrow_mut().set_has_wrapper(node_id, true);
         }
 
         let state = self.state.clone();
@@ -625,7 +667,7 @@ impl WrapperWorld for V8World {
                 let mut state = state.borrow_mut();
                 if state.hosts.remove(&handle).is_some() {
                     match kind {
-                        WrapperKind::Node => state.dead.push(decoded.node_id),
+                        WrapperKind::Node => state.dead.push((decoded.slot, decoded.node_id)),
                         WrapperKind::Snapshot => state.dead_snapshots.push(handle),
                         WrapperKind::Event => state.dead_events.push(handle),
                         WrapperKind::Host => state.dead_hosts.push(handle),
@@ -711,6 +753,13 @@ impl WrapperWorld for V8World {
             .map_err(|_| JsError::type_error("adopt: the host is not a HostObject"))?;
         let handle = host.handle_bits();
         let decoded = decode(handle);
+        // The record an adopted host belongs to lives in the slab of the context
+        // its slot names — the page's for everything a constructor can build.
+        let ctx = self
+            .ctx
+            .documents
+            .get(decoded.slot)
+            .ok_or_else(|| JsError::type_error("adopt: the document is gone"))?;
         // A constructor may only adopt a host that owns a slab record: an
         // `Event`, or an `URL`/`URLSearchParams`. Anything else is a generator
         // wiring bug surfaced as a `TypeError`, not a panic.
@@ -718,7 +767,7 @@ impl WrapperWorld for V8World {
             let key = decoded.event_key();
             // Mark the record wrapped, mirroring the TAG_EVENT branch of
             // `wrapper`, so the dead-event sweep reclaims it exactly once.
-            let mut events = self.ctx.events.borrow_mut();
+            let mut events = ctx.events.borrow_mut();
             let record = events
                 .get_mut(key)
                 .ok_or_else(|| JsError::type_error("adopt: the event record is gone"))?;
@@ -731,7 +780,7 @@ impl WrapperWorld for V8World {
             // here: the entry list frees a file record as soon as nothing holds
             // it, so an unmarked record could be freed while this very wrapper is
             // alive.
-            let mut records = self.ctx.host_records.borrow_mut();
+            let mut records = ctx.host_records.borrow_mut();
             let record = records
                 .get_mut(key)
                 .ok_or_else(|| JsError::type_error("adopt: the host record is gone"))?;

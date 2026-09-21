@@ -540,11 +540,7 @@ impl Engine {
         let state = Rc::new(RefCell::new(world::WorldState::default()));
         // Events timestamp against the loop clock, so `evt.timeStamp` and
         // `performance.now()` are readings of the same clock.
-        let ctx = Rc::new(HostContext::new(
-            doc.clone(),
-            host.scheduler.clock(),
-            host.cookies.clone(),
-        ));
+        let ctx = HostContext::new(doc.clone(), host.scheduler.clock(), host.cookies.clone());
         let document_ref = {
             let doc = doc.borrow();
             doc.node_ref(doc.document_node())
@@ -727,6 +723,31 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the Document interface");
+            // DocumentType : Node and ProcessingInstruction : CharacterData —
+            // both roots are installed above, so both install here. A doctype
+            // and a processing instruction each get a prototype of their own
+            // rather than the `Node` shell (see world.rs interface selection).
+            tenta_js::bindings::install_document_type::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the DocumentType interface");
+            tenta_js::bindings::install_processing_instruction::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the ProcessingInstruction interface");
+            // DOMImplementation has no DOM parent, so its install order relative
+            // to the node types is free. It is installed so `Document.implementation`
+            // has a prototype and a global constructor.
+            tenta_js::bindings::install_dom_implementation::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the DOMImplementation interface");
             tenta_js::bindings::install_node_list::<HostObject>(
                 scope,
                 global_template,
@@ -908,7 +929,7 @@ impl Engine {
                 .wrapper(
                     inner,
                     "Document",
-                    tenta_js::bindings::host::encode_node(document_ref),
+                    tenta_js::bindings::host::encode_node(ctx.slot, document_ref),
                 )
                 .expect("the document wrapper");
             let key = v8::String::new(inner, "document").expect("`document` fits the string limit");
@@ -1539,7 +1560,7 @@ impl Engine {
         };
         let (target, type_, bubbles, cancelable) = match event {
             LifecycleEvent::DomContentLoaded => (
-                DispatchTarget::node(document_ref),
+                DispatchTarget::node(dom.ctx.slot, document_ref),
                 "DOMContentLoaded",
                 true,
                 false,
@@ -1550,7 +1571,8 @@ impl Engine {
                 // window's document rather than the window
                 // (`DispatchTarget::with_target_override`). The listener table
                 // is unaffected: a `window` listener still fires.
-                DispatchTarget::window().with_target_override(encode_node(document_ref)),
+                DispatchTarget::window()
+                    .with_target_override(encode_node(dom.ctx.slot, document_ref)),
                 "load",
                 false,
                 false,
@@ -1930,7 +1952,7 @@ impl Drop for Engine {
             // It must run before the `clear` below drops those lists, and it is
             // the same function the lazy sweep and `trim_memory` use, so the
             // three cannot drift.
-            world::reclaim_dead_bookkeeping(&dom.state, &dom.ctx);
+            world::reclaim_dead_bookkeeping(&dom.state, &dom.ctx.documents);
 
             // Clear `HAS_WRAPPER` for every node still wrapped — the anchor of
             // every live host (the ids a finalizer recorded were cleared just
@@ -1938,12 +1960,13 @@ impl Drop for Engine {
             // still alive, before dropping the hosts. Wrappers still live at
             // teardown are dropped here without ever running a finalizer, so
             // their bits must be cleared explicitly; otherwise a document that
-            // outlives the engine keeps those nodes pinned forever.
+            // outlives the engine keeps those nodes pinned forever. A handle
+            // names the document it belongs to by its slot, so each id is
+            // cleared in that document and not in the page's.
             let ids = dom.state.borrow().wrapped_node_ids();
-            if !ids.is_empty() {
-                let mut doc = dom.ctx.doc.borrow_mut();
-                for id in ids {
-                    doc.set_has_wrapper(id, false);
+            for (slot, id) in ids {
+                if let Some(ctx) = dom.ctx.documents.get(slot) {
+                    ctx.doc.borrow_mut().set_has_wrapper(id, false);
                 }
             }
             dom.state.borrow_mut().clear();
@@ -2077,7 +2100,7 @@ fn build_completion(
             let key = insert_fetched_response(&dom.ctx, data);
             let wrapper = handle_to_v8::<tenta_js::bindings::Response>(
                 scope,
-                Handle::from_bits(encode_host(key)),
+                Handle::from_bits(encode_host(dom.ctx.slot, key)),
             )
             .ok()?;
             Some((dom.state.borrow_mut().store_value(scope, wrapper), false))
