@@ -90,9 +90,11 @@ only place JavaScript is needed in this repository.
 
 What it does, per test:
 
-- one engine and one context for the whole run (`allow_private_network` and
+- one engine, built with one io thread and one page thread per worker, and one
+  context **per worker** — each with `allow_private_network` and
   `ignore_https_errors`, because the WPT server is on loopback with test
-  certificates), and one interceptor that answers three kinds of request:
+  certificates. Each context has its own interceptor, resolver, cache and cookie
+  jar; the interceptor answers three kinds of request:
   - `/resources/testharnessreport.js` (any path ending with it) is fulfilled
     with the completion hook — `setup({ output: false })` plus an
     `add_completion_callback` that posts the harness status, the message and
@@ -115,12 +117,34 @@ What it does, per test:
   dropped when either wins, which cancels it, and the page is closed. A test
   whose hook never arrives is `TIMEOUT` with no subtests, and `run.py`'s exit
   status flags it as unexpected until an expectation says otherwise.
-- one test at a time. The plan's `jobs` is read and reported but ignored:
-  concurrency is a later slice, and the driver warns on stderr when `jobs > 1`.
+- one test at a time per worker; `jobs` tests run at once. A worker owns a
+  context, and the context's interceptor answers the report-script path with a
+  hook naming the index *that* worker is running — so attribution is right by
+  construction, and a shared hub would make both hooks name the same test. The
+  pool runs on the driver's own current-thread runtime through a `LocalSet`, so
+  the workers need no `Send` bound. Results are written by index, so they always
+  come back in plan order whatever order the workers finish in. The run deadline
+  (`--max-minutes`) is checked when a worker claims a test, before its page
+  exists: a test claimed after it is `NOTRUN`, and a test already started drains
+  to its own hook or per-test deadline rather than being aborted.
 
 The driver's diagnostics go to stderr at `WARN`; `TENTA_LOG=info` adds a line per
 test with its status and subtest passes, which is the only progress signal a run
 against a whole directory has. Results go to the file, never to stdout.
+
+**Concurrency is not usable against `dom/nodes` yet.** Measured 2026-09-21 on
+`dom/nodes`: `--jobs 1` gives 2032/5247 subtests (38.73 %) in 738 s, but
+`--jobs 4` aborts the driver with `SIGABRT` after 163 s — the page threads panic
+with `v8::OwnedIsolate instances must be dropped in the reverse order of
+creation`. The cause is in the engine, not this driver: a page thread keeps one
+`PageRuntime` per page it hosts (`crates/tenta-page/src/runtime.rs`), each owning
+a `v8::OwnedIsolate`, and `OwnedIsolate::drop` asserts the isolate being dropped
+is the thread's current one. Page threads are handed out by a **global**
+round-robin (`crates/tenta-browser/src/threads.rs`), so two workers' pages land
+on one thread as soon as the workers drift apart, and whichever page closes
+first is then not the newest. One page thread per worker would fix it; that is an
+engine change and a decision, not a driver change. Until then, run this product
+at `--jobs 1`.
 
 A directory that measures 0 % or comes back all-`TIMEOUT` is a driver problem
 rather than a finding: check that the hook was requested at all in

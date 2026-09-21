@@ -36,6 +36,12 @@ directories and updating expectations.
   implement is documented on the `Driver` class in `run.py`; this one is
   described in `docs/dev/wpt.md`.
 
+  Measured on `dom/nodes` (2026-09-21): `--jobs 1` gives 2032/5247 subtests
+  (38.73 %) in 738 s. `--jobs 4` aborts the driver with `SIGABRT` after 163 s
+  (a V8 isolate teardown panic on a shared page thread), so **run this product
+  at `--jobs 1`** until that engine defect is fixed; `docs/dev/wpt.md` has the
+  mechanism.
+
 ## Pinned WPT commit
 
 `b89af32bc8f42d678f444eb0703bca015ddcf240` (`web-platform-tests/wpt` master,

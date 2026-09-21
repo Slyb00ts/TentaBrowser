@@ -237,6 +237,98 @@ impl Interceptor for StaticPage {
     }
 }
 
+/// An interceptor that fulfils exactly one path with its own body, so two
+/// contexts can be told apart by which one answered.
+struct FixedPage {
+    path: &'static str,
+    body: &'static str,
+}
+
+impl Interceptor for FixedPage {
+    fn intercept<'a>(&'a self, request: &'a mut Request) -> BoxFuture<'a, Interception> {
+        Box::pin(async move {
+            if request.url.path() == self.path {
+                Interception::Fulfill(
+                    FulfilledResponse::new(http::StatusCode::OK, self.body)
+                        .header("content-type", "text/html; charset=utf-8"),
+                )
+            } else {
+                Interception::Continue
+            }
+        })
+    }
+}
+
+/// A second context on one engine has its own interceptor list, so context A's
+/// interceptor can never answer context B's request.
+///
+/// The WPT driver's worker pool rests on exactly this: each worker owns a
+/// context, and the context's interceptor answers the report-script path with a
+/// hook naming the worker's current test. If the two contexts shared one hub,
+/// both hook scripts would name whichever test the shared slot held, and the
+/// other test would time out. The request count makes the negative half
+/// non-vacuous: context B's crossed request reached the network rather than
+/// being fulfilled by context A's interceptor.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_contexts_on_one_engine_have_separate_interceptor_lists() {
+    let server = support::server().await;
+    let engine = support::engine(2);
+    let first = support::context(&engine);
+    let second = support::context(&engine);
+
+    first
+        .intercept(Arc::new(FixedPage {
+            path: "/only-first.html",
+            body: "<html><body><p>from context A</p></body></html>",
+        }))
+        .expect("register on the first");
+    second
+        .intercept(Arc::new(FixedPage {
+            path: "/only-second.html",
+            body: "<html><body><p>from context B</p></body></html>",
+        }))
+        .expect("register on the second");
+
+    assert_eq!(first.interceptor_count(), 1);
+    assert_eq!(
+        second.interceptor_count(),
+        1,
+        "the second context has its own list, not the first's"
+    );
+
+    // Each context's own interceptor answers its own path, without a socket.
+    let a = first
+        .fetch(&server.url("/only-first.html"))
+        .await
+        .expect("A");
+    assert!(a.text().contains("from context A"));
+    let b = second
+        .fetch(&server.url("/only-second.html"))
+        .await
+        .expect("B");
+    assert!(b.text().contains("from context B"));
+    assert_eq!(
+        server.requests_served(),
+        0,
+        "both were fulfilled by their own context's interceptor"
+    );
+
+    // The first context's interceptor does not answer the second's request: it
+    // goes to the server, which has no such file.
+    let crossed = second.fetch(&server.url("/only-first.html")).await;
+    let body = crossed.map(|document| document.text()).unwrap_or_default();
+    assert!(
+        !body.contains("from context A"),
+        "context A's interceptor answered context B's request: {body}"
+    );
+    assert_eq!(
+        server.requests_served(),
+        1,
+        "context B's crossed request reached the network"
+    );
+    engine.close();
+}
+
 #[derive(Default)]
 struct CountingObserver {
     requests: AtomicUsize,

@@ -21,8 +21,16 @@
 
 #![cfg(feature = "v8")]
 
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use tenta_browser::wpt::{Plan, PlanTest, Results};
 use tenta_testutil::{FixtureServer, FixtureServerConfig, TempDir};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Notify;
 
 /// The stand-in `resources/testharness.js`.
 ///
@@ -91,10 +99,15 @@ async fn serve(files: &[(&str, &str)]) -> (FixtureServer, TempDir) {
     (server, temp)
 }
 
-/// The plan `run.py` would build for these tests.
+/// The plan `run.py` would build for these tests, one job.
 fn plan(server: &FixtureServer, tests: &[(&str, u64)]) -> Plan {
+    plan_for(&format!("http://{}", server.addr()), tests)
+}
+
+/// The same plan against any base URL, for the hand-written servers below.
+fn plan_for(base: &str, tests: &[(&str, u64)]) -> Plan {
     Plan {
-        base: format!("http://{}", server.addr()),
+        base: base.to_owned(),
         resolver_rules: false,
         jobs: 1,
         deadline_epoch_ms: None,
@@ -106,6 +119,14 @@ fn plan(server: &FixtureServer, tests: &[(&str, u64)]) -> Plan {
             })
             .collect(),
     }
+}
+
+/// The clock `wpt::run` reads, for a run deadline relative to now.
+fn now_epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("after the epoch")
+        .as_millis() as u64
 }
 
 /// When `subtests` has `len` or more entries, the one at `index`.
@@ -272,4 +293,371 @@ async fn every_test_in_a_plan_gets_its_own_result() {
     assert_eq!(results.tests[1].test, "/error.html");
     assert_eq!(results.tests[1].status, "ERROR");
     assert_eq!(results.tests[1].subtests.len(), 1);
+}
+
+// --- the pool: S3a, S3b, S3c -------------------------------------------------
+
+/// Two tests at two jobs, over the fixtures the sequential tests use.
+///
+/// The worker pool must not change what a result *is*: both outcomes come back
+/// in plan order, and each carries its own subtests rather than a mixture. Both
+/// pages here name their subtest `a passing subtest`, so the distinct statuses
+/// and subtest counts are what separate them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_tests_at_two_jobs_keep_their_own_results() {
+    let (server, _temp) = serve(&[
+        ("index.html", PAGE),
+        ("error.html", ERROR_PAGE),
+        ("resources/testharness.js", HARNESS),
+    ])
+    .await;
+
+    let mut plan = plan(&server, &[("/index.html", 10_000), ("/error.html", 10_000)]);
+    plan.jobs = 2;
+
+    let results = tenta_browser::wpt::run(plan)
+        .await
+        .expect("the run finishes");
+
+    assert_eq!(results.tests.len(), 2);
+    assert_eq!(
+        results.tests[0].test, "/index.html",
+        "results are in plan order, not completion order"
+    );
+    assert_eq!(results.tests[0].status, "OK");
+    assert_eq!(results.tests[0].subtests.len(), 2);
+    assert_eq!(results.tests[0].subtests[0].name, "a passing subtest");
+    assert_eq!(results.tests[1].test, "/error.html");
+    assert_eq!(results.tests[1].status, "ERROR");
+    assert_eq!(
+        results.tests[1].subtests.len(),
+        1,
+        "the second worker's own subtest list, not the first's"
+    );
+}
+
+/// A page that loads the harness stand-in and the report script and reports one
+/// subtest named `subtest`. When `gate` is given, its gate script is a
+/// parser-blocking `<script src>` **before** the report script, so the parser
+/// cannot reach the harness until the gate is answered; `None` is an ordinary
+/// page with no gate in front of it.
+fn harness_page(gate: Option<&str>, subtest: &str) -> String {
+    let gate = gate.map_or_else(String::new, |gate| {
+        format!("<script src=\"/gate/{gate}\"></script>")
+    });
+    format!(
+        "<!doctype html><html><head><title>harness</title>{gate}\
+         <script src=\"/resources/testharness.js\"></script>\
+         <script src=\"/resources/testharnessreport.js\"></script></head><body>\
+         <script>test({subtest:?}, function () {{ assert_equals(1 + 1, 2, 'sum'); }});</script>\
+         </body></html>"
+    )
+}
+
+/// Both gate paths: bit 0 is `/gate/a`, bit 1 is `/gate/b`.
+const GATE_BOTH: usize = 0b11;
+
+/// The meeting point the two gate scripts must reach together. One arrival
+/// never opens it, however long it waits.
+#[derive(Default)]
+struct Gate {
+    /// Bit `n` set once gate `n` has arrived.
+    seen: AtomicUsize,
+    /// Arrival count per gate path, for the tests' own assertions.
+    arrivals: [AtomicUsize; 2],
+    opened: Notify,
+}
+
+impl Gate {
+    /// Records an arrival on gate `index` and waits until **both** gates have
+    /// arrived. The re-check after registering the waiter is what makes a
+    /// notification that fires early impossible to miss.
+    async fn arrive(&self, index: usize) {
+        self.arrivals[index].fetch_add(1, Ordering::SeqCst);
+        self.seen.fetch_or(1 << index, Ordering::SeqCst);
+        if self.seen.load(Ordering::SeqCst) & GATE_BOTH == GATE_BOTH {
+            self.opened.notify_waiters();
+            return;
+        }
+        loop {
+            let notified = self.opened.notified();
+            if self.seen.load(Ordering::SeqCst) & GATE_BOTH == GATE_BOTH {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    fn arrivals(&self, index: usize) -> usize {
+        self.arrivals[index].load(Ordering::SeqCst)
+    }
+}
+
+/// A bespoke HTTP/1.1 server, no new dependency: it serves a page, a harness
+/// stand-in and two gate scripts, and holds each gate script until a request for
+/// *the other* one has arrived.
+///
+/// It exists to make "`jobs: 2` really overlaps" categorical rather than
+/// timing-based. Because the gate script is parser-blocking and comes before the
+/// report script, a page cannot reach the harness — and the driver cannot see a
+/// hook — until the gate opens; the gate opens only when both gate paths are in
+/// flight at the same time, which one page at a time cannot do.
+struct GateServer {
+    addr: SocketAddr,
+    gate: Arc<Gate>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl GateServer {
+    async fn start() -> GateServer {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let gate = Arc::new(Gate::default());
+        let accept_gate = Arc::clone(&gate);
+        let task = tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let gate = Arc::clone(&accept_gate);
+                tokio::spawn(serve_connection(stream, gate));
+            }
+        });
+        GateServer { addr, gate, task }
+    }
+
+    fn base(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    /// How many times gate `index` (`0` = `/gate/a`, `1` = `/gate/b`) was
+    /// requested. Counted on arrival, before the hold, so a connection torn down
+    /// mid-gate cannot change it.
+    fn gate_arrivals(&self, index: usize) -> usize {
+        self.gate.arrivals(index)
+    }
+}
+
+impl Drop for GateServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// `jobs: 2` is real overlap, shown by a meeting point rather than a clock.
+///
+/// Each page loads its gate script as a parser-blocking `<script src>` before
+/// the report script, and the gate server answers a gate script only once a
+/// request for *each* gate path has arrived. A single page, however long it
+/// waits, cannot open its own gate — so a run in which both tests reach `OK`,
+/// each reporting its own subtest, could not have been sequential. The distinct
+/// subtest names are the attribution half: each page's hook reached its own
+/// worker's slot, not a shared one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_jobs_overlap_at_a_gate_that_needs_both_pages() {
+    let server = GateServer::start().await;
+
+    let mut plan = plan_for(
+        &server.base(),
+        &[("/gate-a.html", 10_000), ("/gate-b.html", 10_000)],
+    );
+    plan.jobs = 2;
+
+    let results = tenta_browser::wpt::run(plan)
+        .await
+        .expect("the run finishes");
+
+    assert_eq!(results.tests.len(), 2);
+    assert_eq!(
+        results.tests[0].status, "OK",
+        "the first page's gate opened: {:?}",
+        results.tests[0].message
+    );
+    assert_eq!(
+        results.tests[1].status, "OK",
+        "the second page's gate opened: {:?}",
+        results.tests[1].message
+    );
+    assert_eq!(results.tests[0].subtests.len(), 1);
+    assert_eq!(results.tests[0].subtests[0].name, "gate a subtest");
+    assert_eq!(results.tests[1].subtests.len(), 1);
+    assert_eq!(results.tests[1].subtests[0].name, "gate b subtest");
+    assert!(
+        server.gate_arrivals(0) >= 1 && server.gate_arrivals(1) >= 1,
+        "the server saw both gate requests (a: {}, b: {})",
+        server.gate_arrivals(0),
+        server.gate_arrivals(1)
+    );
+}
+
+/// The gate does not open for one page, which is why the two-jobs test above is
+/// evidence of overlap rather than of a permissive server.
+///
+/// At `jobs: 1` the first test reaches its gate, waits for a second arrival that
+/// cannot come while the driver runs one test at a time, and times out. The
+/// assertion is deliberately the single `TIMEOUT`: the driver tears the first
+/// page's connection down mid-gate, and how the server's held response unwinds in
+/// that case must not be able to make this flake. A `TIMEOUT` can only come from
+/// a page that loaded and then stalled, and the arrival count below shows the
+/// stall was at the gate, so neither half is vacuous.
+///
+/// The second test is deliberately an ordinary page rather than `/gate-b.html`.
+/// Asking for the other gate path here would release the first page's held gate
+/// script into the parse that the driver already cancelled, which is a
+/// **pre-existing engine defect** — a parse parked on a parser-blocking script
+/// fetch resumes and runs the script after its navigation is gone, and with a
+/// second page's V8 isolate current on the same page thread that aborts the
+/// process (`tenta-js-v8`'s `ContextScope` assertion, then `OwnedIsolate`'s drop
+/// order). The evidence this test owes is that one page alone cannot open the
+/// gate, and that is exactly what a never-answered gate script shows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_job_cannot_open_the_gate_and_times_out() {
+    let server = GateServer::start().await;
+
+    let plan = plan_for(
+        &server.base(),
+        &[("/gate-a.html", 600), ("/plain.html", 10_000)],
+    );
+
+    let results = tenta_browser::wpt::run(plan)
+        .await
+        .expect("the run finishes");
+
+    assert_eq!(results.tests.len(), 2);
+    assert_eq!(
+        results.tests[0].status, "TIMEOUT",
+        "a lone page's gate never opened: {:?}",
+        results.tests[0].message
+    );
+    assert!(
+        server.gate_arrivals(0) >= 1,
+        "the first page did reach its gate, so it stalled there rather than \
+         failing to load at all"
+    );
+}
+
+/// A test started before the deadline drains; a test that no worker can claim
+/// before it is never run.
+///
+/// Two workers claim the two stall pages while the deadline is still ahead and
+/// run them to their own 1.5 s per-test timeout, past the ~1 s run deadline.
+/// Only then does a worker claim the third test, by which time the deadline has
+/// passed, so it is `NOTRUN` with no page created. This is the one assertion in
+/// the slice with a real-time margin: the deadline is the mechanism under test,
+/// so the margin is the point and not a dressed-up determinism.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tests_started_before_the_deadline_drain_and_the_next_is_not_run() {
+    let (server, _temp) = serve(&[
+        ("stall-a.html", STALL_PAGE),
+        ("stall-b.html", STALL_PAGE),
+        ("index.html", PAGE),
+        ("resources/testharness.js", HARNESS),
+    ])
+    .await;
+
+    let mut plan = plan(
+        &server,
+        &[
+            ("/stall-a.html", 1_500),
+            ("/stall-b.html", 1_500),
+            ("/index.html", 10_000),
+        ],
+    );
+    plan.jobs = 2;
+    plan.deadline_epoch_ms = Some(now_epoch_ms() + 1_000);
+
+    let results = tenta_browser::wpt::run(plan)
+        .await
+        .expect("the run finishes");
+
+    assert_eq!(results.tests.len(), 3);
+    assert_eq!(
+        results.tests[0].status, "TIMEOUT",
+        "started before the deadline, then drained"
+    );
+    assert_eq!(
+        results.tests[1].status, "TIMEOUT",
+        "started before the deadline, then drained"
+    );
+    assert_eq!(
+        results.tests[2].status, "NOTRUN",
+        "no worker was free before the deadline"
+    );
+    assert_eq!(
+        results.tests[2].message.as_deref(),
+        Some("run deadline reached")
+    );
+    assert_eq!(results.tests[2].duration_ms, 0);
+    assert!(results.tests[2].subtests.is_empty());
+}
+
+/// Reads one request head and returns its request-target, or `None` if the peer
+/// closed first or sent no well-formed request line.
+async fn read_request_path(stream: &mut TcpStream) -> Option<String> {
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        let read = stream.read(&mut chunk).await.ok()?;
+        if read == 0 {
+            return None;
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+        if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+        if buffer.len() > 64 * 1024 {
+            return None;
+        }
+    }
+    let head = String::from_utf8_lossy(&buffer);
+    head.lines()
+        .next()?
+        .split_whitespace()
+        .nth(1)
+        .map(str::to_owned)
+}
+
+/// Answers one connection and closes it (`Connection: close` is sent with every
+/// response, so no connection serves two requests). The two gate paths are held
+/// until both have arrived.
+async fn serve_connection(mut stream: TcpStream, gate: Arc<Gate>) {
+    let Some(path) = read_request_path(&mut stream).await else {
+        return;
+    };
+    let (content_type, body): (&str, Vec<u8>) = match path.as_str() {
+        "/gate/a" => {
+            gate.arrive(0).await;
+            ("text/javascript; charset=utf-8", b"/* gate a */".to_vec())
+        }
+        "/gate/b" => {
+            gate.arrive(1).await;
+            ("text/javascript; charset=utf-8", b"/* gate b */".to_vec())
+        }
+        "/resources/testharness.js" => (
+            "text/javascript; charset=utf-8",
+            HARNESS.as_bytes().to_vec(),
+        ),
+        "/gate-a.html" => (
+            "text/html; charset=utf-8",
+            harness_page(Some("a"), "gate a subtest").into_bytes(),
+        ),
+        "/gate-b.html" => (
+            "text/html; charset=utf-8",
+            harness_page(Some("b"), "gate b subtest").into_bytes(),
+        ),
+        "/plain.html" => (
+            "text/html; charset=utf-8",
+            harness_page(None, "plain subtest").into_bytes(),
+        ),
+        _ => ("text/plain; charset=utf-8", b"not found\n".to_vec()),
+    };
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(head.as_bytes()).await;
+    let _ = stream.write_all(&body).await;
+    let _ = stream.flush().await;
+    let _ = stream.shutdown().await;
 }

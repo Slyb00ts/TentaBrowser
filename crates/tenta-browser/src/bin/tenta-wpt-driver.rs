@@ -16,8 +16,10 @@ use std::process::ExitCode;
 
 use tenta_browser::wpt;
 
-// The engine's io and page threads are its own, so one current-thread runtime is
-// enough to drive the per-test waits (the same shape the CLI uses).
+// The engine's io and page threads are its own, so one current-thread runtime
+// is enough to drive the per-test waits: the pool needs concurrency — several
+// in-flight waits at once — not parallelism, and `wpt::run` gets it from a
+// `LocalSet` whose worker futures never have to be `Send`.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     init_logging();
@@ -37,10 +39,9 @@ async fn main() -> ExitCode {
 
 /// Installs the stderr subscriber, at `TENTA_LOG` or `WARN`.
 ///
-/// `WARN` is the default because it is the level the driver's own notices are
-/// at — `wpt::run` warns when the plan's `jobs` is ignored — and because a
-/// redirected run's stderr should stay quiet. `TENTA_LOG=info` adds a line per
-/// test, which is what makes a long run's progress visible.
+/// `WARN` is the default because a redirected run's stderr should stay quiet.
+/// `TENTA_LOG=info` adds a line per test with its status and subtest passes,
+/// which is the only progress signal a run against a whole directory has.
 fn init_logging() {
     let level = std::env::var("TENTA_LOG")
         .ok()

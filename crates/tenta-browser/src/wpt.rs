@@ -11,11 +11,31 @@
 //!
 //! Chromium's driver routes `/resources/testharnessreport.js` to a hook that
 //! hands the harness result back over an exposed binding. Nothing like that
-//! binding exists here, and none is needed: the context's interceptor answers
+//! binding exists here, and none is needed: a context's interceptor answers
 //! that path **on the wire** with the hook script, and the hook posts the same
 //! payload to a driver-owned path with `fetch()`. The interceptor reads the
 //! request body before it fulfils, so the payload arrives with no page-visible
 //! API involved.
+//!
+//! # Concurrency
+//!
+//! The plan's `jobs` is how many tests run at once. One worker owns one
+//! [`BrowserContext`] — and therefore its own interceptor hub, resolver, cache
+//! and cookie jar — and runs one test at a time. That is what makes attribution
+//! correct **by construction**: a report-script request reaches the interceptor
+//! of the very context whose page asked for it, so the hook script it is
+//! answered with names the index that worker is running and never another
+//! worker's. A second context gets its own hub because a context builds one when
+//! it is created, and the engine holds no hook list of its own.
+//!
+//! `jobs > 1` does not work against `dom/nodes` yet, and the fault is the
+//! engine's rather than this pool's: a page thread holds one `PageRuntime` per
+//! page it hosts (`tenta-page`), each owning a `v8::OwnedIsolate`, and
+//! `OwnedIsolate` asserts on drop that it is the thread's current isolate. Page
+//! threads are handed out by a global round-robin, so two workers' pages share
+//! one thread as soon as they drift apart and the first page to close is not the
+//! newest. Measured 2026-09-21: `--jobs 1` is 2032/5247 subtests (38.73 %) in
+//! 738 s; `--jobs 4` aborts with `SIGABRT` after 163 s. See `docs/dev/wpt.md`.
 //!
 //! The POST body is a `Body::Bytes` and not a stream because that is the only
 //! shape a page's `fetch()` can produce: `tenta-page`'s `net_request` builds the
@@ -57,6 +77,7 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
@@ -70,6 +91,7 @@ use tenta_net::request::Request;
 use tenta_page::page::{Goto, Page};
 use tenta_page::settle::Settle;
 use tokio::sync::oneshot;
+use tokio::task::{JoinSet, LocalSet};
 
 use crate::context::{BrowserContext, ContextOptions, PageOptions};
 use crate::engine::Engine;
@@ -115,8 +137,8 @@ pub struct Plan {
     /// sets it when the machine's hosts file does not already do so.
     #[serde(default)]
     pub resolver_rules: bool,
-    /// How many tests the runner would run at once. Read and reported, but S1
-    /// runs them one at a time.
+    /// How many tests the runner runs at once. One worker per job, and never
+    /// fewer than one, so a plan that says `0` runs one test at a time.
     #[serde(default)]
     pub jobs: usize,
     /// Epoch milliseconds after which no new test may start; `null` is no
@@ -343,55 +365,104 @@ impl Interceptor for WptInterceptor {
     }
 }
 
-/// Runs a plan: one engine, one context, one test after another.
+/// How many workers a plan asks for: one per job, and never fewer than one,
+/// because `run.py` can be handed `--jobs 0`.
+fn worker_count(plan: &Plan) -> usize {
+    plan.jobs.max(1)
+}
+
+/// Runs a plan: one engine, one context per worker, `jobs` tests at a time.
 ///
 /// The engine is created here rather than taken as a parameter so the binary
 /// owns nothing but the two file paths, and so a test can drive the whole loop.
 pub async fn run(plan: Plan) -> Result<Results, Error> {
-    if plan.jobs > 1 {
-        tracing::warn!(
-            jobs = plan.jobs,
-            "S1 runs every test sequentially; the plan's `jobs` is ignored"
-        );
-    }
+    let workers = worker_count(&plan);
     let engine = Engine::builder()
-        .io_threads(1)
-        .page_threads(1)
+        .io_threads(workers)
+        .page_threads(workers)
         .max_tier(Tier::Js)
         .build()?;
-    let context = engine.new_context(ContextOptions {
-        // The WPT server is on loopback (`wpt/serve-config.json`) and its TLS
-        // certificates are ones no machine trusts.
-        allow_private_network: true,
-        ignore_https_errors: true,
-        ..ContextOptions::default()
-    })?;
-    let shared = Arc::new(Shared {
-        resolver: plan
-            .resolver_rules
-            .then(|| Arc::clone(context.client().resolver())),
-        active: Mutex::new(None),
-    });
-    context.intercept(Arc::new(WptInterceptor {
-        shared: Arc::clone(&shared),
-    }))?;
 
+    let plan = Arc::new(plan);
     let total = plan.tests.len();
-    let mut tests = Vec::with_capacity(total);
-    for (index, test) in plan.tests.iter().enumerate() {
-        let outcome = run_one(&context, &shared, &plan, index, test).await;
-        tracing::info!(
-            position = index + 1,
-            total,
-            status = %outcome.status,
-            passed = outcome.subtests.iter().filter(|s| s.status == "PASS").count(),
-            subtests = outcome.subtests.len(),
-            test = %outcome.test,
-            "ran a WPT test"
-        );
-        tests.push(outcome);
+    // Pre-sized to the plan so a worker's write is a slot assignment, never a
+    // push: completion order must not be able to reach the output.
+    let results = Arc::new(Mutex::new(vec![None; total]));
+
+    // One `(context, slot)` pair per worker. Each context is its own interceptor
+    // hub, resolver, cache and cookie jar, so a hook can only ever reach the
+    // worker whose page asked for the report script.
+    let mut pool = Vec::with_capacity(workers);
+    for _ in 0..workers {
+        let context = engine.new_context(ContextOptions {
+            // The WPT server is on loopback (`wpt/serve-config.json`) and its
+            // TLS certificates are ones no machine trusts.
+            allow_private_network: true,
+            ignore_https_errors: true,
+            ..ContextOptions::default()
+        })?;
+        let shared = Arc::new(Shared {
+            resolver: plan
+                .resolver_rules
+                .then(|| Arc::clone(context.client().resolver())),
+            active: Mutex::new(None),
+        });
+        context.intercept(Arc::new(WptInterceptor {
+            shared: Arc::clone(&shared),
+        }))?;
+        pool.push((context, shared));
     }
+
+    let next = Arc::new(AtomicUsize::new(0));
+    // `LocalSet` keeps every in-flight await on this thread, so a worker's
+    // future need not be `Send`. The driver's runtime only ever awaits channels
+    // and timers, so the pool needs concurrency, not parallelism, and a
+    // `current_thread` runtime is enough to hold it.
+    LocalSet::new()
+        .run_until(async {
+            let mut set = JoinSet::new();
+            for (context, shared) in pool {
+                let plan = Arc::clone(&plan);
+                let results = Arc::clone(&results);
+                let next = Arc::clone(&next);
+                set.spawn_local(async move {
+                    // One worker is one context is one test at a time. That loop
+                    // is the attribution invariant: a worker must finish
+                    // `run_one` before it claims the next index, because its
+                    // context's interceptor slot answers whichever test it is
+                    // running. Intra-worker parallelism would break it.
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(test) = plan.tests.get(index) else {
+                            break;
+                        };
+                        let outcome = run_one(&context, &shared, &plan, index, test).await;
+                        tracing::info!(
+                            position = index + 1,
+                            total,
+                            status = %outcome.status,
+                            passed = outcome.subtests.iter().filter(|s| s.status == "PASS").count(),
+                            subtests = outcome.subtests.len(),
+                            test = %outcome.test,
+                            "ran a WPT test"
+                        );
+                        results.lock()[index] = Some(outcome);
+                    }
+                });
+            }
+            while set.join_next().await.is_some() {}
+        })
+        .await;
+
     engine.close();
+    let mut slots = results.lock();
+    let tests = slots
+        .drain(..)
+        .enumerate()
+        .map(|(index, outcome)| {
+            outcome.unwrap_or_else(|| panic!("no worker wrote the outcome of test {index}"))
+        })
+        .collect();
     Ok(Results {
         browser: BrowserInfo {
             name: "tentabrowser".to_owned(),
@@ -644,6 +715,35 @@ mod tests {
         assert_eq!(plan.deadline_epoch_ms, None);
         assert_eq!(plan.tests[0].url, "/dom/nodes/x.html");
         assert_eq!(plan.tests[0].timeout_ms, 10_000);
+    }
+
+    /// `run.py --jobs N` is one worker per job, and `--jobs 0` is one worker
+    /// rather than none: a plan with no worker would run no test at all.
+    #[test]
+    fn jobs_maps_to_at_least_one_worker() {
+        let plan = |jobs| Plan {
+            base: "http://web-platform.test:8000".to_owned(),
+            resolver_rules: false,
+            jobs,
+            deadline_epoch_ms: None,
+            tests: Vec::new(),
+        };
+        assert_eq!(worker_count(&plan(0)), 1, "`--jobs 0` still runs the plan");
+        assert_eq!(worker_count(&plan(1)), 1);
+        assert_eq!(worker_count(&plan(4)), 4);
+    }
+
+    /// Every test in a plan is claimed exactly once, however many workers race
+    /// for it: the claim is a `fetch_add`, so the indices are a permutation of
+    /// the plan's and no worker can miss an index or take one twice.
+    #[test]
+    fn a_worker_claim_hands_out_every_index_exactly_once() {
+        let next = AtomicUsize::new(0);
+        let mut claimed: Vec<usize> = (0..8)
+            .map(|_| next.fetch_add(1, Ordering::Relaxed))
+            .collect();
+        claimed.sort_unstable();
+        assert_eq!(claimed, (0..8).collect::<Vec<_>>());
     }
 
     /// The payload `testharness.js` produces: numeric statuses, and a `message`
