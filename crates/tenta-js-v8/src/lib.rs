@@ -766,6 +766,19 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the DOMTokenList interface");
+            // `Attr` and `NamedNodeMap` both root at `Object`, so their order
+            // among themselves and relative to the node types is free:
+            // `Element.attributes` resolves the map's template through the
+            // isolate's cache at call time, and the map's `item` mints `Attr`
+            // wrappers the same way.
+            tenta_js::bindings::install_attr::<HostObject>(scope, global_template, &mut registry)
+                .expect("install the Attr interface");
+            tenta_js::bindings::install_named_node_map::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the NamedNodeMap interface");
             tenta_js::bindings::install_css_style_declaration::<HostObject>(
                 scope,
                 global_template,

@@ -16,6 +16,7 @@ use std::time::SystemTime;
 
 use tenta_core::atom::atoms;
 use tenta_core::{Atom, NodeId, NodeRef, Origin};
+use tenta_dom::arena::AttrName;
 use tenta_dom::{Document, Mutation, NodeKind};
 use tenta_html::{ElementFlags, QualName, QuirksMode};
 use tenta_net::policy::cookies::{CookieJar, SameSiteContext, Site};
@@ -27,8 +28,8 @@ use url::Url;
 use super::SequenceOfSequenceOfUsvStringOrRecordOfUsvStringToUsvStringOrUsvString as ParamsInit;
 use super::{
     AbortControllerConstructor, AbortControllerOps, AbortSignal, AbortSignalOps,
-    AddEventListenerOptionsOrBoolean, AnyValue, Blob, BlobConstructor, BlobOps, BlobOrUsvString,
-    BlobPart, BlobPropertyBag, BufferSourceOrUsvString, CSSStyleDeclaration,
+    AddEventListenerOptionsOrBoolean, AnyValue, Attr, AttrOps, Blob, BlobConstructor, BlobOps,
+    BlobOrUsvString, BlobPart, BlobPropertyBag, BufferSourceOrUsvString, CSSStyleDeclaration,
     CSSStyleDeclarationOps, Callback, CharacterDataOps, Comment, CommentOps,
     CustomEventConstructor, CustomEventInit, CustomEventOps, DOMImplementation,
     DOMImplementationOps, DOMTokenList, DOMTokenListOps, DocumentFragment, DocumentFragmentOps,
@@ -41,14 +42,15 @@ use super::{
     HTMLLabelElementOps, HTMLOptionElementOps, HTMLParagraphElementOps, HTMLScriptElementOps,
     HTMLSelectElementOps, HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps,
     Handle, Headers, HeadersConstructor, HeadersInit, HeadersOps, IterableEntries, JsError,
-    MouseEventConstructor, MouseEventInit, MouseEventOps, Node, NodeList, NodeListOps, NodeOps,
-    ProcessingInstruction, ProcessingInstructionOps, ProgressEventConstructor, ProgressEventInit,
-    ProgressEventOps, Promise, Realm, RequestInit, ResponseConstructor, ResponseInit, ResponseOps,
-    ResponseType, SVGElementOps, Text, TextDecodeOptions, TextDecoderConstructor, TextDecoderOps,
-    TextDecoderOptions, TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor,
-    UIEventInit, UIEventOps, URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor,
-    URLSearchParamsOps, WindowProxy, XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps,
-    XMLHttpRequestOps, XMLHttpRequestResponseType,
+    MouseEventConstructor, MouseEventInit, MouseEventOps, NamedNodeMap, NamedNodeMapOps, Node,
+    NodeList, NodeListOps, NodeOps, ProcessingInstruction, ProcessingInstructionOps,
+    ProgressEventConstructor, ProgressEventInit, ProgressEventOps, Promise, Realm, RequestInit,
+    ResponseConstructor, ResponseInit, ResponseOps, ResponseType, SVGElementOps, Text,
+    TextDecodeOptions, TextDecoderConstructor, TextDecoderOps, TextDecoderOptions,
+    TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
+    URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
+    WindowProxy, XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps, XMLHttpRequestOps,
+    XMLHttpRequestResponseType,
 };
 use crate::dom::events::{
     CallbackRef, DispatchTarget, EventHandlerName, EventKey, EventKind, EventRecord, EventSlab,
@@ -227,6 +229,54 @@ pub enum HostRecord {
     /// two documents' slabs are independent and their first minted key is the
     /// same number.
     Implementation,
+    /// One entry of an element's attribute list — an `Attr`.
+    ///
+    /// It is a host record rather than a tag anchored to an element, because an
+    /// attribute is named by more than its element: the record carries the
+    /// element *and* the attribute's qualified name, and a handle's node field
+    /// has room for neither both. Its own wrapper is its only owner, so the
+    /// world frees it by finalizer like a `Blob`.
+    Attr(AttrRecord),
+}
+
+/// The state behind one `Attr`.
+///
+/// An `Attr` is *not* a node in this tree (see `idl/dom/dom.webidl`'s `Attr`
+/// deviation note): an attribute lives inside its element's packed attribute
+/// list, with no arena slot and no id. This record is therefore the smallest
+/// thing that can name one — the element, when there is one, and the name.
+///
+/// An attribute the page built with `createAttribute` has no element until it is
+/// attached, so [`Self::value`] is the record's own state until then and the
+/// element's storage is the source of truth afterwards. That is the standard's
+/// own split: a detached `Attr` owns its value, an attached one reflects the
+/// element's.
+pub struct AttrRecord {
+    /// The element the attribute is attached to, or `None` for a detached
+    /// attribute.
+    pub element: Option<NodeRef>,
+    /// The attribute's namespace, prefix and local name.
+    pub name: QualName,
+    /// The value a *detached* attribute carries. It is ignored — and never
+    /// written — while `element` is set.
+    pub detached_value: String,
+}
+
+impl AttrRecord {
+    /// A detached attribute with the given name and the empty value.
+    pub fn detached(name: QualName) -> Self {
+        Self {
+            element: None,
+            name,
+            detached_value: String::new(),
+        }
+    }
+
+    /// The attribute's qualified name: `prefix:local`, or the local name when
+    /// there is no prefix (<https://dom.spec.whatwg.org/#dom-attr-name>).
+    pub fn qualified_name(&self) -> String {
+        qualified_attr_name(&self.name)
+    }
 }
 
 impl HostRecord {
@@ -249,6 +299,7 @@ impl HostRecord {
             HostRecord::File(_) => "File",
             HostRecord::FormData(_) => "FormData",
             HostRecord::Implementation => "DOMImplementation",
+            HostRecord::Attr(_) => "Attr",
         }
     }
 }
@@ -1544,6 +1595,17 @@ pub enum HostObject {
         /// A generational reference to the element whose `class` the list reflects.
         owner: NodeRef,
     },
+    /// A wrapper for the live `NamedNodeMap` (`attributes`) of `owner`.
+    ///
+    /// It is the same shape as [`HostObject::TokenList`] — the element is the
+    /// state, and the handle is derived from its [`NodeRef`] — which is what
+    /// makes `element.attributes === element.attributes` hold.
+    NamedNodeMap {
+        /// The context the map's owner lives in.
+        ctx: SharedContext,
+        /// A generational reference to the element whose attributes the map is.
+        owner: NodeRef,
+    },
     /// A wrapper for the inline `CSSStyleDeclaration` (`style`) of `owner`.
     Style {
         /// The context the style declaration's owner lives in.
@@ -1598,6 +1660,11 @@ impl HostObject {
         Self::TokenList { ctx, owner }
     }
 
+    /// Builds a `NamedNodeMap` host for the `attributes` of `owner` in `ctx`.
+    pub fn named_node_map(ctx: SharedContext, owner: NodeRef) -> Self {
+        Self::NamedNodeMap { ctx, owner }
+    }
+
     /// Builds a `CSSStyleDeclaration` host for the `style` of `owner` in `ctx`.
     pub fn style(ctx: SharedContext, owner: NodeRef) -> Self {
         Self::Style { ctx, owner }
@@ -1639,6 +1706,7 @@ impl HostObject {
             | HostObject::StaticHtmlCollection { ctx, .. }
             | HostObject::Event { ctx, .. }
             | HostObject::TokenList { ctx, .. }
+            | HostObject::NamedNodeMap { ctx, .. }
             | HostObject::Style { ctx, .. }
             | HostObject::Host { ctx, .. }
             | HostObject::Window { ctx } => ctx,
@@ -1768,6 +1836,91 @@ impl HostObject {
             return f(record);
         }
         default
+    }
+
+    /// Runs `f` over the `AttrRecord` this host stands for, or returns
+    /// `default` when the host is not an `Attr` or the record is gone.
+    fn with_attr<R>(&self, default: R, f: impl FnOnce(&AttrRecord) -> R) -> R {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::Attr(record)) = ctx.host_records.borrow().get(*key)
+        {
+            return f(record);
+        }
+        default
+    }
+
+    /// The value this `Attr` currently reports: the element's own storage while
+    /// the attribute is attached, the record's detached state otherwise.
+    ///
+    /// The element's document is the one this host's context owns — an `Attr`
+    /// is only ever minted by an operation reached through a wrapper of that
+    /// same context, so the reference cannot name another arena.
+    fn attr_value(&self, record: &AttrRecord) -> String {
+        let Some(element) = record.element else {
+            return record.detached_value.clone();
+        };
+        self.context()
+            .doc
+            .borrow()
+            .attribute_ns(element.id, record.name.ns, record.name.local)
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    /// Attaches the `Attr` at `attr` to the element this host stands for, the
+    /// shared half of `Element.setAttributeNode` and `setAttributeNodeNS`.
+    ///
+    /// The two operations differ only in which name they already have — both
+    /// take the attribute's own qualified name — so one implementation serves
+    /// both. Returns the `Attr` the new one replaced, or `None`.
+    fn attach_attribute_node(&self, attr: Handle<Attr>) -> Result<Option<Handle<Attr>>, JsError> {
+        let ctx = self.context();
+        let (doc, id) = self.anchor();
+        let key = decode(attr.bits()).host_key();
+        let Some(record) = attr_record(ctx, key) else {
+            return Err(JsError::type_error("the argument is not an Attr"));
+        };
+        // "If attr's element is not null, throw an `InUseAttributeError`"
+        // (https://dom.spec.whatwg.org/#dom-element-setattributenode). A
+        // re-attachment of an attribute already on *this* element is that same
+        // case, and the standard does not exempt it.
+        if record.element.is_some() {
+            return Err(JsError::dom_exception(
+                "InUseAttributeError",
+                "The attribute is already attached to an element",
+            ));
+        }
+        let value = record.detached_value.clone();
+        let name = record.name.clone();
+        // The attribute the new one replaces, if any, reported as the same kind
+        // of object the page would have got from `getAttributeNode`.
+        let replaced = {
+            let doc = doc.borrow();
+            doc.attributes(id)
+                .find(|(stored, _)| AttrName::from_qual(*stored) == AttrName::from_qual(name))
+                .map(|(stored, _)| AttrName::from_qual(stored))
+        };
+        let node = {
+            let doc = doc.borrow();
+            doc.node_ref(id)
+        };
+        {
+            let mut doc = doc.borrow_mut();
+            doc.mutate(Mutation::SetAttribute {
+                element: id,
+                name: name.clone(),
+                value,
+            })
+            .map_err(|e| mutation_error(&e))?;
+        }
+        // The record now belongs to this element: its value comes from the
+        // element's storage from here on, which is what makes a later
+        // `setAttribute` visible through a held `Attr`.
+        if let Some(HostRecord::Attr(stored)) = ctx.host_records.borrow_mut().get_mut(key) {
+            stored.element = Some(node);
+            stored.detached_value = String::new();
+        }
+        Ok(replaced.map(|name| Handle::from_bits(mint_attr(ctx, Some(node), name.to_qual()))))
     }
 
     /// Mutates the event record this host stands for, if it is a live `Event`.
@@ -2069,6 +2222,7 @@ impl HostObject {
             }
             HostObject::Event { key, .. } => encode_event(slot, *key),
             HostObject::TokenList { owner, .. } => encode_token_list(slot, *owner),
+            HostObject::NamedNodeMap { owner, .. } => encode_named_node_map(slot, *owner),
             HostObject::Style { owner, .. } => encode_style(slot, *owner),
             HostObject::Host { key, .. } => encode_host(slot, *key),
             HostObject::Window { .. } => encode_window(),
@@ -2086,6 +2240,7 @@ impl HostObject {
             HostObject::NodeList { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::HtmlCollection { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::TokenList { ctx, owner } => (&ctx.doc, owner.id),
+            HostObject::NamedNodeMap { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::Style { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::StaticNodeList { ctx, .. } => (&ctx.doc, NodeId::NONE),
             HostObject::StaticHtmlCollection { ctx, .. } => (&ctx.doc, NodeId::NONE),
@@ -2680,8 +2835,13 @@ impl ElementOps for HostObject {
         class_names: &str,
     ) -> Result<Handle<HTMLCollection>, JsError> {
         let (doc, id) = self.anchor();
-        // For Element, scope the query to the element's subtree
-        let tokens: Vec<&str> = class_names.split_whitespace().collect();
+        // For Element, scope the query to the element's subtree. The split is
+        // the DOM's *ASCII whitespace*, not Rust's Unicode
+        // `split_whitespace`: U+00A0, U+1680, U+2000-U+200A and U+3000 are all
+        // whitespace to Rust and none of them is whitespace to the DOM, so the
+        // Unicode split would silently drop a class name that is one of those
+        // characters (`dom/nodes/getElementsByClassName-whitespace-class-names.html`).
+        let tokens: Vec<&str> = class_names.split_ascii_whitespace().collect();
         let doc_ref = doc.borrow();
         let descendants: Vec<NodeRef> = doc_ref
             .descendants(id)
@@ -2756,6 +2916,29 @@ impl ElementOps for HostObject {
         )))
     }
 
+    fn get_elements_by_tag_name_ns(
+        &self,
+        namespace: Option<&str>,
+        local_name: Option<&str>,
+    ) -> Result<Handle<HTMLCollection>, JsError> {
+        // `[NewObject]`, and a snapshot rather than the standard's live
+        // collection: this tree's `getElementsByTagName` is the same shape, and
+        // a live one needs a document-side observer the arena does not keep.
+        // `Element` scopes the query to its subtree, excluding itself, which is
+        // what `dom/nodes/Element-getElementsByTagNameNS.html` asserts of the
+        // context object itself.
+        let (doc, id) = self.anchor();
+        let snapshot = {
+            let doc = doc.borrow();
+            qualified_snapshot(&doc, id, namespace, local_name, false)
+        };
+        Ok(Handle::from_bits(encode_snapshot(
+            self.slot(),
+            TAG_STATIC_HTML_COLLECTION,
+            self.context().snapshots.borrow_mut().insert(snapshot),
+        )))
+    }
+
     fn id(&self) -> Result<String, JsError> {
         let (doc, id) = self.anchor();
         Ok(doc.borrow().element_id(id).unwrap_or("").to_owned())
@@ -2801,6 +2984,21 @@ impl ElementOps for HostObject {
             .namespace(id)
             .map(|ns| ns.as_str().to_owned())
             .filter(|uri| !uri.is_empty()))
+    }
+
+    fn prefix(&self) -> Result<Option<String>, JsError> {
+        // `Element.prefix` is the *qualified name's* prefix, which the tree
+        // builder stores on the element itself (`Document::element_prefix`), or
+        // null when the element name has none
+        // (<https://dom.spec.whatwg.org/#dom-element-prefix>). It is the sibling
+        // of the `localName` and `namespaceURI` getters above, all three read
+        // off the same stored qualified name.
+        let (doc, id) = self.anchor();
+        Ok(doc
+            .borrow()
+            .element_prefix(id)
+            .filter(|prefix| *prefix != atoms::EMPTY)
+            .map(|prefix| prefix.as_str().to_owned()))
     }
 
     fn last_element_child(&self) -> Result<Option<Handle<Element>>, JsError> {
@@ -2958,6 +3156,176 @@ impl ElementOps for HostObject {
             .collect())
     }
 
+    fn set_attribute_ns(
+        &self,
+        namespace: Option<&str>,
+        qualified_name: &str,
+        value: &str,
+    ) -> Result<(), JsError> {
+        // `setAttributeNS` validates and extracts exactly as `createElementNS`
+        // does — step 1 of its algorithm *is* "let (namespace, prefix,
+        // localName) be the result of validating and extracting namespace and
+        // qualifiedName" (<https://dom.spec.whatwg.org/#dom-element-setattributens>)
+        // — so the two share one implementation and cannot drift apart on the
+        // prefix/namespace rules. Nothing is ASCII-lowercased: the lowercasing
+        // is `setAttribute`'s own step, which is why
+        // `dom/nodes/attributes.html` reads `setAttributeNS(ns, "foo:bar", ...)`
+        // back with `localName` `"bar"` and `prefix` `"foo"`.
+        let (ns, prefix, local) = validate_and_extract(namespace, qualified_name)?;
+        let (doc, id) = self.anchor();
+        let qname = QualName {
+            ns,
+            prefix,
+            local: Atom::new(local),
+        };
+        let mut doc = doc.borrow_mut();
+        doc.mutate(Mutation::SetAttribute {
+            element: id,
+            name: qname,
+            value: value.to_owned(),
+        })
+        .map_err(|e| mutation_error(&e))
+    }
+
+    fn get_attribute_ns(
+        &self,
+        namespace: Option<&str>,
+        local_name: Option<&str>,
+    ) -> Result<Option<String>, JsError> {
+        // The standard's whole *get an attribute by namespace and local name*
+        // is the (namespace, localName) pair; the null namespace and the empty
+        // string are one case, which is why both arrive here as `None` or as
+        // `""` and both are treated as no namespace.
+        let (doc, id) = self.anchor();
+        Ok(lookup_attribute_ns(
+            &doc.borrow(),
+            id,
+            namespace,
+            local_name,
+        ))
+    }
+
+    fn remove_attribute_ns(
+        &self,
+        namespace: Option<&str>,
+        local_name: Option<&str>,
+    ) -> Result<(), JsError> {
+        let (doc, id) = self.anchor();
+        let Some(name) = attribute_name_ns(&doc.borrow(), id, namespace, local_name) else {
+            // Removing an attribute that is not there is a silent no-op, the
+            // same as `removeAttribute`'s.
+            return Ok(());
+        };
+        let qname = name.to_qual();
+        let mut doc = doc.borrow_mut();
+        let _ = doc.mutate(Mutation::RemoveAttribute {
+            element: id,
+            name: qname,
+        });
+        Ok(())
+    }
+
+    fn has_attribute_ns(
+        &self,
+        namespace: Option<&str>,
+        local_name: Option<&str>,
+    ) -> Result<bool, JsError> {
+        let (doc, id) = self.anchor();
+        Ok(lookup_attribute_ns(&doc.borrow(), id, namespace, local_name).is_some())
+    }
+
+    fn attributes(&self) -> Result<Handle<NamedNodeMap>, JsError> {
+        // `[SameObject]`: the map's handle is derived from the element's own
+        // `NodeRef`, so two reads answer with one object. The interface is only
+        // reachable on a wrapper that carries `Element`'s prototype, which the
+        // world mints for element nodes alone.
+        let (doc, id) = self.anchor();
+        let node = doc.borrow().node_ref(id);
+        Ok(Handle::from_bits(encode_named_node_map(self.slot(), node)))
+    }
+
+    fn get_attribute_node(&self, name: &str) -> Result<Option<Handle<Attr>>, JsError> {
+        // `getAttributeNode` identifies the attribute by *qualified name*, the
+        // same key `getAttribute` uses; `None` when there is none.
+        let ctx = self.context();
+        let (doc, id) = self.anchor();
+        let (node, found) = {
+            let doc = doc.borrow();
+            let found = doc
+                .attributes(id)
+                .find(|(stored, _)| qualified_attr_name(stored) == name)
+                .map(|(stored, _)| stored);
+            (doc.node_ref(id), found)
+        };
+        Ok(found.map(|name| Handle::from_bits(mint_attr(ctx, Some(node), name))))
+    }
+
+    fn get_attribute_node_ns(
+        &self,
+        namespace: Option<&str>,
+        local_name: Option<&str>,
+    ) -> Result<Option<Handle<Attr>>, JsError> {
+        let ctx = self.context();
+        let (doc, id) = self.anchor();
+        let (node, found) = {
+            let doc = doc.borrow();
+            let found = attribute_name_ns(&doc, id, namespace, local_name).map(AttrName::to_qual);
+            (doc.node_ref(id), found)
+        };
+        Ok(found.map(|name| Handle::from_bits(mint_attr(ctx, Some(node), name))))
+    }
+
+    fn set_attribute_node(&self, attr: Handle<Attr>) -> Result<Option<Handle<Attr>>, JsError> {
+        self.attach_attribute_node(attr)
+    }
+
+    fn set_attribute_node_ns(&self, attr: Handle<Attr>) -> Result<Option<Handle<Attr>>, JsError> {
+        self.attach_attribute_node(attr)
+    }
+
+    fn remove_attribute_node(&self, attr: Handle<Attr>) -> Result<Handle<Attr>, JsError> {
+        // The argument has to be one of *this* element's attributes: the
+        // standard's step 1 is "if this's attribute list does not contain
+        // attribute, throw a `NotFoundError`". A detached `Attr`, or one of
+        // another element's, is exactly that case.
+        let ctx = self.context();
+        let key = decode(attr.bits()).host_key();
+        let (doc, id) = self.anchor();
+        let name = {
+            let records = ctx.host_records.borrow();
+            let Some(HostRecord::Attr(record)) = records.get(key) else {
+                return Err(attr_not_found());
+            };
+            if record.element.map(|node| node.id) != Some(id) {
+                return Err(attr_not_found());
+            }
+            record.name.clone()
+        };
+        let value = doc
+            .borrow()
+            .attribute_ns(id, name.ns, name.local)
+            .unwrap_or_default()
+            .to_owned();
+        {
+            let mut doc = doc.borrow_mut();
+            doc.mutate(Mutation::RemoveAttribute {
+                element: id,
+                name: name.clone(),
+            })
+            .map_err(|e| mutation_error(&e))?;
+        }
+        // The standard's *remove an attribute* sets the attribute's element to
+        // null and keeps its value, so the record — and therefore the wrapper
+        // the page already holds — becomes the detached object it returns.
+        // Identity is deliberate: `removeAttributeNode` returns the *same*
+        // `Attr` it was given.
+        if let Some(HostRecord::Attr(record)) = ctx.host_records.borrow_mut().get_mut(key) {
+            record.element = None;
+            record.detached_value = value;
+        }
+        Ok(attr)
+    }
+
     fn inner_html(&self) -> Result<String, JsError> {
         let (doc, id) = self.anchor();
         Ok(doc.borrow().inner_html(id))
@@ -3021,6 +3389,39 @@ impl DocumentOps for HostObject {
         )))
     }
 
+    fn create_attribute(&self, local_name: &str) -> Result<Handle<Attr>, JsError> {
+        // `createAttribute(localName)` mints a *detached* `Attr` in no
+        // namespace with no prefix, lowercasing the name in an HTML document —
+        // step 2 of its algorithm, the same conditional step `createElement`
+        // has (<https://dom.spec.whatwg.org/#dom-document-createattribute>).
+        validate_attribute_name(local_name)?;
+        let (doc, _) = self.anchor();
+        let local = if doc.borrow().is_html_document() {
+            local_name.to_ascii_lowercase()
+        } else {
+            local_name.to_owned()
+        };
+        let name = QualName::new(atoms::EMPTY, Atom::new(&local));
+        Ok(Handle::from_bits(mint_attr(self.context(), None, name)))
+    }
+
+    fn create_attribute_ns(
+        &self,
+        namespace: Option<&str>,
+        qualified_name: &str,
+    ) -> Result<Handle<Attr>, JsError> {
+        // The same *validate and extract* as `createElementNS`, and no
+        // lowercasing: the namespace-aware factory takes the qualified name as
+        // it is given.
+        let (ns, prefix, local) = validate_and_extract(namespace, qualified_name)?;
+        let name = QualName {
+            ns,
+            prefix,
+            local: Atom::new(local),
+        };
+        Ok(Handle::from_bits(mint_attr(self.context(), None, name)))
+    }
+
     fn create_event(&self, interface: &str) -> Result<Handle<Event>, JsError> {
         // Legacy `createEvent` interface aliases (https://dom.spec.whatwg.org/#dom-document-createevent).
         // The Event/CustomEvent families arrived in 3a/3c; UIEvent/MouseEvent
@@ -3061,21 +3462,12 @@ impl DocumentOps for HostObject {
     }
 
     fn create_element(&self, local_name: &str) -> Result<Handle<Element>, JsError> {
-        // Validate the name: non-empty and starts with ASCII letter
-        if local_name.is_empty() {
-            return Err(JsError::dom_exception(
-                "InvalidCharacterError",
-                "Element name must not be empty",
-            ));
-        }
-        if let Some(first_char) = local_name.chars().next()
-            && !first_char.is_ascii_alphabetic()
-        {
-            return Err(JsError::dom_exception(
-                "InvalidCharacterError",
-                "Element name must start with a letter",
-            ));
-        }
+        // `createElement`'s name is its own local name, so the whole string is
+        // the one whose first character has to match `NameStartChar`. (An XML
+        // document's own stricter production is checked again by the arena; an
+        // HTML document's is not, which is why this boundary rule is the one
+        // `dom/nodes/Document-createElement.html` measures.)
+        validate_name(local_name, local_name)?;
         let (doc, _) = self.anchor();
         let mut doc = doc.borrow_mut();
         // "If this is an HTML document, set localName to localName in ASCII
@@ -3490,7 +3882,9 @@ impl DocumentOps for HostObject {
         class_names: &str,
     ) -> Result<Handle<HTMLCollection>, JsError> {
         let (doc, _) = self.anchor();
-        let tokens: Vec<&str> = class_names.split_whitespace().collect();
+        // ASCII whitespace only; see the `Element` version for why the Unicode
+        // split is wrong.
+        let tokens: Vec<&str> = class_names.split_ascii_whitespace().collect();
         let doc_ref = doc.borrow();
         let doc_node = doc_ref.document_node();
         let descendants: Vec<NodeRef> = doc_ref
@@ -3561,6 +3955,31 @@ impl DocumentOps for HostObject {
             self.slot(),
             TAG_STATIC_HTML_COLLECTION,
             key,
+        )))
+    }
+
+    fn get_elements_by_tag_name_ns(
+        &self,
+        namespace: Option<&str>,
+        local_name: Option<&str>,
+    ) -> Result<Handle<HTMLCollection>, JsError> {
+        // The document-level query is the whole tree in document order, which
+        // is `descendants` of the document node.
+        let (doc, _) = self.anchor();
+        let snapshot = {
+            let doc_ref = doc.borrow();
+            qualified_snapshot(
+                &doc_ref,
+                doc_ref.document_node(),
+                namespace,
+                local_name,
+                false,
+            )
+        };
+        Ok(Handle::from_bits(encode_snapshot(
+            self.slot(),
+            TAG_STATIC_HTML_COLLECTION,
+            self.context().snapshots.borrow_mut().insert(snapshot),
         )))
     }
 
@@ -4762,7 +5181,7 @@ impl HTMLTextAreaElementOps for HostObject {
         // an attribute, so fall back to `textContent` when nothing is dirty.
         match self.dirty_value() {
             Some(dirty) => Ok(dirty),
-            None => Ok(self.text_content()?.unwrap_or_default()),
+            None => Ok(<Self as NodeOps>::text_content(self)?.unwrap_or_default()),
         }
     }
     fn set_value(&self, value: &str) {
@@ -4962,6 +5381,250 @@ impl DOMTokenListOps for HostObject {
 
     fn set_value(&self, value: &str) {
         self.reflect_attribute("class", value);
+    }
+}
+
+/// `Element.attributes`. Every member reads the element's attribute list, so
+/// the map is live without any state of its own to keep in step: the element is
+/// the state, exactly as it is for `classList`.
+impl NamedNodeMapOps for HostObject {
+    fn length(&self) -> u32 {
+        let (doc, id) = self.anchor();
+        doc.borrow().attribute_count(id) as u32
+    }
+
+    fn item(&self, index: u32) -> Result<Option<Handle<Attr>>, JsError> {
+        let ctx = self.context();
+        let (doc, id) = self.anchor();
+        let (node, found) = {
+            let doc = doc.borrow();
+            let found = doc.attributes(id).nth(index as usize).map(|(name, _)| name);
+            (doc.node_ref(id), found)
+        };
+        Ok(found.map(|name| Handle::from_bits(mint_attr(ctx, Some(node), name))))
+    }
+
+    fn get_named_item(&self, name: &str) -> Result<Option<Handle<Attr>>, JsError> {
+        let ctx = self.context();
+        let (doc, id) = self.anchor();
+        let (node, found) = {
+            let doc = doc.borrow();
+            let found = doc
+                .attributes(id)
+                .find(|(stored, _)| qualified_attr_name(stored) == name)
+                .map(|(stored, _)| stored);
+            (doc.node_ref(id), found)
+        };
+        Ok(found.map(|name| Handle::from_bits(mint_attr(ctx, Some(node), name))))
+    }
+
+    fn get_named_item_ns(
+        &self,
+        namespace: Option<&str>,
+        local_name: Option<&str>,
+    ) -> Result<Option<Handle<Attr>>, JsError> {
+        let ctx = self.context();
+        let (doc, id) = self.anchor();
+        let (node, found) = {
+            let doc = doc.borrow();
+            let found = attribute_name_ns(&doc, id, namespace, local_name).map(AttrName::to_qual);
+            (doc.node_ref(id), found)
+        };
+        Ok(found.map(|name| Handle::from_bits(mint_attr(ctx, Some(node), name))))
+    }
+
+    fn set_named_item(&self, attr: Handle<Attr>) -> Result<Option<Handle<Attr>>, JsError> {
+        // The map *is* the element, so attaching through it is
+        // `setAttributeNode` reached from the other side — the standard defines
+        // the two in terms of one *set an attribute*.
+        self.attach_attribute_node(attr)
+    }
+
+    fn set_named_item_ns(&self, attr: Handle<Attr>) -> Result<Option<Handle<Attr>>, JsError> {
+        self.attach_attribute_node(attr)
+    }
+
+    fn remove_named_item(&self, name: &str) -> Result<Handle<Attr>, JsError> {
+        let ctx = self.context();
+        let (doc, id) = self.anchor();
+        let found = {
+            let doc = doc.borrow();
+            doc.attributes(id)
+                .find(|(stored, _)| qualified_attr_name(stored) == name)
+                .map(|(stored, _)| stored)
+        };
+        let Some(name) = found else {
+            return Err(attr_not_found());
+        };
+        self.detach_attribute(ctx, doc, id, name)
+    }
+
+    fn remove_named_item_ns(
+        &self,
+        namespace: Option<&str>,
+        local_name: Option<&str>,
+    ) -> Result<Handle<Attr>, JsError> {
+        let ctx = self.context();
+        let (doc, id) = self.anchor();
+        let found = attribute_name_ns(&doc.borrow(), id, namespace, local_name);
+        let Some(name) = found else {
+            return Err(attr_not_found());
+        };
+        self.detach_attribute(ctx, doc, id, name.to_qual())
+    }
+}
+
+impl HostObject {
+    /// Removes the attribute `name` from element `id` and returns an `Attr`
+    /// wrapper for what was removed — the shared half of `removeNamedItem` and
+    /// `removeNamedItemNS`.
+    ///
+    /// The returned object is *detached* and carries the value the attribute
+    /// had, which is the standard's own outcome: *remove an attribute* sets the
+    /// removed attribute's element to null and leaves its value alone.
+    fn detach_attribute(
+        &self,
+        ctx: &HostContext,
+        doc: &SharedDocument,
+        id: NodeId,
+        name: QualName,
+    ) -> Result<Handle<Attr>, JsError> {
+        let value = doc
+            .borrow()
+            .attribute_ns(id, name.ns, name.local)
+            .unwrap_or_default()
+            .to_owned();
+        {
+            let mut doc = doc.borrow_mut();
+            doc.mutate(Mutation::RemoveAttribute {
+                element: id,
+                name: name.clone(),
+            })
+            .map_err(|e| mutation_error(&e))?;
+        }
+        Ok(Handle::from_bits(mint_detached_attr(ctx, name, value)))
+    }
+}
+
+/// `Attr`. An attribute is not a node in this tree, so this interface carries the
+/// four `Node` members the WPT attribute helpers read directly; see the
+/// deviation note on `interface Attr` in `idl/dom/dom.webidl`.
+impl AttrOps for HostObject {
+    fn node_type(&self) -> u16 {
+        // `Node.ATTRIBUTE_NODE`, the value `Attr.nodeType` has.
+        2
+    }
+
+    fn node_name(&self) -> Result<String, JsError> {
+        // `nodeName` and `name` are one member for an `Attr`: both are the
+        // qualified name.
+        AttrOps::name(self)
+    }
+
+    fn node_value(&self) -> Result<Option<String>, JsError> {
+        Ok(Some(AttrOps::value(self)?))
+    }
+
+    fn set_node_value(&self, value: Option<&str>) -> Result<(), JsError> {
+        self.write_attr_value(value.unwrap_or_default());
+        Ok(())
+    }
+
+    fn text_content(&self) -> Result<Option<String>, JsError> {
+        // `Attr` takes the standard's "otherwise" arm of the `textContent`
+        // getter: its value.
+        AttrOps::node_value(self)
+    }
+
+    fn set_text_content(&self, value: Option<&str>) -> Result<(), JsError> {
+        self.write_attr_value(value.unwrap_or_default());
+        Ok(())
+    }
+
+    fn namespace_uri(&self) -> Result<Option<String>, JsError> {
+        Ok(self
+            .with_attr(None, |record| Some(record.name.ns.as_str().to_owned()))
+            .filter(|ns| !ns.is_empty()))
+    }
+
+    fn prefix(&self) -> Result<Option<String>, JsError> {
+        Ok(self.with_attr(None, |record| {
+            record
+                .name
+                .prefix
+                .filter(|prefix| *prefix != atoms::EMPTY)
+                .map(|prefix| prefix.as_str().to_owned())
+        }))
+    }
+
+    fn local_name(&self) -> Result<String, JsError> {
+        Ok(self.with_attr(String::new(), |record| {
+            record.name.local.as_str().to_owned()
+        }))
+    }
+
+    fn name(&self) -> Result<String, JsError> {
+        Ok(self.with_attr(String::new(), AttrRecord::qualified_name))
+    }
+
+    fn value(&self) -> Result<String, JsError> {
+        Ok(self.with_attr(String::new(), |record| self.attr_value(record)))
+    }
+
+    fn set_value(&self, value: &str) {
+        self.write_attr_value(value);
+    }
+
+    fn owner_element(&self) -> Result<Option<Handle<Element>>, JsError> {
+        let ctx = self.context();
+        let element = self.with_attr(None, |record| record.element);
+        Ok(element.map(|node| {
+            let doc = ctx.doc.borrow();
+            Handle::from_bits(encode_node(ctx.slot, doc.node_ref(node.id)))
+        }))
+    }
+
+    fn specified(&self) -> bool {
+        // Every attribute in this tree came from a start tag, from a script
+        // write or from parsing: none is a DTD default, which is the state
+        // `specified` distinguishes.
+        true
+    }
+}
+
+impl HostObject {
+    /// Writes `value` through the `Attr` this host stands for.
+    ///
+    /// The write goes to the element's storage while the attribute is attached
+    /// — which is what makes a held `Attr` reflect a later `setAttribute` — and
+    /// to the record's own state while it is detached.
+    fn write_attr_value(&self, value: &str) {
+        let HostObject::Host { ctx, key } = self else {
+            return;
+        };
+        let target = {
+            let records = ctx.host_records.borrow();
+            match records.get(*key) {
+                Some(HostRecord::Attr(record)) => (record.element, record.name.clone()),
+                _ => return,
+            }
+        };
+        match target {
+            (Some(element), name) => {
+                let mut doc = ctx.doc.borrow_mut();
+                let _ = doc.mutate(Mutation::SetAttribute {
+                    element: element.id,
+                    name,
+                    value: value.to_owned(),
+                });
+            }
+            (None, _) => {
+                if let Some(HostRecord::Attr(record)) = ctx.host_records.borrow_mut().get_mut(*key)
+                {
+                    record.detached_value = value.to_owned();
+                }
+            }
+        }
     }
 }
 
@@ -5219,6 +5882,7 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
         | HostRecord::Blob(_)
         | HostRecord::File(_)
         | HostRecord::Implementation
+        | HostRecord::Attr(_)
         | HostRecord::FormData(_) => return None,
     };
     match params.url {
@@ -5234,6 +5898,7 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
             | HostRecord::Xhr(_)
             | HostRecord::Blob(_)
             | HostRecord::File(_)
+            | HostRecord::Attr(_)
             | HostRecord::FormData(_)
             | HostRecord::Implementation => None,
         },
@@ -5341,6 +6006,9 @@ enum HostLink {
     FormData(Vec<HostKey>),
     /// The record is a `DOMImplementation`, which links to nothing.
     Implementation,
+    /// The record is an `Attr`, which links to nothing: it names an element by
+    /// node reference, and that reference is not a slab key.
+    Attr,
 }
 
 /// What freeing host records took out of the world: the record slots that left
@@ -5450,6 +6118,7 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         Some(HostRecord::File(record)) => HostLink::File(record.owners.clone()),
         Some(HostRecord::FormData(record)) => HostLink::FormData(file_keys(&record.list)),
         Some(HostRecord::Implementation) => HostLink::Implementation,
+        Some(HostRecord::Attr(_)) => HostLink::Attr,
         None => return freed,
     };
     match link {
@@ -5467,7 +6136,8 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         | HostLink::TextEncoder
         | HostLink::Xhr
         | HostLink::Blob
-        | HostLink::Implementation => {
+        | HostLink::Implementation
+        | HostLink::Attr => {
             free_record(slab, key, &mut freed);
         }
         // A file record is the shape a `FormData` entry list makes two-way: its
@@ -9955,25 +10625,245 @@ fn qualified_attr_name(name: &QualName) -> String {
     }
 }
 
-/// Validates an attribute name at the DOM boundary: non-empty and starting with
-/// a letter, underscore or colon. Returns an `InvalidCharacterError` otherwise,
-/// as `setAttribute`/`toggleAttribute` require.
-fn validate_attribute_name(name: &str) -> Result<(), JsError> {
-    if name.is_empty() {
-        return Err(JsError::dom_exception(
-            "InvalidCharacterError",
-            "Attribute name must not be empty",
+/// The elements an `Element.getElementsByTagNameNS` /
+/// `Document.getElementsByTagNameNS` query selects under `root`, as a snapshot
+/// of node references.
+///
+/// `namespace` and `local_name` are the operation's own arguments: `"*"` matches
+/// anything in that position, `None` is the null namespace (which the empty
+/// string is too), and a `None` local name — what a `null` argument becomes — is
+/// the empty string, which no element has, so it selects nothing.
+fn qualified_snapshot(
+    doc: &Document,
+    root: NodeId,
+    namespace: Option<&str>,
+    local_name: Option<&str>,
+    include_root: bool,
+) -> Vec<NodeRef> {
+    let namespace = namespace.filter(|ns| !ns.is_empty());
+    let local_name = local_name.unwrap_or_default();
+    let matches = |id: NodeId| {
+        if doc.kind(id) != NodeKind::Element {
+            return false;
+        }
+        if local_name != "*" && doc.tag(id).is_none_or(|tag| tag.as_str() != local_name) {
+            return false;
+        }
+        match namespace {
+            Some("*") => true,
+            None => doc.namespace(id).is_none_or(|ns| ns == atoms::EMPTY),
+            Some(want) => doc.namespace(id).is_some_and(|ns| ns.as_str() == want),
+        }
+    };
+    let descendants = if include_root {
+        doc.descendants_inclusive(root).collect::<Vec<_>>()
+    } else {
+        doc.descendants(root).collect::<Vec<_>>()
+    };
+    descendants
+        .into_iter()
+        .filter(|id| matches(*id))
+        .map(|id| doc.node_ref(id))
+        .collect()
+}
+
+/// Whether the stored attribute `name` is the one selected by `namespace` and
+/// `local_name`, both already normalized (`namespace` has had the empty string
+/// folded to `None`, `local_name` is a real string).
+fn attribute_matches_ns(name: &QualName, namespace: Option<&str>, local_name: &str) -> bool {
+    if name.local.as_str() != local_name {
+        return false;
+    }
+    match namespace {
+        None => name.ns == atoms::EMPTY,
+        Some(want) => name.ns.as_str() == want,
+    }
+}
+
+/// The stored name of the attribute an element carries in `namespace` with
+/// local name `local_name`, or `None` when it has none.
+///
+/// This is the standard's *get an attribute by namespace and local name*
+/// (<https://dom.spec.whatwg.org/#concept-element-attributes-get-by-namespace>):
+/// the pair is the key, so a prefixed and an unprefixed attribute of one local
+/// name in one namespace are the same attribute.
+fn attribute_name_ns(
+    doc: &Document,
+    id: NodeId,
+    namespace: Option<&str>,
+    local_name: Option<&str>,
+) -> Option<AttrName> {
+    let namespace = namespace.filter(|ns| !ns.is_empty());
+    let local_name = local_name.unwrap_or_default();
+    if local_name.is_empty() {
+        return None;
+    }
+    doc.attributes(id)
+        .find(|(name, _)| attribute_matches_ns(name, namespace, local_name))
+        .map(|(name, _)| AttrName::from_qual(name))
+}
+
+/// The value of the attribute [`attribute_name_ns`] selects.
+fn lookup_attribute_ns(
+    doc: &Document,
+    id: NodeId,
+    namespace: Option<&str>,
+    local_name: Option<&str>,
+) -> Option<String> {
+    let namespace = namespace.filter(|ns| !ns.is_empty());
+    let local_name = local_name.unwrap_or_default();
+    if local_name.is_empty() {
+        return None;
+    }
+    doc.attributes(id)
+        .find(|(name, _)| attribute_matches_ns(name, namespace, local_name))
+        .map(|(_, value)| value.to_owned())
+}
+
+/// The `NotFoundError` `removeAttributeNode` and the `NamedNodeMap` removers
+/// throw for an attribute the element does not carry
+/// (<https://dom.spec.whatwg.org/#dom-element-removeattributenode>).
+fn attr_not_found() -> JsError {
+    JsError::dom_exception("NotFoundError", "The element does not carry that attribute")
+}
+
+/// Mints an `Attr` wrapper host for the attribute `name` of `element` in `ctx`
+/// and returns its handle bits.
+///
+/// The record is fresh on every mint. An attribute in this tree is a row of its
+/// element's packed attribute list rather than a node, so there is no
+/// per-attribute identity to hang a `[SameObject]` rule on: two reads of
+/// `element.attributes[0]` answer with two objects that read the same storage.
+/// `docs/dev/idl.md` records that as the `Attr` deviation's second half.
+fn mint_attr(ctx: &HostContext, element: Option<NodeRef>, name: QualName) -> u64 {
+    mint_attr_record(
+        ctx,
+        AttrRecord {
+            element,
+            name,
+            detached_value: String::new(),
+        },
+    )
+}
+
+/// Mints a *detached* `Attr` carrying `value` — the object a write through a
+/// `NamedNodeMap`'s removers returns, which the standard leaves detached with
+/// the value the attribute had.
+fn mint_detached_attr(ctx: &HostContext, name: QualName, value: String) -> u64 {
+    mint_attr_record(
+        ctx,
+        AttrRecord {
+            element: None,
+            name,
+            detached_value: value,
+        },
+    )
+}
+
+/// Inserts `record` into `ctx`'s host-record slab and returns the handle bits of
+/// the `TAG_HOST` wrapper that will stand for it.
+fn mint_attr_record(ctx: &HostContext, record: AttrRecord) -> u64 {
+    let key = ctx
+        .host_records
+        .borrow_mut()
+        .insert(HostRecord::Attr(record));
+    encode_host(ctx.slot, key)
+}
+
+/// Reads the `AttrRecord` a `TAG_HOST` handle names, or `None` when the handle
+/// is not an `Attr` or its record has been reclaimed.
+fn attr_record(ctx: &HostContext, key: HostKey) -> Option<AttrRecord> {
+    match ctx.host_records.borrow().get(key) {
+        Some(HostRecord::Attr(record)) => Some(AttrRecord {
+            element: record.element,
+            name: record.name.clone(),
+            detached_value: record.detached_value.clone(),
+        }),
+        _ => None,
+    }
+}
+
+/// Whether `c` may begin a name at the DOM boundary.
+///
+/// This is XML's `NameStartChar` as `dom/nodes` pins it: an ASCII letter, `_`,
+/// `:`, or any non-ASCII scalar value. XML's own table is narrower — it excludes
+/// U+0300, U+037E and U+FFFF, all of which
+/// `dom/nodes/Document-createElement.html` and
+/// `dom/nodes/Document-createElementNS.js` require to be accepted — so the rule
+/// implemented here is the one the gate measures, not the XML table.
+/// `tenta_dom::Document::validate_xml_name` keeps the strict XML production for
+/// XML documents, where the DOM Standard has no say.
+fn is_name_start_char(c: char) -> bool {
+    !c.is_ascii() || c.is_ascii_alphabetic() || c == '_' || c == ':'
+}
+
+/// Whether `c` may continue a name at the DOM boundary: every character except
+/// ASCII whitespace and `>`.
+///
+/// The asymmetry is the gate's, not a guess: the same tables require
+/// `createElement("f<oo")` and `createElement("f}oo")` to succeed while
+/// `createElement("foo>")` and `createElement("fo o")` must not.
+fn is_name_char(c: char) -> bool {
+    !c.is_ascii_whitespace() && c != '>'
+}
+
+/// The DOM Standard's *validate* step for a name
+/// (<https://dom.spec.whatwg.org/#validate>): the name must match XML's `Name`
+/// production, throwing an `InvalidCharacterError` when it does not.
+///
+/// `name` is the whole string whose characters are checked; `start` is the part
+/// whose *first* character has to match `NameStartChar`. The two differ for
+/// `createElementNS`, which validates the local part's first character but the
+/// whole qualified name's remaining ones — `createElementNS(ns, "0:a")` is
+/// accepted with the prefix `0`, so the prefix is never checked.
+///
+/// This is the *element* name rule. An attribute name uses
+/// [`validate_attribute_name`], which is a different — and much more
+/// permissive — predicate; see it for why.
+fn validate_name(name: &str, start: &str) -> Result<(), JsError> {
+    let invalid = |message: &str| JsError::dom_exception("InvalidCharacterError", message);
+    if name.is_empty() || start.is_empty() {
+        return Err(invalid("The name must not be empty"));
+    }
+    if !start.chars().next().is_some_and(is_name_start_char) {
+        return Err(invalid(
+            "The name must start with a letter, underscore or colon",
         ));
     }
-    if let Some(first_char) = name.chars().next()
-        && !first_char.is_ascii_alphabetic()
-        && first_char != '_'
-        && first_char != ':'
-    {
-        return Err(JsError::dom_exception(
-            "InvalidCharacterError",
-            "Attribute name must start with a letter, underscore, or colon",
-        ));
+    if name.chars().any(|c| !is_name_char(c)) {
+        return Err(invalid("The name contains an invalid character"));
+    }
+    Ok(())
+}
+
+/// Whether `c` may appear in an *attribute* name at the DOM boundary.
+///
+/// The four excluded characters are the whole rule the WPT attribute tables pin,
+/// and they are a *different* set from the element rule's:
+/// `dom/nodes/attributes.html`'s `valid_names` includes `"0"`, `"~"`, `"\\"`,
+/// `"'"` and `'"'` and requires every one of them to be accepted by
+/// `setAttribute` and `toggleAttribute`, while
+/// `dom/nodes/processing-instruction-attributes.html` requires
+/// `"$"`, `"_"` and `"a$b"` to be accepted and `"="`, `">"`, `"/"`, tab, LF and
+/// CR to be refused wherever they appear. No first-character rule survives
+/// both: `"0"` and `"~"` are accepted names.
+fn is_attr_name_char(c: char) -> bool {
+    !c.is_ascii_whitespace() && !matches!(c, '=' | '>' | '/')
+}
+
+/// Validates an *attribute* name at the DOM boundary — `setAttribute`,
+/// `toggleAttribute` and `Document.createAttribute` all use it.
+///
+/// The name must be non-empty and free of the four characters
+/// [`is_attr_name_char`] excludes. The first character is deliberately not
+/// checked: see that function for the WPT evidence.
+fn validate_attribute_name(name: &str) -> Result<(), JsError> {
+    let invalid = |message: &str| JsError::dom_exception("InvalidCharacterError", message);
+    if name.is_empty() {
+        return Err(invalid("The attribute name must not be empty"));
+    }
+    if name.chars().any(|c| !is_attr_name_char(c)) {
+        return Err(invalid("The attribute name contains an invalid character"));
     }
     Ok(())
 }
@@ -10045,34 +10935,24 @@ fn validate_and_extract<'a>(
     // An empty namespace string is treated as the null namespace.
     let namespace = namespace.filter(|ns| !ns.is_empty());
 
-    validate_attribute_name(qualified_name)?;
-    if qualified_name.chars().any(|c| {
-        matches!(
-            c,
-            ' ' | '\t' | '\n' | '\r' | '"' | '\'' | '>' | '<' | '&' | '/'
-        )
-    }) {
-        return Err(JsError::dom_exception(
-            "InvalidCharacterError",
-            "Qualified name contains an invalid character",
-        ));
-    }
-
-    // Split an optional single prefix. A trailing or doubled colon is invalid.
+    // Split at the *first* colon. An empty part on either side is invalid, but
+    // the local part may itself contain colons: `createElementNS(ns, "f:o:o")`
+    // must succeed with the local name `o:o`, and `createElementNS(ns,
+    // "prefix::local")` with `:local`. Both are `dom/nodes` rows, and both are
+    // why the split is `split_once` and not a no-colon-in-the-local check.
     let (prefix, local) = match qualified_name.split_once(':') {
-        Some((prefix, local))
-            if !prefix.is_empty() && !local.is_empty() && !local.contains(':') =>
-        {
+        Some((prefix, local)) => {
+            if prefix.is_empty() || local.is_empty() {
+                return Err(JsError::dom_exception(
+                    "InvalidCharacterError",
+                    "Qualified name has an empty prefix or local name",
+                ));
+            }
             (Some(prefix), local)
-        }
-        Some(_) => {
-            return Err(JsError::dom_exception(
-                "InvalidCharacterError",
-                "Qualified name has a malformed prefix",
-            ));
         }
         None => (None, qualified_name),
     };
+    validate_name(qualified_name, local)?;
 
     let ns = namespace.map(Atom::new);
     let namespace_error = |msg: &str| JsError::dom_exception("NamespaceError", msg);
@@ -10100,14 +10980,28 @@ fn validate_and_extract<'a>(
     Ok((ns.unwrap_or(atoms::EMPTY), prefix.map(Atom::new), local))
 }
 
+/// The DOM `tagName` of an element: the *qualified* name, ASCII-uppercased for
+/// elements in the HTML namespace
+/// (<https://dom.spec.whatwg.org/#dom-element-tagname>).
+///
+/// The qualified name, not the local name: `createElementNS(HTMLNS, "html:span")`
+/// reads back as `"HTML:SPAN"` while its `localName` is `"span"`
+/// (`dom/nodes/Document-createElementNS.html`). The uppercasing is ASCII-only,
+/// so a non-ASCII local name keeps its case while an ASCII one does not.
 fn element_tag_name(doc: &Document, id: NodeId) -> String {
     let Some(local) = doc.tag(id) else {
         return String::new();
     };
+    let qualified = match doc.element_prefix(id) {
+        Some(prefix) if prefix != atoms::EMPTY => {
+            format!("{}:{}", prefix.as_str(), local.as_str())
+        }
+        _ => local.as_str().to_owned(),
+    };
     if doc.namespace(id) == Some(atoms::NS_HTML) {
-        local.as_str().to_ascii_uppercase()
+        qualified.to_ascii_uppercase()
     } else {
-        local.as_str().to_owned()
+        qualified
     }
 }
 
@@ -10166,6 +11060,16 @@ pub const TAG_WINDOW: u8 = 8;
 /// this one tag — the tag is 4 bits of a handle and there is no room for one
 /// per class.
 pub const TAG_HOST: u8 = 9;
+/// Handle tag for an element's `NamedNodeMap` (`attributes`); like a live
+/// collection, it anchors to the owning element's node.
+///
+/// It is tag 10 rather than a [`TAG_HOST`] record because `Element.attributes`
+/// is `[SameObject]`: the map *is* the element's attribute list, so two reads
+/// have to answer with one object, and a handle derived from the owner's
+/// [`NodeRef`] gives that for free. An `Attr` — which names an entry *within*
+/// that list — cannot be derived from the element alone and is a host record
+/// instead.
+pub const TAG_NAMED_NODE_MAP: u8 = 10;
 
 /// The tag field's width. Every tag has to be below this, and the four bits the
 /// document slot took from the tag are why `TAG_HOST` multiplexes by record.
@@ -10191,9 +11095,8 @@ impl DecodedHandle {
     /// when sweeping dead wrappers.
     pub fn node_anchor(&self) -> Option<NodeId> {
         match self.tag {
-            TAG_NODE | TAG_NODE_LIST | TAG_HTML_COLLECTION | TAG_TOKEN_LIST | TAG_STYLE => {
-                Some(self.node_id)
-            }
+            TAG_NODE | TAG_NODE_LIST | TAG_HTML_COLLECTION | TAG_TOKEN_LIST | TAG_STYLE
+            | TAG_NAMED_NODE_MAP => Some(self.node_id),
             // Snapshot tags 3 and 4, TAG_EVENT, TAG_WINDOW and TAG_HOST: none of
             // them is anchored to a node. A window handle and a host handle are
             // deliberately excluded so a sweep cannot mistake their small
@@ -10264,6 +11167,11 @@ pub fn encode_html_collection(slot: u16, owner: NodeRef) -> u64 {
 /// Packs a token-list owner's reference into a [`TAG_TOKEN_LIST`] handle.
 pub fn encode_token_list(slot: u16, owner: NodeRef) -> u64 {
     pack(TAG_TOKEN_LIST, slot, owner)
+}
+
+/// Packs a `NamedNodeMap` owner's reference into a [`TAG_NAMED_NODE_MAP`] handle.
+pub fn encode_named_node_map(slot: u16, owner: NodeRef) -> u64 {
+    pack(TAG_NAMED_NODE_MAP, slot, owner)
 }
 
 /// Packs a style declaration owner's reference into a [`TAG_STYLE`] handle.

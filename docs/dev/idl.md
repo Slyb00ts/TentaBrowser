@@ -1332,6 +1332,76 @@ Deviations, all recorded in `idl/dom/dom.webidl`:
    `Node-mutation-adoptNode.html`'s "simple append of foreign div with text" is
    the subtest it will turn green.
 
+### The Element attribute surface (P2 slice d-10)
+
+`Element.prefix`, the namespace-aware attribute operations
+(`setAttributeNS`/`getAttributeNS`/`removeAttributeNS`/`hasAttributeNS`),
+`Element.attributes` with `NamedNodeMap` and `Attr`, the attribute-node
+operations, `Document.createAttribute`/`createAttributeNS`,
+`getElementsByTagNameNS` and the ASCII-whitespace rule
+`getElementsByClassName` splits on. The deviations and the deliberate gaps:
+
+- **`Attr` is not a `Node` here.** The DOM Standard makes `Attr : Node` with
+  `nodeType` 2. In this tree an attribute is a row of its element's packed
+  attribute list (`AttrName`/`AttrValue` inside `tenta_dom`'s arena) with no
+  arena slot, no id and no generation, so there is nothing for the `Node`
+  members to read and no `TAG_NODE` handle that could name one. `interface Attr`
+  in `idl/dom/dom.webidl` therefore carries the four `Node` members the WPT
+  attribute helpers read (`nodeType`, `nodeName`, `nodeValue`, `textContent`)
+  directly. `attr instanceof Node` is false.
+- **Two reads of one attribute are two objects.** There is no per-entry identity
+  to hang a `[SameObject]` rule on, so `element.attributes[0]` mints a fresh
+  `Attr` each time. Its members still read the element's storage, so a held
+  `Attr` follows a later `setAttribute` — only `===` between two reads is false.
+  `Element.attributes` itself *is* `[SameObject]`: it is a `TAG_NAMED_NODE_MAP`
+  handle derived from the element's `NodeRef`.
+- **Two name rules, not one.** `createElement`/`createElementNS` use XML's
+  `Name` production as the WPT tables pin it (`Document-createElement.html`,
+  `Document-createElementNS.js`): an ASCII letter, `_`, `:` or a non-ASCII
+  scalar to start, and no ASCII whitespace or `>` after it. Attribute names use
+  a different, looser predicate — non-empty, and free of `=`, `>` and `/` —
+  because `dom/nodes/attributes.html`'s `valid_names` requires
+  `setAttribute("0")`, `setAttribute("~")` and `setAttribute("\"")` to be
+  accepted, while `dom/nodes/processing-instruction-attributes.html` requires
+  `$`, `_` and `a$b` to be accepted and `=`, `>` and `/` to be refused wherever
+  they sit. No single first-character rule satisfies both tables.
+- **The plain name operations still match by `(no namespace, local name)`.**
+  `getAttributeNode`, `getAttributeNodeNS`, `getNamedItem` and `getNamedItemNS`
+  match by *qualified* name or by `(namespace, localName)` against the stored
+  list, but `getAttribute("xlink:href")` does not find a parsed `xlink:href`
+  attribute: the four plain operations build a `QualName` with no namespace and
+  the lowercased argument as the local name, and `tenta_dom` matches on the
+  whole `AttrName`. That is a pre-existing divergence, and now the only one left
+  on the attribute path.
+- **`getElementsByTagNameNS` returns a snapshot**, not the standard's live
+  collection, exactly as `getElementsByTagName` already did, so a mutation after
+  the call is not visible through it. `HTMLCollection`'s own `[NewObject]`
+  declaration is what this matches.
+
+Deliberately **not** taken in this slice, each with its reason:
+
+- `MutationObserver` (114 non-passing `dom/nodes` subtests). `tenta-dom` has a
+  mutation *log* (`MutationObserverSink`), but the interface needs a delivery
+  order — a microtask queue, an observation-target set and `takeRecords`'s
+  interplay with it — that the host has no mechanism for. A stub whose callbacks
+  never fire would be exactly the masking the working rules forbid.
+- `DOMParser` (41). Its reachable `dom/nodes` demand is
+  `processing-instruction-attributes.html`'s `application/xml` sources, which
+  needs an XML parser, and the engine has none. `parseFromString` for
+  `text/html` alone would not move the file.
+- The `Attr` surface on `ProcessingInstruction` (`pi.setAttribute`,
+  `pi.getAttribute`, `pi.hasAttributes`, `pi.toggleAttribute` — 90 subtests of
+  `processing-instruction-attributes.html`). Those members belong to the WICG
+  *declarative partial updates* proposal, where a PI's attributes are parsed out
+  of its `data` string and a mutation rewrites that string; that is a
+  serialization subsystem of its own, not an `Element` member.
+- `ChildNode.before`/`after`/`replaceWith` (117). The standard's algorithm
+  inserts through *convert nodes into a node* and merges the inserted text with
+  any adjacent `Text` sibling, and this tree's single `Mutation` path performs
+  no adjacent-text merging — `dom/nodes/ChildNode-before.html` is written
+  against the merging. Shipping the members without it would fail most of that
+  file.
+
 ### `window.onload` and the two lifecycle dispatches (P2 slice d-8)
 
 The window is the global object, so none of its members can come from the

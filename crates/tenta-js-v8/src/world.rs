@@ -25,8 +25,8 @@ use tenta_core::atom::atoms;
 use tenta_dom::NodeKind;
 use tenta_js::bindings::host::{
     DocumentSet, HostObject, HostRecord, SharedContext, TAG_EVENT, TAG_HOST, TAG_HTML_COLLECTION,
-    TAG_NODE_LIST, TAG_STYLE, TAG_TOKEN_LIST, TAG_WINDOW, decode, encode_window,
-    reclaim_host_record,
+    TAG_NAMED_NODE_MAP, TAG_NODE_LIST, TAG_STYLE, TAG_TOKEN_LIST, TAG_WINDOW, decode,
+    encode_window, reclaim_host_record,
 };
 use tenta_js::bindings::{
     InterfaceDescriptor, InterfaceRegistry, WRAPPER_HOST_FIELD, WRAPPER_TAG, WrapperWorld,
@@ -550,7 +550,8 @@ impl WrapperWorld for V8World {
                 | HostRecord::Xhr(_)
                 | HostRecord::Blob(_)
                 | HostRecord::FormData(_)
-                | HostRecord::Implementation => {}
+                | HostRecord::Implementation
+                | HostRecord::Attr(_) => {}
             }
             interface_name = record.interface_name();
             host = Box::new(HostObject::host_record(ctx.clone(), key));
@@ -575,6 +576,8 @@ impl WrapperWorld for V8World {
                 "HTMLCollection"
             } else if decoded.tag == TAG_TOKEN_LIST {
                 "DOMTokenList"
+            } else if decoded.tag == TAG_NAMED_NODE_MAP {
+                "NamedNodeMap"
             } else if decoded.tag == TAG_STYLE {
                 "CSSStyleDeclaration"
             } else {
@@ -625,6 +628,8 @@ impl WrapperWorld for V8World {
                 HostObject::html_collection(ctx.clone(), node)
             } else if decoded.tag == TAG_TOKEN_LIST {
                 HostObject::token_list(ctx.clone(), node)
+            } else if decoded.tag == TAG_NAMED_NODE_MAP {
+                HostObject::named_node_map(ctx.clone(), node)
             } else if decoded.tag == TAG_STYLE {
                 HostObject::style(ctx.clone(), node)
             } else {

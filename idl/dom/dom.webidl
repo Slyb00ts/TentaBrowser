@@ -84,6 +84,7 @@ interface Element : Node {
   // Phase 4b-1: reflected name/namespace and a writable id/className.
   readonly attribute DOMString? namespaceURI;
   readonly attribute DOMString localName;
+  readonly attribute DOMString? prefix;
   attribute DOMString id;
   attribute DOMString className;
   readonly attribute Element? firstElementChild;
@@ -103,6 +104,7 @@ interface Element : Node {
 
   // Phase 1c: static snapshots (live collections in later phases)
   [NewObject] HTMLCollection getElementsByTagName(DOMString qualifiedName);
+  [NewObject] HTMLCollection getElementsByTagNameNS(DOMString? namespace, DOMString? localName);
   [NewObject] HTMLCollection getElementsByClassName(DOMString classNames);
 
   // Phase 2a: attribute mutation
@@ -111,12 +113,35 @@ interface Element : Node {
   undefined removeAttribute(DOMString name);
   boolean hasAttribute(DOMString name);
 
+  // d-10: the namespace-aware attribute surface. `namespace` and `localName`
+  // are declared `DOMString?` where the standard writes
+  // `[LegacyNullToEmptyString] DOMString`; the generator has no such extended
+  // attribute, and for these four operations the two are observationally the
+  // same, because the standard's own steps read the empty namespace and the
+  // null one as one case. A `None` here is that empty string. See
+  // `docs/dev/idl.md`.
+  undefined setAttributeNS(DOMString? namespace, DOMString qualifiedName, DOMString value);
+  DOMString? getAttributeNS(DOMString? namespace, DOMString? localName);
+  undefined removeAttributeNS(DOMString? namespace, DOMString? localName);
+  boolean hasAttributeNS(DOMString? namespace, DOMString? localName);
+
   // Phase 4b-1: attribute presence and toggling.
   boolean hasAttributes();
   [Throws] boolean toggleAttribute(DOMString name, optional boolean force);
 
   // Phase 2b-3: attribute-name enumeration (sequence return).
   sequence<DOMString> getAttributeNames();
+
+  // d-10: the `Attr`/`NamedNodeMap` surface. `attributes` is `[SameObject]`
+  // because the specification's attribute list is: the object is derived from
+  // the element's attribute storage on every read, and two reads answer with
+  // the same object.
+  [SameObject] readonly attribute NamedNodeMap attributes;
+  Attr? getAttributeNode(DOMString name);
+  Attr? getAttributeNodeNS(DOMString? namespace, DOMString? localName);
+  [Throws] Attr? setAttributeNode(Attr attr);
+  [Throws] Attr? setAttributeNodeNS(Attr attr);
+  [Throws] Attr removeAttributeNode(Attr attr);
 
   // Phase 2b-1: innerHTML (getter + setter - note: setter is fast-API eligible so non-throwing)
   attribute DOMString innerHTML;
@@ -187,11 +212,18 @@ interface Document : Node {
 
   // Phase 1c: static snapshots (live collections in later phases)
   [NewObject] HTMLCollection getElementsByTagName(DOMString qualifiedName);
+  [NewObject] HTMLCollection getElementsByTagNameNS(DOMString? namespace, DOMString? localName);
   [NewObject] HTMLCollection getElementsByClassName(DOMString classNames);
 
   [NewObject] Element createElement(DOMString localName);
   [NewObject] Text createTextNode(DOMString data);
   [NewObject] Comment createComment(DOMString data);
+
+  // d-10: the detached-`Attr` factories. `createAttribute` lowercases in an
+  // HTML document exactly as `createElement` does; `createAttributeNS` runs the
+  // same *validate and extract* as `createElementNS`.
+  [NewObject] Attr createAttribute(DOMString localName);
+  [Throws, NewObject] Attr createAttributeNS(DOMString? namespace, DOMString qualifiedName);
 
   // d-9: the processing-instruction factory. `target` is validated against
   // XML's `Name` production and `data` against the `?>` sequence, both with an
@@ -227,6 +259,62 @@ interface NodeList {
   readonly attribute unsigned long length;
   getter Node? item(unsigned long index);
   iterable<Node>;
+};
+
+// d-10: `Element.attributes`. The DOM Standard's `NamedNodeMap` is the
+// element's attribute list itself — one live object per element, which is what
+// `[SameObject]` on `Element.attributes` and this interface's own identity
+// rule rest on. Every member reads the element's attribute storage, so a write
+// through `setAttribute` is visible through a map obtained before it.
+//
+// The DOM Standard declares an indexed getter, a *named* getter
+// (`getNamedItem`) and `getNamedItemNS` on this interface. Only the indexed
+// one is declared with `getter` here, matching `HTMLCollection`'s own
+// declaration, because the generator installs the indexed handler alone;
+// `getNamedItem` and `getNamedItemNS` are ordinary operations, so
+// `attributes["id"]` does not resolve while `attributes[0]` and
+// `attributes.getNamedItem("id")` do.
+[Exposed=Window]
+interface NamedNodeMap {
+  readonly attribute unsigned long length;
+  getter Attr? item(unsigned long index);
+  Attr? getNamedItem(DOMString name);
+  Attr? getNamedItemNS(DOMString? namespace, DOMString? localName);
+  [Throws] Attr? setNamedItem(Attr attr);
+  [Throws] Attr? setNamedItemNS(Attr attr);
+  [Throws] Attr removeNamedItem(DOMString name);
+  [Throws] Attr removeNamedItemNS(DOMString? namespace, DOMString? localName);
+  iterable<Attr>;
+};
+
+// d-10: `Attr` — the interface over one entry of an element's attribute list.
+//
+// **Deliberate deviation from the DOM Standard, recorded here and in
+// `docs/dev/idl.md`:** in the standard `Attr` is a `Node` (`nodeType` 2, with
+// the whole `Node` surface and an `Attr` prototype in the `Node` chain). Here
+// it is a standalone interface: an attribute is *not* a node in this tree —
+// `tenta_dom` stores an element's attributes as a packed `(ns, prefix, local,
+// value)` list inside the element, with no arena slot, id or generation — so
+// there is nothing for the `Node` members to read and no handle that could
+// name one in the arena's `TAG_NODE` space. The four `Node` members the WPT
+// attribute helpers read (`nodeType`, `nodeName`, `nodeValue`, `textContent`)
+// are therefore declared here directly, with the values the standard gives
+// them. `attr instanceof Node` is false, and `nodeValue`/`textContent` are
+// declared writable because `Node`'s are; `textContent`'s declared type is
+// `DOMString?` where the standard's `Node.textContent` is `DOMString?` too.
+[Exposed=Window]
+interface Attr {
+  readonly attribute unsigned short nodeType;
+  readonly attribute DOMString nodeName;
+  attribute DOMString? nodeValue;
+  attribute DOMString? textContent;
+  readonly attribute DOMString? namespaceURI;
+  readonly attribute DOMString? prefix;
+  readonly attribute DOMString localName;
+  readonly attribute DOMString name;
+  attribute DOMString value;
+  readonly attribute Element? ownerElement;
+  readonly attribute boolean specified;
 };
 
 // Phase 4c-1: DOMTokenList backs Element.classList. Backed by the `class`
