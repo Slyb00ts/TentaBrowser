@@ -14,7 +14,7 @@ use crate::bindings::host::{HostContext, decode};
 use crate::bindings::{AnyValue, Callback, Event, Handle};
 use crate::event_loop::{Clock, MonoTime, SharedClock};
 use crate::fetch::FetchStartError;
-use crate::xhr::XhrRequest;
+use crate::xhr::{XhrHandle, XhrRequest};
 
 /// What a mock listener does when invoked, to exercise re-entrant paths.
 #[derive(Clone)]
@@ -237,7 +237,7 @@ impl ScriptHost for MockHost {
     /// contract names (["`Err` means no request was started for any
     /// reason"](ScriptHost::start_xhr)) instead of passing vacuously on a start
     /// nothing ever answered.
-    fn start_xhr(&self, _request: XhrRequest, _target: u64) -> Result<(), FetchStartError> {
+    fn start_xhr(&self, _request: XhrRequest, _handle: XhrHandle) -> Result<(), FetchStartError> {
         Err(FetchStartError::new(
             "the dispatcher mock starts no XMLHttpRequest",
         ))

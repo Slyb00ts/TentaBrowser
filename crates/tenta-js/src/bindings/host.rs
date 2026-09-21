@@ -52,7 +52,7 @@ use crate::dom::events::{
 };
 use crate::event_loop::SharedClock;
 use crate::fetch::{FetchOutcome, FetchStartError, FetchedResponse};
-use crate::xhr::XhrRequest;
+use crate::xhr::{XhrHandle, XhrRequest};
 
 /// A document shared between the host objects of one world and the engine that
 /// drives it. Every `HostObject` for the document holds one of these clones, so
@@ -462,6 +462,29 @@ pub struct XhrRecord {
     /// which is why it is set before the request is built rather than after it
     /// succeeds.
     pub send_flag: bool,
+    /// The *request id*: the identity of the request `send()` most recently
+    /// started, and the value a completion is checked against before it is
+    /// delivered.
+    ///
+    /// A completion is not addressed to the object alone. `send()` leaves the
+    /// object at `OPENED` until the response's headers arrive, so `open()` can
+    /// run with a request still in flight and leave two of them on one object —
+    /// and the response state machine, which writes `ready_state` and `response`
+    /// on this record, would then interleave the two answers. The standard closes
+    /// that in `open()`'s step 10 by terminating the abandoned request, which the
+    /// host layer cannot reach because the driver sits on the other side of the
+    /// seam; this id is what stands in for it. It is bumped by `open()` **and**
+    /// by the `send()` that starts a request, carried to the driver in
+    /// [`XhrHandle`](crate::xhr::XhrHandle), and compared in
+    /// [`deliver_xhr_completion`], which discards a completion whose id is no
+    /// longer this record's.
+    ///
+    /// A counter rather than an "is a request in flight" flag, for the reason the
+    /// watchdog's generation bump and the detached-node sweep's exact-`NodeRef`
+    /// match exist: a bare test cannot tell the abandoned request from the live
+    /// one, since both are in flight on the same object. Wrapping is unreachable
+    /// — it would take 2^64 `open()`/`send()` calls on one object.
+    pub request_id: u64,
     /// The *author request headers*: the header list `setRequestHeader`
     /// combines into, and the one `send()` hands to the driver.
     ///
@@ -6162,7 +6185,14 @@ impl HostObject {
             .ok_or_else(|| JsError::type_error("the receiver is not an event target"))?;
         let parts = self.with_xhr_mut(None, |record| {
             record.send_flag = true;
+            // The request this object is now waiting for. Stamped here rather
+            // than read off the record afterwards because a `loadstart` listener
+            // below can re-enter `open()`, which bumps the id again — and the
+            // handle, and the refusal path's delivery, must name *this* request
+            // rather than the one that replaced it.
+            record.request_id = record.request_id.wrapping_add(1);
             Some((
+                record.request_id,
                 record.url.clone()?,
                 record.method.clone()?,
                 record.author_headers.clone(),
@@ -6171,7 +6201,7 @@ impl HostObject {
         // A total refusal rather than an `unwrap`: the state check above passed
         // with the state opened, and only `open()` writes the method and the URL
         // — together with that state — but nothing here is worth a panic on.
-        let Some((url, method, headers)) = parts else {
+        let Some((request_id, url, method, headers)) = parts else {
             return Err(JsError::dom_exception(
                 "InvalidStateError",
                 "the object's state must be opened",
@@ -6211,8 +6241,12 @@ impl HostObject {
         // in the match's scrutinee would hold it until the end of the statement
         // below, i.e. across the very call it must not span.
         let script = ctx.script.borrow().as_ref().map(Rc::clone);
+        let handle = XhrHandle {
+            target: encode_host(key),
+            request: request_id,
+        };
         let refusal = match script {
-            Some(script) => script.start_xhr(request, encode_host(key)).err(),
+            Some(script) => script.start_xhr(request, handle).err(),
             // A world with no script host is a world with no driver either, so
             // it reports the same refusal the backend does for an empty slot.
             None => Some(FetchStartError::new("XMLHttpRequest is not available")),
@@ -6221,10 +6255,12 @@ impl HostObject {
         // `Err` means no request was started, and what the page observes is the
         // standard's *request error steps* — exactly the failure sequence b-5a2's
         // machine implements — so it is driven through that machine rather than
-        // through a second copy of it.
+        // through a second copy of it. The id is the one this `send()` stamped,
+        // so the delivery is the live request's and would be discarded if a
+        // `loadstart` listener had re-opened the object meanwhile.
         if let Some(error) = refusal {
             let outcome = FetchOutcome::Failed(error.message().to_owned());
-            deliver_xhr_completion(ctx, DispatchTarget::host(key), &outcome);
+            deliver_xhr_completion(ctx, DispatchTarget::host(key), request_id, &outcome);
         }
         Ok(())
     }
@@ -6327,17 +6363,21 @@ impl XMLHttpRequestOps for HostObject {
             ));
         }
 
-        // Step 10 ("terminate this's fetch controller") has nothing to act on
-        // *here*: no driver is installed in this tree, so `send()` cannot leave
-        // a request in flight and there is no controller to terminate. It stops
-        // being a no-op the moment one is installed, because `send()` leaves the
-        // object at `OPENED` for as long as its request is unanswered — so
-        // `open()` is reachable with a live request from then on, and this step
-        // is the standard's own protection against a re-opened object carrying
-        // two of them. Terminating one is the machinery `abort()` needs as well
-        // (b-7), and until it lands the driver's slice has to keep the abandoned
-        // request's completion from being delivered to the object that abandoned
-        // it (b-6).
+        // Step 10 ("terminate this's fetch controller") is served by the request
+        // id and not by termination. `send()` leaves the object at `OPENED` for
+        // as long as its request is unanswered, so this step *is* reachable with
+        // a live request, and the standard's own protection against a re-opened
+        // object carrying two of them is to end the first. The host layer cannot
+        // end it here — the driver sits on the other side of the seam
+        // (`crate::xhr::XhrDriver`), so terminating a request is the machinery
+        // `abort()` needs and does not have yet (b-7). What this does instead is
+        // make the abandoned request **invisible**: bumping the record's request
+        // id means the handle the driver still holds for it no longer matches
+        // this record, and `deliver_xhr_completion` discards a completion that
+        // does not match — so no event is fired for the abandoned request and
+        // its response never lands on the object. The task itself does run to
+        // completion; what ends it early is the driver's own `Drop`, with the
+        // navigation.
         //
         // Step 11's *reset associated variables* is otherwise complete here.
         // "Set this's send() flag to unset" and "set this's author request
@@ -6359,6 +6399,10 @@ impl XMLHttpRequestOps for HostObject {
             .event_target_key()
             .ok_or_else(|| JsError::type_error("the receiver is not an event target"))?;
         let opened = self.with_xhr_mut(false, |record| {
+            // Step 10's effect, and the one write in this closure that is not
+            // step 11's: an id that has moved on is what makes any request in
+            // flight for this object undeliverable (`XhrRecord::request_id`).
+            record.request_id = record.request_id.wrapping_add(1);
             record.method = Some(normalized);
             record.url = Some(parsed);
             record.send_flag = false;
@@ -6744,6 +6788,11 @@ impl XMLHttpRequestConstructor for HostObject {
                 // Nothing is in flight and nothing has been authored yet, which
                 // is what `open()`'s step 11 would leave the two as well.
                 send_flag: false,
+                // No request has been started, so there is none for a
+                // completion to belong to. `open()` and `send()` both bump it
+                // before any request can leave, so a live request's id is never
+                // this value.
+                request_id: 0,
                 author_headers: Vec::new(),
                 timeout: 0,
                 with_credentials: false,
@@ -6766,19 +6815,34 @@ impl XMLHttpRequestConstructor for HostObject {
 /// cannot tell the two apart — `URL`, `Headers`, `AbortSignal` and
 /// `XMLHttpRequest` share one — so only the record does.
 ///
+/// `request` is the id the object's `send()` stamped on this request. A record
+/// whose id has moved on has abandoned the request — `open()` ran while it was
+/// still in flight, which is the object's step 10 standing in for a termination
+/// this layer cannot perform — and then **nothing** happens: no store, no state
+/// change, no event. The return is `true` in that case, so the caller's fallback
+/// dispatch is suppressed too; a page that re-opened an object must not receive
+/// even a bare `error`/`load` for the request it walked away from.
+///
 /// The events are fired synchronously, on this stack, at the object's own event
 /// target key, and the caller holds the native-dispatch guard that makes a
 /// listener here runnable with no V8 callback underneath it.
 pub fn deliver_xhr_completion(
     ctx: &SharedContext,
     target: DispatchTarget,
+    request: u64,
     outcome: &FetchOutcome,
 ) -> bool {
     let Some(key) = target.host_key() else {
         return false;
     };
-    if !matches!(ctx.host_records.borrow().get(key), Some(HostRecord::Xhr(_))) {
-        return false;
+    // Scoped to the match: the arms below re-borrow the record table mutably, so
+    // the read that decides whether to act cannot be held across them.
+    let ours = match ctx.host_records.borrow().get(key) {
+        Some(HostRecord::Xhr(record)) => record.request_id == request,
+        Some(_) | None => return false,
+    };
+    if !ours {
+        return true;
     }
     match outcome {
         FetchOutcome::Response(data) => xhr_handle_response(ctx, target, key, data),

@@ -27,7 +27,7 @@ use std::rc::Rc;
 use tenta_js::bindings::{Event, EventTarget, Handle, handle_to_v8, value_to_v8};
 use tenta_js::dom::events::{CallbackRef, HostValue, PromiseOutcome, PromiseRef, ScriptHost};
 use tenta_js::fetch::FetchStartError;
-use tenta_js::xhr::XhrRequest;
+use tenta_js::xhr::{XhrHandle, XhrRequest};
 
 use crate::host::HostState;
 use crate::promise;
@@ -329,11 +329,11 @@ impl ScriptHost for V8ScriptHost {
     /// precedent, "fetch is not available" — but XHR has no promise to reject, so
     /// its translation is this `Err`: the caller reports the standard's *request
     /// error steps* synchronously.
-    fn start_xhr(&self, request: XhrRequest, target: u64) -> Result<(), FetchStartError> {
+    fn start_xhr(&self, request: XhrRequest, handle: XhrHandle) -> Result<(), FetchStartError> {
         let request = request.into_fetch_request(self.host.scheduler.current_origin());
         let Some(driver) = self.host.xhr_driver() else {
             return Err(FetchStartError::new("XMLHttpRequest is not available"));
         };
-        driver.start(request, target)
+        driver.start(request, handle)
     }
 }

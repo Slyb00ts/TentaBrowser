@@ -1,11 +1,20 @@
-//! The `tenta-net` driver behind the page's `fetch()` (`docs/spec/05-javascript.md`
-//! §3, P2 slice 4a-1b).
+//! The `tenta-net` driver behind the page's `fetch()` and `XMLHttpRequest`
+//! (`docs/spec/05-javascript.md` §3, P2 slices 4a-1b and b-6).
 //!
-//! `tenta_js::fetch` is the seam and `crate::runtime` is where a completion is
-//! drained back into script; this module is what sits between them. It turns a
-//! [`FetchRequest`] into a `tenta-net` request, sends it from the page thread's
-//! `LocalSet`, reads the body to the end, and leaves the answer in the page's
-//! [`FetchCompletions`] table with a wake behind it.
+//! `tenta_js::fetch` and `tenta_js::xhr` are the two seams and `crate::runtime`
+//! is where a completion is drained back into script; this module is what sits
+//! between them. It turns a [`FetchRequest`] into a `tenta-net` request, sends it
+//! from the page thread's `LocalSet`, reads the body to the end, and leaves the
+//! answer in the page's [`FetchCompletions`] table — or, for XHR, its
+//! [`XhrCompletions`](tenta_js::xhr::XhrCompletions) table — with a wake behind
+//! it.
+//!
+//! One driver serves both routes rather than two drivers sharing helpers. The
+//! two differ in exactly two things — the resource type the request carries and
+//! which table the answer is left in — while *everything* else is the same code
+//! path, and it is the same code path on purpose: **both cross-origin gates live
+//! here**, and a second driver would be a second place for gate 2 to be
+//! forgotten. See [`NetFetchDriver`] for the two gates and why both are needed.
 //!
 //! It lives in `tenta-page` because that is the only crate that can see
 //! everything it needs — `tenta-net`, the `tenta_js::fetch` seam, the
@@ -14,13 +23,21 @@
 //! holds no engine, and neither `tenta-js` nor `tenta-js-v8` gains an edge to
 //! the network tier.
 //!
-//! # What this slice does not do
+//! # What this does not do
 //!
 //! There is no CORS and no preflight, and there is no `RequestInit`, no
 //! streaming `Response.body`, and no `AbortSignal`-driven cancellation. A
 //! request that leaves the document's origin is *refused* rather than made and
 //! then filtered, which is the one security property this module owns: see
 //! [`NetFetchDriver`] for the two gates and why both are needed.
+//!
+//! XHR's own `abort()` is not here either (b-7), so an abandoned request is
+//! *discarded* when its completion arrives rather than terminated where it
+//! stands — the record's request id is what makes the two distinguishable, and
+//! the discard itself is
+//! [`deliver_xhr_completion`](tenta_js::bindings::host::deliver_xhr_completion)'s.
+//! What this driver owes that arrangement is that the task still lands in
+//! `inflight`, so [`Drop`] ends it with the navigation.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -28,6 +45,7 @@ use std::rc::Rc;
 use tenta_js::fetch::{
     FetchCompletions, FetchDriver, FetchOutcome, FetchRequest, FetchStartError, FetchedResponse,
 };
+use tenta_js::xhr::{XhrCompletions, XhrDriver, XhrHandle};
 use tenta_net::policy::cookies::Site;
 use tenta_net::request::same_origin;
 use tenta_net::{Client, NetError, Request, ResourceType, Response};
@@ -57,18 +75,23 @@ const FAILED: &str = "Failed to fetch";
 
 /// The refusal a page header that cannot go on the wire produces.
 ///
-/// In this slice such a header can only come from the page's own configuration
-/// (`PageConfig::extra_headers`), never from script, because `RequestInit` is
-/// refused before a request is ever built.
+/// On the `fetch` route such a header can only come from the page's own
+/// configuration (`PageConfig::extra_headers`), because `RequestInit` is refused
+/// before a request is ever built. XHR reaches this constant through
+/// `setRequestHeader` as well.
 const INVALID_HEADER: &str = "Failed to fetch: a request header cannot be sent";
 
-/// Answers the `fetch()` calls of one navigation over `tenta-net`.
+/// Answers the `fetch()` calls and the `XMLHttpRequest` objects of one
+/// navigation over `tenta-net`.
 ///
 /// One driver is built per navigation by `PageRuntime::create` and installed
-/// with `PageEngine::set_fetch_driver`, so a completion it leaves behind always
-/// names a resolver of the engine that is current when the page drains it. A
-/// new navigation gets a fresh document, hence a fresh runtime and a fresh
-/// driver, so a late completion can never reach an earlier document's engine.
+/// twice — with `PageEngine::set_fetch_driver` and `PageEngine::set_xhr_driver` —
+/// so a completion it leaves behind always names a resolver, or an event target,
+/// of the engine that is current when the page drains it. A new navigation gets
+/// a fresh document, hence a fresh runtime and a fresh driver, so a late
+/// completion can never reach an earlier document's engine. (The name is older
+/// than XHR and is kept: it is the *fetch* module, and the shared gates below are
+/// its reason to be one driver.)
 ///
 /// # The cross-origin gates
 ///
@@ -90,8 +113,16 @@ pub(crate) struct NetFetchDriver {
     /// The page's transport handle, cloned per request. Cloning is cheap and
     /// every clone talks to the same io thread, pool and cookie jar.
     client: Client,
-    /// The page's completion table, which `crate::runtime`'s drain reads.
+    /// The page's `fetch()` completion table, which `crate::runtime`'s drain
+    /// reads.
     completions: Rc<FetchCompletions>,
+    /// The page's XHR completion table, drained by the same turn.
+    ///
+    /// A second table rather than one table with a tagged payload, because the
+    /// two are drained into different engine entries (`settle_fetches` settles a
+    /// promise, `settle_xhr` dispatches an event) and because the XHR table's
+    /// entries carry a request id the fetch table's have no use for.
+    xhrs: Rc<XhrCompletions>,
     /// The settle call the requests are registered against. It is also the
     /// wake: `note_request_done` signals the notification the settle loop
     /// parks on.
@@ -121,10 +152,12 @@ impl NetFetchDriver {
         config: &PageConfig,
         tracker: Rc<RefCell<SettleTracker>>,
         completions: Rc<FetchCompletions>,
+        xhrs: Rc<XhrCompletions>,
     ) -> NetFetchDriver {
         NetFetchDriver {
             client: config.client.clone(),
             completions,
+            xhrs,
             tracker,
             max_body_bytes: config.budgets.network_bytes,
             extra_headers: config.extra_headers.clone(),
@@ -133,39 +166,66 @@ impl NetFetchDriver {
     }
 }
 
-impl FetchDriver for NetFetchDriver {
-    fn start(&self, request: FetchRequest, resolver: u64) -> Result<(), FetchStartError> {
+/// Sends one request and leaves its answer where `delivery` says. Both routes
+/// are this one call.
+impl NetFetchDriver {
+    fn send(
+        &self,
+        request: FetchRequest,
+        resource_type: ResourceType,
+        delivery: Delivery,
+    ) -> Result<(), FetchStartError> {
         // Gate 1, before anything is registered and before anything is sent.
         same_origin_allowed(&request.initiator, &request.url)?;
         // Built before the registration, so a header the transport cannot put
         // on the wire leaves no trace in the settle machine. The refusal is a
         // start refusal rather than a `Failed` outcome: the request cannot be
         // built at all, so there is nothing to send and nothing to wait for.
-        let net =
-            net_request(&request, self.max_body_bytes, &self.extra_headers).map_err(|error| {
-                tracing::warn!(
-                    url = %request.url,
-                    %error,
-                    "a fetch is refused: one of the page's headers cannot go on the wire"
-                );
-                FetchStartError::new(INVALID_HEADER)
-            })?;
-        // The non-parser entry: a `fetch()` is not parser-inserted, so unlike a
-        // script's own fetch it is *not* exempt from reclassification. The
-        // provenance is the calling task's, verbatim — a `fetch` from a timer
-        // is `Background` and does not hold the settle open, which is the
-        // settle machine's own rule rather than this driver's.
+        let net = net_request(
+            &request,
+            resource_type,
+            self.max_body_bytes,
+            &self.extra_headers,
+        )
+        .map_err(|error| {
+            tracing::warn!(
+                url = %request.url,
+                %error,
+                "a request is refused: one of the page's headers cannot go on the wire"
+            );
+            FetchStartError::new(INVALID_HEADER)
+        })?;
+        // The non-parser entry: a `fetch()` and an `XMLHttpRequest` are both
+        // script-initiated, so unlike a script's own fetch neither is exempt
+        // from reclassification. The provenance is the calling task's, verbatim
+        // — a request from a timer is `Background` and does not hold the settle
+        // open, which is the settle machine's own rule rather than this
+        // driver's. It is *not* what the cross-origin gate above compares; that
+        // one is the initiator's, the document URL (`same_origin_allowed`).
         let request_id = next_request_id();
         self.tracker.borrow_mut().note_request_started(
             request_id,
             RequestClass::XhrFetch,
             request.origin,
         );
+        // Where this request's answer goes, resolved *before* the spawn so the
+        // task body below is one body for both routes: the two differ in this
+        // and in nothing else, and a second body is a second place for the
+        // push-then-wake order and the panic path to drift.
+        let push: Rc<dyn Fn(FetchOutcome)> = match delivery {
+            Delivery::Resolver(resolver) => {
+                let completions = Rc::clone(&self.completions);
+                Rc::new(move |outcome| completions.push(resolver, outcome))
+            }
+            Delivery::Xhr(handle) => {
+                let completions = Rc::clone(&self.xhrs);
+                Rc::new(move |outcome| completions.push(handle, outcome))
+            }
+        };
         // The task captures the pieces and never `self`: an `Rc` to the driver
-        // inside it would keep the driver alive for as long as the fetch runs,
+        // inside it would keep the driver alive for as long as the request runs,
         // so the driver would never drop and [`Drop`] would abort nothing.
         let client = self.client.clone();
-        let completions = Rc::clone(&self.completions);
         let tracker = Rc::clone(&self.tracker);
         let initiator = request.initiator.clone();
         let handle = tokio::task::spawn_local(async move {
@@ -178,14 +238,15 @@ impl FetchDriver for NetFetchDriver {
             .await;
             let outcome = match fetched {
                 Ok(outcome) => outcome,
-                // A panic here must not leave the promise pending and the
-                // request holding the settle until the page's deadline: the
-                // request is over either way, so the page is told so and the
-                // promise rejects.
+                // A panic here must not leave a promise pending or an
+                // `XMLHttpRequest` waiting, and either would hold the settle
+                // until the page's own deadline: the request is over either way,
+                // so the page is told so — the promise rejects, or the object's
+                // *request error steps* run.
                 Err(payload) => {
                     tracing::error!(
                         reason = %panic_message(&payload),
-                        "the fetch of one request panicked"
+                        "the transport task of one request panicked"
                     );
                     FetchOutcome::Failed(FAILED.to_owned())
                 }
@@ -198,30 +259,62 @@ impl FetchDriver for NetFetchDriver {
             // `LocalSet` whose `select!` is its only await point, so this task
             // runs only while the loop is parked and `notify_one` leaves a
             // permit behind.
-            completions.push(resolver, outcome);
+            push(outcome);
             tracker.borrow_mut().note_request_done(request_id);
         });
         let mut inflight = self.inflight.borrow_mut();
-        // A page that fetches in a loop must not accumulate handles for fetches
+        // A page that fetches in a loop must not accumulate handles for requests
         // that are over. Aborting a finished handle is a no-op, so dropping it
-        // here costs nothing and keeps this list to the fetches actually in
-        // flight.
+        // here costs nothing and keeps this list to the requests actually in
+        // flight. The XHR route lands here too, which is what keeps an abandoned
+        // request from outliving its navigation.
         inflight.retain(|handle| !handle.is_finished());
         inflight.push(handle);
         Ok(())
     }
 }
 
+/// Where a finished request's answer is left, which is the whole of the
+/// difference between the two routes.
+///
+/// `fetch()` settles a promise, so its completion names the resolver the engine
+/// handed out; XHR dispatches events, so its completion names the object that
+/// made the request *and* which of that object's requests this is — the second
+/// half is what lets a completion for a request the object abandoned be
+/// discarded rather than delivered (`deliver_xhr_completion`).
+#[derive(Clone, Copy, Debug)]
+enum Delivery {
+    /// The `fetch()` promise registered under this resolver.
+    Resolver(u64),
+    /// The `XMLHttpRequest` object, and the request of it that is being answered.
+    Xhr(XhrHandle),
+}
+
+impl FetchDriver for NetFetchDriver {
+    fn start(&self, request: FetchRequest, resolver: u64) -> Result<(), FetchStartError> {
+        self.send(request, ResourceType::Fetch, Delivery::Resolver(resolver))
+    }
+}
+
+impl XhrDriver for NetFetchDriver {
+    /// `Err` is gate 1's refusal, and the caller turns it into the standard's
+    /// *request error steps* rather than into a request left in the air: nothing
+    /// is registered and nothing is sent, so there is nothing to wait for.
+    fn start(&self, request: FetchRequest, handle: XhrHandle) -> Result<(), FetchStartError> {
+        self.send(request, ResourceType::Xhr, Delivery::Xhr(handle))
+    }
+}
+
 impl Drop for NetFetchDriver {
-    /// Aborts every fetch still running.
+    /// Aborts every request still running, either route's.
     ///
-    /// This is not needed for settlement *correctness*: the completion table is
-    /// per-navigation and a completion from a dropped navigation is discarded
-    /// with it, and the promise a completion could have named is bounded by the
-    /// engine's own `PromiseState::clear`. It is needed for real resource
-    /// freedom: an aborted `Client::send` sees its reply channel closed, cancels
-    /// the transport at `reply.closed()` and closes the connection instead of
-    /// parking it. The socket-level observable is
+    /// This is not needed for settlement *correctness*: both completion tables
+    /// are per-navigation and a completion from a dropped navigation is
+    /// discarded with it, and the promise a completion could have named is
+    /// bounded by the engine's own `PromiseState::clear`. It is needed for real
+    /// resource freedom: an aborted `Client::send` sees its reply channel
+    /// closed, cancels the transport at `reply.closed()` and closes the
+    /// connection instead of parking it. The socket-level observable is
     /// `FixtureServer::open_connections()` returning to its baseline; this
     /// commit asserts the future's drop beneath it and no further, and says so
     /// at the test.
@@ -232,21 +325,29 @@ impl Drop for NetFetchDriver {
     }
 }
 
-/// The one request a [`FetchRequest`] becomes.
+/// The one request a [`FetchRequest`] becomes, whichever route it came from.
 ///
 /// Follows `crate::runtime::script_request` wherever the two agree, because the
 /// page's own headers and its first-party site must not differ between the
 /// document, the scripts it loads and the requests its scripts make.
+///
+/// `resource_type` is the one thing the two routes disagree about, and it is a
+/// parameter rather than two functions because everything else here is shared —
+/// the two literals differ only in their name, and `tenta-net` gives `Xhr` and
+/// `Fetch` the same mode and priority (`request.rs`: `Cors`, `Medium`, not
+/// incremental). It is still worth carrying the true one: it is what the request
+/// table, the priority queue and any CDP `Network.requestWillBeSent` report,
+/// and a request whose type lied would be a wrong answer to all three.
 fn net_request(
     request: &FetchRequest,
+    resource_type: ResourceType,
     max_body_bytes: u64,
     extra_headers: &[(String, String)],
 ) -> Result<Request, NetError> {
     let mut out = Request::new(request.method.clone(), request.url.clone())
-        // `Fetch` is what `fetch()` is: `.resource_type()` also sets the
-        // priority to `Medium` and the mode to `Cors`, which are the right
-        // answers for a CORS-flagged subresource.
-        .resource_type(ResourceType::Fetch)
+        // `.resource_type()` also sets the priority and the mode, which are the
+        // right answers for a CORS-flagged subresource on either route.
+        .resource_type(resource_type)
         // The initiator decides `Sec-Fetch-Site`, `Origin` and the default
         // `Referer`, all of which are the document's rather than the request's.
         // `.referrer()` is deliberately not called: the initiator supplies the
@@ -318,14 +419,11 @@ async fn fetched_response(response: Response, initiator: &Url) -> FetchOutcome {
     if let Err(refusal) = same_origin_allowed(initiator, &response.url) {
         tracing::warn!(
             url = %response.url,
-            "a fetch was redirected off the requesting origin; the response is discarded"
+            "a response was redirected off the requesting origin; it is discarded"
         );
         return FetchOutcome::Failed(refusal.message().to_owned());
     }
-    tracing::debug!(
-        status = response.status.as_u16(),
-        "a fetch response head arrived"
-    );
+    tracing::debug!(status = response.status.as_u16(), "a response head arrived");
     let status = response.status.as_u16();
     let url = response.url.to_string();
     let redirected = !response.redirects.is_empty();
@@ -362,7 +460,7 @@ fn transport_failure(error: &NetError) -> FetchOutcome {
     tracing::warn!(
         name = %error.error_text(),
         message = %error.message,
-        "a fetch failed at the transport"
+        "a request failed at the transport"
     );
     FetchOutcome::Failed(FAILED.to_owned())
 }
@@ -407,6 +505,7 @@ mod tests {
         NetFetchDriver {
             client,
             completions: Rc::new(FetchCompletions::new()),
+            xhrs: Rc::new(XhrCompletions::new()),
             tracker,
             max_body_bytes: 4096,
             extra_headers: Vec::new(),
@@ -464,7 +563,8 @@ mod tests {
         request.headers = vec![("x-from-script".to_owned(), "one".to_owned())];
         let extra = vec![("user-agent".to_owned(), "tenta/0".to_owned())];
 
-        let net = net_request(&request, 4096, &extra).expect("the request is built");
+        let net =
+            net_request(&request, ResourceType::Fetch, 4096, &extra).expect("the request is built");
 
         assert_eq!(net.method, http::Method::GET);
         assert_eq!(net.url, request.url);
@@ -536,9 +636,8 @@ mod tests {
             Origin::Tracked,
         );
 
-        let error = driver
-            .start(request, 7)
-            .expect_err("a cross-origin request is refused");
+        let error =
+            FetchDriver::start(&driver, request, 7).expect_err("a cross-origin request is refused");
 
         assert_eq!(error.message(), CROSS_ORIGIN);
         assert_eq!(
@@ -579,6 +678,136 @@ mod tests {
         let outcome = fetched_response(answered, &initiator).await;
 
         assert_eq!(outcome, FetchOutcome::Failed(CROSS_ORIGIN.to_owned()));
+    }
+
+    /// The other route, and the only thing `net_request` does differently for
+    /// it: the resource type. Everything else — the mode, the priority, the
+    /// first-party site, the header order — is the same request, which is why
+    /// the two routes share one function.
+    #[test]
+    fn an_xhr_maps_to_an_xhr_resource_request() {
+        let initiator = url("https://origin.test/page");
+        let request = FetchRequest::get(
+            url("https://origin.test/data.json"),
+            initiator.clone(),
+            Origin::Tracked,
+        );
+
+        let net =
+            net_request(&request, ResourceType::Xhr, 4096, &[]).expect("the request is built");
+
+        assert_eq!(net.resource_type, ResourceType::Xhr);
+        assert_eq!(
+            net.mode,
+            RequestMode::Cors,
+            "an XHR is a CORS-flagged subresource too"
+        );
+        assert_eq!(
+            net.priority,
+            ResourceType::Fetch.default_priority(),
+            "and `tenta-net` gives the two the same priority, so the \
+             parameter is about the *name* on the request, not a scheduling \
+             difference"
+        );
+    }
+
+    /// Gate 1 on the XHR route. The refusal is the same one the `fetch` route
+    /// reports and is checked in the same place — before the registration and
+    /// before the spawn — so a cross-origin `xhr.send()` leaves the settle
+    /// machine exactly as it found it and leaves no task behind.
+    ///
+    /// XHR is the route where this matters most: a page's XHR is the request
+    /// shape a cross-origin call is most often written with.
+    #[test]
+    fn a_cross_origin_xhr_is_refused_before_it_registers() {
+        let (tracker, _clock) = tracker();
+        let driver = driver(Rc::clone(&tracker));
+        let request = FetchRequest::get(
+            url("http://other.test/x"),
+            url("http://origin.test/page"),
+            Origin::Tracked,
+        );
+        let handle = XhrHandle {
+            target: 0x0900_0000_0000_0007,
+            request: 2,
+        };
+
+        let error = XhrDriver::start(&driver, request, handle)
+            .expect_err("a cross-origin request is refused");
+
+        assert_eq!(error.message(), CROSS_ORIGIN);
+        assert_eq!(tracker.borrow().pending().foreground_requests, 0);
+        assert_eq!(tracker.borrow().in_flight_for_idle(), 0);
+        assert!(driver.inflight.borrow().is_empty());
+        assert!(
+            driver.xhrs.take_all().is_empty(),
+            "a refused request leaves no completion behind either"
+        );
+    }
+
+    /// The handle survives the whole XHR route unchanged, which is what the
+    /// host layer's discard depends on: `DispatchTarget::from_bits` must resolve
+    /// the `target` half back to the object that sent the request, and
+    /// `deliver_xhr_completion` must see the `request` half it will compare
+    /// against the record.
+    ///
+    /// The transport here is a real one and there is no server on the port, so
+    /// the answer is a transport failure — which is exactly as good a completion
+    /// to carry a handle as a response, and is the one this test can produce
+    /// without a fixture server (`tenta-page` has no `tenta-testutil`
+    /// dev-dependency). The e2e in `tenta-browser` is where the response half of
+    /// the route is exercised against a real server.
+    #[test]
+    fn the_xhr_handle_arrives_back_at_the_table_unchanged() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let local = tokio::task::LocalSet::new();
+        local.block_on(&runtime, async {
+            let (tracker, _clock) = tracker();
+            let driver = driver(Rc::clone(&tracker));
+            let handle = XhrHandle {
+                target: 0x0900_0000_0000_0007,
+                request: 2,
+            };
+            // Same-origin, so gate 1 passes; nothing listens on port 1, so the
+            // transport fails rather than the request being refused.
+            let request = FetchRequest::get(
+                url("http://127.0.0.1:1/data.json"),
+                url("http://127.0.0.1:1/page"),
+                Origin::Tracked,
+            );
+
+            XhrDriver::start(&driver, request, handle).expect("the request is started");
+            assert_eq!(
+                tracker.borrow().pending().foreground_requests,
+                1,
+                "the request is registered before it is sent"
+            );
+            let task = driver
+                .inflight
+                .borrow_mut()
+                .pop()
+                .expect("the request's task is in flight");
+            task.await.expect("the task ends normally");
+
+            let completions = driver.xhrs.take_all();
+            assert_eq!(completions.len(), 1, "the request left exactly one answer");
+            assert_eq!(
+                completions[0].handle, handle,
+                "both halves of the handle reach the table as they were handed over"
+            );
+            assert_eq!(
+                completions[0].outcome,
+                FetchOutcome::Failed(FAILED.to_owned()),
+                "and the answer is the transport's failure, not a refusal"
+            );
+            assert_eq!(
+                tracker.borrow().pending().foreground_requests,
+                0,
+                "the wake behind the push is what releases the settle"
+            );
+        });
     }
 
     /// Every field of the seam's response comes from the transport's, and the

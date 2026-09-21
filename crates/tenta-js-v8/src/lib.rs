@@ -1230,7 +1230,10 @@ impl Engine {
     ///   is a `load` and anything else an `error`, both of them
     ///   `ProgressEvent`s with the init defaults. That fallback is what keeps
     ///   this entry total for a target that is not an XHR at all, and a `true`
-    ///   return from the machine is the only thing that suppresses it.
+    ///   return from the machine is the only thing that suppresses it. One
+    ///   such `true` is not a delivery at all: a completion whose request id
+    ///   the object has moved past belongs to a request it abandoned, and
+    ///   nothing — not even the one-event fallback — is fired for it.
     pub fn settle_xhr(&mut self, completions: Vec<XhrCompletion>) {
         if completions.is_empty() {
             return;
@@ -1252,10 +1255,15 @@ impl Engine {
             // A target whose record has since been reclaimed is not a skip here
             // — its key simply matches no listener, and its wrapper is never
             // built.
-            let Some(target) = DispatchTarget::from_bits(completion.target) else {
+            let Some(target) = DispatchTarget::from_bits(completion.handle.target) else {
                 continue;
             };
-            if deliver_xhr_completion(&dom.ctx, target, &completion.outcome) {
+            if deliver_xhr_completion(
+                &dom.ctx,
+                target,
+                completion.handle.request,
+                &completion.outcome,
+            ) {
                 continue;
             }
             let type_ = match completion.outcome {

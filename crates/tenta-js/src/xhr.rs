@@ -14,12 +14,15 @@
 //! boundary — [`XhrRequest`] is the page's half, and the backend turns it into
 //! a [`FetchRequest`] once it has added the engine's.
 //!
-//! `target: u64` is opaque handle bits for the same reason `resolver: u64` is
-//! — a driver must not be able to name a handle type, or the network tier would
+//! [`XhrHandle`] is opaque bits for the same reason `resolver: u64` is — a
+//! driver must not be able to name a handle type, or the network tier would
 //! have to depend on the engine tier instead of the other way round
-//! (`docs/spec/02-architecture.md` §2). It is deliberately not a node: today it
-//! is whatever the page's XHR object is keyed under, which b-5 makes an
-//! `XMLHttpRequest` host record rather than an element.
+//! (`docs/spec/02-architecture.md` §2). It is deliberately not a node: its
+//! `target` half is whatever the page's XHR object is keyed under, which is an
+//! `XMLHttpRequest` host record rather than an element, and its `request` half
+//! is the object's own identity for one request, which is what lets a
+//! completion that belongs to a request the object has abandoned be discarded
+//! instead of delivered (`deliver_xhr_completion` in the bindings).
 //!
 //! Neither direction does any work here. `start` only hands the request over,
 //! and the table only stores what it is given: the scheduling belongs to the
@@ -99,16 +102,46 @@ impl XhrRequest {
     }
 }
 
-/// One answer waiting to be delivered: the event target it belongs to, and what
-/// to dispatch there.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct XhrCompletion {
+/// One request's identity: the object that will receive its answer, and which
+/// of that object's requests the answer belongs to.
+///
+/// Both halves are opaque `u64`s for the reason `resolver: u64` is: a driver
+/// must not be able to name a handle type or a record, or the network tier
+/// would have to depend on the engine tier instead of the other way round
+/// (`docs/spec/02-architecture.md` §2).
+///
+/// The second half is what keeps an object that abandoned a request from
+/// receiving it anyway. An `XMLHttpRequest` stays at `OPENED` for as long as
+/// its request is unanswered, so `open()` is reachable with a live request and
+/// leaves two of them in flight on one object; the request id is stamped by the
+/// `send()` that started a request and carried back here, so the host layer can
+/// tell the object's *current* request from the one it abandoned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct XhrHandle {
     /// The event target's handle bits, as the XHR object handed them to the
     /// driver when the request started.
     ///
     /// Opaque here: the engine is what turns them back into a dispatch target
     /// and is what refuses a handle that is not one.
     pub target: u64,
+    /// The *request id*: the identity `send()` stamped on this request.
+    ///
+    /// The engine compares it against the id the object currently holds, and
+    /// discards a completion that does not match — see
+    /// [`crate::bindings::host::XhrRecord::request_id`].
+    pub request: u64,
+}
+
+/// One answer waiting to be delivered: the request it belongs to, and what to
+/// dispatch there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct XhrCompletion {
+    /// The object to deliver at, and the request of that object the answer
+    /// belongs to.
+    ///
+    /// Opaque here: the engine is what turns the target into a dispatch target
+    /// and is what refuses one that is not.
+    pub handle: XhrHandle,
     /// The answer. Which event the outcome becomes is the engine's mapping, so
     /// a driver never has to know that a failure is an `error` event and a
     /// response is a `load`.
@@ -134,15 +167,15 @@ impl XhrCompletions {
         Self::default()
     }
 
-    /// Records the answer to `target`. Called by a driver, from whatever task
+    /// Records the answer to `handle`. Called by a driver, from whatever task
     /// or thread it completes on — the table is not `Sync`, so a driver that
     /// completes off the page thread must hand the completion back to it first.
     ///
     /// See [`XhrDriver::start`] for what the caller owes in addition to this.
-    pub fn push(&self, target: u64, outcome: FetchOutcome) {
+    pub fn push(&self, handle: XhrHandle, outcome: FetchOutcome) {
         self.queue
             .borrow_mut()
-            .push_back(XhrCompletion { target, outcome });
+            .push_back(XhrCompletion { handle, outcome });
     }
 
     /// Takes every completion recorded so far, in the order they were pushed,
@@ -177,49 +210,73 @@ impl XhrCompletions {
 /// The same hold `fetch` relies on keeps the settle open while the request is
 /// in flight: a tracked foreground request holds the settle
 /// (`RequestRecord::holds_settle` in `tenta-page`), so 4a-1b's push-then-wake
-/// order is this trait's contract too. Unlike `fetch`, a refusal from `start`
-/// is not the only failure a page can observe — the driver that lands in b-6
-/// registers the request *before* evaluating its cross-origin gate, so a
-/// refused request still completes with a failure outcome rather than
-/// disappearing.
+/// order is this trait's contract too.
+///
+/// A refusal from `start` is not a request left in the air: the caller turns it
+/// into the standard's *request error steps* synchronously, so a refused
+/// request is over before `send()` returns.
+///
+/// **That turn is this engine's, not the standard's.** The standard runs
+/// `send()`'s fetch *in parallel*, so a network error reaches the page after
+/// `send()` has returned; a refusal is a start-time decision made on the calling
+/// turn and the caller runs the error steps there. The order a page observes is
+/// the standard's — `loadstart`, then `error`, then `loadend` — and only the
+/// turn they land on differs. CORS landing would make the cross-origin case a
+/// network error like any other and the difference would go with it;
+/// `a_cross_origin_xhr_is_refused_before_it_reaches_the_other_origin` in
+/// `tenta-browser/tests/xhr_js.rs` pins it so it cannot change unnoticed.
+///
+/// What a driver must never do is accept a request and then neither push nor
+/// wake for it: that leaves the object waiting and holds the settle until the
+/// page's own deadline.
 pub trait XhrDriver {
-    /// Takes `request`, to be answered at `target` when it completes.
+    /// Takes `request`, to be answered at `handle` when it completes.
     ///
     /// `Err` refuses the request before any of it is sent: the caller turns the
     /// message into the failure the page observes, rather than leaving the XHR
     /// object waiting for a driver that was never asked. A refusal is checked
     /// here rather than in the caller because only the driver knows whether it
     /// can serve the request — a cross-origin URL is the first case.
-    fn start(&self, request: FetchRequest, target: u64) -> Result<(), FetchStartError>;
+    fn start(&self, request: FetchRequest, handle: XhrHandle) -> Result<(), FetchStartError>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn failed(message: &str, target: u64) -> XhrCompletion {
+    /// A failing completion for `target`, belonging to request `request`.
+    fn hand(message: &str, target: u64, request: u64) -> XhrCompletion {
         XhrCompletion {
-            target,
+            handle: XhrHandle { target, request },
             outcome: FetchOutcome::Failed(message.to_owned()),
         }
+    }
+
+    /// A handle for `target`, belonging to request `request`.
+    fn handle(target: u64, request: u64) -> XhrHandle {
+        XhrHandle { target, request }
     }
 
     #[test]
     fn take_all_hands_the_completions_back_in_push_order() {
         let table = XhrCompletions::new();
-        table.push(7, FetchOutcome::Failed("first".to_owned()));
-        table.push(1, FetchOutcome::Failed("second".to_owned()));
-        table.push(4, FetchOutcome::Failed("third".to_owned()));
+        table.push(handle(7, 1), FetchOutcome::Failed("first".to_owned()));
+        table.push(handle(1, 2), FetchOutcome::Failed("second".to_owned()));
+        table.push(handle(4, 3), FetchOutcome::Failed("third".to_owned()));
         assert_eq!(
             table.take_all(),
-            vec![failed("first", 7), failed("second", 1), failed("third", 4)],
+            vec![
+                hand("first", 7, 1),
+                hand("second", 1, 2),
+                hand("third", 4, 3),
+            ],
         );
     }
 
     #[test]
     fn take_all_empties_the_table() {
         let table = XhrCompletions::new();
-        table.push(1, FetchOutcome::Failed("only".to_owned()));
+        table.push(handle(1, 1), FetchOutcome::Failed("only".to_owned()));
         assert_eq!(table.take_all().len(), 1);
         assert!(
             table.take_all().is_empty(),
@@ -235,14 +292,29 @@ mod tests {
     #[test]
     fn a_completion_pushed_after_a_drain_is_delivered_by_the_next_one() {
         let table = XhrCompletions::new();
-        table.push(1, FetchOutcome::Failed("before".to_owned()));
-        assert_eq!(table.take_all(), vec![failed("before", 1)]);
-        table.push(2, FetchOutcome::Failed("after".to_owned()));
+        table.push(handle(1, 1), FetchOutcome::Failed("before".to_owned()));
+        assert_eq!(table.take_all(), vec![hand("before", 1, 1)]);
+        table.push(handle(2, 2), FetchOutcome::Failed("after".to_owned()));
         assert_eq!(
             table.take_all(),
-            vec![failed("after", 2)],
+            vec![hand("after", 2, 2)],
             "the drain is a boundary, not a subscription"
         );
+    }
+
+    /// Both halves of a handle survive the table unchanged: the target bits an
+    /// engine decodes back into a dispatch target, and the request id it
+    /// compares against the object's own.
+    #[test]
+    fn a_handle_keeps_both_halves() {
+        let table = XhrCompletions::new();
+        table.push(
+            handle(0x0A_00_00_07, 9),
+            FetchOutcome::Failed("x".to_owned()),
+        );
+        let delivered = table.take_all().pop().expect("one completion");
+        assert_eq!(delivered.handle.target, 0x0A_00_00_07);
+        assert_eq!(delivered.handle.request, 9);
     }
 
     fn url(text: &str) -> Url {

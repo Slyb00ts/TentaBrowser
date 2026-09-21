@@ -1611,7 +1611,7 @@ mod prelude_helpers {
         fn start_xhr(
             &self,
             _request: crate::xhr::XhrRequest,
-            _target: u64,
+            _handle: crate::xhr::XhrHandle,
         ) -> Result<(), crate::fetch::FetchStartError> {
             Err(crate::fetch::FetchStartError::new(
                 "the recording host starts no XMLHttpRequest",
@@ -2151,11 +2151,13 @@ mod prelude_helpers {
             };
             record.ready_state = <HostObject as XMLHttpRequestOps>::OPENED;
             record.send_flag = true;
+            record.request_id = 3;
         }
 
         let delivered = deliver_xhr_completion(
             &ctx,
             DispatchTarget::host(key),
+            3,
             &FetchOutcome::Failed("gone".to_owned()),
         );
         assert!(delivered, "the record names an XMLHttpRequest");
@@ -2167,6 +2169,87 @@ mod prelude_helpers {
         assert!(
             !record.send_flag,
             "a finished request is no longer in flight, so a re-opened object can be sent"
+        );
+    }
+
+    /// A completion belonging to a request its object has abandoned is
+    /// discarded: nothing is stored, no state changes, and the return is `true`
+    /// so the caller fires no fallback event at it either.
+    ///
+    /// This is `open()`'s step 10 as this product can serve it. `send()` leaves
+    /// the object at `OPENED` for as long as its request is unanswered, so
+    /// `open()` is reachable with a request in flight; the standard ends that
+    /// request, and the host layer cannot, because the driver sits on the other
+    /// side of the seam (`crate::xhr::XhrDriver`). The record's request id is
+    /// what the abandonment is expressed with instead
+    /// (`HostRecord::Xhr`'s `request_id`), and this is the comparison that reads
+    /// it.
+    #[test]
+    fn a_completion_for_an_abandoned_request_is_discarded() {
+        use super::host::{HostRecord, deliver_xhr_completion};
+        use crate::dom::events::DispatchTarget;
+        use crate::fetch::FetchOutcome;
+
+        let realm = host_realm();
+        let ctx = realm_context(&realm).expect("the realm is a host context");
+        let host = <HostObject as XMLHttpRequestConstructor>::construct(&realm)
+            .expect("a new XMLHttpRequest is constructible");
+        let HostObject::Host { key, .. } = host else {
+            panic!("an XMLHttpRequest is a host-record wrapper");
+        };
+        {
+            let mut records = ctx.host_records.borrow_mut();
+            let Some(HostRecord::Xhr(record)) = records.get_mut(key) else {
+                panic!("the constructor installs an XMLHttpRequest record");
+            };
+            // A request is in flight (`send()` stamped 2), and `open()` has run
+            // since (bumping to 3), which is what abandons it.
+            record.ready_state = <HostObject as XMLHttpRequestOps>::OPENED;
+            record.send_flag = true;
+            record.request_id = 3;
+        }
+        let events_before = ctx.events.borrow().len();
+
+        let delivered = deliver_xhr_completion(
+            &ctx,
+            DispatchTarget::host(key),
+            2,
+            &FetchOutcome::Response(crate::fetch::FetchedResponse {
+                url: "http://origin.test/x".to_owned(),
+                status: 200,
+                redirected: false,
+                headers: Vec::new(),
+                body: Some(b"the abandoned request's body".to_vec()),
+            }),
+        );
+
+        assert!(
+            delivered,
+            "the target *is* an XMLHttpRequest, so the caller's fallback event is \
+             suppressed as well"
+        );
+        let records = ctx.host_records.borrow();
+        let Some(HostRecord::Xhr(record)) = records.get(key) else {
+            panic!("a discarded completion must not remove the record");
+        };
+        assert_eq!(
+            record.ready_state,
+            <HostObject as XMLHttpRequestOps>::OPENED,
+            "the abandoned response must not move the live request's state"
+        );
+        assert!(
+            record.response.is_none(),
+            "and must not become the object's response"
+        );
+        assert!(
+            record.send_flag,
+            "the live request is still in flight, so its flag stays set"
+        );
+        drop(records);
+        assert_eq!(
+            ctx.events.borrow().len(),
+            events_before,
+            "and no event is fired for it, not even a bare load or error"
         );
     }
 }

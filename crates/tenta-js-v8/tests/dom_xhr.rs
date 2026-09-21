@@ -47,7 +47,7 @@ use tenta_js::bindings::XMLHttpRequest;
 use tenta_js::bindings::host::encode_node;
 use tenta_js::engine::PageEngine;
 use tenta_js::fetch::{FetchOutcome, FetchRequest, FetchStartError, FetchedResponse};
-use tenta_js::xhr::{XhrCompletion, XhrCompletions, XhrDriver};
+use tenta_js::xhr::{XhrCompletion, XhrCompletions, XhrDriver, XhrHandle};
 use tenta_js_v8::Engine;
 use url::Url;
 
@@ -101,8 +101,13 @@ fn ok_outcome() -> FetchOutcome {
 /// leaves an object in the state `send()` put it in.
 #[derive(Default)]
 struct Recorder {
-    /// Every `(request, target)` the driver was started with, in order.
-    starts: RefCell<Vec<(FetchRequest, u64)>>,
+    /// Every `(request, handle)` the driver was started with, in order.
+    ///
+    /// The handle is echoed back with the answer, exactly as a real driver does
+    /// — both halves of it. The `request` half is what a test uses to deliver a
+    /// completion for a request the object has since abandoned without having to
+    /// know the record's own counter.
+    starts: RefCell<Vec<(FetchRequest, XhrHandle)>>,
     /// The table a completion is pushed into, exactly as a real driver would.
     table: XhrCompletions,
     /// Answer with a failure instead of a response.
@@ -112,8 +117,8 @@ struct Recorder {
 }
 
 impl XhrDriver for Recorder {
-    fn start(&self, request: FetchRequest, target: u64) -> Result<(), FetchStartError> {
-        self.starts.borrow_mut().push((request, target));
+    fn start(&self, request: FetchRequest, handle: XhrHandle) -> Result<(), FetchStartError> {
+        self.starts.borrow_mut().push((request, handle));
         if self.hold.get() {
             return Ok(());
         }
@@ -121,7 +126,7 @@ impl XhrDriver for Recorder {
             true => FetchOutcome::Failed("the request failed".to_owned()),
             false => ok_outcome(),
         };
-        self.table.push(target, outcome);
+        self.table.push(handle, outcome);
         Ok(())
     }
 }
@@ -133,9 +138,28 @@ fn eval(engine: &mut Engine, source: &str) -> String {
         .unwrap_or_else(|error| panic!("`{source}` should evaluate: {error}"))
 }
 
-/// A completion that dispatches `outcome` at `target`.
+/// The request id of an object that has been `open()`ed and never sent.
+///
+/// `open()` bumps the record's id once (its step 10), so an object that has only
+/// been opened holds `1`. That is the state of every object the response-half
+/// tests deliver at — they never install a driver, so nothing is ever sent — and
+/// a `send()` would bump it again, which is what makes the re-open test's
+/// abandoned completion carry a *different* id.
+const OPENED_ONLY: u64 = 1;
+
+/// A completion that dispatches `outcome` at `target`, for the request an
+/// `open()`ed-and-never-sent object is waiting for.
 fn completion(target: u64, outcome: FetchOutcome) -> XhrCompletion {
-    XhrCompletion { target, outcome }
+    hand(target, OPENED_ONLY, outcome)
+}
+
+/// A completion for one specific request of an object, which is what a test needs
+/// once an object has more than one in flight.
+fn hand(target: u64, request: u64, outcome: FetchOutcome) -> XhrCompletion {
+    XhrCompletion {
+        handle: XhrHandle { target, request },
+        outcome,
+    }
 }
 
 /// The request a page would have made for `/data.json` — the one the page above
@@ -163,10 +187,19 @@ fn target_bits(engine: &mut Engine, expression: &str) -> u64 {
         .bits()
 }
 
-/// Delivers one completion at the global `xhr`, as the page's turn loop would.
+/// Delivers one completion at the global `xhr`, as the page's turn loop would,
+/// for the request an `open()`ed-and-never-sent object is waiting for
+/// ([`OPENED_ONLY`]).
 fn deliver(engine: &mut Engine, outcome: FetchOutcome) {
     let target = target_bits(engine, "xhr");
     engine.settle_xhr(vec![completion(target, outcome)]);
+}
+
+/// Delivers one completion for request `request` of the object a driver was
+/// handed, which is what a test that sent a request needs: the id is the
+/// driver's, not a constant.
+fn deliver_at(engine: &mut Engine, handle: XhrHandle, outcome: FetchOutcome) {
+    engine.settle_xhr(vec![hand(handle.target, handle.request, outcome)]);
 }
 
 /// A completed response carrying `status`, the driver's `headers` in the order
@@ -241,19 +274,23 @@ fn a_request_reaches_the_driver_verbatim_and_its_completion_keeps_the_target() {
     let recorder = Rc::new(Recorder::default());
     let request = request();
 
+    let handle = XhrHandle {
+        target: body,
+        request: 5,
+    };
     recorder
-        .start(request.clone(), body)
+        .start(request.clone(), handle)
         .expect("the recorder never refuses");
 
     assert_eq!(
         recorder.starts.borrow().as_slice(),
-        &[(request, body)],
-        "the driver was handed the request and the target, unchanged"
+        &[(request, handle)],
+        "the driver was handed the request and the handle, unchanged"
     );
     assert_eq!(
         recorder.table.take_all(),
-        vec![completion(body, ok_outcome())],
-        "and its answer is in the table against the same target"
+        vec![hand(body, 5, ok_outcome())],
+        "and its answer is in the table against the same handle, both halves of it"
     );
 }
 
@@ -378,7 +415,13 @@ fn a_failed_outcome_dispatches_an_error_rather_than_a_load() {
 
     recorder.fail.set(true);
     recorder
-        .start(request(), body)
+        .start(
+            request(),
+            XhrHandle {
+                target: body,
+                request: OPENED_ONLY,
+            },
+        )
         .expect("the recorder never refuses");
     engine.settle_xhr(recorder.table.take_all());
 
@@ -1492,7 +1535,10 @@ fn send_after_a_completion_is_refused_by_the_state() {
             xhr.send();
             "#,
         );
-        deliver(engine, ok_outcome());
+        // The request the driver was handed, not a constant: `send()` stamps the
+        // id the completion has to carry to be delivered at all.
+        let sent = recorder.starts.borrow()[0].1;
+        deliver_at(engine, sent, ok_outcome());
 
         assert_eq!(
             eval(
@@ -1548,7 +1594,7 @@ fn send_fires_loadstart_and_hands_the_driver_the_request_it_built() {
 
         let starts = recorder.starts.borrow();
         assert_eq!(starts.len(), 1, "one `send()` makes one request");
-        let (request, target) = &starts[0];
+        let (request, handle) = &starts[0];
         assert_eq!(request.method.as_str(), "POST");
         assert_eq!(request.url.as_str(), "http://fixture.test/submit?x=1");
         assert_eq!(
@@ -1562,9 +1608,13 @@ fn send_fires_loadstart_and_hands_the_driver_the_request_it_built() {
             "the document is the initiator, which is what a same-origin test compares"
         );
         assert_eq!(
-            *target,
+            handle.target,
             target_bits(engine, "xhr"),
             "the completion is addressed to the object that made the request"
+        );
+        assert_eq!(
+            handle.request, 2,
+            "and to this object's *first* request: `open()` took 1 and `send()` 2"
         );
     });
 }
@@ -1852,6 +1902,112 @@ fn open_clears_the_send_flag_and_the_author_request_headers() {
         assert!(
             starts[1].0.headers.is_empty(),
             "the previous request's headers must not carry into the new one"
+        );
+    });
+}
+
+/// A completion for a request its object has abandoned is discarded: none of its
+/// events fire and none of its response lands.
+///
+/// This is `open()`'s step 10 as this product can serve it. `send()` does not
+/// change the state — the object stays at `OPENED` for as long as its request is
+/// unanswered — so with a driver installed, `open()` is reachable with a request
+/// in flight and the object can carry two. The standard's answer is to terminate
+/// the first; the host layer cannot, because the driver is on the other side of
+/// the seam, so the record's request id is what the abandonment is expressed
+/// with (b-6) and this is the test that it holds.
+///
+/// The second `send()` is what makes the two requests distinguishable from the
+/// outside: without an id, both completions would be addressed to one object and
+/// the page would see two interleaved event sequences, with `response` ending up
+/// whichever arrived last. That is the failure this pins.
+#[test]
+fn a_completion_for_a_request_the_object_abandoned_is_discarded() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        eval(
+            engine,
+            r#"
+            globalThis.xhr = new XMLHttpRequest();
+            xhr.open('GET', '/first');
+            xhr.send();
+            // The re-open with the first request still in flight: this is the
+            // step-10 case. The state is already `OPENED`, so the second
+            // `open()` fires no `readystatechange`.
+            xhr.open('GET', '/second');
+            xhr.send();
+            // Registered after both, so the log holds the completions' events
+            // and nothing of the setup's.
+            globalThis.log = [];
+            for (const name of ['readystatechange', 'progress', 'load', 'error', 'loadend']) {
+                xhr.addEventListener(name, event => log.push(event.type + '@' + xhr.readyState));
+            }
+            "#,
+        );
+
+        let (abandoned, live) = {
+            let starts = recorder.starts.borrow();
+            assert_eq!(
+                starts.len(),
+                2,
+                "the re-opened object made a second request"
+            );
+            assert_eq!(
+                starts[0].1.target, starts[1].1.target,
+                "one object made both requests, so both answers are addressed to it"
+            );
+            assert_ne!(
+                starts[0].1.request, starts[1].1.request,
+                "and the two requests are told apart by their ids alone"
+            );
+            (starts[0].1, starts[1].1)
+        };
+
+        // The abandoned request's answer arrives first, and it is a *response*
+        // with a body: delivered, it would move the object to `DONE` and store
+        // its body.
+        engine.settle_xhr(vec![hand(
+            abandoned.target,
+            abandoned.request,
+            response(200, &[("Content-Type", "text/plain")], Some(b"abandoned")),
+        )]);
+
+        assert_eq!(
+            eval(engine, "log.join(',')"),
+            "",
+            "an abandoned request's completion fires no event at all"
+        );
+        assert_eq!(
+            eval(
+                engine,
+                "[xhr.readyState, xhr.status, xhr.responseText.length, \
+                  xhr.getResponseHeader('content-type') === null].join('|')"
+            ),
+            "1|0|0|true",
+            "and it neither moves the state nor stores anything"
+        );
+
+        // The live request's answer still lands, so the discard is not a machine
+        // that has stopped working.
+        engine.settle_xhr(vec![hand(
+            live.target,
+            live.request,
+            response(200, &[("Content-Type", "text/plain")], Some(b"live")),
+        )]);
+
+        assert_eq!(
+            eval(
+                engine,
+                "[xhr.readyState, xhr.status, xhr.responseText].join('|')"
+            ),
+            "4|200|live"
+        );
+        assert_eq!(
+            eval(engine, "log.join(',')"),
+            "readystatechange@2,readystatechange@3,progress@3,progress@3,\
+             readystatechange@4,load@4,loadend@4",
+            "the live request runs the whole response machine"
         );
     });
 }

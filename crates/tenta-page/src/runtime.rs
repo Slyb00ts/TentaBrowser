@@ -36,7 +36,7 @@ use tenta_html::{Encoding, Parser};
 use tenta_js::engine::{EngineClock, EngineWatchdog, PageEngine, PageEngineConfig, ScriptKind};
 use tenta_js::event_loop::ProvenanceSink;
 use tenta_js::fetch::{FetchCompletions, FetchDriver};
-use tenta_js::xhr::XhrCompletions;
+use tenta_js::xhr::{XhrCompletions, XhrDriver};
 use tenta_net::policy::cookies::Site;
 use tenta_net::{Client, NetError, Request, ResourceType};
 use url::Url;
@@ -188,8 +188,8 @@ pub(crate) struct PageRuntime {
     /// One table per navigation, for the same reason [`Self::fetches`] is: a
     /// completion names an event target of the document that is current, and a
     /// table that outlived its engine would hold a handle no engine can
-    /// dispatch at. The driver will hold a handle to it
-    /// (`tenta_js::xhr::XhrDriver`), so it is shared rather than owned outright.
+    /// dispatch at. The driver holds a handle to it (`tenta_js::xhr::XhrDriver`),
+    /// so it is shared rather than owned outright.
     xhrs: Rc<XhrCompletions>,
 }
 
@@ -238,21 +238,25 @@ impl PageRuntime {
         // it, so a completion the driver leaves behind is drained by this
         // navigation's `turn` and never by another's. The driver is installed
         // before this runtime is reachable, and `create` runs before the paused
-        // script is run, so a driver exists before any script can call `fetch`.
+        // script is run, so a driver exists before any script can call `fetch`
+        // or `xhr.send()`.
         let fetches = Rc::new(FetchCompletions::new());
+        // The XHR table is the fetch table's sibling and is created here for the
+        // same reason; it is built before the driver because the driver is what
+        // fills it. Both tables are handed to the *one* driver: `fetch()` and
+        // `XMLHttpRequest` differ in the resource type and in which table the
+        // answer goes to, and share both cross-origin gates, so a second driver
+        // would be a second place for gate 2 to be forgotten
+        // (`NetFetchDriver`).
+        let xhrs = Rc::new(XhrCompletions::new());
         let driver = Rc::new(NetFetchDriver::new(
             config,
             Rc::clone(&tracker),
             Rc::clone(&fetches),
+            Rc::clone(&xhrs),
         ));
-        engine.set_fetch_driver(driver as Rc<dyn FetchDriver>);
-        // The XHR table is created here and handed to the driver that will fill
-        // it, but nothing installs that driver in this slice: the only candidate
-        // is `NetFetchDriver`, which gains its `XhrDriver` impl — and this
-        // runtime the `set_xhr_driver` call — with the XHR route itself (b-6).
-        // Until then the table stays empty, and an empty table costs no engine
-        // entry (`turn`).
-        let xhrs = Rc::new(XhrCompletions::new());
+        engine.set_fetch_driver(Rc::clone(&driver) as Rc<dyn FetchDriver>);
+        engine.set_xhr_driver(driver as Rc<dyn XhrDriver>);
         Ok(PageRuntime {
             page,
             engine,
@@ -1011,7 +1015,7 @@ mod tests {
     use tenta_dom::Document;
     use tenta_js::engine::{EngineWatchdog, ScriptError, ScriptKind};
     use tenta_js::fetch::{FetchCompletion, FetchDriver, FetchOutcome};
-    use tenta_js::xhr::{XhrCompletion, XhrDriver};
+    use tenta_js::xhr::{XhrCompletion, XhrDriver, XhrHandle};
 
     /// An engine that records whether the page trimmed it and does nothing
     /// else: what the guard under test decides is whether the page enters the
@@ -1174,10 +1178,14 @@ mod tests {
                 .push(resolver, FetchOutcome::Failed(message.to_owned()));
         }
 
-        /// Records an XHR completion the way a driver would.
-        fn complete_xhr(&self, target: u64, message: &str) {
-            self.xhrs
-                .push(target, FetchOutcome::Failed(message.to_owned()));
+        /// Records an XHR completion the way a driver would. `request` is the
+        /// request id the object's `send()` stamped, which the drain carries
+        /// through untouched and hands to the bindings' discard test.
+        fn complete_xhr(&self, target: u64, request: u64, message: &str) {
+            self.xhrs.push(
+                XhrHandle { target, request },
+                FetchOutcome::Failed(message.to_owned()),
+            );
         }
 
         /// The resolvers of every completion the page has handed the engine, one
@@ -1190,13 +1198,20 @@ mod tests {
                 .collect()
         }
 
-        /// The targets of every XHR completion the page has handed the engine,
-        /// one inner list per entry.
-        fn xhr_batches(&self) -> Vec<Vec<u64>> {
+        /// Both halves of every XHR completion the page has handed the engine,
+        /// one inner list per entry — the id as well as the target, because the
+        /// drain has to carry it for the bindings to discard an abandoned
+        /// request's completion.
+        fn xhr_batches(&self) -> Vec<Vec<(u64, u64)>> {
             self.settled_xhr
                 .borrow()
                 .iter()
-                .map(|batch| batch.iter().map(|done| done.target).collect())
+                .map(|batch| {
+                    batch
+                        .iter()
+                        .map(|done| (done.handle.target, done.handle.request))
+                        .collect()
+                })
                 .collect()
         }
     }
@@ -1315,14 +1330,14 @@ mod tests {
     #[test]
     fn a_turn_drains_the_xhr_table_into_one_batch() {
         let mut harness = Harness::new(true);
-        harness.complete_xhr(0x11, "first");
-        harness.complete_xhr(0x22, "second");
+        harness.complete_xhr(0x11, 1, "first");
+        harness.complete_xhr(0x22, 2, "second");
 
         assert!(harness.runtime.turn(1).is_none());
         assert_eq!(
             harness.xhr_batches(),
-            vec![vec![0x11, 0x22]],
-            "one entry, in push order"
+            vec![vec![(0x11, 1), (0x22, 2)]],
+            "one entry, in push order, with each request id carried alongside its target"
         );
         assert!(
             harness.xhrs.take_all().is_empty(),
@@ -1332,7 +1347,7 @@ mod tests {
         assert!(harness.runtime.turn(1).is_none());
         assert_eq!(
             harness.xhr_batches(),
-            vec![vec![0x11, 0x22]],
+            vec![vec![(0x11, 1), (0x22, 2)]],
             "a turn with nothing waiting makes no entry"
         );
     }
@@ -1345,7 +1360,7 @@ mod tests {
     fn an_empty_xhr_table_costs_no_engine_entry_and_the_drain_sits_before_the_timers() {
         let mut harness = Harness::new(true);
         harness.complete(7, "fetch");
-        harness.complete_xhr(0x33, "xhr");
+        harness.complete_xhr(0x33, 3, "xhr");
 
         assert!(harness.runtime.turn(1).is_none());
         assert_eq!(

@@ -30,7 +30,7 @@ use crate::bindings::host::{
     encode_node, encode_window,
 };
 use crate::fetch::FetchStartError;
-use crate::xhr::XhrRequest;
+use crate::xhr::{XhrHandle, XhrRequest};
 
 #[cfg(test)]
 mod tests;
@@ -169,9 +169,14 @@ pub trait ScriptHost {
     /// request — and hands it here; the implementation adds the provenance and
     /// calls the installed [`XhrDriver`](crate::xhr::XhrDriver).
     ///
-    /// `target` is the opaque handle bits of the `XMLHttpRequest` object, the
-    /// same encoding [`DispatchTarget::host`] decodes, so the completion a
-    /// driver leaves behind lands at the object that made the request.
+    /// `handle` is the opaque identity of the request the page is starting: the
+    /// handle bits of the `XMLHttpRequest` object, the same encoding
+    /// [`DispatchTarget::host`] decodes, plus the *request id* `send()` stamped
+    /// on it. The bits are what makes the completion a driver leaves behind land
+    /// at the object that made the request; the id is what makes it land
+    /// *nowhere* once the object has abandoned that request — `open()` over a
+    /// request still in flight takes a new id, so the abandoned one no longer
+    /// matches the record and its events are never delivered.
     ///
     /// # Failure
     ///
@@ -180,7 +185,7 @@ pub trait ScriptHost {
     /// promise to reject, so the caller turns the message into the standard's
     /// *request error steps* — a synchronous report the page observes as a
     /// failed request, never as a request still in flight.
-    fn start_xhr(&self, request: XhrRequest, target: u64) -> Result<(), FetchStartError>;
+    fn start_xhr(&self, request: XhrRequest, handle: XhrHandle) -> Result<(), FetchStartError>;
 
     /// Settles the promise whose resolver holds the bits `resolver`, reporting
     /// whether a settlement was queued.
@@ -718,7 +723,7 @@ impl DispatchTarget {
     ///
     /// The inverse of the three constructors above, for a caller that holds bits
     /// and no handle: an XHR completion names its target as opaque bits
-    /// ([`crate::xhr::XhrCompletion::target`]), because the driver that produced
+    /// ([`crate::xhr::XhrCompletion::handle`]), because the driver that produced
     /// it cannot name a handle type. Re-encoding what this decodes gives the
     /// input back, which is what keeps `event.target` the *same* object the page
     /// holds — the world memoises one wrapper per handle.

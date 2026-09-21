@@ -16,7 +16,7 @@ use tenta_js::engine::{
 };
 use tenta_js::event_loop::ProvenanceSink;
 use tenta_js::fetch::{FetchCompletion, FetchDriver, FetchOutcome, FetchRequest, FetchStartError};
-use tenta_js::xhr::{XhrCompletion, XhrDriver};
+use tenta_js::xhr::{XhrCompletion, XhrDriver, XhrHandle};
 
 /// Records what it was asked to do, so a test can assert the page's calls
 /// arrive with the arguments the page meant.
@@ -88,7 +88,7 @@ impl PageEngine for StubEngine {
     fn settle_xhr(&mut self, completions: Vec<XhrCompletion>) {
         let mut recorder = self.recorder.lock().unwrap();
         for completion in completions {
-            recorder.settled_xhr.push(completion.target);
+            recorder.settled_xhr.push(completion.handle.target);
         }
     }
 
@@ -147,7 +147,7 @@ impl FetchDriver for StubDriver {
 struct StubXhrDriver;
 
 impl XhrDriver for StubXhrDriver {
-    fn start(&self, _request: FetchRequest, _target: u64) -> Result<(), FetchStartError> {
+    fn start(&self, _request: FetchRequest, _handle: XhrHandle) -> Result<(), FetchStartError> {
         Ok(())
     }
 }
@@ -234,15 +234,25 @@ fn a_page_drives_an_engine_through_the_trait_object_alone() {
     engine.set_xhr_driver(Rc::new(StubXhrDriver));
     engine.settle_xhr(vec![
         XhrCompletion {
-            target: 0x11,
+            handle: XhrHandle {
+                target: 0x11,
+                request: 1,
+            },
             outcome: FetchOutcome::Failed("stub".to_string()),
         },
         XhrCompletion {
-            target: 0x22,
+            handle: XhrHandle {
+                target: 0x22,
+                request: 2,
+            },
             outcome: FetchOutcome::Failed("stub".to_string()),
         },
     ]);
-    assert_eq!(recorder.lock().unwrap().settled_xhr, vec![0x11, 0x22]);
+    assert_eq!(
+        recorder.lock().unwrap().settled_xhr,
+        vec![0x11, 0x22],
+        "the batch reaches the engine in order, request id and all"
+    );
 
     let watchdog = engine.watchdog().expect("the stub can be interrupted");
     watchdog.terminate();

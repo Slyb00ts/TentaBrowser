@@ -110,7 +110,13 @@ definition = "fixture with inline script, one XHR and one `fetch` that mutate th
 rtt_ms = 0
 expect_stdout_contains = "js-xhr: done (2 requests)"
 [scenario.commands]
-# No `tentabrowser` entry: the fixture needs JavaScript, which is P2.
+# No `tentabrowser` entry, and not because JavaScript is still landing: the shipped CLI is Tier 1
+# by construction (`PageOptions::tier1()` in `crates/tentabrowser-cli/src/fetch.rs`, and
+# `crates/tentabrowser-cli/tests/tier.rs` asserts its dependency graph stays free of `v8`), so
+# `fetch --dump text` cannot run the fixture's script and never prints the marker. The P2
+# in-process harness carries this gate; `crates/tenta-browser/tests/xhr_js.rs` is where the
+# fixture's behaviour is asserted today. The `mode = "inprocess"` rows below are declared for that
+# harness and are not measured yet — `bench/run.py` reports every non-`cli` mode as not implemented.
 reference = ["fetch", "{url}", "--dump", "text", "--allow-private-network", "--quiet"]
 # Chromium's --dump-dom serialises at `load`, before the XHR and fetch have settled; a virtual-time
 # budget lets pending async work (timers, in-flight responses) complete before the dump.
