@@ -503,12 +503,14 @@ async fn two_jobs_overlap_at_a_gate_that_needs_both_pages() {
 ///
 /// The second test is deliberately an ordinary page rather than `/gate-b.html`.
 /// Asking for the other gate path here would release the first page's held gate
-/// script into the parse that the driver already cancelled, which is a
-/// **pre-existing engine defect** — a parse parked on a parser-blocking script
-/// fetch resumes and runs the script after its navigation is gone, and with a
-/// second page's V8 isolate current on the same page thread that aborts the
-/// process (`tenta-js-v8`'s `ContextScope` assertion, then `OwnedIsolate`'s drop
-/// order). The evidence this test owes is that one page alone cannot open the
+/// script into the parse that the driver already cancelled. **That is a
+/// pre-existing engine defect, still open:** a parse parked on a
+/// parser-blocking script fetch resumes and runs the script after its navigation
+/// is gone. The entry guard in `tenta-js-v8` does not touch it — the script now
+/// runs on the right isolate instead of aborting the process, which leaves the
+/// defect with no symptom at all rather than fixing it. It is not this slice's
+/// to fix, and this test must not be written in a way that depends on either
+/// behaviour. The evidence this test owes is that one page alone cannot open the
 /// gate, and that is exactly what a never-answered gate script shows.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn one_job_cannot_open_the_gate_and_times_out() {

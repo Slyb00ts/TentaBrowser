@@ -28,14 +28,23 @@
 //! worker's. A second context gets its own hub because a context builds one when
 //! it is created, and the engine holds no hook list of its own.
 //!
-//! `jobs > 1` does not work against `dom/nodes` yet, and the fault is the
-//! engine's rather than this pool's: a page thread holds one `PageRuntime` per
-//! page it hosts (`tenta-page`), each owning a `v8::OwnedIsolate`, and
-//! `OwnedIsolate` asserts on drop that it is the thread's current isolate. Page
-//! threads are handed out by a global round-robin, so two workers' pages share
-//! one thread as soon as they drift apart and the first page to close is not the
-//! newest. Measured 2026-09-21: `--jobs 1` is 2032/5247 subtests (38.73 %) in
-//! 738 s; `--jobs 4` aborts with `SIGABRT` after 163 s. See `docs/dev/wpt.md`.
+//! One engine is built for the whole plan, with `jobs` io threads and `jobs`
+//! page threads (`run`), and each worker owns one page at a time. Nothing ties a
+//! worker to a page thread — the pool hands them out round-robin
+//! (`crate::threads`) — so **one page thread hosts one live `PageRuntime` per
+//! worker** as soon as the workers drift apart. Each runtime owns a
+//! `v8::OwnedIsolate`, and until P2's entry guard landed that combination
+//! aborted the process: an engine entry did not make its own isolate the
+//! thread's current one, so the second engine's `ContextScope` was built on the
+//! first's isolate and panicked, and the teardown that unwound into aborted with
+//! `SIGABRT` (2026-09-21: `--jobs 4` died after 163 s). `tenta-js-v8`'s
+//! `IsolateEntry` now opens that window at every entry and closes it at every
+//! exit, `Engine::drop` enters its own isolate for teardown, and the pool works
+//! at any `jobs`.
+//!
+//! Measured on `dom/nodes` (2026-09-21, after the guard): `--jobs 1` is 2032/5247
+//! subtests (38.73 %) in 736 s, `--jobs 4` is 2032/5247 (38.73 %) in 194 s — the
+//! same pass set, 3.8x the throughput. See `docs/dev/wpt.md`.
 //!
 //! The POST body is a `Body::Bytes` and not a stream because that is the only
 //! shape a page's `fetch()` can produce: `tenta-page`'s `net_request` builds the

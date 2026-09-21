@@ -37,10 +37,11 @@ directories and updating expectations.
   described in `docs/dev/wpt.md`.
 
   Measured on `dom/nodes` (2026-09-21): `--jobs 1` gives 2032/5247 subtests
-  (38.73 %) in 738 s. `--jobs 4` aborts the driver with `SIGABRT` after 163 s
-  (a V8 isolate teardown panic on a shared page thread), so **run this product
-  at `--jobs 1`** until that engine defect is fixed; `docs/dev/wpt.md` has the
-  mechanism.
+  (38.73 %) in 736 s and `--jobs 4` gives the same 2032/5247 (38.73 %) in 194 s,
+  so **run this product at `--jobs 4`** (or higher) for the gate. Before P2's
+  isolate entry guard landed, `--jobs 4` aborted the driver with `SIGABRT` after
+  163 s — an engine teardown panic on a shared page thread; `docs/dev/wpt.md`
+  has the mechanism.
 
 ## Pinned WPT commit
 

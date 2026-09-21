@@ -234,6 +234,7 @@ impl PageEngine for Engine {
     /// (`Engine::install_script_host` in `Engine::build`), which is what makes
     /// the release real rather than a silent no-op.
     fn trim_memory(&mut self) {
+        let _entry = self.entered();
         // V8's embedder memory-pressure entry point, which collects
         // synchronously — the browser's replacement for an exposed `gc()`.
         self.isolate.low_memory_notification();

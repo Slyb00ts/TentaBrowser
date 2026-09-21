@@ -90,8 +90,8 @@ only place JavaScript is needed in this repository.
 
 What it does, per test:
 
-- one engine, built with one io thread and one page thread per worker, and one
-  context **per worker** — each with `allow_private_network` and
+- one engine for the whole plan, with one io thread and one page thread per
+  worker, and one context **per worker** — each with `allow_private_network` and
   `ignore_https_errors`, because the WPT server is on loopback with test
   certificates. Each context has its own interceptor, resolver, cache and cookie
   jar; the interceptor answers three kinds of request:
@@ -128,23 +128,51 @@ What it does, per test:
   exists: a test claimed after it is `NOTRUN`, and a test already started drains
   to its own hook or per-test deadline rather than being aborted.
 
+Nothing ties a worker to a page thread: the pool hands threads out round-robin,
+so two workers' pages share one as soon as they drift apart. That is deliberate
+and it is why the isolate-entry discipline lives in the engine rather than in
+this driver — the same collision is reachable from the public API by calling
+`context.new_page()` twice, and a worker-to-thread pin would fix only the
+driver's case.
+
 The driver's diagnostics go to stderr at `WARN`; `TENTA_LOG=info` adds a line per
 test with its status and subtest passes, which is the only progress signal a run
 against a whole directory has. Results go to the file, never to stdout.
 
-**Concurrency is not usable against `dom/nodes` yet.** Measured 2026-09-21 on
-`dom/nodes`: `--jobs 1` gives 2032/5247 subtests (38.73 %) in 738 s, but
-`--jobs 4` aborts the driver with `SIGABRT` after 163 s — the page threads panic
-with `v8::OwnedIsolate instances must be dropped in the reverse order of
-creation`. The cause is in the engine, not this driver: a page thread keeps one
-`PageRuntime` per page it hosts (`crates/tenta-page/src/runtime.rs`), each owning
-a `v8::OwnedIsolate`, and `OwnedIsolate::drop` asserts the isolate being dropped
-is the thread's current one. Page threads are handed out by a **global**
-round-robin (`crates/tenta-browser/src/threads.rs`), so two workers' pages land
-on one thread as soon as the workers drift apart, and whichever page closes
-first is then not the newest. One page thread per worker would fix it; that is an
-engine change and a decision, not a driver change. Until then, run this product
-at `--jobs 1`.
+**Concurrency works.** Measured 2026-09-21 on `dom/nodes`, after the engine's
+entry guard (`tenta-js-v8`'s `IsolateEntry`, above):
+
+| `--jobs` | Subtests | Wall time |
+|----------|----------|-----------|
+| 1 | 2032/5247 (38.73 %) | 736 s |
+| 4 | 2032/5247 (38.73 %) | 194 s |
+
+The same pass set at both settings and 3.8x the throughput, so the four-job run
+is the practical one. The `--jobs 1` figure recorded before this change was
+738 s, so the guard's enter/exit pair per engine entry costs nothing measurable
+(-0.3 %, inside the ±10 % noise floor of `docs/spec/13-performance.md` §8).
+
+`--jobs 4` used to abort the driver with `SIGABRT` after 163 s: a page thread
+keeps one `PageRuntime` per page it hosts
+(`crates/tenta-page/src/runtime.rs`), each owning a `v8::OwnedIsolate`, and page
+threads are handed out by a **global** round-robin
+(`crates/tenta-browser/src/threads.rs`), so two workers' pages land on one thread
+as soon as the workers drift apart. An engine entry did not make its own isolate
+the thread's current one, so the second engine's scopes were built on the first's
+isolate, `ContextScope::new` panicked, and the `OwnedIsolate::drop` assertion
+that followed during the unwind aborted the process. `tenta-js-v8`'s
+`IsolateEntry` opens that window at every entry:
+
+```rust
+let _entry = self.entered();
+```
+
+and closes it on every exit, including the unwind path that `catch_unwind`
+takes; `Engine::drop` enters its own isolate for teardown, because
+`OwnedIsolate::drop` requires it to be current. `crates/tenta-js-v8/tests/isolate_entry.rs`
+is the differential test for the guard, and
+`crates/tenta-browser/tests/isolate_lifecycle.rs` for two live pages on one page
+thread closed in both orders.
 
 A directory that measures 0 % or comes back all-`TIMEOUT` is a driver problem
 rather than a finding: check that the hook was requested at all in

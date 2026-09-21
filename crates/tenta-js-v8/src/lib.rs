@@ -182,6 +182,134 @@ unsafe extern "C" fn on_gc_epilogue(
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
+// The isolates this thread has entered through an `IsolateEntry`, innermost
+// last — the same stack V8 keeps, mirrored here only because V8 exposes no
+// accessor for it.
+//
+// It exists for one purpose: letting `Engine`'s `Drop` turn "an engine was
+// dropped while its own isolate was entered" into a message instead of a
+// silent use-after-free. Debug-only, and read only by a `debug_assert!`, so a
+// release build pays nothing for it.
+#[cfg(debug_assertions)]
+thread_local! {
+    static ENTERED: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The address V8's own entry stack is keyed by: the `RealIsolate` an
+/// [`v8::UnsafeRawIsolatePtr`] points at.
+///
+/// Both types are `repr(transparent)` over that one pointer, so
+/// [`Isolate::ref_from_raw_isolate_ptr`](v8::Isolate::ref_from_raw_isolate_ptr)
+/// hands back a view *of the pointer value*: the returned reference's own
+/// address is the stack slot holding the pointer, and its contents are the
+/// isolate's address. This reads the contents, which is the identity wanted;
+/// the slot address would differ per call site.
+#[cfg(debug_assertions)]
+fn isolate_address(isolate: &v8::UnsafeRawIsolatePtr) -> usize {
+    // SAFETY: `isolate` came from a live `Engine`, and the reference above is a
+    // transparent view of one pointer, so reading one pointer-sized integer
+    // through it is an in-bounds read of that value.
+    let view: &v8::Isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr(isolate) };
+    let contents: *const usize = (view as *const v8::Isolate).cast();
+    unsafe { *contents }
+}
+
+/// An RAII window during which this engine's isolate is the thread's current
+/// one.
+///
+/// V8 ties a `HandleScope` and a `ContextScope` to the isolate that was current
+/// when they were built: `ContextScope::new` compares the scope's isolate
+/// against `Isolate::GetCurrent()` and **panics** when the two differ
+/// (`scope.rs`). `Isolate::new` enters the isolate it creates and
+/// `OwnedIsolate::drop` exits it, so a page thread hosting two engines has two
+/// isolates competing for that one per-thread slot and the second engine's
+/// entries panic. Every engine entry that touches V8 therefore opens this
+/// window first, which makes the engine's own isolate current for exactly the
+/// body of the entry.
+///
+/// # Why RAII and not a bare `enter()`/`exit()` pair
+///
+/// Every native boundary is wrapped in `catch_unwind`
+/// (`docs/spec/02-architecture.md` §8) and `AGENTS.md` pins `panic = "unwind"`,
+/// so an entry can unwind. A pair would leave the *previous* isolate current on
+/// that path, and every later scope on the thread would be built on the wrong
+/// isolate; the guard's `Drop` closes the window during unwind instead. Two
+/// properties fall out of that, and both are requirements:
+///
+/// - the exit is **infallible**: it is one V8 call with no failure mode — a pop
+///   of V8's per-thread entry stack — so the destructor cannot panic. A panic
+///   there is a panic in a destructor during cleanup, which aborts the process,
+///   and that is exactly the `SIGABRT` this guard exists to remove.
+/// - the exit is **unconditional**: nothing disarms the guard on the happy path.
+///
+/// # Why the isolate is held as a raw pointer
+///
+/// The guard is created from `&self`, but the entries it covers mostly take
+/// `&mut self` — `run_inner` and friends borrow `self.isolate` to open their
+/// scopes — and [`Engine`]'s `Drop` must still run V8 teardown on `self.isolate`
+/// before the field drops. Holding `&mut self.isolate` would make both
+/// impossible, so the guard holds the isolate's *address* by value instead:
+/// [`v8::UnsafeRawIsolatePtr`] is `Copy`, and the address of the `RealIsolate`
+/// V8 allocates never changes, not even when the `Engine` is moved out of
+/// `build` (which is the same fact `Engine::install_script_host` relies on).
+///
+/// # Invariant
+///
+/// **An [`Engine`] is never dropped while its own isolate is entered.** An
+/// entry only ever pushes a frame onto V8's per-thread entry stack, so opening
+/// one is sound at depth zero, where its matching exit restores the thread to
+/// "nothing entered". At depth ≥ 1 it is not: dropping an engine inside its own
+/// entry would leave the caller's frame pointing at a freed isolate once the
+/// exit restored it. `Engine::drop` asserts this in debug builds; nothing does
+/// it today — creation happens outside `with_runtime_for`, disposal in
+/// `Page::close`'s task and in `ensure_runtime`'s rebuild, both between
+/// entries.
+///
+/// The guard is neither `Send` nor `Sync`, because a raw isolate pointer is not.
+struct IsolateEntry {
+    isolate: v8::UnsafeRawIsolatePtr,
+}
+
+impl IsolateEntry {
+    /// Enters `isolate` on this thread and returns the guard that undoes it.
+    fn enter(isolate: v8::UnsafeRawIsolatePtr) -> Self {
+        // SAFETY: `isolate` is the address of a live engine's isolate on this
+        // thread (see `Engine::entered`, the only caller); entering it pushes a
+        // frame onto V8's per-thread entry stack and touches nothing else.
+        unsafe { v8::Isolate::ref_from_raw_isolate_ptr(&isolate).enter() };
+        #[cfg(debug_assertions)]
+        ENTERED.with(|stack| stack.borrow_mut().push(isolate_address(&isolate)));
+        Self { isolate }
+    }
+
+    /// Whether `isolate` is entered on this thread.
+    #[cfg(debug_assertions)]
+    fn is_entered(isolate: v8::UnsafeRawIsolatePtr) -> bool {
+        let address = isolate_address(&isolate);
+        ENTERED.with(|stack| stack.borrow().contains(&address))
+    }
+}
+
+impl Drop for IsolateEntry {
+    fn drop(&mut self) {
+        // SAFETY: the pointer is this engine's own, captured by
+        // `IsolateEntry::enter`; an `Engine` is never dropped while a guard over
+        // it is live (the invariant `Engine::drop` asserts), and `enter`/`exit`
+        // is a per-thread stack, so this pops exactly the frame that pushed it.
+        // The guard is neither `Send` nor `Sync`.
+        unsafe { v8::Isolate::ref_from_raw_isolate_ptr(&self.isolate).exit() };
+        #[cfg(debug_assertions)]
+        ENTERED.with(|stack| {
+            let popped = stack.borrow_mut().pop();
+            debug_assert_eq!(
+                popped,
+                Some(isolate_address(&self.isolate)),
+                "isolate entries were dropped out of the order they were entered"
+            );
+        });
+    }
+}
+
 /// How one call of a queued handler ended, which is what a pump needs to know
 /// before it may run the next one.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -336,7 +464,37 @@ impl Engine {
             dom,
         };
         engine.install_script_host();
+        // `Isolate::new` leaves the isolate it built **entered**, and that entry
+        // has to be given back before `build` returns. A settled `Engine` is
+        // then not the thread's current isolate, so building a second engine
+        // pushes 0 -> 1 -> 0 instead of leaving a stack behind, and every entry
+        // below opens a window of its own ([`IsolateEntry`]).
+        //
+        // SAFETY: `engine.isolate` is the isolate `Isolate::new` entered above,
+        // and nothing has exited it since — every scope in this function nests
+        // inside that one entry — so this pops exactly that frame.
+        unsafe { engine.isolate.exit() };
         engine
+    }
+
+    /// The stable address of this engine's V8 isolate, captured by value.
+    ///
+    /// The `RealIsolate` V8 allocates never moves, unlike the `OwnedIsolate`
+    /// field that points at it, so the address survives the `Engine` being
+    /// moved out of [`Self::build`] or boxed by the engine factory.
+    fn raw_isolate(&self) -> v8::UnsafeRawIsolatePtr {
+        // SAFETY: `self.isolate` is alive for `&self`'s lifetime, so this reads
+        // a live isolate's address and dereferences nothing.
+        unsafe { self.isolate.as_raw_isolate_ptr() }
+    }
+
+    /// Enters this engine's isolate for as long as the returned guard lives.
+    ///
+    /// Every entry that touches V8 opens one of these, so the scopes it builds
+    /// belong to *this* engine's isolate rather than to whichever engine
+    /// happens to be the thread's current one. See [`IsolateEntry`].
+    fn entered(&self) -> IsolateEntry {
+        IsolateEntry::enter(self.raw_isolate())
     }
 
     /// Wires the DOM event dispatcher's callback boundary to this engine's
@@ -355,12 +513,11 @@ impl Engine {
         // `build` returns it by value, leaving `V8ScriptHost` with a dangling
         // pointer; the raw isolate address itself never moves.
         //
-        // SAFETY: `as_raw_isolate_ptr` reads the live isolate's address, only
-        // ever reconstructed by `invoke_listener`, which runs synchronously
-        // inside a DOM binding call on this engine's thread while the engine
-        // (and thus the isolate) is alive. `Drop` clears the stored host before
-        // the isolate is disposed.
-        let isolate = unsafe { self.isolate.as_raw_isolate_ptr() };
+        // The stored host is only ever reconstructed inside `invoke_listener`,
+        // which runs synchronously inside a DOM binding call on this engine's
+        // thread while the engine (and thus the isolate) is alive; `Drop`
+        // clears the stored host before the isolate is disposed.
+        let isolate = self.raw_isolate();
         let script: Rc<dyn ScriptHost> = Rc::new(V8ScriptHost::new(
             isolate,
             self.context.clone(),
@@ -801,6 +958,7 @@ impl Engine {
     /// notification runs a full GC synchronously and is safe for a browser
     /// build, unlike exposing `gc()` to web content.
     pub fn low_memory_gc(&mut self) {
+        let _entry = self.entered();
         self.isolate.low_memory_notification();
     }
 
@@ -809,6 +967,7 @@ impl Engine {
     /// runs lazily at the head of `wrapper`). Call after [`Engine::low_memory_gc`]
     /// to make reclamation observable without waiting for the next wrapper.
     pub fn reclaim_dead_events(&mut self) {
+        let _entry = self.entered();
         if let Some(dom) = &self.dom {
             let dead = dom.state.borrow_mut().take_dead_events();
             let mut state = dom.state.borrow_mut();
@@ -832,6 +991,7 @@ impl Engine {
     /// lazily at the head of `wrapper`). Call after [`Engine::low_memory_gc`] to
     /// make reclamation observable without waiting for the next wrapper.
     pub fn reclaim_dead_hosts(&mut self) {
+        let _entry = self.entered();
         if let Some(dom) = &self.dom {
             let dead = dom.state.borrow_mut().take_dead_hosts();
             let mut state = dom.state.borrow_mut();
@@ -887,6 +1047,7 @@ impl Engine {
     ) -> Option<Handle<T>> {
         // Running the expression is entering script, so this entry clears a
         // termination a watchdog left pending, like every other way in.
+        let _entry = self.entered();
         self.discard_stray_termination();
         v8::scope!(let handle_scope, &mut self.isolate);
         let context = v8::Local::new(handle_scope, &self.context);
@@ -1000,6 +1161,7 @@ impl Engine {
         // `discard_stray_termination`): clear before the watchdog is even
         // spawned, so a stray termination from an earlier entry cannot abort
         // this script and be blamed on this run's own deadline.
+        let _entry = self.entered();
         self.discard_stray_termination();
 
         let watchdog = timeout.map(|timeout| {
@@ -1091,6 +1253,7 @@ impl Engine {
     /// run so a `setTimeout`-recursion cannot spin forever; it returns the
     /// number actually run (`docs/spec/05-javascript.md` §5, §11).
     pub fn run_event_loop(&mut self, max_tasks: usize) -> usize {
+        let _entry = self.entered();
         // Microtasks queued by the preceding top-level script run first.
         self.checkpoint();
 
@@ -1131,6 +1294,7 @@ impl Engine {
     /// script by some other route — [`Self::evaluate`], a dispatched DOM event
     /// — owes one too, and until it is paid [`Self::next_wakeup`] reports zero.
     pub fn run_microtasks(&mut self) {
+        let _entry = self.entered();
         self.checkpoint();
     }
 
@@ -1180,6 +1344,7 @@ impl Engine {
     ///   which [`promise`]'s module doc explains and `tests/dom_response.rs`
     ///   pins.
     pub fn settle_fetches(&mut self, completions: Vec<FetchCompletion>) {
+        let _entry = self.entered();
         if completions.is_empty() {
             return;
         }
@@ -1259,6 +1424,7 @@ impl Engine {
     ///   the object has moved past belongs to a request it abandoned, and
     ///   nothing — not even the one-event fallback — is fired for it.
     pub fn settle_xhr(&mut self, completions: Vec<XhrCompletion>) {
+        let _entry = self.entered();
         if completions.is_empty() {
             return;
         }
@@ -1360,6 +1526,7 @@ impl Engine {
     /// caller's settle bookkeeping, and a listener may legitimately re-enter
     /// this path by calling `dispatchEvent`.
     pub fn dispatch_lifecycle(&mut self, event: LifecycleEvent) {
+        let _entry = self.entered();
         // Runs page script, so it starts with nothing pending, like every other
         // way in.
         self.discard_stray_termination();
@@ -1509,6 +1676,7 @@ impl Engine {
     /// time supplies the advance, so the engine only ever fires what has
     /// already come due (`docs/spec/05-javascript.md` §5).
     pub fn pump_due_timers(&mut self, max_tasks: usize) -> usize {
+        let _entry = self.entered();
         self.checkpoint();
 
         // Exactly one sweep of the timer heap per pump. A zero-delay timer a
@@ -1538,6 +1706,7 @@ impl Engine {
     /// next `run_animation_frame`, entered on `next_wakeup`'s word, runs them
     /// under an arm of its own.
     pub fn run_animation_frame(&mut self) {
+        let _entry = self.entered();
         // Moves each due callback's handle onto the ready-frame queue.
         self.event_loop.run_animation_frame();
         self.drain_ready_frames();
@@ -1549,6 +1718,7 @@ impl Engine {
     /// this frame do not fire until a later frame, so one `tick_frame` cannot
     /// spin.
     pub fn tick_frame(&mut self) {
+        let _entry = self.entered();
         self.event_loop.tick_frame();
         // Timers that came due this frame run as tasks, a checkpoint behind each
         // that runs to its own end. Through `invoke_ready` like every other drive
@@ -1689,6 +1859,41 @@ impl Default for Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        // Enter for the whole of teardown, and **unpaired on purpose**:
+        // `OwnedIsolate`'s own `Drop` calls `exit()`, and that is this enter's
+        // pair. V8 requires an isolate to be current to dispose it, and
+        // `OwnedIsolate::drop` asserts exactly that (`Isolate::GetCurrent() ==
+        // self`), so without this a page thread hosting two engines aborts
+        // right here.
+        //
+        // A local `IsolateEntry` would *not* do the job: a guard local to this
+        // body is released at the end of it, before the fields drop, so the
+        // `isolate` field would then be disposed while the thread's current
+        // isolate was something else — the very mismatch this pairing removes.
+        //
+        // **Invariant.** Entering is only sound at entry depth zero: an `Engine`
+        // must never be dropped while its own isolate is entered, or the exit
+        // `OwnedIsolate::drop` performs would leave the caller's frame pointing
+        // at a freed isolate. The check below is what turns a violation of that
+        // into a message.
+        //
+        // `#[cfg]` rather than `debug_assert!`: `debug_assert!` type-checks its
+        // argument in every profile, and the mirror this reads is
+        // debug-only, so a plain `debug_assert!` would demand a release-mode
+        // `is_entered` — and a release build would pay for the mirror to have
+        // something to answer.
+        #[cfg(debug_assertions)]
+        assert!(
+            !IsolateEntry::is_entered(self.raw_isolate()),
+            "an Engine is being dropped while its own isolate is entered on this \
+             thread: the exit the isolate's disposal performs would leave the \
+             caller's frame pointing at a freed isolate"
+        );
+        // SAFETY: `raw_isolate` is this engine's own isolate, alive until the
+        // `isolate` field drops below, and the assertion above rules out the one
+        // state — already entered — in which entering here would be unsound.
+        unsafe { v8::Isolate::ref_from_raw_isolate_ptr(&self.raw_isolate()).enter() };
+
         // Release every script-handle a pending timer or animation-frame
         // callback still holds while the isolate is alive. These callbacks own
         // `v8::Global<Function>` handles (a live `setInterval` keeps one

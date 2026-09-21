@@ -37,7 +37,7 @@ use crate::script_cpu::ScriptCpu;
 use crate::settle::{
     Origin, PendingScripts, RequestClass, Settle, SettleConfig, SettleState, SettleTracker,
 };
-use crate::task::{catch_unwind_future, panic_message};
+use crate::task::{catch_unwind_future, catch_unwind_task, panic_message};
 use crate::thread::PageThread;
 
 /// How many raw bytes of a response are kept so a late `<meta charset>` can
@@ -621,12 +621,25 @@ impl Page {
         let thread = Arc::clone(&self.inner.config.thread);
         let (reply, answer) = oneshot::channel();
         let posted = thread.post_task(Box::new(move || {
-            // A closed page has no engine: the navigation that built it is
-            // cancelled and unwinds on this thread, and this is the one place
-            // that can reclaim it without waiting for that.
-            drop(runtime::take_runtime(inner.config.id));
-            let document = inner.state.lock().document.take();
-            drop(document);
+            // Reclaiming a live engine can panic — teardown of two isolates on
+            // one page thread used to, which is why the page thread exists
+            // around this. The page thread's own `catch_unwind_task` logs and
+            // moves on (`tenta_page::task`), and a logged panic leaves a page
+            // that crashed looking merely closed, so this task takes the
+            // wrapper itself and records the failure on the page, exactly as
+            // `goto_url`'s job does for a panicking navigation.
+            let reporter = Arc::clone(&inner);
+            let teardown = catch_unwind_task(move || {
+                // A closed page has no engine: the navigation that built it is
+                // cancelled and unwinds on this thread, and this is the one
+                // place that can reclaim it without waiting for that.
+                drop(runtime::take_runtime(inner.config.id));
+                let document = inner.state.lock().document.take();
+                drop(document);
+            });
+            if let Err(reason) = teardown {
+                reporter.mark_crashed(&reason);
+            }
             let _ = reply.send(());
         }));
         match posted {
