@@ -36,12 +36,28 @@ directories and updating expectations.
   implement is documented on the `Driver` class in `run.py`; this one is
   described in `docs/dev/wpt.md`.
 
-  Measured on `dom/nodes` (2026-09-21): `--jobs 1` gives 2032/5247 subtests
-  (38.73 %) in 736 s and `--jobs 4` gives the same 2032/5247 (38.73 %) in 194 s,
-  so **run this product at `--jobs 4`** (or higher) for the gate. Before P2's
-  isolate entry guard landed, `--jobs 4` aborted the driver with `SIGABRT` after
-  163 s — an engine teardown panic on a shared page thread; `docs/dev/wpt.md`
-  has the mechanism.
+  Measured on `dom/nodes` (2026-09-21). **Run this product at `--jobs 4`** (or
+  higher) for the gate: 3.8x the throughput of one job for the same pass set.
+
+  | Run | Subtests | Files OK | Wall time |
+  |-----|----------|----------|-----------|
+  | `--jobs 1` | 2032/5247 (38.73 %) | 251/334 | 736 s |
+  | `--jobs 4` | 2032/5247 (38.73 %) | 251/334 | 194 s |
+  | `--jobs 4`, after the two-clock fix | 2658/5981 (44.44 %) | 257/334 | 184 s |
+
+  The first two rows predate the two-clock fix, so the driver's deadline was what
+  reported 70 of their 73 timeout files and none of those files' subtests were
+  ever counted. The third row is not the fix's doing: the same tree carried the
+  DOM work that landed as `c65bbf8` (`document.implementation`, `defaultView`),
+  and `DOMImplementation-createDocument` (+174 subtests) and `hasFeature` (+136)
+  alone account for most of the gain. What the fix itself changed is the timeout
+  class — files that lose everything to the driver's deadline went 70 → 18, files
+  reporting no subtests at all 77 → 41, and 4 passes that used to be discarded
+  with their file came back. No file lost a pass.
+
+  Before P2's isolate entry guard landed, `--jobs 4` aborted the driver with
+  `SIGABRT` after 163 s — an engine teardown panic on a shared page thread;
+  `docs/dev/wpt.md` has the mechanism.
 
 ## Pinned WPT commit
 

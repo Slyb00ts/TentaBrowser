@@ -42,9 +42,12 @@
 //! exit, `Engine::drop` enters its own isolate for teardown, and the pool works
 //! at any `jobs`.
 //!
-//! Measured on `dom/nodes` (2026-09-21, after the guard): `--jobs 1` is 2032/5247
-//! subtests (38.73 %) in 736 s, `--jobs 4` is 2032/5247 (38.73 %) in 194 s — the
-//! same pass set, 3.8x the throughput. See `docs/dev/wpt.md`.
+//! Measured on `dom/nodes` (2026-09-21, after the guard and *before* the two-clock
+//! fix below): `--jobs 1` is 2032/5247 subtests (38.73 %) in 736 s, `--jobs 4` is
+//! 2032/5247 (38.73 %) in 194 s — the same pass set, 3.8x the throughput. That fix
+//! moves both the numerator and the denominator, because the files it recovers had
+//! no subtest counted at all; `docs/dev/wpt.md` has the current row, and what of it
+//! is and is not this module's doing.
 //!
 //! The POST body is a `Body::Bytes` and not a stream because that is the only
 //! shape a page's `fetch()` can produce: `tenta-page`'s `net_request` builds the
@@ -72,6 +75,28 @@
 //! The hook signal is delivered from the interceptor, i.e. from the moment the
 //! request reaches the network layer — never from the response settling in
 //! script — so a cancelled fetch cannot lose the result.
+//!
+//! # The two clocks, and who must win
+//!
+//! The deadline is a backstop, not the reporting path. `testharness.js` runs its
+//! own timer over the same nominal budget, and it starts that timer when the
+//! harness script executes — after page creation, the document fetch, the parse
+//! up to the harness tag and the harness script's own fetch. The driver starts
+//! its deadline before the page exists, so the harness's deadline is always the
+//! later one and, if nobody intervenes, the driver's coarse deadline is what
+//! reports a test that the harness was about to report properly: `TIMEOUT` with
+//! **no subtests at all**, losing every subtest that had already passed.
+//!
+//! The interceptor therefore hands the harness the plan's *remaining* budget when
+//! it answers `resources/testharnessreport.js`, as
+//! `setup({ timeout_multiplier })` — `harness_multiplier` is that arithmetic
+//! and the hook script is where it lands. The harness's timer then expires at the
+//! driver's deadline, so the harness produces the status and its subtest list
+//! travels, and the driver's deadline stays a backstop for a page whose harness
+//! never got that far. The multiplier is floored (`MIN_MULTIPLIER`) because it
+//! scales in-page budgets too, and an invented subtest failure would be worse
+//! than a coarse timeout. `ORDER_GRACE` on the driver's arm is the room that
+//! in-process round trip needs.
 //!
 //! # Resolver rules
 //!
@@ -130,6 +155,28 @@ const SETTLE_QUIET: Duration = Duration::from_secs(3600);
 /// so that the driver's deadline is the one that always fires and the navigation
 /// never reports the timeout first.
 const GOTO_SLACK: Duration = Duration::from_secs(5);
+
+/// The lower bound on the `timeout_multiplier` the harness is set up with.
+///
+/// `timeout_multiplier` does not only scale the harness's own timer: it also
+/// scales `step_timeout`'s default, `step_wait_func`'s 3 s poll and an explicit
+/// `async_test(..., {timeout})` (all in `testharness.js`). An unfloored
+/// multiplier would collapse those in-page budgets and could turn a test that
+/// simply ran long into a subtest `FAIL` the engine invented, so the shrink is
+/// bounded at 4x. See [`harness_multiplier`].
+const MIN_MULTIPLIER: f64 = 0.25;
+
+/// How much longer than the per-test deadline the driver waits before it gives
+/// up on a hook.
+///
+/// The harness's timer is armed from the budget left when the report script is
+/// answered, so its report lands within one in-process round trip of the
+/// deadline: the delivery and execution of the hook script, and the POST back.
+/// This is what that round trip has to fit in. It is only ever paid by a test
+/// whose harness never reported at all — the path where the driver was already
+/// waiting the whole budget. `GOTO_SLACK` exceeds it, so the navigation's own
+/// deadline still loses this race.
+const ORDER_GRACE: Duration = Duration::from_millis(250);
 
 /// Life of a remembered WPT host answer. The resolver caps it at its own
 /// `max_ttl`; the value only matters for runs that outlive it, and every request
@@ -220,9 +267,16 @@ struct HookTest {
     message: Option<String>,
 }
 
-/// The test whose hook the driver is waiting for.
+/// The test whose hook the driver is waiting for, and the budget it is running
+/// under: the interceptor needs both to answer the report script.
 struct Active {
     index: usize,
+    /// The budget the plan gave this test, as a whole.
+    timeout_ms: u64,
+    /// When `run_one` started the test, i.e. when that budget started running.
+    /// It is what makes "how much of the budget is gone" a question with an
+    /// answer rather than a guess.
+    started: Instant,
     sender: oneshot::Sender<HookPayload>,
 }
 
@@ -234,12 +288,23 @@ struct Shared {
 }
 
 impl Shared {
-    fn begin(&self, index: usize, sender: oneshot::Sender<HookPayload>) {
-        *self.active.lock() = Some(Active { index, sender });
+    fn begin(
+        &self,
+        index: usize,
+        timeout_ms: u64,
+        started: Instant,
+        sender: oneshot::Sender<HookPayload>,
+    ) {
+        *self.active.lock() = Some(Active {
+            index,
+            timeout_ms,
+            started,
+            sender,
+        });
     }
 
     /// Releases the slot, so a late hook of a closed page cannot be delivered
-    /// to the next test.
+    /// to the next test. The test's budget goes with it.
     fn end(&self, index: usize) {
         let mut active = self.active.lock();
         if active
@@ -253,6 +318,17 @@ impl Shared {
     /// The index the hook script must post to.
     fn active_index(&self) -> usize {
         self.active.lock().as_ref().map_or(0, |active| active.index)
+    }
+
+    /// The multiplier the report script must be answered with: the active
+    /// test's remaining budget as a fraction of its whole budget. With no test
+    /// current the harness is left at its own `test_timeout()` — a multiplier of
+    /// one is a no-op, and there is no budget to hand it.
+    fn active_multiplier(&self) -> f64 {
+        let active = self.active.lock();
+        active.as_ref().map_or(1.0, |active| {
+            harness_multiplier(active.timeout_ms, millis(active.started.elapsed()))
+        })
     }
 
     /// Hands a decoded payload to the test that is waiting for it, if it is the
@@ -313,6 +389,35 @@ fn is_wpt_host(host: &str) -> bool {
     })
 }
 
+/// The `timeout_multiplier` the harness must be set up with for its own timer to
+/// fire at the driver's deadline instead of after it.
+///
+/// Two clocks nominally read `timeout_ms` and only one of them can win. The
+/// driver starts its deadline in `run_one`, *before* the page exists; the
+/// harness starts its own timer when `testharness.js` runs, i.e. after page
+/// creation, the document fetch, the parse up to the harness tag and the harness
+/// script's own fetch. Every one of those steps falls between the two starts, so
+/// a harness left at its natural length always fires late and the driver's
+/// coarse deadline — which carries no subtests — is what reports the test.
+///
+/// `setup({ timeout_multiplier })` scales `Tests.prototype.timeout_length`
+/// before it re-arms the harness's timer (`testharness.js`), so handing the
+/// harness `remaining / timeout_ms` makes its timer expire at the driver's
+/// deadline and lets the *harness* produce the status, subtests and all. The
+/// driver's deadline stays a backstop for a harness that never got that far.
+///
+/// The floor is [`MIN_MULTIPLIER`]: the same property scales in-page budgets, so
+/// an unfloored multiplier could invent a subtest failure.
+fn harness_multiplier(timeout_ms: u64, elapsed_ms: u64) -> f64 {
+    // A zero budget is already spent; there is nothing to hand the harness that
+    // would not divide by zero, and the floor is the honest answer.
+    if timeout_ms == 0 {
+        return MIN_MULTIPLIER;
+    }
+    let remaining = timeout_ms.saturating_sub(elapsed_ms);
+    (remaining as f64 / timeout_ms as f64).clamp(MIN_MULTIPLIER, 1.0)
+}
+
 /// The completion hook served in place of `resources/testharnessreport.js`.
 ///
 /// The shape is `driver-chromium.mjs`'s: `setup({ output: false })` and an
@@ -320,9 +425,14 @@ fn is_wpt_host(host: &str) -> bool {
 /// every subtest. The difference is the transport — a same-origin `fetch()` to
 /// the driver's own path instead of an exposed binding — because the engine has
 /// no binding to offer and the interceptor can answer a request instead.
-fn hook_script(index: usize) -> String {
+///
+/// `multiplier` is the plan's remaining budget when this script was asked for
+/// ([`harness_multiplier`]). The hook is served in place of the report script,
+/// so it runs after `testharness.js` has armed its own timer and `setup` here is
+/// the re-arm that moves that timer onto the driver's deadline.
+fn hook_script(index: usize, multiplier: f64) -> String {
     format!(
-        r#"setup({{ output: false }});
+        r#"setup({{ output: false, timeout_multiplier: {multiplier} }});
 add_completion_callback(function (tests, harnessStatus) {{
   var payload = {{
     status: harnessStatus.status,
@@ -352,9 +462,28 @@ impl Interceptor for WptInterceptor {
         Box::pin(async move {
             let path = request.url.path();
             if path.ends_with(REPORT_SUFFIX) {
+                let multiplier = self.shared.active_multiplier();
+                tracing::debug!(
+                    multiplier,
+                    "answered the report script with the test's remaining budget"
+                );
+                if multiplier <= MIN_MULTIPLIER {
+                    // The measurement that says whether the floor should be
+                    // re-derived: it binds when the page's set-up has already
+                    // eaten 3/4 of the budget, which shrinks the harness's
+                    // in-page timers by four as well.
+                    tracing::warn!(
+                        multiplier,
+                        "the harness timeout multiplier is at its floor; the remaining \
+                         budget was already a quarter of the whole one"
+                    );
+                }
                 return Interception::Fulfill(
-                    FulfilledResponse::new(StatusCode::OK, hook_script(self.shared.active_index()))
-                        .header("content-type", "text/javascript"),
+                    FulfilledResponse::new(
+                        StatusCode::OK,
+                        hook_script(self.shared.active_index(), multiplier),
+                    )
+                    .header("content-type", "text/javascript"),
                 );
             }
             if let Some(index) = path.strip_prefix(RESULT_PREFIX) {
@@ -510,7 +639,9 @@ async fn run_one(
 
     let url = format!("{}{}", plan.base.trim_end_matches('/'), test.url);
     let (sender, receiver) = oneshot::channel();
-    shared.begin(index, sender);
+    // The budget starts here, before the page exists, and the interceptor reads
+    // it back from the slot: that gap is what the harness's multiplier closes.
+    shared.begin(index, test.timeout_ms, started, sender);
     let page = match context.new_page(PageOptions::default()).await {
         Ok(page) => page,
         Err(error) => {
@@ -519,6 +650,8 @@ async fn run_one(
         }
     };
 
+    // The plan's budget. The deadline arm adds `ORDER_GRACE`, so a harness that
+    // was handed the budget's remainder has the room its report needs.
     let wait = Duration::from_millis(test.timeout_ms.max(1));
     // The navigation is pinned so it stays alive across the race and is dropped
     // at its end — dropping it is what cancels a navigation the hook has already
@@ -537,7 +670,7 @@ async fn run_one(
             biased;
             hook = receiver => Race::Hook(hook.ok()),
             result = &mut navigation => Race::Navigation(result.into()),
-            _ = tokio::time::sleep(wait) => Race::Deadline,
+            _ = tokio::time::sleep(wait + ORDER_GRACE) => Race::Deadline,
         }
     };
     shared.end(index);
@@ -702,13 +835,59 @@ mod tests {
 
     #[test]
     fn the_hook_script_posts_to_the_current_tests_path() {
-        let script = hook_script(7);
+        let script = hook_script(7, 1.0);
         assert!(script.contains("\"/_tenta/wpt-result/7\""));
         assert!(
-            script.contains("setup({ output: false })"),
-            "the harness must not try to write a results table: {script}"
+            script.contains("setup({ output: false, timeout_multiplier: 1 })"),
+            "the harness must not try to write a results table, and must be given \
+             the test's remaining budget: {script}"
         );
         assert!(script.contains("add_completion_callback"));
+    }
+
+    /// The hook script carries the multiplier the interceptor computed, as the
+    /// number `setup` scales `timeout_length` by.
+    #[test]
+    fn the_hook_script_emits_the_multiplier_it_was_given() {
+        let multiplier = harness_multiplier(1_000, 520);
+        let script = hook_script(7, multiplier);
+        assert!(
+            script.contains(&format!("timeout_multiplier: {multiplier}")),
+            "the multiplier the interceptor computed must reach `setup`: {script}"
+        );
+    }
+
+    /// The arithmetic that makes the harness's own timer expire at the driver's
+    /// deadline: the plan's *remaining* budget over the plan's whole budget.
+    #[test]
+    fn the_multiplier_is_the_plans_remaining_budget() {
+        assert_eq!(harness_multiplier(10_000, 0), 1.0, "nothing spent yet");
+        let half = harness_multiplier(1_000, 500);
+        assert!(
+            (half - 0.5).abs() < 0.01,
+            "half the budget gone is a multiplier of one half, got {half}"
+        );
+    }
+
+    /// The floor, and the three things it must never be: the multiplier also
+    /// scales in-page budgets, so a spent budget may not become a negative, zero
+    /// or `NaN` multiplier that a page's own timers are then armed with.
+    #[test]
+    fn a_spent_budget_is_the_floor_and_never_nan() {
+        assert_eq!(harness_multiplier(1_000, 1_000), MIN_MULTIPLIER);
+        assert_eq!(harness_multiplier(1_000, 9_999), MIN_MULTIPLIER);
+        assert_eq!(harness_multiplier(0, 0), MIN_MULTIPLIER, "a zero budget");
+        for multiplier in [
+            harness_multiplier(0, 0),
+            harness_multiplier(1_000, 1_000),
+            harness_multiplier(1_000, u64::MAX),
+        ] {
+            assert!(multiplier.is_finite(), "{multiplier} is not finite");
+            assert!(
+                (MIN_MULTIPLIER..=1.0).contains(&multiplier),
+                "{multiplier} is outside the floor and one"
+            );
+        }
     }
 
     /// The plan `wpt/run.py` writes, field for field.

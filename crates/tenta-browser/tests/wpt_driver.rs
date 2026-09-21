@@ -14,17 +14,19 @@
 //! The harness stand-in is deliberately not the WPT file: this is a test of the
 //! driver, and depending on a gitignored checkout would make it unrunnable. It
 //! reproduces only the contract the driver relies on — `setup`,
-//! `add_completion_callback`, the two **numeric** status enums, and a completion
-//! that runs from a `setTimeout(0)` queued by the window's `load` listener,
-//! which is the shape `testharness.js` itself has and the reason `Settle::Load`
-//! cannot be used.
+//! `add_completion_callback`, the numeric status enums, a completion that runs
+//! from a `setTimeout(0)` queued by the window's `load` listener (the shape
+//! `testharness.js` itself has, and the reason `Settle::Load` cannot be used),
+//! and the two pieces of `testharness.js`'s timing that `wpt.rs` depends on: a
+//! timer armed from `setup`'s `timeout_multiplier`, and a `load` completion
+//! gated on there being no pending test.
 
 #![cfg(feature = "v8")]
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tenta_browser::wpt::{Plan, PlanTest, Results};
 use tenta_testutil::{FixtureServer, FixtureServerConfig, TempDir};
@@ -32,15 +34,44 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 
-/// The stand-in `resources/testharness.js`.
+/// The stand-in `resources/testharness.js`, with `__BUDGET__` standing in for
+/// the budget the harness arms its own timer at.
 ///
-/// Status numbers are `testharness.js`'s: subtest `PASS: 0`, `FAIL: 1`, and
-/// harness `OK: 0`, `ERROR: 1`. `__wpt` is a global so a test page can set the
-/// harness status directly, which is what the real harness does internally when
-/// it raises one.
-const HARNESS: &str = r#"
-var __wpt = { tests: [], status: { status: 0, message: null }, completion: null };
-function setup(properties) {}
+/// Status numbers are `testharness.js`'s: subtest `PASS: 0`, `FAIL: 1`,
+/// `NOTRUN: 3`, and harness `OK: 0`, `ERROR: 1`, `TIMEOUT: 2`. `__wpt` is a
+/// global so a test page can set the harness status directly, which is what the
+/// real harness does internally when it raises one.
+///
+/// The stand-in reproduces two things beyond the contract the driver relies on,
+/// because the driver's two clocks are what the multiplier is for:
+/// `setup(properties)` records `properties.timeout_multiplier` and re-arms the
+/// harness's timer at `budget * multiplier` — `Tests.prototype.set_timeout`
+/// clearing and re-arming at `timeout_length` after `setup` has scaled it — and
+/// the `load` listener completes only when no test is pending
+/// (`Tests.prototype.all_done`), which is why a harness with a pending
+/// `async_test` has to be reported by its own timer.
+const HARNESS_TEMPLATE: &str = r#"
+var __wpt = { tests: [], pending: 0, status: { status: 0, message: null },
+              completion: null, budget: __BUDGET__, multiplier: 1,
+              reported: false, timer: null };
+function __wpt_arm(millis) {
+  clearTimeout(__wpt.timer);
+  __wpt.timer = setTimeout(function () {
+    __wpt.status.status = 2;
+    __wpt_report();
+  }, millis);
+}
+function __wpt_report() {
+  if (__wpt.reported) { return; }
+  __wpt.reported = true;
+  if (__wpt.completion) { __wpt.completion(__wpt.tests, __wpt.status); }
+}
+function setup(properties) {
+  if (properties && properties.timeout_multiplier) {
+    __wpt.multiplier = properties.timeout_multiplier;
+  }
+  __wpt_arm(__wpt.budget * __wpt.multiplier);
+}
 function add_completion_callback(callback) { __wpt.completion = callback; }
 function test(name, body) {
   try {
@@ -50,6 +81,14 @@ function test(name, body) {
     __wpt.tests.push({ name: name, status: 1, message: String(error && error.message) });
   }
 }
+function async_test(name) {
+  // `Test`'s own initial status is NOTRUN, and it stays there while the test is
+  // pending: that is what a harness that times out reports for it.
+  var subtest = { name: name, status: 3, message: null };
+  __wpt.tests.push(subtest);
+  __wpt.pending++;
+  return { done: function () { subtest.status = 0; __wpt.pending--; } };
+}
 function assert_equals(actual, expected, message) {
   if (actual !== expected) {
     throw new Error(message + ": expected " + expected + ", got " + actual);
@@ -57,12 +96,26 @@ function assert_equals(actual, expected, message) {
 }
 window.addEventListener("load", function () {
   setTimeout(function () {
-    if (__wpt.completion) {
-      __wpt.completion(__wpt.tests, __wpt.status);
-    }
+    if (__wpt.pending === 0) { __wpt_report(); }
   }, 0);
 });
+__wpt_arm(__wpt.budget);
 "#;
+
+/// The budget `wpt/run.py` gives every fixture below that loads the harness:
+/// their plans say 10 000 ms. The harness's own `test_timeout()` and the plan's
+/// `timeout_ms` are the same number in a real run, because the runner and the
+/// server derive both from the manifest's metadata.
+const HARNESS_BUDGET_MS: u64 = 10_000;
+
+/// The stand-in at `budget_ms`, served at `/resources/testharness.js`.
+fn harness(budget_ms: u64) -> String {
+    assert!(
+        HARNESS_TEMPLATE.contains("__BUDGET__"),
+        "the stand-in's budget placeholder moved"
+    );
+    HARNESS_TEMPLATE.replace("__BUDGET__", &budget_ms.to_string())
+}
 
 /// A page with one passing and one failing subtest.
 const PAGE: &str = "<!doctype html><html><head><title>driver fixture</title>\
@@ -71,6 +124,17 @@ const PAGE: &str = "<!doctype html><html><head><title>driver fixture</title>\
      <script>\
      test('a passing subtest', function () { assert_equals(1 + 1, 2, 'sum'); });\
      test('a failing subtest', function () { assert_equals(1 + 1, 3, 'sum'); });\
+     </script></body></html>";
+
+/// A page whose harness ends in `TIMEOUT` on its own timer: one synchronous
+/// subtest that passes, and one `async_test` that never completes, so
+/// `all_done()` stays false and the `load` listener cannot report for it.
+const SLOW_PAGE: &str = "<!doctype html><html><head><title>driver fixture</title>\
+     <script src=\"/resources/testharness.js\"></script>\
+     <script src=\"/resources/testharnessreport.js\"></script></head><body>\
+     <script>\
+     test('a passing subtest', function () { assert_equals(1 + 1, 2, 'sum'); });\
+     async_test('a pending subtest');\
      </script></body></html>";
 
 /// A page whose harness ends in `ERROR`, with a subtest that passed anyway.
@@ -87,16 +151,26 @@ const ERROR_PAGE: &str = "<!doctype html><html><head><title>driver fixture</titl
 const STALL_PAGE: &str = "<!doctype html><html><head><title>stall</title></head>\
      <body><p>no harness here</p></body></html>";
 
-/// Serves each `(relative path, contents)` on loopback.
-async fn serve(files: &[(&str, &str)]) -> (FixtureServer, TempDir) {
+/// Serves each `(relative path, contents)` on loopback, with the fixture
+/// server's own configuration: the two-clock test below needs a delay on one
+/// path, which is a property of the server rather than of a file.
+async fn serve_with(
+    files: &[(&str, &str)],
+    configure: impl FnOnce(FixtureServerConfig) -> FixtureServerConfig,
+) -> (FixtureServer, TempDir) {
     let temp = tenta_testutil::temp_dir("wpt-driver");
     for (relative, contents) in files {
         temp.write(relative, contents);
     }
-    let server = FixtureServer::start(FixtureServerConfig::new(temp.path()))
+    let server = FixtureServer::start(configure(FixtureServerConfig::new(temp.path())))
         .await
         .expect("fixture server");
     (server, temp)
+}
+
+/// Serves each `(relative path, contents)` on loopback.
+async fn serve(files: &[(&str, &str)]) -> (FixtureServer, TempDir) {
+    serve_with(files, |config| config).await
 }
 
 /// The plan `run.py` would build for these tests, one job.
@@ -150,8 +224,9 @@ fn subtest(results: &Results, index: usize) -> &tenta_browser::wpt::SubtestOutco
 /// the network at all.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_driver_reports_the_harness_status_and_every_subtest() {
+    let harness = harness(HARNESS_BUDGET_MS);
     let (server, _temp) =
-        serve(&[("index.html", PAGE), ("resources/testharness.js", HARNESS)]).await;
+        serve(&[("index.html", PAGE), ("resources/testharness.js", &harness)]).await;
 
     let results = tenta_browser::wpt::run(plan(&server, &[("/index.html", 10_000)]))
         .await
@@ -189,9 +264,10 @@ async fn the_driver_reports_the_harness_status_and_every_subtest() {
 /// status may fail a run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_non_ok_harness_status_keeps_its_message_and_its_subtests() {
+    let harness = harness(HARNESS_BUDGET_MS);
     let (server, _temp) = serve(&[
         ("error.html", ERROR_PAGE),
-        ("resources/testharness.js", HARNESS),
+        ("resources/testharness.js", &harness),
     ])
     .await;
 
@@ -214,7 +290,9 @@ async fn a_non_ok_harness_status_keeps_its_message_and_its_subtests() {
 /// The duration is asserted below the deadline so a driver that returned early
 /// — one that settled on `load` or on a network-idle window, which is exactly
 /// what a hook-less page looks like from the settle machine — is caught rather
-/// than passed.
+/// than passed. The bound is the plan's budget itself, which is the half of
+/// `ORDER_GRACE` a unit test can hold: the grace may only ever *add* to the
+/// deadline, never let the driver report before the budget it was given.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_hook_that_never_arrives_is_a_timeout_with_no_subtests() {
     let (server, _temp) = serve(&[("stall.html", STALL_PAGE)]).await;
@@ -230,11 +308,80 @@ async fn a_hook_that_never_arrives_is_a_timeout_with_no_subtests() {
         Some("the completion hook did not arrive within 400 ms")
     );
     assert!(
-        results.tests[0].duration_ms >= 350,
+        results.tests[0].duration_ms >= 400,
         "the driver waited for the deadline instead of settling early: {} ms",
         results.tests[0].duration_ms
     );
     assert_eq!(server.requests_served(), 1, "the document only");
+}
+
+/// The budget of the two-clock test below, in milliseconds.
+const TWO_CLOCK_BUDGET_MS: u64 = 1_000;
+
+/// A live harness reports from its own timeout, before the driver's deadline,
+/// and its subtests travel with it.
+///
+/// This is the two-clock defect at its smallest. The driver's deadline starts
+/// before the page exists; the harness's own timer starts when
+/// `testharness.js` executes, which here is half a budget late — the page-side
+/// half of a real page's set-up (page creation, document fetch, the parse up to
+/// the harness tag, the harness script's own fetch). The delay is that subject,
+/// not a synchronisation sleep, and nothing here asserts on elapsed time.
+///
+/// The hook script is what closes the gap: answered with the plan's *remaining*
+/// budget as `setup({ timeout_multiplier })`, the stand-in re-arms its timer at
+/// `budget * multiplier` — the re-arm `Tests.prototype.set_timeout` performs —
+/// so it fires around 1 000 ms, while a harness left at its natural length arms
+/// a whole budget from that later start, roughly 1 500 ms, and loses to the
+/// driver's 1 250 ms. The status and the empty message assertions are the pair
+/// that says which of the two clocks reported; the subtest count is what only
+/// the harness can supply.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_live_harness_reports_from_its_own_timeout_before_the_driver_gives_up() {
+    let harness = harness(TWO_CLOCK_BUDGET_MS);
+    let (server, _temp) = serve_with(
+        &[
+            ("two-clocks.html", SLOW_PAGE),
+            ("resources/testharness.js", &harness),
+        ],
+        |config| {
+            config.delay_path(
+                "/resources/testharness.js",
+                Duration::from_millis(TWO_CLOCK_BUDGET_MS / 2),
+            )
+        },
+    )
+    .await;
+
+    let results =
+        tenta_browser::wpt::run(plan(&server, &[("/two-clocks.html", TWO_CLOCK_BUDGET_MS)]))
+            .await
+            .expect("the run finishes");
+
+    assert_eq!(
+        results.tests[0].status, "TIMEOUT",
+        "the harness timed itself out: {:?}",
+        results.tests[0].message
+    );
+    assert_eq!(
+        results.tests[0].message, None,
+        "the harness's own status has no message; the driver's says \
+         \"the completion hook did not arrive within {TWO_CLOCK_BUDGET_MS} ms\""
+    );
+    assert_eq!(
+        results.tests[0].subtests.len(),
+        2,
+        "the harness's own subtest list travelled: {:?}",
+        results.tests[0].subtests
+    );
+    assert_eq!(subtest(&results, 0).name, "a passing subtest");
+    assert_eq!(subtest(&results, 0).status, "PASS");
+    assert_eq!(subtest(&results, 1).name, "a pending subtest");
+    assert_eq!(
+        subtest(&results, 1).status,
+        "NOTRUN",
+        "a test that never finished is in the harness's list as NOTRUN"
+    );
 }
 
 /// A run past its deadline starts no test at all.
@@ -244,8 +391,9 @@ async fn a_hook_that_never_arrives_is_a_timeout_with_no_subtests() {
 /// having done the work the deadline exists to stop.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_run_past_its_deadline_reports_not_run_without_touching_the_server() {
+    let harness = harness(HARNESS_BUDGET_MS);
     let (server, _temp) =
-        serve(&[("index.html", PAGE), ("resources/testharness.js", HARNESS)]).await;
+        serve(&[("index.html", PAGE), ("resources/testharness.js", &harness)]).await;
 
     let mut plan = plan(&server, &[("/index.html", 10_000)]);
     plan.deadline_epoch_ms = Some(1);
@@ -272,10 +420,11 @@ async fn a_run_past_its_deadline_reports_not_run_without_touching_the_server() {
 /// second test would end in `TIMEOUT` instead.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_test_in_a_plan_gets_its_own_result() {
+    let harness = harness(HARNESS_BUDGET_MS);
     let (server, _temp) = serve(&[
         ("index.html", PAGE),
         ("error.html", ERROR_PAGE),
-        ("resources/testharness.js", HARNESS),
+        ("resources/testharness.js", &harness),
     ])
     .await;
 
@@ -305,10 +454,11 @@ async fn every_test_in_a_plan_gets_its_own_result() {
 /// and subtest counts are what separate them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_tests_at_two_jobs_keep_their_own_results() {
+    let harness = harness(HARNESS_BUDGET_MS);
     let (server, _temp) = serve(&[
         ("index.html", PAGE),
         ("error.html", ERROR_PAGE),
-        ("resources/testharness.js", HARNESS),
+        ("resources/testharness.js", &harness),
     ])
     .await;
 
@@ -549,11 +699,12 @@ async fn one_job_cannot_open_the_gate_and_times_out() {
 /// so the margin is the point and not a dressed-up determinism.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tests_started_before_the_deadline_drain_and_the_next_is_not_run() {
+    let harness = harness(HARNESS_BUDGET_MS);
     let (server, _temp) = serve(&[
         ("stall-a.html", STALL_PAGE),
         ("stall-b.html", STALL_PAGE),
         ("index.html", PAGE),
-        ("resources/testharness.js", HARNESS),
+        ("resources/testharness.js", &harness),
     ])
     .await;
 
@@ -637,7 +788,7 @@ async fn serve_connection(mut stream: TcpStream, gate: Arc<Gate>) {
         }
         "/resources/testharness.js" => (
             "text/javascript; charset=utf-8",
-            HARNESS.as_bytes().to_vec(),
+            harness(HARNESS_BUDGET_MS).into_bytes(),
         ),
         "/gate-a.html" => (
             "text/html; charset=utf-8",

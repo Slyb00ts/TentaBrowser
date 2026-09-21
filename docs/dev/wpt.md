@@ -96,9 +96,9 @@ What it does, per test:
   certificates. Each context has its own interceptor, resolver, cache and cookie
   jar; the interceptor answers three kinds of request:
   - `/resources/testharnessreport.js` (any path ending with it) is fulfilled
-    with the completion hook — `setup({ output: false })` plus an
-    `add_completion_callback` that posts the harness status, the message and
-    every subtest as JSON;
+    with the completion hook — `setup({ output: false, timeout_multiplier })`
+    plus an `add_completion_callback` that posts the harness status, the
+    message and every subtest as JSON;
   - `/_tenta/wpt-result/<n>` is where that POST arrives: the interceptor reads
     the request body, hands it to the test that is waiting, and answers 200
     without touching the network;
@@ -117,6 +117,24 @@ What it does, per test:
   dropped when either wins, which cancels it, and the page is closed. A test
   whose hook never arrives is `TIMEOUT` with no subtests, and `run.py`'s exit
   status flags it as unexpected until an expectation says otherwise.
+- **the driver's deadline is a backstop, not the reporting path.** `testharness.js`
+  runs its own timer over the same nominal budget, but it starts that timer when
+  the harness script executes — after page creation, the document fetch, the
+  parse up to the harness tag and the harness script's own fetch — while the
+  driver starts its deadline before the page exists. Left alone, the harness's
+  deadline is therefore always the later one and the driver's coarse `TIMEOUT`
+  wins, losing every subtest the harness had already recorded. The interceptor
+  answers the report script with the plan's *remaining* budget as
+  `setup({ timeout_multiplier })`, which scales `Tests.prototype.timeout_length`
+  before the harness re-arms its timer, so the harness fires at the driver's
+  deadline and reports its own status and its whole subtest list. The multiplier
+  is floored at `0.25`, because the same property scales in-page budgets
+  (`step_timeout`, `step_wait_func`, an explicit `async_test` timeout) and an
+  invented subtest `FAIL` would be worse than a coarse timeout; the driver
+  warns when the floor binds, and the value should be re-derived from those
+  lines. The driver's own arm is `budget + 250 ms`, the room the in-process
+  round trip (hook delivery, then the result POST) needs, and it is only ever
+  paid by a test whose harness never reported at all.
 - one test at a time per worker; `jobs` tests run at once. A worker owns a
   context, and the context's interceptor answers the report-script path with a
   hook naming the index *that* worker is running — so attribution is right by
@@ -138,19 +156,38 @@ driver's case.
 The driver's diagnostics go to stderr at `WARN`; `TENTA_LOG=info` adds a line per
 test with its status and subtest passes, which is the only progress signal a run
 against a whole directory has. Results go to the file, never to stdout.
+`TENTA_LOG=debug` also logs the harness timeout multiplier the interceptor
+computed for each report script, and a `WARN` marks the runs where the `0.25`
+floor bound. That warning rate is how the floor should be re-derived: a floor
+that never binds can be raised toward 1, which makes the whole concern inert.
 
 **Concurrency works.** Measured 2026-09-21 on `dom/nodes`, after the engine's
-entry guard (`tenta-js-v8`'s `IsolateEntry`, above):
+entry guard (`tenta-js-v8`'s `IsolateEntry`, above).
 
-| `--jobs` | Subtests | Wall time |
-|----------|----------|-----------|
-| 1 | 2032/5247 (38.73 %) | 736 s |
-| 4 | 2032/5247 (38.73 %) | 194 s |
+| `--jobs` | Subtests | Files OK | Wall time | Driver-deadline timeouts |
+|----------|----------|----------|-----------|--------------------------|
+| 1 | 2032/5247 (38.73 %) | 251/334 | 736 s | 70 |
+| 4 | 2032/5247 (38.73 %) | 251/334 | 194 s | 70 |
+| 4, after the two-clock fix | 2658/5981 (44.44 %) | 257/334 | 184 s | 18 |
 
-The same pass set at both settings and 3.8x the throughput, so the four-job run
-is the practical one. The `--jobs 1` figure recorded before this change was
-738 s, so the guard's enter/exit pair per engine entry costs nothing measurable
-(-0.3 %, inside the ±10 % noise floor of `docs/spec/13-performance.md` §8).
+The first two rows predate the two-clock fix, so the driver's deadline was what
+reported those 70 files and the 38.73 % denominator is missing every subtest of
+theirs. The third row's pass count is not the fix's doing either: the same tree
+carried the DOM work that landed as `c65bbf8` (`document.implementation`,
+`defaultView`), and `DOMImplementation-createDocument` (+174 subtests) and
+`hasFeature` (+136) alone account for most of the gain. The fix's own measurable effect is the timeout
+class — 70 → 18 files that lose everything to the driver's deadline, 77 → 41
+files reporting no subtests at all, and 4 passes that used to be discarded with
+their file. No file lost a pass. `--jobs 1` was not re-measured after the fix;
+the recovered files mostly report `NOTRUN` and the harness's own "Test timed out"
+subtest, because their tests really were still pending when the deadline passed —
+what the fix buys is the record, not the pass.
+
+At both job counts the same pass set came back and four jobs are 3.8x faster, so
+the four-job run is the practical one. The `--jobs 1` figure recorded before the
+guard landed was 738 s, so the guard's enter/exit pair per engine entry costs
+nothing measurable (-0.3 %, inside the ±10 % noise floor of
+`docs/spec/13-performance.md` §8).
 
 `--jobs 4` used to abort the driver with `SIGABRT` after 163 s: a page thread
 keeps one `PageRuntime` per page it hosts
