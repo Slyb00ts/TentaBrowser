@@ -147,6 +147,10 @@ include!(concat!(
     "/xml_http_request_event_target_register.rs"
 ));
 include!(concat!(env!("OUT_DIR"), "/xml_http_request_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/blob_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/blob_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/file_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/file_register.rs"));
 
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/character_data_v8.rs"));
@@ -239,6 +243,10 @@ include!(concat!(
 ));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/xml_http_request_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/blob_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/file_v8.rs"));
 
 pub mod host;
 

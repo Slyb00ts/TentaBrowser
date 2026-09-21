@@ -27,18 +27,19 @@ use url::Url;
 use super::SequenceOfSequenceOfUsvStringOrRecordOfUsvStringToUsvStringOrUsvString as ParamsInit;
 use super::{
     AbortControllerConstructor, AbortControllerOps, AbortSignal, AbortSignalOps,
-    AddEventListenerOptionsOrBoolean, AnyValue, BufferSourceOrUsvString, CSSStyleDeclaration,
-    CSSStyleDeclarationOps, Callback, CharacterDataOps, Comment, CommentOps,
-    CustomEventConstructor, CustomEventInit, CustomEventOps, DOMTokenList, DOMTokenListOps,
-    DocumentFragment, DocumentFragmentOps, DocumentOps, Element, ElementOps, Event,
-    EventConstructor, EventInit, EventListener, EventListenerOptionsOrBoolean, EventOps,
-    EventTarget, EventTargetOps, HTMLAnchorElementOps, HTMLButtonElementOps, HTMLCollection,
-    HTMLCollectionOps, HTMLDivElementOps, HTMLElement, HTMLElementOps, HTMLFormElementOps,
-    HTMLIFrameElementOps, HTMLImageElementOps, HTMLInputElementOps, HTMLLabelElementOps,
-    HTMLOptionElementOps, HTMLParagraphElementOps, HTMLScriptElementOps, HTMLSelectElementOps,
-    HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps, Handle, Headers,
-    HeadersConstructor, HeadersInit, HeadersOps, JsError, MouseEventConstructor, MouseEventInit,
-    MouseEventOps, Node, NodeList, NodeListOps, NodeOps, ProgressEventConstructor,
+    AddEventListenerOptionsOrBoolean, AnyValue, Blob, BlobConstructor, BlobOps, BlobPart,
+    BlobPropertyBag, BufferSourceOrUsvString, CSSStyleDeclaration, CSSStyleDeclarationOps,
+    Callback, CharacterDataOps, Comment, CommentOps, CustomEventConstructor, CustomEventInit,
+    CustomEventOps, DOMTokenList, DOMTokenListOps, DocumentFragment, DocumentFragmentOps,
+    DocumentOps, Element, ElementOps, EndingType, Event, EventConstructor, EventInit,
+    EventListener, EventListenerOptionsOrBoolean, EventOps, EventTarget, EventTargetOps,
+    FileConstructor, FileOps, FilePropertyBag, HTMLAnchorElementOps, HTMLButtonElementOps,
+    HTMLCollection, HTMLCollectionOps, HTMLDivElementOps, HTMLElement, HTMLElementOps,
+    HTMLFormElementOps, HTMLIFrameElementOps, HTMLImageElementOps, HTMLInputElementOps,
+    HTMLLabelElementOps, HTMLOptionElementOps, HTMLParagraphElementOps, HTMLScriptElementOps,
+    HTMLSelectElementOps, HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps,
+    Handle, Headers, HeadersConstructor, HeadersInit, HeadersOps, JsError, MouseEventConstructor,
+    MouseEventInit, MouseEventOps, Node, NodeList, NodeListOps, NodeOps, ProgressEventConstructor,
     ProgressEventInit, ProgressEventOps, Promise, Realm, RequestInit, ResponseConstructor,
     ResponseInit, ResponseOps, ResponseType, SVGElementOps, Text, TextDecodeOptions,
     TextDecoderConstructor, TextDecoderOps, TextDecoderOptions, TextEncoderConstructor,
@@ -166,7 +167,7 @@ impl Default for SnapshotSlab {
 
 // ---------------------------------------------------------------------------
 // Host records: URL, URLSearchParams, Headers, AbortController, AbortSignal,
-// Response, TextDecoder, TextEncoder and XMLHttpRequest
+// Response, TextDecoder, TextEncoder, XMLHttpRequest, Blob and File
 // ---------------------------------------------------------------------------
 
 /// A key into a world's [`HostSlab`]; the payload of a [`TAG_HOST`] handle.
@@ -201,6 +202,10 @@ pub enum HostRecord {
     TextEncoder,
     /// An `XMLHttpRequest`.
     Xhr(XhrRecord),
+    /// A `Blob`.
+    Blob(BlobRecord),
+    /// A `File`, which is a `Blob` with a name and a modification time.
+    File(FileRecord),
 }
 
 impl HostRecord {
@@ -219,6 +224,8 @@ impl HostRecord {
             HostRecord::TextDecoder(_) => "TextDecoder",
             HostRecord::TextEncoder => "TextEncoder",
             HostRecord::Xhr(_) => "XMLHttpRequest",
+            HostRecord::Blob(_) => "Blob",
+            HostRecord::File(_) => "File",
         }
     }
 }
@@ -541,6 +548,45 @@ pub struct XhrRecord {
     /// `open()` does not clear it: the standard says so explicitly, because
     /// `overrideMimeType()` may be called before `open()`.
     pub override_charset: Option<Vec<u8>>,
+}
+
+/// A `Blob` record: the spec's *underlying byte sequence* and its `type`.
+///
+/// The record *is* the `Blob`: the standard gives it no other state, because
+/// the byte sequence is snapshotted at construction and `slice()` returns a new
+/// `Blob` rather than a view (compare the `Response` record, whose body is
+/// consumed in place). Both fields are owned, so a `Blob` is self-contained and
+/// the world's finalizer frees it the way it frees a `TextEncoder` — nothing
+/// else points at it.
+///
+/// This slice deliberately does not model the standard's *snapshot state*
+/// (<https://w3c.github.io/FileAPI/#snapshot-state>): a constructed `Blob` has
+/// no underlying storage to take a snapshot of, and the only source of one here
+/// would be a `File` from a file on disk, which this engine cannot produce.
+#[derive(Debug)]
+pub struct BlobRecord {
+    /// The *underlying byte sequence*.
+    pub bytes: Vec<u8>,
+    /// The `type`, already normalized and stored in its ASCII-lowercase form.
+    pub blob_type: String,
+}
+
+/// A `File` record: a [`BlobRecord`] plus the two members `File` adds.
+///
+/// The `Blob` half is nested rather than flattened so that the `Blob` members —
+/// `size`, `type`, `slice()` and `text()` — are served from the one field both
+/// variants share (see [`HostObject::with_blob`]): a `File` is a `Blob` first,
+/// and reading its bytes must not depend on which of the two spellings the page
+/// constructed it with.
+#[derive(Debug)]
+pub struct FileRecord {
+    /// The `Blob` half: the byte sequence and the normalized type.
+    pub blob: BlobRecord,
+    /// The `name`, an unnormalized `USVString` — the standard stores it as it
+    /// was given, and only notes that an OS filename is not the same thing.
+    pub name: String,
+    /// The `lastModified`, in milliseconds since the Unix Epoch.
+    pub last_modified: i64,
 }
 
 /// An `AbortController` record.
@@ -1564,6 +1610,40 @@ impl HostObject {
         default
     }
 
+    /// Reads the `Blob` half of the `Blob` or `File` this host stands for, or
+    /// returns `default` when the host is neither or its record has been
+    /// reclaimed.
+    ///
+    /// Both variants are read through this one method, which is what makes a
+    /// `Blob`-declared member work on a `File` receiver: `File` inherits
+    /// `Blob`'s members, and the generated glue reaches them through `BlobOps`
+    /// on the same host type. `FileRecord` nests its `BlobRecord` precisely so
+    /// this method can hand out a `&BlobRecord` without a second copy of the
+    /// bytes.
+    fn with_blob<R>(&self, default: R, f: impl FnOnce(&BlobRecord) -> R) -> R {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(record) = ctx.host_records.borrow().get(*key)
+        {
+            match record {
+                HostRecord::Blob(blob) => return f(blob),
+                HostRecord::File(file) => return f(&file.blob),
+                _ => {}
+            }
+        }
+        default
+    }
+
+    /// Reads the `File` this host stands for, or returns `default` when the
+    /// host is not one or its record has been reclaimed.
+    fn with_file<R>(&self, default: R, f: impl FnOnce(&FileRecord) -> R) -> R {
+        if let HostObject::Host { ctx, key } = self
+            && let Some(HostRecord::File(record)) = ctx.host_records.borrow().get(*key)
+        {
+            return f(record);
+        }
+        default
+    }
+
     /// Mutates the `XMLHttpRequest` this host stands for, or returns `default`
     /// when the host is not one or its record has been reclaimed. `open()` and
     /// the three refusing setters all write through the record, because its
@@ -1580,9 +1660,9 @@ impl HostObject {
     /// The record key of the host object this host stands for when that object
     /// is an `EventTarget`, or `None` for every other host.
     ///
-    /// The tag cannot answer this: `URL`, `Headers`, `AbortSignal` and
-    /// `XMLHttpRequest` share [`TAG_HOST`], so only the record knows which
-    /// interface it is — and of those, only two are event targets. This is the
+    /// The tag cannot answer this: every JS-owned wrapper carries [`TAG_HOST`],
+    /// so only the record knows which interface it is — and of them, only
+    /// `AbortSignal` and `XMLHttpRequest` are event targets. This is the
     /// one place the host asks, and both event-target queries below go through
     /// it, as does every refusal that has to name the receiver as a target.
     fn event_target_key(&self) -> Option<HostKey> {
@@ -4326,8 +4406,12 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
         // A response holds no pair list of its own; its headers do.
         HostRecord::Response(_) => return None,
         // Neither encoding record holds one either, and neither does an
-        // `XMLHttpRequest`.
-        HostRecord::TextDecoder(_) | HostRecord::TextEncoder | HostRecord::Xhr(_) => return None,
+        // `XMLHttpRequest`, a `Blob` or a `File`.
+        HostRecord::TextDecoder(_)
+        | HostRecord::TextEncoder
+        | HostRecord::Xhr(_)
+        | HostRecord::Blob(_)
+        | HostRecord::File(_) => return None,
     };
     match params.url {
         Some(owner) => match slab.get(owner)? {
@@ -4339,7 +4423,9 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
             | HostRecord::Response(_)
             | HostRecord::TextDecoder(_)
             | HostRecord::TextEncoder
-            | HostRecord::Xhr(_) => None,
+            | HostRecord::Xhr(_)
+            | HostRecord::Blob(_)
+            | HostRecord::File(_) => None,
         },
         None => Some(params.list.clone()),
     }
@@ -4434,6 +4520,10 @@ enum HostLink {
     TextEncoder,
     /// The record is an `XMLHttpRequest`, which links to nothing.
     Xhr,
+    /// The record is a `Blob`, which links to nothing.
+    Blob,
+    /// The record is a `File`, which links to nothing.
+    File,
 }
 
 /// What freeing host records took out of the world: the record slots that left
@@ -4527,6 +4617,8 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         Some(HostRecord::TextDecoder(_)) => HostLink::TextDecoder,
         Some(HostRecord::TextEncoder) => HostLink::TextEncoder,
         Some(HostRecord::Xhr(_)) => HostLink::Xhr,
+        Some(HostRecord::Blob(_)) => HostLink::Blob,
+        Some(HostRecord::File(_)) => HostLink::File,
         None => return freed,
     };
     match link {
@@ -4537,8 +4629,14 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         // same key finds nothing. An `XMLHttpRequest` is the same shape: nothing
         // else points at its record, and its own state (no stored value, not
         // even an interned one) frees with it. Its *listeners* are keyed by the
-        // record's key, so the caller drains them from the freed key.
-        HostLink::TextDecoder | HostLink::TextEncoder | HostLink::Xhr => {
+        // record's key, so the caller drains them from the freed key. A `Blob`
+        // and a `File` are the same shape again: nothing but their own wrapper
+        // can reach either, and a `File` owns no second record.
+        HostLink::TextDecoder
+        | HostLink::TextEncoder
+        | HostLink::Xhr
+        | HostLink::Blob
+        | HostLink::File => {
             free_record(slab, key, &mut freed);
         }
         // The headers record a response owns outlives its own wrapper, because
@@ -5839,13 +5937,18 @@ impl HostObject {
     /// A promise needs an isolate, and a host record has none; the callback
     /// boundary is the only route, exactly as it is for a listener's invocation
     /// or a value the host has to settle a promise with.
+    ///
+    /// The message names no member: this is the shared half of `fetch`'s
+    /// *consume body* and of `Blob.text()`, and every host that reaches it has
+    /// already been entered through a wrapper, which is what installs a script
+    /// host in the first place.
     fn script_host(&self) -> Result<Rc<dyn ScriptHost>, JsError> {
         self.context()
             .script
             .borrow()
             .as_ref()
             .map(Rc::clone)
-            .ok_or_else(|| JsError::type_error("consume body: this world has no script host"))
+            .ok_or_else(|| JsError::type_error("this world has no script host"))
     }
 
     /// Fetch's *consume body* for a `Body` member, up to but not including
@@ -6298,6 +6401,446 @@ impl TextEncoderOps for HostObject {
         // A constant, and not a read of a record: the encoder has no encoding
         // to vary, which is what makes the record empty.
         Ok(String::from(TEXT_ENCODER_ENCODING))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Blob / File
+// ---------------------------------------------------------------------------
+
+/// The current wall-clock time in milliseconds since the Unix Epoch, which is
+/// what `lastModified` defaults to.
+///
+/// The standard's default is "the current date and time represented as the
+/// number of milliseconds since the `Unix Epoch` (which is the equivalent of
+/// `Date.now()` [[ECMA-262]])" (<https://w3c.github.io/FileAPI/#file-constructor>,
+/// step 3.3, and its note that the member "could be a `Date` object").
+///
+/// This reads the system clock rather than the event loop's `Clock`, because
+/// the loop's clock is a monotonic count from the loop's own origin and may be
+/// virtual: `Date.now()` in this engine is V8's, which is the system clock, and
+/// a `lastModified` measured from a virtual origin would not be comparable with
+/// it. A clock set before the epoch reads as 0, which is what `Clock::real`
+/// does with the same duration.
+fn now_epoch_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| i64::try_from(since.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
+/// The File API's *type normalization*, which both the `Blob` constructor's step
+/// 3 (<https://w3c.github.io/FileAPI/#constructorBlob>) and *slice blob*'s
+/// `contentType` substeps (<https://w3c.github.io/FileAPI/#dfn-slice-blob>) run.
+///
+/// The two clauses are one rule written twice: "If |t| contains any characters
+/// outside the range U+0020 to U+007E, then set |t| to the empty string and
+/// return from these substeps", and otherwise "Convert every character in |t| to
+/// ASCII lowercase". The range is therefore the printable ASCII range: a tab, a
+/// newline, a DEL or any non-ASCII character empties the whole type rather than
+/// being dropped from it.
+///
+/// The constructor's step 3 opens with "If the `type` member is not the empty
+/// string", so an absent or empty `type` enters no substeps at all, and both
+/// constructors then read `t` from outside that guard — `Blob` in its step 4
+/// ("its `type` set to the value of |t| from the substeps above") and `File` in
+/// its step 3.2 ("Convert every character in |t| to ASCII lowercase") — which is
+/// an unbound reference when the member was absent or empty. `BlobPropertyBag`
+/// declares `type = ""`, so the empty string is the only value the guarded and
+/// the unguarded reading can disagree about, and this function returns the empty
+/// string for it: the two readings agree on every input.
+fn normalize_blob_type(value: &str) -> String {
+    if !value.chars().all(|c| ('\u{20}'..='\u{7E}').contains(&c)) {
+        return String::new();
+    }
+    value.to_ascii_lowercase()
+}
+
+/// The bytes a `Blob` or `File` record holds, or `None` when `handle` names
+/// neither.
+///
+/// This is the brand check the generated `BlobPart` union cannot perform. Its
+/// `Blob` arm is lowered to the test `value.is_object()`
+/// (`crates/tenta-idl/src/codegen/types.rs`'s `union_test` — *every* object, not
+/// a brand check) followed by `handle_from_v8::<Blob>`, and the V8
+/// `WrapperWorld::handle` (`crates/tenta-js-v8/src/world.rs`) ignores the
+/// interface name the prelude hands it: it answers with the host bits of any
+/// object that carries a host pointer, and with the window's handle for the
+/// global object. So the conversion alone accepts a `URL`, a `Headers`, a
+/// `Response`, a `TextDecoder`, a node, an event or the window, and the bits it
+/// returns point at a record of some other kind. Resolving the record here is
+/// what makes that unreachable: `HostRecord::interface_name` already names the
+/// interface, because every one of these wrappers shares `TAG_HOST`.
+///
+/// The tag test is not redundant with the record lookup. A window handle carries
+/// no key at all — `encode_window` is the tag alone — so reading its
+/// `host_key` and looking that up would ask for slab slot 0 and could append an
+/// unrelated record's bytes.
+fn blob_bytes_of(ctx: &SharedContext, handle: Handle<Blob>) -> Option<Vec<u8>> {
+    let decoded = decode(handle.bits());
+    if decoded.tag != TAG_HOST {
+        return None;
+    }
+    match ctx.host_records.borrow().get(decoded.host_key())? {
+        HostRecord::Blob(blob) => Some(blob.bytes.clone()),
+        HostRecord::File(file) => Some(file.blob.bytes.clone()),
+        _ => None,
+    }
+}
+
+/// *process blob parts* (<https://w3c.github.io/FileAPI/#process-blob-parts>).
+///
+/// Per element: "If |element| is a `USVString` ... Append the result of UTF-8
+/// encoding |s| to |bytes|"; "If |element| is a `BufferSource`, get a copy of the
+/// bytes held by the buffer source, and append those bytes to |bytes|"; "If
+/// |element| is a `Blob`, append the bytes it represents to |bytes|", with the
+/// spec's own note that "the `type` of the `Blob` array element is ignored and
+/// will not affect `type` of returned `Blob` object".
+///
+/// The union conversion has already made the three-way split: `Vec<u8>` for the
+/// buffer arm is the copy that step takes, `String` for the string arm is
+/// already a scalar-value sequence (Rust `String` cannot hold a lone surrogate,
+/// so WebIDL's U+FFFD replacement has happened), and its UTF-8 is what Rust's
+/// `as_bytes` yields. What is left for this function is the `Blob` arm's brand
+/// check ([`blob_bytes_of`]) and the append.
+///
+/// Substep 1.2's *convert line endings to native* is absent by decision, not by
+/// oversight: the host refuses a property bag that names `endings` at all, so no
+/// input reaches this function with that branch live. The declaration's own
+/// header, `idl/fileapi/Blob.webidl`, records why.
+fn append_blob_parts(
+    ctx: &SharedContext,
+    parts: &[BlobPart],
+    constructor: &str,
+    argument: &str,
+) -> Result<Vec<u8>, JsError> {
+    let mut bytes = Vec::new();
+    for element in parts {
+        match element {
+            BlobPart::BufferSource(buffer) => bytes.extend_from_slice(buffer),
+            BlobPart::Blob(handle) => {
+                let Some(blob) = blob_bytes_of(ctx, *handle) else {
+                    return Err(JsError::type_error(format!(
+                        "Failed to construct '{constructor}': the {argument} argument contains a \
+                         value that is not a Blob"
+                    )));
+                };
+                bytes.extend_from_slice(&blob);
+            }
+            BlobPart::UsvString(text) => bytes.extend_from_slice(text.as_bytes()),
+        }
+    }
+    Ok(bytes)
+}
+
+/// The `BlobPropertyBag`/`FilePropertyBag` member this engine cannot serve, or
+/// `None` when it can serve every one the page named.
+///
+/// The bag declares two members and this engine serves one of them. `endings` is
+/// refused *by name* rather than ignored, for the reason slice b-6.5 refuses
+/// `RequestInit`'s twelve unserved members
+/// ([`refused_request_init_member`]): ignoring it means producing different
+/// bytes than the page asked for, silently, and only on a platform whose native
+/// line ending is not LF. The refusal names the member so that a page can tell
+/// which one it was.
+///
+/// **The refusal is by presence and not by value, so it over-refuses.**
+/// `{endings: "transparent"}` is the standard's own default written out and asks
+/// for exactly the bytes this engine would have produced, and is refused here
+/// where a browser proceeds. Being value-aware would mean accepting `"native"`
+/// on the platforms whose native ending is LF while refusing it on the others,
+/// and the repository cannot test the other branch; the two error directions are
+/// not equally bad, so this errs at the visible one.
+///
+/// The member has no default in this repository's IDL so that its presence is
+/// *observable* here at all — a dictionary member with a default lowers to a
+/// plain field and one without a default to an `Option`. The host applies the
+/// standard's `"transparent"` itself by ignoring `None`. That deviation, and
+/// this refusal, are recorded in `idl/fileapi/Blob.webidl` and
+/// `docs/dev/idl.md`.
+fn refused_endings(endings: Option<EndingType>) -> Option<&'static str> {
+    endings.map(|_| "endings")
+}
+
+/// *slice blob* (<https://w3c.github.io/FileAPI/#dfn-slice-blob>), which
+/// `Blob.slice()`'s own steps delegate to
+/// (<https://w3c.github.io/FileAPI/#slice-method-algo>).
+///
+/// `None` is the standard's null: the IDL declares all three arguments
+/// `optional` with **no** default, and the generated binding yields `None`
+/// exactly when the argument is absent or explicitly `undefined`, which is
+/// WebIDL's own rule for a dictionary-free optional argument — so "If `start` is
+/// given" and "If `start` is null" select the same branch, and `Some(0)` is not
+/// collapsed into `None`. `[Clamp]` rather than `[EnforceRange]` is what lets a
+/// negative index arrive here at all: it clamps to the `long long` range and
+/// leaves the sign, which is precisely what the negative branch below reads.
+///
+/// The two normalizations are `max(originalSize + value, 0)` for a negative
+/// value and `min(value, originalSize)` otherwise, `end` defaulting to
+/// `originalSize`; then `span = max(relativeEnd - relativeStart, 0)`. Both
+/// relative bounds therefore lie in `0..=originalSize`, so `from` and `from +
+/// span` are in bounds for every input and the byte range cannot panic.
+fn blob_slice(
+    source: &BlobRecord,
+    start: Option<i64>,
+    end: Option<i64>,
+    content_type: Option<&str>,
+) -> BlobRecord {
+    let original_size = i64::try_from(source.bytes.len()).unwrap_or(i64::MAX);
+    let normalize = |value: Option<i64>, default: i64| match value {
+        None => default,
+        Some(value) if value < 0 => original_size.saturating_add(value).max(0),
+        Some(value) => value.min(original_size),
+    };
+    let relative_start = normalize(start, 0);
+    let relative_end = normalize(end, original_size);
+    let span = (relative_end - relative_start).max(0);
+    let from = relative_start as usize;
+    let to = (relative_start + span) as usize;
+    BlobRecord {
+        bytes: source.bytes[from..to].to_vec(),
+        // "If `contentType` is null, let `relativeContentType` be set to the
+        // empty string" — which is why a slice without a third argument loses
+        // the source's type rather than inheriting it.
+        blob_type: match content_type {
+            None => String::new(),
+            Some(value) => normalize_blob_type(value),
+        },
+    }
+}
+
+#[cfg(test)]
+mod blob_tests {
+    use super::{BlobRecord, blob_slice, normalize_blob_type};
+
+    fn blob(bytes: &[u8], blob_type: &str) -> BlobRecord {
+        BlobRecord {
+            bytes: bytes.to_vec(),
+            blob_type: blob_type.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_type_keeps_only_printable_ascii_and_lowercases_it() {
+        // The clause is a range test over the *whole* string: one character
+        // outside U+0020..=U+007E empties the type rather than being dropped, so
+        // the assertions below are the boundary of the range and not a filter.
+        assert_eq!(normalize_blob_type("Text/Plain"), "text/plain");
+        assert_eq!(normalize_blob_type(""), "");
+        assert_eq!(normalize_blob_type(" "), " ");
+        assert_eq!(normalize_blob_type("\u{7E}"), "\u{7E}");
+        assert_eq!(normalize_blob_type("\u{1F}"), "");
+        assert_eq!(normalize_blob_type("\u{7F}"), "");
+        assert_eq!(normalize_blob_type("text/plain\n"), "");
+        assert_eq!(normalize_blob_type("text/plain\u{00E9}"), "");
+        assert_eq!(normalize_blob_type("text/pläin"), "");
+        // Lowercasing is ASCII-only, so a non-ASCII character never reaches it.
+        assert_eq!(normalize_blob_type("TEXT/PLAIN"), "text/plain");
+    }
+
+    #[test]
+    fn slice_bounds_are_normalized_against_the_original_size() {
+        let source = blob(b"0123456789", "text/plain");
+
+        // Absent `start` is 0 and absent `end` is the original size.
+        let all = blob_slice(&source, None, None, None);
+        assert_eq!(all.bytes, b"0123456789");
+        // `contentType` absent is the empty string, not the source's type.
+        assert_eq!(all.blob_type, "");
+
+        // A positive bound clamps to the original size.
+        assert_eq!(blob_slice(&source, None, Some(4), None).bytes, b"0123");
+        assert_eq!(
+            blob_slice(&source, None, Some(99), None).bytes,
+            b"0123456789"
+        );
+        assert_eq!(blob_slice(&source, Some(6), None, None).bytes, b"6789");
+
+        // A negative `start` counts from the end and clamps at 0; each of the
+        // three arguments is `Some` here, so the three branches are separate.
+        assert_eq!(blob_slice(&source, Some(-3), None, None).bytes, b"789");
+        assert_eq!(
+            blob_slice(&source, Some(-99), None, None).bytes,
+            b"0123456789"
+        );
+
+        // An inverted range is empty rather than a panic: `span` is a `max`.
+        assert_eq!(blob_slice(&source, Some(7), Some(2), None).bytes, b"");
+        assert_eq!(blob_slice(&source, Some(5), Some(5), None).bytes, b"");
+
+        // The third argument is normalized by the same rule as the constructor's.
+        let typed = blob_slice(&source, None, None, Some("TEXT/Plain"));
+        assert_eq!(typed.blob_type, "text/plain");
+        assert_eq!(
+            blob_slice(&source, None, None, Some("a\u{00E9}b")).blob_type,
+            ""
+        );
+
+        // `Some(0)` is not collapsed into `None`: both are 0, but the `[Clamp]`
+        // conversion is what the negative branch distinguishes, and an empty
+        // source makes the difference visible.
+        let empty = blob(b"", "text/plain");
+        assert_eq!(blob_slice(&empty, Some(0), Some(0), None).bytes, b"");
+        assert_eq!(blob_slice(&empty, Some(-1), None, None).bytes, b"");
+    }
+}
+
+impl BlobConstructor for HostObject {
+    fn construct(
+        realm: &Realm,
+        blob_parts: Option<Vec<BlobPart>>,
+        options: Option<BlobPropertyBag>,
+    ) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        // `None` is an `options` argument that was absent or `undefined`; the
+        // generated binding supplies `Default::default()` for the absent case,
+        // so this is the `undefined` one and the two bags agree.
+        let options = options.unwrap_or_default();
+        if let Some(member) = refused_endings(options.endings) {
+            return Err(JsError::type_error(format!(
+                "Failed to construct 'Blob': the BlobPropertyBag member '{member}' is not \
+                 implemented"
+            )));
+        }
+        // Step 1 gives the zero-parameter call its own 0-byte answer, and it is
+        // the same answer as processing no parts, which is what `None` is here.
+        let bytes = match &blob_parts {
+            Some(parts) => append_blob_parts(&ctx, parts, "Blob", "blobParts")?,
+            None => Vec::new(),
+        };
+        let key = ctx
+            .host_records
+            .borrow_mut()
+            .insert(HostRecord::Blob(BlobRecord {
+                bytes,
+                // Step 3, including the empty-string guard the two readings of
+                // the spec's step agree on.
+                blob_type: normalize_blob_type(&options.r#type),
+            }));
+        Ok(HostObject::host_record(ctx, key))
+    }
+}
+
+impl BlobOps for HostObject {
+    fn size(&self) -> u64 {
+        // "the total number of bytes that can be read by a `FileReader` or
+        // `FileReaderSync` object, or 0 if the `Blob` has no bytes to be read" —
+        // which is the byte sequence's length, and is never a derived count.
+        // (<https://w3c.github.io/FileAPI/#dfn-size>)
+        self.with_blob(0, |blob| blob.bytes.len() as u64)
+    }
+
+    fn r#type(&self) -> Result<String, JsError> {
+        Ok(self.with_blob(String::new(), |blob| blob.blob_type.clone()))
+    }
+
+    fn slice(
+        &self,
+        start: Option<i64>,
+        end: Option<i64>,
+        content_type: Option<&str>,
+    ) -> Result<Handle<Blob>, JsError> {
+        // A `Blob` or a `File` receiver is always a `HostObject::Host`, and its
+        // record lives exactly as long as the wrapper the template's signature
+        // checked, so the error is unreachable rather than expected.
+        let HostObject::Host { ctx, key } = self else {
+            return Err(JsError::type_error("slice: the receiver is not a Blob"));
+        };
+        // The new record is built while the slab is borrowed for reading and
+        // inserted after that borrow ends: inserting under it would be a second
+        // borrow of the same `RefCell`.
+        let sliced = match ctx.host_records.borrow().get(*key) {
+            Some(HostRecord::Blob(blob)) => blob_slice(blob, start, end, content_type),
+            Some(HostRecord::File(file)) => blob_slice(&file.blob, start, end, content_type),
+            _ => return Err(JsError::type_error("slice: the receiver is not a Blob")),
+        };
+        let new_key = ctx
+            .host_records
+            .borrow_mut()
+            .insert(HostRecord::Blob(sliced));
+        // The result is a `Blob` even when the receiver was a `File`: `File`
+        // declares no `slice()` of its own, and the standard's `Blob` return
+        // type is what the inherited member answers with.
+        Ok(Handle::from_bits(encode_host(new_key)))
+    }
+
+    fn text(&self) -> Result<Promise<String>, JsError> {
+        // The standard's steps read the whole byte sequence through the blob's
+        // stream and run UTF-8 decode on it
+        // (<https://w3c.github.io/FileAPI/#text-method-algo>). The bytes are
+        // held directly here, so the decode is the whole of it — `Response.text`
+        // is the same shape, and `HostValue::String` is one of the four promise
+        // outcomes this engine can build.
+        let script = self.script_host()?;
+        let promise = script
+            .new_promise()
+            .ok_or_else(|| JsError::type_error("Blob.text: the promise could not be created"))?;
+        let text = utf8_decode(&self.with_blob(Vec::new(), |blob| blob.bytes.clone()));
+        script.settle_promise(
+            promise.resolver,
+            PromiseOutcome::Resolve(HostValue::String(text)),
+        );
+        Ok(Promise::from_bits(promise.promise))
+    }
+}
+
+impl FileConstructor for HostObject {
+    fn construct(
+        realm: &Realm,
+        file_bits: Vec<BlobPart>,
+        file_name: &str,
+        options: Option<FilePropertyBag>,
+    ) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        // `FilePropertyBag` inherits `BlobPropertyBag`'s two members ahead of its
+        // own `lastModified` — `Dictionary::parent` and `Model::dictionary_members`
+        // walk the chain, so the generated `FilePropertyBag` carries all three
+        // and the inherited refusal applies unchanged.
+        let options = options.unwrap_or_default();
+        if let Some(member) = refused_endings(options.endings) {
+            return Err(JsError::type_error(format!(
+                "Failed to construct 'File': the FilePropertyBag member '{member}' is not \
+                 implemented"
+            )));
+        }
+        // Step 1: process `fileBits`, which is a required argument and so is
+        // never absent.
+        let bytes = append_blob_parts(&ctx, &file_bits, "File", "fileBits")?;
+        // Step 3.1 and 3.2: the type, through the same normalization — and
+        // through the same editorial defect, which the IDL header records under
+        // "One editorial defect in the standard".
+        let blob_type = normalize_blob_type(&options.r#type);
+        // Step 3.3: `lastModified` when it is provided, and "the current date and
+        // time represented as the number of milliseconds since the Unix Epoch"
+        // when it is not. The member's own type is `long long`, so a `Date`
+        // converts through `ToNumber` like any other `long long` member.
+        let last_modified = options.last_modified.unwrap_or_else(now_epoch_ms);
+        let key = ctx
+            .host_records
+            .borrow_mut()
+            .insert(HostRecord::File(FileRecord {
+                // Step 4: the new `File` refers to the same byte sequence and
+                // size its `Blob` half does.
+                blob: BlobRecord { bytes, blob_type },
+                name: file_name.to_string(),
+                last_modified,
+            }));
+        Ok(HostObject::host_record(ctx, key))
+    }
+}
+
+impl FileOps for HostObject {
+    fn name(&self) -> Result<String, JsError> {
+        // "the name of the file" as it was constructed, unnormalized: the
+        // standard stores the `USVString` it was handed and only notes that an
+        // OS filename uses different conventions.
+        Ok(self.with_file(String::new(), |file| file.name.clone()))
+    }
+
+    fn last_modified(&self) -> i64 {
+        // Unreachable default, like `Response.status`: only a `File` wrapper can
+        // reach an accessor carrying `File`'s signature.
+        self.with_file(0, |file| file.last_modified)
     }
 }
 
@@ -7232,8 +7775,8 @@ impl XMLHttpRequestConstructor for HostObject {
 /// Returns whether `target` was an `XMLHttpRequest`. That answer *is* the
 /// caller's decision: a completion at one of these is answered here, and every
 /// other target keeps whatever the caller did with it before. The handle tag
-/// cannot tell the two apart — `URL`, `Headers`, `AbortSignal` and
-/// `XMLHttpRequest` share one — so only the record does.
+/// cannot tell the two apart — every JS-owned wrapper carries [`TAG_HOST`] —
+/// so only the record does.
 ///
 /// `request` is the id the object's `send()` stamped on this request. A record
 /// whose id has moved on has already ended that request — `open()` ran while it

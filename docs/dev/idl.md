@@ -486,16 +486,24 @@ cargo run -p tenta-idl -- gen --idl idl/toy --out /tmp/generated
 
 An interface whose instances are host records rather than wrapper-world nodes —
 `URL`/`URLSearchParams`, `Headers`, `AbortController`/`AbortSignal`,
-`TextEncoder`/`TextDecoder`, `Response`, `XMLHttpRequest` — uses the same
-generated glue as a node-backed interface, and differs from it in three places
-outside the generator:
+`TextEncoder`/`TextDecoder`, `Response`, `XMLHttpRequest`, `Blob`/`File` — uses
+the same generated glue as a node-backed interface, and differs from it in three
+places outside the generator:
 
 - the record lives in the host's slab and every wrapper for it carries
   `TAG_HOST`, a tag shared by all of them; the `HostRecord` variant is what
   names the interface, so `HostRecord::Response` and `HostRecord::Headers` are
-  distinguishable through one tag. A new record variant must be added to the
-  wrapper path in `crates/tenta-js-v8/src/world.rs` and to the reclaim arms in
-  `crates/tenta-js/src/bindings/host.rs` as well as to `HostRecord` itself.
+  distinguishable through one tag. A new record variant has to be added
+  everywhere the existing ones are matched exhaustively, which the compiler
+  enumerates rather than this paragraph: `HostRecord` itself, `interface_name()`,
+  both `host_pairs` arms, the `HostLink` enum and its `reclaim_host_record` arm
+  (all `crates/tenta-js/src/bindings/host.rs`), and the wrapper path in
+  `crates/tenta-js-v8/src/world.rs`. An earlier revision named three of those and
+  left the rest to the compiler; the compiler does catch them, so the cost is a
+  broken build rather than a wrong record, but a slice's author should not have
+  to discover the list. `Blob`/`File` also needed a `with_*` reader on
+  `HostObject` — one per shape a member reads — which is a design choice rather
+  than a site the compiler forces.
 - a member that hands a JavaScript value back needs the engine, and the record
   has no isolate. `ScriptHost` (`crates/tenta-js/src/dom/events/mod.rs`) is that
   boundary: `build_value` interns a value and returns bits, `release_value`
@@ -535,8 +543,10 @@ and its arm order is load-bearing: the union's first arm with no test of its own
 becomes the fallback, so `(BufferSource or USVString)` converts by
 `is_array_buffer() || is_shared_array_buffer() || is_array_buffer_view()` and
 falls back to `USVString` (`ToString`) for everything else. Only three of the
-standard's six arm types exist here — `ReadableStream`, `Blob` and `FormData` do
-not — and dropping `URLSearchParams` does **not** cost nothing observable, which
+standard's six arm types are declared here — `ReadableStream` and `FormData` do
+not exist in this repository, and `Blob` exists (`idl/fileapi/Blob.webidl`) but
+is deliberately not added to `BodyInit` — and dropping `URLSearchParams` does
+**not** cost nothing observable, which
 an earlier revision of this paragraph claimed. It is an object with no
 buffer-source shape, so it does reach the `USVString` arm whose conversion calls
 its stringifier, and `URLSearchParams`'s stringifier *is* its form-encoded
@@ -836,6 +846,136 @@ attribute parser, the cookie-averse rule, and the "no own property left behind"
 regression), and `crates/tenta-browser/tests/cookie_js.rs` is the end-to-end
 half, where the cookie has to survive into a real request.
 
+### `Blob` and `File`: the first host-side brand check (P2 `d-4b`, `FormData`'s prerequisite)
+
+`idl/fileapi/Blob.webidl` declares `Blob`, `BlobPropertyBag`, `EndingType`, the
+`BlobPart` typedef, and `File : Blob` with `FilePropertyBag`. `idl/fileapi/` is a
+new entry in `tenta-js/build.rs`'s directory list, so this is the first
+declaration lowered from a directory the list did not already name (`idl/toy/`
+is the generator's own fixture and is not in it). `Blob` and `File`
+are also the first declarations whose *union arm* needs a check the generator does
+not emit. Both host records are new variants of
+`HostRecord`, so they follow the recipe in "JS-owned host objects and the promise
+seam" above: a variant, an `interface_name()` arm, a `host_pairs`
+arm, a `HostLink` arm, a `reclaim_host_record` arm, a `with_*` reader on
+`HostObject`, and the `has_wrapper` arm in `crates/tenta-js-v8/src/world.rs`.
+
+**Why the union needs a check at all.** `BlobPart` is `(BufferSource or Blob or
+USVString)`, and the generator's arm order is the declaration's. Two facts about
+the generated `from_v8` (`crates/tenta-idl/src/codegen/types.rs`) make the `Blob`
+arm a hole rather than a check:
+
+1. `union_test` lowers `Type::Interface(_)`, `Type::Object` and
+   `Type::Dictionary(_)` alike to `value.is_object()` — every object, not a brand
+   check. This is the same defect `Response.webidl`'s `URLSearchParams` paragraph
+   records.
+2. The V8 `WrapperWorld::handle` (`crates/tenta-js-v8/src/world.rs`) ignores the
+   interface name the prelude passes it. It answers with the host bits of any
+   object carrying a host pointer, and with the window's handle for the global
+   object, because *every* JS-owned wrapper shares `TAG_HOST`.
+
+So `handle_from_v8::<Blob>` succeeds for a `URL`, a `Headers`, a `Response`, a
+`TextDecoder`, an `XMLHttpRequest`, a node, an event and the window, and its
+bits point at a record of whichever kind that object really is. **The host
+performs the brand check on the record**, in `blob_bytes_of`
+(`crates/tenta-js/src/bindings/host.rs`): look the key up in `host_records` and
+require `HostRecord::Blob` or `HostRecord::File`. Anything else is a `TypeError`
+naming the argument. The tag test is not redundant with the record lookup — a
+window handle is the tag alone, so reading its key would ask for slab slot 0 and
+could append an unrelated record's bytes.
+
+The claim that `new Blob([{}])` and `new Blob([new Date()])` already throw, with
+no host-side check involved, is **half right**. `{}` and a `Date` carry no host
+pointer at all, so `unwrap_this::<HostObject>` fails on
+`internal_field_count() == 0` and
+the conversion throws before the host sees anything — that part is correct, and
+those two values need no brand check. But a *host-backed* wrapper is exactly
+where the conversion succeeds and the check is the only thing standing between a
+`Headers` and a `Handle<Blob>`, so the tests that matter are
+`new Blob([new URL("https://example.com/")])`, `new Blob([document.body])` and
+`new Blob([window])`, not `{}`.
+
+**Three deviations this slice records**, beside the members in
+`idl/fileapi/Blob.webidl`:
+
+1. `BlobPropertyBag.endings` is refused **by name, by presence** — the same
+   error direction `RequestInit`'s twelve unserved members take from slice
+   b-6.5 — because the CRLF branch of *convert line endings to native*
+   (<https://w3c.github.io/FileAPI/#convert-line-endings-to-native>) is
+   unreachable on a Unix-like host and only `endings: "native"` selects it. By
+   presence and not by value, so `{endings: "transparent"}` is over-refused.
+2. `endings` is declared **without** the standard's `= "transparent"`. A
+   dictionary member with a default lowers to a plain field and one without a
+   default to an `Option<T>`, so a default makes presence unobservable to the
+   host and deviation 1 unimplementable. The host applies the standard's default
+   itself. `type` keeps its `= ""`.
+3. A non-`Blob` object in `blobParts` throws where a browser takes the
+   `USVString` arm and produces `"[object Object]"` — the deliberately chosen
+   error direction, for the reason above.
+
+**One editorial defect in File API, read around rather than reproduced.** Both
+constructors guard the `type` normalization on `type` being non-empty and then
+read the guarded local `t` from outside that guard — `Blob` in its step 4 ("its
+`type` set to the value of `t` from the substeps above") and `File` in its
+sub-step 3.2 — leaving `t` unbound when `type` was absent or empty. Since
+`BlobPropertyBag` declares `type = ""`, the empty string is the only input the
+two readings can disagree about, and the implementation answers the empty string
+for it. `idl/fileapi/Blob.webidl` records the same reading.
+
+**Facts the declaration relies on, verified rather than assumed.** A dictionary
+member is read with `Get` and not by own-enumerable lookup, so
+`new Blob([], Object.create({endings: "native"}))` is refused. `sequence_from_v8`
+requires an object with a callable `@@iterator` (`iteration_method` refuses a
+non-object, which is WebIDL's own `GetV`), so `new Blob("ab")` and
+`new Blob({})` both throw where the standard throws too. Optional arguments with
+no IDL default lower to
+`Option<T>` and are `None` when the argument is absent *or* explicitly
+`undefined`, which is WebIDL's own rule, so `slice(undefined)` and `slice()` take
+the same branch and `slice(0)` does not. `[Clamp]` leaves the sign intact, which
+is what lets `slice(-3)` reach the standard's `originalSize - 3` branch.
+`File` inherits `Blob`'s constructor-visibility *not* by inheritance but by being
+a supertrait: the generated `FileOps: BlobOps` bound is what makes
+`file.slice()` resolve, and `install_file<T: FileOps + BlobOps + FileConstructor
++ BlobConstructor>` is the same fact restated for the installer. `File` is
+installed after `Blob`, because `constructor.inherit` reads the parent template
+out of the isolate's template cache (`crates/tenta-idl/src/codegen/v8.rs`).
+
+**A fourth deviation, and it is the generator's rather than the declaration's.**
+An absent or explicitly `undefined` optional `sequence<>` argument lowers to
+`None`, but an explicit `null` does not: the generated argument check is
+`args.length() > 0 && !args.get(0).is_undefined()`, so `null` reaches
+`sequence_from_v8`, whose `iteration_method` refuses a non-object and throws.
+WebIDL's sequence conversion returns the empty sequence for `null` as well as
+for `undefined` (<https://webidl.spec.whatwg.org/#es-sequence> step 2), so
+`new Blob(null)` is an empty `Blob` in a browser and a `TypeError` here. `Blob`
+and `File` are the corpus's first optional `sequence<>` parameters, so this is
+where it became reachable; the fix is in the codegen's optional-argument test,
+not in `idl/fileapi/Blob.webidl`, and it is not made here.
+
+`lastModified` defaults to the system clock, not to the event loop's `Clock`:
+`Date.now()` in this engine is V8's, which is the system clock, and a value
+measured from a virtual origin would not be comparable with it.
+
+**Two further properties `File` exposed, both the generator's rather than the
+declaration's.** `File` is the corpus's first *derived* interface, so both are
+first observable here and both are pinned in
+`crates/tenta-js-v8/tests/dom_blob.rs`:
+
+- `Object.getPrototypeOf(File) === Blob` is `false` where a browser says `true`.
+  V8's `FunctionTemplate::inherit` (`crates/tenta-idl/src/codegen/v8.rs`'s
+  `constructor.inherit(parent)`) sets the **instance** prototype chain, which is
+  the one WebIDL requires of `File.prototype`; the constructor *function's* own
+  `[[Prototype]]` has no template API at all and would have to be patched on the
+  instantiated function object per context. So `File.prototype` chains correctly
+  and `File` does not.
+- `File.length` is `0` where the standard's is `2` (`fileBits` and `fileName` are
+  required). The generator computes the number —
+  `InterfaceDescriptor.constructor_length` is `Some(2)` — and **nothing reads
+  it**: no `*_v8.rs` sets the template's `length`, so every constructor in this
+  engine answers `0`. `Blob`'s `0` is correct by accident, since both of its
+  arguments are `optional` and the existing `Response.length` assertion in
+  `dom_response.rs` passes for the same reason.
+
 ## Extended attributes
 
 | Attribute | Effect |
@@ -963,8 +1103,10 @@ generated code:
 - `Response` declares the part of `Body` a constructor-built response can
   serve — `bodyUsed`, `json()`, `text()` — and leaves out `body`,
   `arrayBuffer()`, `blob()`, `bytes()`, `formData()` and `textStream()`, because
-  every one of them reads a `ReadableStream` (or a `Blob`/`FormData` that does
-  not exist here). `Response.body` arrives with Streams (`d-5b`). Its static
+  every one of them reads a `ReadableStream` (or `FormData`, which does not
+  exist here; `Blob` now does, but `blob()` and `bytes()` need the value kinds
+  below rather than a declaration). `Response.body` arrives with Streams
+  (`d-5b`). Its static
   `error()`, `redirect()` and `json()` and its `clone()` are absent too:
   `clone()` needs a body tee and the statics need the request and redirect
   machinery. `Response.body`'s stand-in in the record is a `Vec<u8>`, which is
@@ -991,7 +1133,9 @@ generated code:
   `withCredentials = true` throws it (the shared cookie jar decides on its own),
   `responseType` accepts only `""` and `"text"`, and `send()`'s body is declared
   as `XMLHttpRequestBodyInit` and narrowed to the two arms `BodyInit` is —
-  `(BufferSource or USVString)` — because `Blob`/`FormData` exist nowhere here
+  `(BufferSource or USVString)` — because `FormData` exists nowhere here and the
+  `Blob` arm is deliberately not added by this slice (a `Blob` now exists, but
+  widening `BodyInit` is a change to the send path rather than a declaration)
   and the `Document` arm needs a `tenta-dom` entry point that serialises a whole
   document plus the HTML-versus-XML choice. `b-9` is what makes the body move:
   the converted bytes reach the driver (`XhrRequest.body`), `GET`/`HEAD` drop the
@@ -1045,6 +1189,17 @@ generated code:
   generator slice with its own goldens; it is not made here, and
   `a_number_body_is_stringified_and_a_symbol_starts_a_request_before_it_throws`
   (`crates/tenta-js-v8/tests/dom_xhr.rs`) pins the pair until it is.
+- `Blob` declares the half a constructor and a byte sequence can serve — both
+  constructors, `size`, `type`, `slice()` and `text()` — and leaves out
+  `stream()`, `textStream()`, `arrayBuffer()`, `bytes()` and the `Serializable`
+  attribute. The two stream members need the Streams interfaces (`d-5a`), the
+  two byte readers need a promise outcome this engine has no value for
+  (`HostValue` has exactly four variants and none holds a byte sequence, which
+  is the same gap that keeps `Body.arrayBuffer()` out), and `Serializable` needs
+  a structured clone. `FileList`, `FileReader`, `FileReaderSync` and
+  `URL.createObjectURL()` are absent for reasons of their own and are listed in
+  `idl/fileapi/Blob.webidl`'s header beside the deviations the declarations
+  create.
 
 ## References
 

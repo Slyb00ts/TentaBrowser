@@ -505,7 +505,9 @@ impl WrapperWorld for V8World {
                 | HostRecord::Response(_)
                 | HostRecord::TextDecoder(_)
                 | HostRecord::TextEncoder
-                | HostRecord::Xhr(_) => {}
+                | HostRecord::Xhr(_)
+                | HostRecord::Blob(_)
+                | HostRecord::File(_) => {}
             }
             interface_name = record.interface_name();
             host = Box::new(HostObject::host_record(self.ctx.clone(), key));

@@ -10,7 +10,9 @@ idl/
 ├── phase-rules.toml  hand-maintained: interface name pattern -> phase, crate, spec, WPT dir
 ├── gen_manifest.py   generator (Python 3.11+, standard library only)
 ├── toy/              the toy interface used by the tenta-idl generator (P0)
-└── <spec>/           WebIDL files copied from the specs, added in P1/P2 (not yet present)
+├── <spec>/           WebIDL files copied from the specs, added per work package, then read
+│                     by `crates/tenta-js/build.rs` (present today: `dom/`, `url/`, `fetch/`,
+│                     `encoding/`, `xhr/`, `fileapi/`)
 ```
 
 ## Workflow: inventories → rules → manifest

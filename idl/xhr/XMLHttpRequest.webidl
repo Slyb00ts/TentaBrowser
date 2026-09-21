@@ -87,10 +87,14 @@
 //    `(Document or XMLHttpRequestBodyInit)?` and `XMLHttpRequestBodyInit` is
 //    `(Blob or BufferSource or FormData or URLSearchParams or USVString)`; the
 //    typedef below is the servable subset — the same two arms `BodyInit` is
-//    (`idl/fetch/Response.webidl`) — because `Blob` and `FormData` exist nowhere
-//    in this repository, and a declared-but-unimplemented interface is the bug
-//    class slice 4a removed. `Document` is absent for two reasons, either of
-//    which is enough on its own. The one that cannot be coded around is the
+//    (`idl/fetch/Response.webidl`) — because `FormData` has no declaration in
+//    this repository and a declared-but-unimplemented interface is the bug
+//    class slice 4a removed. `Blob` does now exist (`idl/fileapi/Blob.webidl`)
+//    and the arm is deliberately not added here: it is a widening of the send
+//    path's `BodyInit` rather than of this file, and it needs the arm order and
+//    the host-side brand check `BlobPart` wires up. `Document` is absent for two
+//    reasons, either of which is enough on its own. The one that cannot be coded
+//    around is the
 //    generator's: `union_test` (`crates/tenta-idl/src/codegen/types.rs`) gives
 //    `Type::Interface(_)` the test `value.is_object()` — the same defect that
 //    keeps the `URLSearchParams` arm out below — and a `Document` arm has to be

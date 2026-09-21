@@ -12,11 +12,15 @@
 //  - `BodyInit` is declared as the arms this slice can convert. The standard's
 //    `BodyInit` is `(ReadableStream or XMLHttpRequestBodyInit)` and
 //    `XMLHttpRequestBodyInit` is `(Blob or BufferSource or FormData or
-//    URLSearchParams or USVString)`. `ReadableStream`, `Blob` and `FormData`
-//    exist nowhere in this repository, so the union is the two arm types that
-//    do: a buffer source and a scalar value string. The arm order is
-//    load-bearing and cannot be rearranged — the first arm with *no* test of
-//    its own becomes the union's fallback (`crates/tenta-idl/src/codegen/
+//    URLSearchParams or USVString)`. `ReadableStream` and `FormData` exist
+//    nowhere in this repository, so the union is the two arm types that do: a
+//    buffer source and a scalar value string. `Blob` has since gained a real
+//    declaration (`idl/fileapi/Blob.webidl`, which carries the host-side brand
+//    check its own `BlobPart` arm needs) and this union is deliberately not
+//    widened to it, because that changes the body path of `Response`, `Request`
+//    and `fetch()` and is a send-path change rather than a declaration. The arm
+//    order is load-bearing and cannot be rearranged — the first arm with *no*
+//    test of its own becomes the union's fallback (`crates/tenta-idl/src/codegen/
 //    types.rs`'s `union_code`), `USVString` has no test, and a buffer source
 //    has one only because slice 4a-0a gave `Type::Buffer` a `buffer_union_test`
 //    (`union_test` in the same file). The generated `from_v8` is therefore
@@ -51,7 +55,9 @@
 //    `ReadableStream` nor a `Blob`: `bodyUsed`, `json()` and `text()`. `body`,
 //    `arrayBuffer()`, `blob()`, `bytes()`, `formData()` and `textStream()` are
 //    left out, because every one of them returns or reads a `ReadableStream`
-//    (or a `Blob`/`FormData` that does not exist here). `Response.body` in
+//    (or `FormData`, which does not exist here; `Blob` now does, in
+//    `idl/fileapi/Blob.webidl`, but `blob()` and `bytes()` need the value kinds
+//    below rather than a declaration). `Response.body` in
 //    particular arrives with Streams (`d-5b`). A declared-but-unimplemented
 //    member is the bug class slice 4a removed, so none is declared.
 //  - The static `error()`, `redirect()` and `json()` methods, the static

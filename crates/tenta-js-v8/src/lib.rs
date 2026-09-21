@@ -699,6 +699,16 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the XMLHttpRequest interface");
+            // `File` is a `Blob` — its chain is `File -> Blob -> Object` — and
+            // `constructor.inherit` reads the parent's template out of the
+            // isolate's template cache, so the parent installs first. The
+            // generated `install_file` also demands `BlobOps` and
+            // `BlobConstructor` of its type parameter, which is the same fact
+            // stated in the type system.
+            tenta_js::bindings::install_blob::<HostObject>(scope, global_template, &mut registry)
+                .expect("install the Blob interface");
+            tenta_js::bindings::install_file::<HostObject>(scope, global_template, &mut registry)
+                .expect("install the File interface");
         }
 
         let local = v8::Context::new(

@@ -173,10 +173,24 @@ fn member_default(member: &DictionaryMember) -> String {
 
 /// True when a member's WebIDL default is the value `#[derive(Default)]`
 /// would produce, so the explicit `impl Default` can be dropped.
+///
+/// `String::from("")` is on the list because that is what
+/// `default_expr` emits for a string member defaulted with `""`, and it is
+/// `String::new()` under another spelling. Missing it made every dictionary
+/// whose members are all defaulted to the empty string take the manual path,
+/// which `clippy::derivable_impls` then rejects — `BlobPropertyBag` and
+/// `FilePropertyBag` were the first such pair.
 fn is_rust_default(expression: &str) -> bool {
     matches!(
         expression,
-        "None" | "Default::default()" | "false" | "0" | "0.0" | "String::new()" | "Vec::new()"
+        "None"
+            | "Default::default()"
+            | "false"
+            | "0"
+            | "0.0"
+            | "String::new()"
+            | "String::from(\"\")"
+            | "Vec::new()"
     )
 }
 
