@@ -586,18 +586,37 @@ Deliberate deviations in this slice, each with the slice that removes it:
   a synchronous throw versus a rejected promise, so a page wrapping the call in
   `try`/`catch` sees it differently. `Request` arrives with the request-body
   work.
-- `RequestInit` is declared as nothing and refused rather than ignored: a second
-  argument that is not an object throws, and an object with any own
-  *enumerable* member (read with the `ONLY_ENUMERABLE | SKIP_SYMBOLS` filter, so
-  an inherited or non-enumerable property is not a member) throws naming that
-  member. `fetch(url)`, `fetch(url, undefined)`, `fetch(url, null)` and
-  `fetch(url, {})` are all the empty dictionary and all a `GET`. Silently
-  dropping `{method: "POST"}` would send a different request than the page asked
-  for. `method`, `headers` and `body` each remove the refusal. So does `signal`,
-  but it is not waiting on the interface — `AbortSignal` landed with `d-3`, and
-  what is missing is the plumbing: the driver would have to take a signal handle
-  and abort the request it is already running. That is its own slice
-  (`4a-abort`), not a consequence of `d-3`.
+- `RequestInit` (slice b-6.5) is the Fetch Standard's dictionary, declared in
+  full in `idl/fetch/Request.webidl`, with **three of its fifteen members
+  served** — `method`, `headers` and `body` — and the other twelve refused *by
+  name* (`"the RequestInit member 'signal' is not implemented"`,
+  `tenta_js::bindings::host::refused_request_init_member`). Two of the twelve
+  are worth naming on their own: `signal` is not waiting on the interface —
+  `AbortSignal` landed with `d-3` — but on the plumbing, because the driver
+  would have to take a signal handle and abort the request it is already
+  running, which is `4a-abort`; and `credentials`/`mode`/`cache`/`redirect` are
+  CORS and redirect policy this engine has not built.
+  Three deviations this slice makes from the *old* refusal, each deliberate:
+  (1) a key the dictionary does not name is **ignored**, because that is what a
+  dictionary conversion does, where the refusal refused every key;
+  (2) a member is read with `Get`, so an inherited or non-enumerable property
+  *is* a member, where the refusal enumerated own enumerable keys only
+  (<https://webidl.spec.whatwg.org/#js-dictionary>); and (3) `method`,
+  `headers` and `body` are no longer refused, so `fetch(url, {method: "POST"})`
+  is a `POST`.
+  Deviations that remain, each deliberate. (a) A member whose value the declared
+  type rejects throws that type's own `TypeError` before the refusal runs
+  (`{credentials: "bogus"}`) — WebIDL's order, and what a browser does. (b) Every
+  throw on the argument-conversion path is a synchronous throw where a browser
+  *rejects*: the standard runs the `Request` constructor inside `fetch()`'s
+  promise and rejects with whatever it throws, and this engine has no `Request`
+  to construct. (c) The refusal is by **presence, not value**, so it
+  over-refuses: a page that writes out the standard's default explicitly
+  (`{keepalive: false}`, `{signal: null}`, `{window: null}`, `{integrity: ""}`,
+  `{cache: "default"}`) asks for exactly the request this engine would have sent
+  and is refused where a browser proceeds. That is the deliberately chosen error
+  direction — a wrong acceptance sends a request the page did not ask for, a
+  wrong refusal says so (`tenta_js::bindings::host::refused_request_init_member`).
 - With no driver installed, `fetch` rejects with
   `TypeError: fetch is not available` instead of throwing or leaving the promise
   pending. A page that has loaded always has a driver once the `tenta-net`
@@ -611,9 +630,16 @@ Deliberate deviations in this slice, each with the slice that removes it:
   record exists, and corrects the body of a null-body status (101/103/204/205/
   304) to `None`. Both are the Fetch rules applied at the boundary, so a driver
   cannot get them wrong.
-- A response's `url` and `redirected` are the driver's report; nothing here
-  follows a redirect, and CORS, `Response.type` other than `basic`, and the
-  forbidden request-header names are all absent.
+- A response's `url` and `redirected` are the driver's report; no redirect is
+  followed in the engine layer (the driver's transport is what follows them —
+  see the next section), and CORS and `Response.type` other than `basic` are
+  absent. The forbidden request-header names are **not** absent, and an earlier
+  revision of this bullet said they were: `is_forbidden_request_header` is
+  applied on two paths — through `HeadersGuard::Request` for `RequestInit`'s
+  `headers` (slice b-6.5), and directly by `XMLHttpRequest.setRequestHeader`
+  (b-5a3), which predates the guard — and the rule is the standard's, which is
+  why `x-http-method-override` is dropped only alongside a forbidden *method*
+  (`crates/tenta-js/src/bindings/host.rs`).
 
 ### The network driver behind `fetch()` (P2 slice 4a-1b)
 
@@ -683,10 +709,16 @@ Deliberate deviations in this slice, each with the slice that removes it:
   (`error.error_text()`, `error.message`) goes to `tracing` and never reaches
   script: `net::ERR_*` is this project's event vocabulary, not a stable script
   API.
-- A header that cannot go on the wire — reachable only through
-  `PageConfig::extra_headers`, since `RequestInit` is refused — is a *start*
+- A header that cannot go on the wire — reachable through the initializer's
+  `headers` (b-6.5) or through `PageConfig::extra_headers` — is a *start*
   refusal rather than a `Failed` outcome: the request cannot be built at all,
   so there is nothing to send and nothing to wait for.
+- The request's body is sent as `Body::Bytes` and **`Content-Length` is left to
+  the transport**: `headers::build` derives it from the body's own length and
+  inserts it only when the caller has not, so a second one would be a
+  smuggling-shaped bug rather than a preference. A page cannot reach that
+  parameter with one anyway — the initializer's header list is filled under the
+  `"request"` guard, which drops the forbidden request-header names.
 - Response headers are passed through untouched. `insert_fetched_response`
   already drops the forbidden names and the NUL/CR/LF values and corrects
   null-body statuses, so a driver that filtered too would be a second, drifting

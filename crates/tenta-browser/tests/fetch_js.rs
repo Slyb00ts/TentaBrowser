@@ -281,3 +281,142 @@ async fn a_non_ok_status_resolves_rather_than_rejecting() {
     );
     engine.close();
 }
+
+/// A `POST` with a JSON body and a `Content-Type` over a real socket, asserted
+/// against what the **server** says it received.
+///
+/// This is the slice that makes `fetch()`'s second argument mean anything, so the
+/// assertions are the server's own echo rather than the page's opinion of it:
+/// `reply.method`, `reply.headers['content-type']` and `reply.body` are the
+/// fields `tenta-testutil`'s `/api/echo` fills from the *request* it was handed,
+/// and `reply.json.item` is that body parsed back. A page that sent a `GET`, no
+/// header, or no body could not produce this text.
+///
+/// `content-length` is asserted too, and it is the one field here that is the
+/// *transport's* rather than the page's: the caller never sets it
+/// (`crates/tenta-page/src/fetch.rs`), so the value the server saw is what
+/// `tenta-net`'s `headers::build` derived from the body — the number the framing
+/// of the request depends on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_post_body_and_content_type_reach_the_server() {
+    let (server, _temp) = serve_all(&[(
+        "index.html",
+        "<!doctype html><html><head></head><body>\
+         <div id=\"method\">unset</div>\
+         <div id=\"ctype\">unset</div>\
+         <div id=\"length\">unset</div>\
+         <div id=\"body\">unset</div>\
+         <div id=\"item\">unset</div>\
+         <script>\
+         const sent = JSON.stringify({ item: 'beta', via: 'fetch' });\
+         fetch('/api/echo', {\
+           method: 'POST',\
+           headers: { 'Content-Type': 'application/json' },\
+           body: sent\
+         }).then(function (response) { return response.json(); }).then(function (reply) {\
+           const put = function (id, value) {\
+             document.getElementById(id).textContent = value;\
+           };\
+           put('method', reply.method);\
+           put('ctype', reply.headers['content-type']);\
+           put('length', reply.headers['content-length']);\
+           put('body', reply.body);\
+           put('item', reply.json.item + ' via ' + reply.json.via);\
+         });\
+         </script>\
+         </body></html>",
+    )])
+    .await;
+    let engine = js_engine(SettleConfig::library());
+    let context = support::context(&engine);
+    let page = context
+        .new_page(PageOptions::default())
+        .await
+        .expect("a JavaScript page");
+
+    let navigation = goto_network_idle(&page, &server.url("/index.html")).await;
+    assert_eq!(navigation.status, 200);
+    assert_eq!(
+        navigation.settle,
+        SettleState::Settled { busy: false },
+        "the loop judged the machine after the request was out of it"
+    );
+
+    // The body the page's own `JSON.stringify` produced, written out here so the
+    // framing assertion below is derived from it rather than from a magic
+    // number that a change to the page would silently invalidate.
+    let sent = r#"{"item":"beta","via":"fetch"}"#;
+
+    let document = page.take_document().expect("document");
+    assert_eq!(
+        text_of(&document, "#method"),
+        "POST",
+        "the server saw the method the initializer named"
+    );
+    assert_eq!(
+        text_of(&document, "#ctype"),
+        "application/json",
+        "and the `Content-Type` the page set, which nothing appended a second of"
+    );
+    assert_eq!(
+        text_of(&document, "#length"),
+        sent.len().to_string(),
+        "the transport framed the body with its own length"
+    );
+    assert_eq!(
+        text_of(&document, "#body"),
+        sent,
+        "and the body itself arrived byte for byte"
+    );
+    assert_eq!(
+        text_of(&document, "#item"),
+        "beta via fetch",
+        "the server parsed the body as JSON, so the POST's payload is what it read"
+    );
+    assert_eq!(
+        server.requests_served(),
+        2,
+        "the document and the POST, so it provably went over the wire"
+    );
+    engine.close();
+}
+
+/// A string body with no `Content-Type` of its own gets the type the standard's
+/// *extract a body with type* infers for the scalar-value-string arm —
+/// `text/plain;charset=UTF-8` — and the server is what reports it.
+///
+/// The `method` is `POST` because a `GET` may not carry a body at all, which the
+/// same standard states and `crates/tenta-js`'s `request_init` tests assert.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_string_body_infers_the_standards_content_type() {
+    let (server, _temp) = serve_all(&[(
+        "index.html",
+        "<!doctype html><html><head></head><body>\
+         <div id=\"ctype\">unset</div>\
+         <div id=\"body\">unset</div>\
+         <script>\
+         fetch('/api/echo', { method: 'POST', body: 'plain text' })\
+           .then(function (response) { return response.json(); })\
+           .then(function (reply) {\
+             document.getElementById('ctype').textContent = reply.headers['content-type'];\
+             document.getElementById('body').textContent = reply.body;\
+           });\
+         </script>\
+         </body></html>",
+    )])
+    .await;
+    let engine = js_engine(SettleConfig::library());
+    let context = support::context(&engine);
+    let page = context
+        .new_page(PageOptions::default())
+        .await
+        .expect("a JavaScript page");
+
+    let navigation = goto_network_idle(&page, &server.url("/index.html")).await;
+    assert_eq!(navigation.settle, SettleState::Settled { busy: false });
+
+    let document = page.take_document().expect("document");
+    assert_eq!(text_of(&document, "#ctype"), "text/plain;charset=UTF-8");
+    assert_eq!(text_of(&document, "#body"), "plain text");
+    engine.close();
+}

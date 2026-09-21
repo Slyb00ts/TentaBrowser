@@ -24,10 +24,29 @@
 //    value.is_array_buffer_view() { <bytes> } else { <USVString> }`, which is
 //    what makes `new Response(new Uint8Array([104, 105])).text()` the string
 //    `"hi"` rather than `"104,105"`. Dropping `URLSearchParams` from the union
-//    costs nothing observable: it is an object with no buffer-source shape, so
-//    it falls to the `USVString` arm, whose conversion calls the object's
+//    does **not** cost nothing observable, and an earlier revision of this
+//    comment claimed it did. It is an object with no buffer-source shape, so it
+//    does fall to the `USVString` arm, whose conversion calls the object's
 //    stringifier, and `URLSearchParams`'s stringifier *is* its form-encoded
-//    serialization.
+//    serialization — so the **bytes** are right. What is wrong is the body
+//    *type*: the standard's *extract a body with type* gives `URLSearchParams`
+//    the type `application/x-www-form-urlencoded;charset=UTF-8`
+//    (<https://fetch.spec.whatwg.org/#bodyinit-safely-extract>) and everything
+//    else the scalar value string branch's `text/plain;charset=UTF-8`, and the
+//    `Response` constructor infers `Content-Type` from that type
+//    (`crates/tenta-js/src/bindings/host.rs`). So
+//    `new Response(new URLSearchParams("a=b")).headers.get("Content-Type")`
+//    reads `text/plain;charset=UTF-8` here against the standard's
+//    `application/x-www-form-urlencoded;charset=UTF-8` — a page-visible
+//    deviation, and the same one `fetch()`'s `body` has.
+//    Declaring the arm is not the fix: `union_test`
+//    (`crates/tenta-idl/src/codegen/types.rs`) gives `Type::Interface(_)` the
+//    test `value.is_object()` — every object, not a brand check — so an arm
+//    declared before `USVString` would capture `{}`, an `Array` and a `Date`,
+//    and `new Response({})` would fail the `URLSearchParams` conversion instead
+//    of stringifying to `"[object Object]"`. Serving it properly needs a
+//    platform-object brand-check helper in the generator's prelude beside
+//    `has_iterator`, which is a separate slice.
 //  - `Body` declares only the three members that need neither a
 //    `ReadableStream` nor a `Blob`: `bodyUsed`, `json()` and `text()`. `body`,
 //    `arrayBuffer()`, `blob()`, `bytes()`, `formData()` and `textStream()` are

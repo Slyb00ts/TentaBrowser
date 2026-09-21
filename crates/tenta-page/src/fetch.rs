@@ -25,8 +25,11 @@
 //!
 //! # What this does not do
 //!
-//! There is no CORS and no preflight, and there is no `RequestInit`, no
-//! streaming `Response.body`, and no `AbortSignal`-driven cancellation. A
+//! There is no CORS and no preflight, and `RequestInit` reaches the request only
+//! through the three members the engine serves (`method`, `headers`, `body`) —
+//! the rest are refused before a request is built
+//! (`tenta_js::bindings::host::refused_request_init_member`). There is no
+//! streaming `Response.body` and no `AbortSignal`-driven cancellation. A
 //! request that leaves the document's origin is *refused* rather than made and
 //! then filtered, which is the one security property this module owns: see
 //! [`NetFetchDriver`] for the two gates and why both are needed.
@@ -75,9 +78,9 @@ const FAILED: &str = "Failed to fetch";
 
 /// The refusal a page header that cannot go on the wire produces.
 ///
-/// On the `fetch` route such a header can only come from the page's own
-/// configuration (`PageConfig::extra_headers`), because `RequestInit` is refused
-/// before a request is ever built. XHR reaches this constant through
+/// On the `fetch` route such a header reaches here through the initializer's
+/// `headers` or through the page's own configuration
+/// (`PageConfig::extra_headers`). XHR reaches this constant through
 /// `setRequestHeader` as well.
 const INVALID_HEADER: &str = "Failed to fetch: a request header cannot be sent";
 
@@ -364,6 +367,17 @@ fn net_request(
     for (name, value) in request.headers.iter().chain(extra_headers) {
         out = out.header(name, value)?;
     }
+    // The body, when the request has one. **`Content-Length` is deliberately not
+    // set here**: the transport derives it from the body's own length and
+    // inserts it only when the caller has not (`tenta-net`'s `headers::build`,
+    // whose `sends_content_length` is what also gives an empty `POST` its
+    // `Content-Length: 0`), and `Content-Length` is a *forbidden request-header
+    // name* — a page cannot set it through the initializer's `headers` either,
+    // because that list is filled under the `"request"` guard. A second one
+    // would be a smuggling-shaped bug rather than a preference.
+    if let Some(body) = request.body.clone() {
+        out = out.with_body(body);
+    }
     // `limits.total` is deliberately left unset, so `ClientConfig::request_timeout`
     // applies. There is no defensible per-request deadline for a `fetch()`:
     // `Goto::timeout` is the navigation's and a fetch may well outlive the
@@ -549,9 +563,8 @@ mod tests {
         }
     }
 
-    /// A `GET` with no headers and no body is the only request `fetch()` can
-    /// make while `RequestInit` is refused, and every knob it turns is the one
-    /// `script_request` turns.
+    /// A `GET` with no headers and no body — what `fetch(url)` is — and every
+    /// knob it turns is the one `script_request` turns.
     #[test]
     fn a_get_maps_to_a_fetch_resource_request() {
         let initiator = url("https://origin.test/page");
@@ -591,6 +604,46 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("x-from-script", "one"), ("user-agent", "tenta/0")],
             "script's headers first, then the page's, in order"
+        );
+    }
+
+    /// A request with a body carries it to the transport, and **nothing here
+    /// sets `Content-Length`**: the transport derives it from the body's own
+    /// length (`tenta-net`'s `headers::build`), and a page cannot reach this
+    /// parameter with one — the initializer's `headers` are filled under the
+    /// `"request"` guard, which drops the name.
+    ///
+    /// Both halves are asserted, because they are one decision: the body is on
+    /// the request, and the framing header is *not* in the author header list
+    /// the page built.
+    #[test]
+    fn a_post_body_reaches_the_transport_without_an_authored_content_length() {
+        let initiator = url("https://origin.test/page");
+        let mut request = FetchRequest::get(
+            url("https://origin.test/api/echo"),
+            initiator,
+            Origin::Tracked,
+        );
+        request.method = http::Method::POST;
+        request.headers = vec![("content-type".to_owned(), "application/json".to_owned())];
+        request.body = Some(b"{\"item\":\"beta\"}".to_vec());
+
+        let mut net =
+            net_request(&request, ResourceType::Fetch, 4096, &[]).expect("the request is built");
+
+        assert_eq!(net.method, http::Method::POST);
+        assert_eq!(
+            net.body.take_bytes().as_deref(),
+            Some(b"{\"item\":\"beta\"}".as_slice()),
+            "the bytes the page's body extracted to are what the transport is given"
+        );
+        assert_eq!(
+            net.headers
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["content-type"],
+            "and the framing header is the transport's to add, not the caller's"
         );
     }
 

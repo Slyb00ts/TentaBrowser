@@ -193,7 +193,7 @@ fn the_request_is_what_the_page_asked_for() {
     assert_eq!(requests[0].method.as_str(), "GET");
     assert!(
         requests[0].headers.is_empty(),
-        "no RequestInit can reach this slice, so there are no headers"
+        "the call passed no initializer, so there are no headers"
     );
     assert!(requests[0].body.is_none());
     assert_eq!(
@@ -596,45 +596,74 @@ fn an_unresolvable_input_rejects_and_the_driver_is_never_asked() {
 }
 
 // ---------------------------------------------------------------------------
-// The initializer this slice refuses
+// The initializer: the three members served, and the twelve refused
 // ---------------------------------------------------------------------------
 
+/// The three members this engine serves reach the driver, and a fourth call that
+/// names something it does not returns no promise at all.
+///
+/// The `body` call is the interesting one: `{body: 'x'}` names no method, so the
+/// method is `GET` and the standard refuses the pair — as a *rejection*, which
+/// is why that call reaches neither the driver nor this test's `try`/`catch`.
 #[test]
-fn a_request_init_that_asks_for_something_is_refused() {
+fn the_served_members_reach_the_driver_and_a_refusal_does_not() {
     let (mut engine, recorder) = engine();
+    eval(
+        &mut engine,
+        r#"
+        fetch('/a', { method: 'POST' });
+        fetch('/a', { method: 'POST', headers: {} });
+        fetch('/a', { headers: { 'X-A': '1' } });
+        fetch('/a', { body: 'x' });
+        "#,
+    );
+
+    let requests = recorder.requests.borrow();
+    assert_eq!(
+        requests.len(),
+        3,
+        "the three served initializers reached the driver and the body one did not"
+    );
+    assert_eq!(requests[0].method.as_str(), "POST");
+    assert_eq!(
+        requests[1].method.as_str(),
+        "POST",
+        "an empty `headers` dictionary changes nothing"
+    );
+    assert_eq!(
+        requests[2].headers,
+        vec![("x-a".to_owned(), "1".to_owned())]
+    );
+    drop(requests);
+
+    // A `try`/`catch` is the only thing that can observe a *throw*, and the
+    // message names the member, so a page's own logging says which one.
     assert_eq!(
         caught(
             &mut engine,
             r#"
-            results.push(attempt(() => fetch('/a', { method: 'POST' })));
-            results.push(attempt(() => fetch('/a', { method: 'POST', headers: {} })));
-            results.push(attempt(() => fetch('/a', { headers: { 'X-A': '1' } })));
-            results.push(attempt(() => fetch('/a', { body: 'x' })));
+            results.push(attempt(() => fetch('/a', { mode: 'cors' })));
             // A non-object second argument is not a `RequestInit` at all, so it
             // is refused for the other reason.
             results.push(attempt(() => fetch('/a', 1)));
             "#,
         ),
-        concat!(
-            "TypeError:TypeError|TypeError:TypeError",
-            "|TypeError:TypeError|TypeError:TypeError|TypeError:TypeError",
-        ),
-        "every non-empty initializer throws, because none of its members is implemented"
+        "TypeError:TypeError|TypeError:TypeError",
+        "both are throws, and neither returned a promise"
     );
-    assert!(
-        recorder.requests.borrow().is_empty(),
-        "and none of the refused calls reached the driver"
-    );
-
-    // The message names the member, so a page's own logging says which one.
     assert_eq!(
         eval(
             &mut engine,
             r#"
-            try { fetch('/a', { method: 'POST' }); } catch (e) { e.message; }
+            try { fetch('/a', { mode: 'cors' }); } catch (e) { e.message; }
             "#
         ),
-        "Failed to execute 'fetch': the RequestInit member 'method' is not implemented",
+        "Failed to execute 'fetch': the RequestInit member 'mode' is not implemented",
+    );
+    assert_eq!(
+        recorder.requests.borrow().len(),
+        3,
+        "and neither of the refused calls reached the driver"
     );
 }
 
@@ -668,11 +697,19 @@ fn an_empty_initializer_is_a_get() {
     );
 }
 
+/// A dictionary member is read with `Get`, so how the property is *reached* does
+/// not matter: an inherited one and a non-enumerable own one are both members,
+/// and both requests are therefore `POST`s
+/// (<https://webidl.spec.whatwg.org/#js-dictionary>: "Properties on the object
+/// (or its prototype chain) correspond to dictionary members", and the
+/// conversion's step is `? Get(jsDict, key)`).
+///
+/// This is the one behaviour of the old refusal that the dictionary conversion
+/// changes beyond the named-members rule, and it is a change *towards* the
+/// standard: the refusal enumerated own enumerable keys, so neither object was
+/// a `RequestInit` member and both were a `GET`.
 #[test]
-fn an_inherited_or_hidden_property_is_not_an_initializer_member() {
-    // A WebIDL dictionary's members are the object's own *enumerable* keys, so
-    // neither a prototype's property nor a non-enumerable own one counts. Both
-    // objects are therefore the empty dictionary and the request is a `GET`.
+fn a_member_is_read_through_the_prototype_chain_and_regardless_of_enumerability() {
     let (mut engine, recorder) = engine();
     eval(
         &mut engine,
@@ -682,12 +719,24 @@ fn an_inherited_or_hidden_property_is_not_an_initializer_member() {
         Object.defineProperty(hidden, 'method', { value: 'POST', enumerable: false });
         fetch('/inherited', inherited);
         fetch('/hidden', hidden);
+        fetch('/plain', { method: 'POST' });
         "#,
     );
     let requests = recorder.requests.borrow();
-    assert_eq!(requests.len(), 2, "neither object has a member to refuse");
-    assert_eq!(requests[0].url.path(), "/inherited");
-    assert_eq!(requests[1].url.path(), "/hidden");
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| (request.url.path(), request.method.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("/inherited", "POST"),
+            ("/hidden", "POST"),
+            ("/plain", "POST"),
+        ],
+        "a `Get` sees the inherited and the hidden `method` where an own-enumerable \
+         enumeration would have seen neither"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -799,4 +848,239 @@ fn a_response_kept_by_script_survives_the_sweep() {
         engine.reclaim_dead_hosts();
     }
     assert_eq!(engine.host_record_count(), baseline_hosts);
+}
+
+// ---------------------------------------------------------------------------
+// The second argument, `RequestInit` (slice b-6.5)
+// ---------------------------------------------------------------------------
+//
+// Everything here is about the *conversion*: what a V8 value becomes a
+// `RequestInit` at all, and what a page sees when it does not. The rules the
+// converted dictionary then runs — which members are served, what a method
+// normalises to, whether a body is allowed on a `GET` — are asserted where they
+// live, engine-independently, in `crates/tenta-js/src/bindings/mod.rs`'s
+// `request_init` module. What can only be observed with an isolate is the
+// boundary: the synchronous throw, the ignored undeclared key, and the
+// presence test for each member a page can name.
+
+/// The `name: message` pair of the `TypeError` `call` throws, or `"no throw"`.
+///
+/// `fetch`'s argument conversion is the one half of the call that throws rather
+/// than rejects, so a `try`/`catch` is the only thing that can observe it — and
+/// what it observes is the message, which is where this engine names the member
+/// it refused.
+fn threw(engine: &mut Engine, call: &str) -> String {
+    eval(
+        engine,
+        &format!(
+            "{{ let out = 'no throw';
+               try {{ {call} }} catch (e) {{ out = e.name + ': ' + e.message; }}
+               out }}"
+        ),
+    )
+}
+
+/// The rejection a promise was settled with, as `name: message`.
+fn rejected(engine: &mut Engine, call: &str) -> String {
+    eval(
+        engine,
+        &format!(
+            "globalThis.out = 'pending';
+             ({call}).catch(e => {{ globalThis.out = e.name + ': ' + e.message; }});
+             'started'"
+        ),
+    );
+    engine.run_microtasks();
+    eval(engine, "globalThis.out")
+}
+
+/// The one request the driver was handed, for a test that made exactly one.
+fn only_request(recorder: &Recorder) -> FetchRequest {
+    let requests = recorder.requests.borrow();
+    assert_eq!(requests.len(), 1, "exactly one request was expected");
+    requests[0].clone()
+}
+
+/// A non-object second argument is a `TypeError` thrown **before** the promise
+/// exists, and the promise is what makes that observable: a call that rejected
+/// would have returned one, so the returned value is `undefined`.
+///
+/// The message is WebIDL's own for a dictionary conversion. It is kept even
+/// though the generated conversion produces a different one, because it is the
+/// text a browser puts on the same failure and the text a page's error handler
+/// reads (`crates/tenta-js-v8/src/host.rs::request_init`).
+#[test]
+fn an_initializer_that_is_not_an_object_throws_and_returns_nothing() {
+    let (mut engine, recorder) = engine();
+
+    assert_eq!(
+        threw(&mut engine, "fetch('/x', 3)"),
+        "TypeError: Failed to execute 'fetch': the provided value is not of type 'RequestInit'"
+    );
+    // A call that threw returned no value at all, so there is no promise for a
+    // page to attach a rejection to. Asserting `typeof` rather than "it threw"
+    // is what makes this non-vacuous: if the engine made the promise first and
+    // rejected it — which is what the standard does, by invoking the `Request`
+    // constructor inside `fetch`'s steps — this would read `object`.
+    assert_eq!(
+        eval(
+            &mut engine,
+            "(function () {
+               try { return typeof fetch('/x', 'POST'); } catch (e) { return 'threw'; }
+             })()"
+        ),
+        "threw",
+        "the call returned no promise"
+    );
+    assert_eq!(
+        recorder.requests.borrow().len(),
+        0,
+        "nothing reached the driver"
+    );
+}
+
+/// A key the dictionary does not name is **ignored**, because that is what a
+/// WebIDL dictionary conversion does: it reads the members it declares and
+/// nothing else.
+///
+/// This is the deliberate behaviour change of this slice and the reason the
+/// blanket refusal was allowed to go. Until it, `fetch(url, {foo: 1})` threw
+/// "the RequestInit member 'foo' is not implemented"; a key that names nothing
+/// is not a member of any dictionary, so there is nothing for the engine to be
+/// refusing.
+#[test]
+fn a_key_the_dictionary_does_not_name_is_ignored() {
+    let (mut engine, recorder) = engine();
+    assert_eq!(
+        threw(&mut engine, "fetch('/x', {foo: 1, bar: 'baz'})"),
+        "no throw",
+        "an undeclared key is not a member, so there is nothing to refuse"
+    );
+
+    let request = only_request(&recorder);
+    assert_eq!(request.method.as_str(), "GET");
+    assert!(
+        request.headers.is_empty(),
+        "and it reaches no header list either"
+    );
+}
+
+/// Each of the twelve members this engine does not serve is refused *by name*,
+/// with the message shape this engine has always used for the refusal.
+///
+/// The names come from the IDL, so this is the JS-side half of the presence
+/// test: a member the page named is a member whether the value is `null`,
+/// `false` or an object, because a dictionary member is what `Get` found and
+/// not what it returned.
+#[test]
+fn every_unserved_member_is_refused_by_name() {
+    let (mut engine, recorder) = engine();
+
+    for (member, literal) in [
+        ("referrer", "''"),
+        ("referrerPolicy", "'no-referrer'"),
+        ("mode", "'cors'"),
+        ("credentials", "'omit'"),
+        ("cache", "'no-store'"),
+        ("redirect", "'follow'"),
+        // The falsy and null-valued spellings are the ones a `Get`-and-truthy
+        // test would get wrong.
+        ("integrity", "''"),
+        ("keepalive", "false"),
+        ("signal", "null"),
+        ("duplex", "'half'"),
+        ("priority", "'low'"),
+        ("window", "null"),
+    ] {
+        assert_eq!(
+            threw(
+                &mut engine,
+                &format!("fetch('/x', {{{member}: {literal}}})")
+            ),
+            format!(
+                "TypeError: Failed to execute 'fetch': the RequestInit member '{member}' is not implemented"
+            ),
+            "the member `{member}` is not served by this engine"
+        );
+    }
+
+    assert_eq!(
+        recorder.requests.borrow().len(),
+        0,
+        "a refused initializer never reaches the driver"
+    );
+}
+
+/// A forbidden method is a `TypeError` — but a *rejection*, not a throw, because
+/// the standard runs that check inside the `Request` constructor and `fetch`
+/// converts the constructor's throw to a rejection
+/// (<https://fetch.spec.whatwg.org/#dom-global-fetch>, step 2).
+///
+/// Both halves are asserted: the message says which rule refused, and the return
+/// value says the call got past its argument conversion and made a promise.
+#[test]
+fn a_forbidden_method_rejects_rather_than_throwing() {
+    let (mut engine, recorder) = engine();
+
+    assert_eq!(
+        eval(
+            &mut engine,
+            "(function () {
+               try {
+                 const p = fetch('/x', {method: 'CONNECT'});
+                 p.catch(function () {});
+                 return typeof p.then;
+               } catch (e) {
+                 return 'threw: ' + e.message;
+               }
+             })()"
+        ),
+        "function",
+        "the call returned a promise, so nothing about it threw"
+    );
+    assert_eq!(
+        rejected(&mut engine, "fetch('/x', {method: 'CONNECT'})"),
+        "TypeError: Failed to execute 'fetch': the method is forbidden"
+    );
+    assert_eq!(
+        recorder.requests.borrow().len(),
+        0,
+        "a refused method never reaches the driver"
+    );
+}
+
+/// The `GET`/`HEAD` body rule rejects too, and `method` normalisation is
+/// observable through what the driver is handed: the six methods the standard
+/// uppercases arrive uppercased and every other method keeps its case.
+#[test]
+fn the_method_rules_reach_the_driver_as_the_standard_leaves_them() {
+    let (mut engine, recorder) = engine();
+
+    assert_eq!(
+        rejected(&mut engine, "fetch('/x', {method: 'GET', body: 'hi'})"),
+        "TypeError: Failed to execute 'fetch': a request with a body cannot be a GET or a HEAD"
+    );
+    assert_eq!(
+        rejected(&mut engine, "fetch('/x', {method: 'head', body: 'hi'})"),
+        "TypeError: Failed to execute 'fetch': a request with a body cannot be a GET or a HEAD",
+        "the rule is about the method, and `head` is a `HEAD`"
+    );
+
+    eval(
+        &mut engine,
+        "fetch('/x', {method: 'post', body: 'hi'});
+         fetch('/x', {method: 'patch'});
+         fetch('/x', {method: 'CHICKEN'});",
+    );
+    let methods: Vec<String> = recorder
+        .requests
+        .borrow()
+        .iter()
+        .map(|request| request.method.as_str().to_owned())
+        .collect();
+    assert_eq!(
+        methods,
+        ["POST", "patch", "CHICKEN"],
+        "the six the standard uppercases arrive uppercased, the rest keep the page's case"
+    );
 }

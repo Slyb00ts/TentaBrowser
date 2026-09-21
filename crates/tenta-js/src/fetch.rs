@@ -32,24 +32,24 @@ use url::Url;
 pub struct FetchRequest {
     /// The request URL, resolved against the document.
     pub url: Url,
-    /// The request method. `fetch()` is always `GET` until `RequestInit` lands —
-    /// the initializer that could ask for another method is refused rather than
-    /// ignored — while an `XMLHttpRequest`'s is the one `open()` validated and
-    /// normalised.
+    /// The request method. `fetch()`'s is the one its initializer named, run
+    /// through the standard's *method* and *normalize a method* rules and
+    /// defaulting to `GET` (`crate::bindings::host::request_from_init`); an
+    /// `XMLHttpRequest`'s is the one `open()` validated and normalised.
     pub method: http::Method,
     /// The author request headers, in the order they were authored.
     ///
     /// `XMLHttpRequest` is the first producer that fills these: `setRequestHeader`
     /// combines the page's pairs into them and `send()` hands them over. A
-    /// `fetch()` leaves them empty until `RequestInit` lands. The values are
-    /// `String`s because `tenta-net`'s `Request::header` takes `&str` pairs; an
-    /// XHR value is a byte sequence, so the conversion
-    /// ([`XhrRequest::into_fetch_request`](crate::xhr::XhrRequest::into_fetch_request))
-    /// is the one step where a byte that is not UTF-8 becomes U+FFFD.
+    /// `fetch()` fills them from its initializer's `headers`, plus the
+    /// `Content-Type` a string body infers. The values are `String`s because
+    /// `tenta-net`'s `Request::header` takes `&str` pairs, and the byte sequence
+    /// to `String` step both producers share is [`header_pairs`].
     pub headers: Vec<(String, String)>,
-    /// The body, or `None` for a request with none. Both producers leave it
-    /// `None` today: `fetch()` needs `RequestInit` and an `XMLHttpRequest`
-    /// refuses a body rather than dropping it.
+    /// The body, or `None` for a request with none: what `fetch()`'s
+    /// initializer's `body` extracted to, or `None` for an absent or null one.
+    /// An `XMLHttpRequest` refuses a body outright rather than dropping it
+    /// (`send()`'s parameter is still `any`), so only `fetch()` fills this.
     pub body: Option<Vec<u8>>,
     /// The document's URL, or the request URL when the document has none. The
     /// `Referer` a driver sends, and the URL a same-origin test is made
@@ -63,13 +63,17 @@ pub struct FetchRequest {
 }
 
 impl FetchRequest {
-    /// A `GET` with no headers and no body — the only request `fetch()` can
-    /// make while `RequestInit` is refused.
+    /// A `GET` with no headers and no body: what `fetch(url)` and
+    /// `fetch(url, {})` are, and therefore exactly what
+    /// [`request_from_init`](crate::bindings::host::request_from_init) builds
+    /// from an empty initializer.
     ///
-    /// It exists so the engine's `fetch` global can build a request without
-    /// naming `http::Method` itself: `tenta-js-v8` depends on neither `http`
-    /// nor `url`, and a struct literal there would add two dependency edges for
-    /// one constant. The fields stay public for a driver that builds its own.
+    /// It stays, rather than being replaced by that function, for the same
+    /// reason it existed: it builds a request without naming `http::Method`, and
+    /// the crates that need one that way cannot name it. `tenta-js-v8` gains no
+    /// `http` edge for a test's sake, and `tenta-page`'s and that crate's tests
+    /// build their requests through this. The fields stay public for a driver
+    /// that builds its own.
     pub fn get(url: Url, initiator: Url, origin: Origin) -> Self {
         Self {
             url,
@@ -80,6 +84,32 @@ impl FetchRequest {
             origin,
         }
     }
+}
+
+/// The author request headers in the form [`FetchRequest`] carries them, from
+/// the byte sequences both of its producers hold.
+///
+/// `FetchRequest` carries `String`s because `tenta-net`'s `Request::header`
+/// takes `&str` pairs; a header value is a byte sequence (WebIDL's `ByteString`)
+/// and may hold obs-text, so a byte that is not UTF-8 decodes with U+FFFD. A
+/// name is a `token` and therefore ASCII, so only a value can lose anything, and
+/// only an obs-text byte of it.
+///
+/// This is a function and not a line in each producer because there are two of
+/// them — `XMLHttpRequest`'s
+/// [`XhrRequest::into_fetch_request`](crate::xhr::XhrRequest::into_fetch_request)
+/// and `fetch()`'s initializer — and because a comment claiming to be *the*
+/// lossy step is a comment that goes stale the moment a second step appears.
+pub fn header_pairs(headers: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<(String, String)> {
+    headers
+        .into_iter()
+        .map(|(name, value)| {
+            (
+                String::from_utf8_lossy(&name).into_owned(),
+                String::from_utf8_lossy(&value).into_owned(),
+            )
+        })
+        .collect()
 }
 
 /// What a driver answers a [`FetchRequest`] with.

@@ -24,15 +24,17 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use tenta_core::Origin;
-use tenta_js::bindings::host::{HostObject, realm_context};
+use tenta_js::bindings::host::{
+    HostObject, realm_context, refused_request_init_member, request_from_init,
+};
 use tenta_js::bindings::{
     AddEventListenerOptionsOrBoolean, Event, EventListener, EventListenerOptionsOrBoolean,
-    EventTargetOps, JsError, string_from_v8, throw_js_error, throw_type_error, value_from_v8,
-    value_to_v8, world_realm,
+    EventTargetOps, JsError, RequestInit, string_from_v8, throw_js_error, throw_type_error,
+    value_from_v8, value_to_v8, world_realm,
 };
 use tenta_js::dom::events::{HostValue, PromiseOutcome, PromiseRef, ScriptHost};
 use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId};
-use tenta_js::fetch::{FetchDriver, FetchRequest};
+use tenta_js::fetch::FetchDriver;
 use tenta_js::xhr::XhrDriver;
 use tenta_net::CookieJar;
 
@@ -789,14 +791,30 @@ fn queue_microtask(
 // fetch
 // ---------------------------------------------------------------------------
 
-/// `fetch(input, init)`: creates the promise, resolves `input` against the
-/// document, and hands the request to the installed driver.
+/// `fetch(input, init)`: converts both arguments, creates the promise, resolves
+/// `input` against the document, and hands the request to the installed driver.
 ///
-/// Everything after the argument conversion is a *rejection*, not a throw: the
-/// Fetch Standard's own `fetch()` wraps its steps in a promise so that a failed
-/// call is a settled promise rather than an abrupt completion. The two things
-/// that do throw are the dictionary conversion this engine refuses (§ the
-/// initializer below) and the absence of a world to create the promise in.
+/// What throws, and what rejects. This engine's argument conversion has four
+/// failure points, all of them before the promise exists:
+///
+/// 1. a second argument that is neither an object nor `null`/`undefined`, which
+///    is WebIDL's own `TypeError` for a dictionary conversion
+///    (<https://webidl.spec.whatwg.org/#js-dictionary>, step 1);
+/// 2. a declared member whose *conversion* throws, which is the same step's
+///    failure for that member — `{method: Symbol()}` is not a `ByteString`;
+/// 3. a declared member this engine does not serve
+///    ([`refused_request_init_member`]), named in the message;
+/// 4. the absence of a world to create the promise in.
+///
+/// A browser reports all of those as a *rejection*, because `fetch` invokes the
+/// `Request` constructor inside its own steps and rejects with whatever it
+/// throws: "If this throws an exception, reject p with it and return p"
+/// (<https://fetch.spec.whatwg.org/#dom-global-fetch>, step 2). This engine has
+/// no `Request` to invoke — the initializer is converted here instead
+/// ([`request_from_init`] is what runs the constructor's steps) — so (1) to (4)
+/// are throws and everything *after* the promise is a rejection: the method
+/// rules, the `GET`/`HEAD` body rule, and every driver refusal, exactly as they
+/// are there.
 fn fetch(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -809,8 +827,23 @@ fn fetch(
 
     // `RequestInfo` is `(Request or USVString)`; only the second arm is
     // reachable, because `Request` is not a global this engine installs.
-    if let Some(reason) = unsupported_init(scope, args.get(1)) {
-        throw_type_error(scope, &format!("Failed to execute 'fetch': {reason}"));
+    let init = match request_init(scope, args.get(1)) {
+        Ok(init) => init,
+        Err(reason) => {
+            throw_type_error(scope, &format!("Failed to execute 'fetch': {reason}"));
+            return;
+        }
+    };
+    // The dictionary is declared in full, so a member this engine cannot honour
+    // is refused rather than converted and dropped — see
+    // [`refused_request_init_member`] for which twelve those are and why.
+    if let Some(member) = refused_request_init_member(&init) {
+        throw_type_error(
+            scope,
+            &format!(
+                "Failed to execute 'fetch': the RequestInit member '{member}' is not implemented"
+            ),
+        );
         return;
     }
 
@@ -862,7 +895,18 @@ fn fetch(
     // document built without one reports the empty string, and an empty
     // initiator is not a URL a driver could send.
     let initiator = document_url.unwrap_or_else(|| url.clone());
-    let request = FetchRequest::get(url, initiator, state.scheduler.current_origin());
+    // The `Request` constructor's steps, which the standard runs inside
+    // `fetch()`'s promise and rejects with: a method that is not a method, a
+    // forbidden method, a body on a `GET` or a `HEAD`, and a header list that
+    // cannot be filled.
+    let origin = state.scheduler.current_origin();
+    let request = match request_from_init(init, url, initiator, origin) {
+        Ok(request) => request,
+        Err(error) => {
+            reject_promise(scope, &mut retval, &script, promise, error.message());
+            return;
+        }
+    };
 
     // No driver is a state a page can be in — `fetch` is installed before the
     // page has one — so it is a rejection rather than a panic. Once 4a-1b lands,
@@ -908,47 +952,33 @@ fn reject_promise(
     return_promise(scope, retval, promise);
 }
 
-/// Why the second argument cannot be honoured, or `None` when it can.
+/// The *reason* the second argument cannot be a `RequestInit`, or the converted
+/// dictionary.
 ///
-/// `RequestInit` is declared as nothing and refused when present: ignoring
-/// `{method: "POST"}` would send a *different request than the page asked for*,
-/// silently, and a declared-but-unimplemented member is the bug class this
-/// engine does not ship. The slice that implements the member removes the
-/// refusal.
+/// This is WebIDL's dictionary conversion and nothing else, so which second
+/// arguments are even a `RequestInit` is the standard's answer: `null` and
+/// `undefined` are the empty dictionary, a member is read with `Get` — a key
+/// the dictionary does not name is ignored, and a key it does name is a member
+/// however it is reached, prototype chain included — and anything that is not
+/// an object throws `TypeError`
+/// (<https://webidl.spec.whatwg.org/#js-dictionary>). `fetch(url)`,
+/// `fetch(url, undefined)`, `fetch(url, null)` and `fetch(url, {})` are
+/// therefore all a `GET`.
 ///
-/// A WebIDL dictionary conversion is what decides which second arguments are
-/// even a `RequestInit`: `null` and `undefined` are the empty dictionary, an
-/// object's own **enumerable** keys are its members — inherited ones are not —
-/// and anything that is not an object at all throws. All three cases are handled
-/// here, so `fetch(url)`, `fetch(url, undefined)`, `fetch(url, null)` and
-/// `fetch(url, {})` are all a `GET`.
-fn unsupported_init(scope: &mut v8::PinScope, value: v8::Local<v8::Value>) -> Option<String> {
-    if value.is_null_or_undefined() {
-        return None;
+/// The non-object case is checked *before* the generated conversion so that the
+/// message is WebIDL's own — "the provided value is not of type 'RequestInit'",
+/// which is what a browser says — rather than the generator's generic "expected
+/// a dictionary for `RequestInit`" (`crates/tenta-idl/src/codegen/types.rs`).
+/// The exception is a `TypeError` either way; only the text differs, and the
+/// text is what a page's error handler reads.
+fn request_init(
+    scope: &mut v8::PinScope,
+    value: v8::Local<v8::Value>,
+) -> Result<RequestInit, String> {
+    if !value.is_null_or_undefined() && !value.is_object() {
+        return Err("the provided value is not of type 'RequestInit'".to_owned());
     }
-    let object = match v8::Local::<v8::Object>::try_from(value) {
-        Ok(object) => object,
-        Err(_) => return Some("the provided value is not of type 'RequestInit'".to_owned()),
-    };
-    let args = v8::GetPropertyNamesArgs {
-        // Symbol keys are never dictionary members, and a non-enumerable own
-        // property is not a member either — which is exactly this filter.
-        property_filter: v8::PropertyFilter::ONLY_ENUMERABLE | v8::PropertyFilter::SKIP_SYMBOLS,
-        ..Default::default()
-    };
-    let names = object.get_own_property_names(scope, args)?;
-    // An empty dictionary is the empty `RequestInit`, and there is no member to
-    // name. The length is checked rather than the first element: V8's
-    // `get_index` out of range hands back `undefined` instead of failing, so
-    // reading index 0 off `{}` would name a member called "undefined".
-    if names.length() == 0 {
-        return None;
-    }
-    let first = names.get_index(scope, 0)?;
-    Some(format!(
-        "the RequestInit member '{}' is not implemented",
-        string_from_v8(scope, first)
-    ))
+    RequestInit::from_v8(scope, value).map_err(|error| error.message().to_owned())
 }
 
 /// `requestAnimationFrame(callback)`: registers `callback` for the next

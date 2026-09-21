@@ -35,7 +35,7 @@ use std::rc::Rc;
 use tenta_core::Origin;
 use url::Url;
 
-use crate::fetch::{FetchOutcome, FetchRequest, FetchStartError};
+use crate::fetch::{FetchOutcome, FetchRequest, FetchStartError, header_pairs};
 
 /// One request an `XMLHttpRequest` object made, ready to become a
 /// [`FetchRequest`].
@@ -75,22 +75,11 @@ impl XhrRequest {
     /// The body is always `None`: a body is refused by `send()`, so a request
     /// that got this far has none.
     ///
-    /// The header conversion is the one lossy step. [`FetchRequest`] carries
-    /// `String`s because `fetch()` was its first producer and its driver is
-    /// `tenta-net`'s `Request::header(&str, &str)`; a value that is not UTF-8
-    /// therefore decodes with U+FFFD. A name is a `token` and so always ASCII,
-    /// so only the value can lose anything, and only for obs-text bytes.
+    /// The header conversion is this conversion's one lossy step, and it is
+    /// [`header_pairs`] — the same function `fetch()`'s initializer reaches its
+    /// headers through, so the loss is described in one place rather than two.
     pub fn into_fetch_request(self, origin: Origin) -> FetchRequest {
-        let headers = self
-            .headers
-            .into_iter()
-            .map(|(name, value)| {
-                (
-                    String::from_utf8_lossy(&name).into_owned(),
-                    String::from_utf8_lossy(&value).into_owned(),
-                )
-            })
-            .collect();
+        let headers = header_pairs(self.headers);
         FetchRequest {
             url: self.url,
             method: self.method,

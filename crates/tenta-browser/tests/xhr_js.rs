@@ -90,32 +90,34 @@ async fn goto_network_idle(page: &tenta_browser::Page, url: &str) -> tenta_brows
 // The fixture the benchmark scenario runs
 // ---------------------------------------------------------------------------
 
-/// The benchmark fixture's own page: one `XMLHttpRequest` against the server's
-/// JSON echo, and the content it put in the DOM.
+/// The benchmark fixture's own page: one `XMLHttpRequest` and one `fetch()`,
+/// both against the server's JSON echo, and the content they put in the DOM.
 ///
-/// **The content assertion is the point, not the marker.** The fixture's
+/// The default root is `tests/fixtures/`, so this is the file the benchmark
+/// scenario serves — not a copy of its shape — and it is the only test that runs
+/// it.
+///
+/// **The content assertions are the point, not the marker.** The fixture's
 /// `xhr.onerror` calls `done()` too, and the scenario's
 /// `expect_stdout_contains = "js-xhr: done (2 requests)"` therefore passes even
 /// when the request failed — a driver that failed every request would settle the
-/// page just as fast. `#xhr` reading `xhr: item=alpha&via=xhr` is what proves the
-/// response reached script: that string is the server's own `query` field for
-/// `/api/echo?item=alpha&via=xhr`, so it cannot be produced by a page that never
-/// got an answer.
+/// page just as fast. Each slot is checked against something only a *successful*
+/// round trip can produce: `#xhr` is the server's own `query` field for
+/// `/api/echo?item=alpha&via=xhr`, and `#fetch` is `reply.json.item` — a field
+/// the server only adds when the body it received parses as JSON — joined with
+/// `reply.json.via` from that same parsed body.
 ///
-/// The `fetch` half is asserted as it stands rather than as the fixture intends,
-/// and the reason is verified: `fetch(url, init)` is refused by
-/// `unsupported_init` (`crates/tenta-js-v8/src/host.rs`) with a *synchronous*
-/// `TypeError` — an empty `{}` is the only init accepted — so the call throws
-/// before a promise exists, the chain's `.catch` never runs, and nothing ever
-/// calls `done()` for the second half. `#status` therefore stays at its
-/// `js-xhr: loading` initial value and the scenario's marker is unreachable
-/// until `RequestInit` lands. That is asserted here rather than left unstated so
-/// that the slice which fixes it fails this test and has to come back and read
-/// this comment.
+/// **Why the marker is not the proof, kept from the slice this one completes.**
+/// This test was written with the `fetch` half `#[ignore]`d: `fetch(url, init)`
+/// used to be refused by `unsupported_init`
+/// (`crates/tenta-js-v8/src/host.rs`) with a *synchronous* `TypeError`, so the
+/// chain's `.catch` never ran and `done()` was never called for the second
+/// request. A test that only grepped for the marker would have been unable to
+/// tell that from a working page, because `xhr.onerror` calls `done()` as well —
+/// which is exactly why the slots are asserted here and the marker only in the
+/// scenario.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_xhr_fixture_page_gets_its_echo_back_into_the_dom() {
-    // The default root is `tests/fixtures/`, so this is the file the benchmark
-    // scenario serves — not a copy of its shape.
+async fn the_fixture_page_settles_its_marker_once_the_fetch_half_works() {
     let server = support::server().await;
     let engine = js_engine(SettleConfig::library());
     let context = support::context(&engine);
@@ -140,51 +142,6 @@ async fn the_xhr_fixture_page_gets_its_echo_back_into_the_dom() {
     );
     assert_eq!(
         text_of(&document, "#fetch"),
-        "fetch: pending",
-        "the `fetch` half never ran its catch: `fetch(url, init)` throws synchronously"
-    );
-    assert_eq!(
-        text_of(&document, "#status"),
-        "js-xhr: loading",
-        "so `done()` is called once, and the scenario's marker is not yet reachable"
-    );
-    assert_eq!(
-        server.requests_served(),
-        2,
-        "the document and the XHR: the request provably went over the wire, and the \
-         refused `fetch` never did"
-    );
-    engine.close();
-}
-
-/// What the fixture's page *says* once the `fetch` half works, which is what the
-/// `S-js-xhr` scenario's marker asserts.
-///
-/// Ignored rather than deleted, because the assertion is the gate: the slice that
-/// implements `RequestInit` turns this test on, and until then running it fails
-/// in the way recorded above. `cargo nextest run --run-ignored` is how to watch
-/// it fail for the stated reason rather than for a driver bug.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "Reason: `fetch(url, init)` is refused until the RequestInit slice (b-6.5). It throws \
-            synchronously, so the fixture's `.catch` never runs and the page's `done()` is never \
-            called for its second request — the marker `js-xhr: done (2 requests)` cannot be \
-            reached. The XHR half is asserted in the test above."]
-async fn the_fixture_page_settles_its_marker_once_the_fetch_half_works() {
-    let server = support::server().await;
-    let engine = js_engine(SettleConfig::library());
-    let context = support::context(&engine);
-    let page = context
-        .new_page(PageOptions::default())
-        .await
-        .expect("a JavaScript page");
-
-    let navigation = goto_network_idle(&page, &server.url("/js-xhr/index.html")).await;
-    assert_eq!(navigation.settle, SettleState::Settled { busy: false });
-
-    let document = page.take_document().expect("document");
-    assert_eq!(text_of(&document, "#xhr"), "xhr: item=alpha&via=xhr");
-    assert_eq!(
-        text_of(&document, "#fetch"),
         "fetch: beta via fetch",
         "the POST's JSON body reached the server and its `json` field came back"
     );
@@ -193,7 +150,12 @@ async fn the_fixture_page_settles_its_marker_once_the_fetch_half_works() {
         "js-xhr: done (2 requests)",
         "both halves settled, which is the string the scenario greps for"
     );
-    assert_eq!(server.requests_served(), 3);
+    assert_eq!(
+        server.requests_served(),
+        3,
+        "the document, the XHR and the `fetch` POST: every request the page makes \
+         provably went over the wire"
+    );
     engine.close();
 }
 

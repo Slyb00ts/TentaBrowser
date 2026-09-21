@@ -15,10 +15,11 @@ use std::rc::Rc;
 use std::time::SystemTime;
 
 use tenta_core::atom::atoms;
-use tenta_core::{Atom, NodeId, NodeRef};
+use tenta_core::{Atom, NodeId, NodeRef, Origin};
 use tenta_dom::{Document, Mutation, NodeKind};
 use tenta_html::{ElementFlags, QualName, QuirksMode};
 use tenta_net::policy::cookies::{CookieJar, SameSiteContext, Site};
+use url::Url;
 
 // The generated name of the `URLSearchParams` constructor's `init` union. It is
 // spelled out of the union's own members, so the alias is the only way to read
@@ -38,11 +39,11 @@ use super::{
     HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps, Handle, Headers,
     HeadersConstructor, HeadersInit, HeadersOps, JsError, MouseEventConstructor, MouseEventInit,
     MouseEventOps, Node, NodeList, NodeListOps, NodeOps, ProgressEventConstructor,
-    ProgressEventInit, ProgressEventOps, Promise, Realm, ResponseConstructor, ResponseInit,
-    ResponseOps, ResponseType, SVGElementOps, Text, TextDecodeOptions, TextDecoderConstructor,
-    TextDecoderOps, TextDecoderOptions, TextEncoderConstructor, TextEncoderOps, TextOps,
-    UIEventConstructor, UIEventInit, UIEventOps, URLConstructor, URLOps, URLSearchParams,
-    URLSearchParamsConstructor, URLSearchParamsOps, XMLHttpRequestConstructor,
+    ProgressEventInit, ProgressEventOps, Promise, Realm, RequestInit, ResponseConstructor,
+    ResponseInit, ResponseOps, ResponseType, SVGElementOps, Text, TextDecodeOptions,
+    TextDecoderConstructor, TextDecoderOps, TextDecoderOptions, TextEncoderConstructor,
+    TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps, URLConstructor, URLOps,
+    URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps, XMLHttpRequestConstructor,
     XMLHttpRequestEventTargetOps, XMLHttpRequestOps, XMLHttpRequestResponseType,
 };
 use crate::dom::events::{
@@ -51,7 +52,7 @@ use crate::dom::events::{
     dispatch, dispatch_at,
 };
 use crate::event_loop::SharedClock;
-use crate::fetch::{FetchOutcome, FetchStartError, FetchedResponse};
+use crate::fetch::{FetchOutcome, FetchRequest, FetchStartError, FetchedResponse, header_pairs};
 use crate::xhr::{XhrHandle, XhrRequest};
 
 /// A document shared between the host objects of one world and the engine that
@@ -587,8 +588,11 @@ impl SignalRecord {
 /// bytes are mutable on a `Headers` a page built and read-only on the
 /// `Headers` of a `Response`. The constructor here is the only way for script
 /// to make a mutable one, which is why `None` is the variant a page reaches;
-/// `Response` stamps `Response` on the list it creates, and `Request` and the
-/// response's other four guard values arrive with `d-4a`.
+/// `Response` stamps `Response` on the list it creates; and `Request` is the
+/// guard the `fetch()` initializer's `headers` are *filled* under, which is not
+/// a `Headers` object at all — the request's list never becomes one until the
+/// `Request` interface exists (`idl/fetch/Request.webidl`). The response's
+/// other three guard values arrive with `d-4a`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeadersGuard {
     /// `"none"`: a `Headers` built by script, whose list the page owns and may
@@ -601,32 +605,64 @@ pub enum HeadersGuard {
     /// `null` rather than a `TypeError`
     /// (`<https://fetch.spec.whatwg.org/#concept-headers-validate>`).
     Response,
+    /// `"request"`: the guard of a request's own header list, which is what the
+    /// `fetch()` initializer's `headers` are filled through
+    /// (`<https://fetch.spec.whatwg.org/#dom-request>`'s "set this's headers to a
+    /// new `Headers` object … whose guard is `request`"). The rule is the same
+    /// shape as `"response"`'s and a different predicate: a *forbidden
+    /// request-header* is dropped silently, so a page cannot name its own
+    /// `Content-Length`, `Host` or `Cookie` — which is what keeps the transport
+    /// the only author of the framing header
+    /// (`<https://fetch.spec.whatwg.org/#forbidden-request-header>`).
+    Request,
 }
 
 impl HeadersGuard {
     /// Whether a mutating member may be attempted at all under this guard.
     ///
-    /// The two guards that answer "yes" differ in what happens next: `"none"`
-    /// allows every name, and `"response"` drops two of them per name
-    /// ([`HeadersGuard::permits_name`]). This is the split the `d-4a` guards
+    /// The guards that answer "yes" differ in what happens next: `"none"`
+    /// allows every name, and the other two drop some
+    /// ([`HeadersGuard::permits_pair`]). This is the split the `d-4a` guards
     /// need too — an `"immutable"` mutation *throws* here rather than returning —
-    /// so the per-name question is separate rather than folded in.
+    /// so the per-pair question is separate rather than folded in.
     fn permits_mutation(self) -> bool {
         match self {
-            HeadersGuard::None | HeadersGuard::Response => true,
+            HeadersGuard::None | HeadersGuard::Response | HeadersGuard::Request => true,
         }
     }
 
     /// Whether a mutation may change the entry named `name` under this guard.
     ///
-    /// `name` must already be normalized, i.e. byte-lowercased: Fetch's
-    /// *forbidden response-header name* is a byte-case-insensitive match
-    /// against two names, and the stored names are lowercase, so the comparison
-    /// is a plain equality.
+    /// This is the *name-only* half of Fetch's *validate a header*, which is the
+    /// half a `delete` can ask because it has no value to test. The full
+    /// question is [`HeadersGuard::permits_pair`], and the two are not the same
+    /// rule for the `"request"` guard: three of that guard's forbidden names are
+    /// decided by the *value*, so a name-only caller is answered with the list's
+    /// name-only clause and an empty value.
+    ///
+    /// `name` must already be normalized, i.e. byte-lowercased: every forbidden
+    /// name set is compared byte-lowercased, so the comparisons are plain
+    /// equalities.
     fn permits_name(self, name: &[u8]) -> bool {
+        self.permits_pair(name, b"")
+    }
+
+    /// Whether the pair `(name, value)` may be *added* under this guard.
+    ///
+    /// Fetch's *validate a header* for a `Headers` object answers "no" by
+    /// returning `false` rather than by throwing, and its *append a header*
+    /// returns without appending — so a forbidden name is dropped silently, and
+    /// every caller of this predicate must drop rather than fault
+    /// (`<https://fetch.spec.whatwg.org/#concept-headers-validate>`, consumed by
+    /// the append step immediately below it).
+    ///
+    /// Both halves of the pair are normalized, so the two predicates are plain
+    /// equalities over lowercase bytes.
+    fn permits_pair(self, name: &[u8], value: &[u8]) -> bool {
         match self {
             HeadersGuard::None => true,
             HeadersGuard::Response => !is_forbidden_response_header_name(name),
+            HeadersGuard::Request => !is_forbidden_request_header(name, value),
         }
     }
 }
@@ -5193,13 +5229,15 @@ impl HeadersOps for HostObject {
 
 /// Fetch's *fill a Headers object*: the list `init` builds, under `guard`.
 ///
-/// Both callers of the standard's fill use this one helper. `Headers`'s
-/// constructor fills a list under guard `"none"`, and the `Response`
-/// constructor's *initialize a response* step 5 is literally "fill response's
-/// headers with `init["headers"]`", under guard `"response"`. The standard's
-/// fill appends *to the Headers object* — the guarded append, not a bare list
-/// append — so the guard's per-name rule applies on both paths, and a second
-/// copy of the loop is exactly where the two would drift.
+/// Every caller of the standard's fill uses this one helper. `Headers`'s
+/// constructor fills a list under guard `"none"`, the `Response` constructor's
+/// *initialize a response* step 5 is literally "fill response's headers with
+/// `init["headers"]`", under guard `"response"`, and the `fetch()` initializer
+/// fills the request's own list under guard `"request"` — see
+/// [`request_from_init`]. The standard's fill appends *to the Headers object* —
+/// the guarded append, not a bare list append — so the guard's per-pair rule
+/// applies on every path, and a second copy of the loop is exactly where the
+/// paths would drift.
 ///
 /// The list is built locally and returned only once every pair has passed,
 /// which is what makes a throw leave nothing half-built behind: the caller
@@ -5226,7 +5264,7 @@ fn fill_header_list(
                     )));
                 };
                 let (name, value) = checked_header(context, name, value)?;
-                if guard.permits_name(&name) {
+                if guard.permits_pair(&name, &value) {
                     list.push((name, value));
                 }
             }
@@ -5237,7 +5275,7 @@ fn fill_header_list(
         HeadersInit::RecordOfByteStringToByteString(pairs) => {
             for (name, value) in pairs {
                 let (name, value) = checked_header(context, &name, &value)?;
-                if guard.permits_name(&name) {
+                if guard.permits_pair(&name, &value) {
                     list.push((name, value));
                 }
             }
@@ -5484,6 +5522,39 @@ const BODY_UNUSABLE: &str = "The body has already been read";
 /// [`CONTENT_TYPE`].
 const TEXT_PLAIN_UTF8: &str = "text/plain;charset=UTF-8";
 
+/// Fetch's *extract a body with type*, over the one union this engine's
+/// `BodyInit` can hold: the bytes, and the `Content-Type` the arm infers, or
+/// `None` for an arm that infers none
+/// (`<https://fetch.spec.whatwg.org/#concept-bodyinit-extract>`).
+///
+/// This is the whole of the rule for the two arms a body can arrive as, so it is
+/// **one function and not one per caller**. Its two callers today are the
+/// `Response` constructor's step 4 and the `fetch()` initializer's body step;
+/// both then append the type to their own header list when it is non-null and
+/// that list has no `Content-Type`, which is the second half of the standard's
+/// step and belongs to each caller's own list.
+///
+/// `send(body)` (`b-9`) needs the same step for WebIDL's
+/// `XMLHttpRequestBodyInit?`, whose servable arms are this same pair — which is
+/// why the function takes the generated union and the *union-to-bytes* half
+/// stands alone, while "which member set does this interface accept" is the
+/// caller's declared member type and not something this decides.
+///
+/// One deviation reaches both callers: a `URLSearchParams` body falls to the
+/// `UsvString` arm because `BufferSourceOrUsvString` has no arm for it. Its
+/// stringifier *is* the `application/x-www-form-urlencoded` serializer, so the
+/// bytes are right, and the type this returns is `text/plain;charset=UTF-8`
+/// where the standard's own `URLSearchParams` branch would set
+/// `application/x-www-form-urlencoded;charset=UTF-8`. Serving it needs a
+/// platform-object brand-check arm in the generator's `union_test`
+/// (`crates/tenta-idl/src/codegen/types.rs`), which is a separate slice.
+fn extract_body(body: BufferSourceOrUsvString) -> (Vec<u8>, Option<&'static str>) {
+    match body {
+        BufferSourceOrUsvString::BufferSource(bytes) => (bytes, None),
+        BufferSourceOrUsvString::UsvString(text) => (text.into_bytes(), Some(TEXT_PLAIN_UTF8)),
+    }
+}
+
 /// The Encoding Standard's *UTF-8 decode* as this engine models it: the bytes
 /// read as UTF-8 with U+FFFD for every malformed sequence, and a leading U+FEFF
 /// dropped.
@@ -5659,12 +5730,11 @@ impl ResponseConstructor for HostObject {
 
         // Step 4 of the constructor: *extract a body with type*. The outer
         // `None` is a missing argument and the inner one the IDL's nullable
-        // `body`; both are the null body step 3 of the constructor keeps.
+        // `body`; both are the null body step 3 of the constructor keeps. The
+        // rule itself is [`extract_body`], shared with the `fetch()`
+        // initializer's body step.
         let body = match body {
-            Some(Some(BufferSourceOrUsvString::BufferSource(bytes))) => Some((bytes, None)),
-            Some(Some(BufferSourceOrUsvString::UsvString(text))) => {
-                Some((text.into_bytes(), Some(TEXT_PLAIN_UTF8)))
-            }
+            Some(Some(body)) => Some(extract_body(body)),
             Some(None) | None => None,
         };
 
@@ -5862,6 +5932,215 @@ impl ResponseOps for HostObject {
             ))))
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// The `fetch()` initializer
+// ---------------------------------------------------------------------------
+
+/// The prefix every message this module builds for a `fetch()` failure carries.
+///
+/// Fetch's `fetch(input, init)` steps are the ones that run here — there is no
+/// `Request` constructor for a page to call
+/// (`idl/fetch/Request.webidl`) — so the call that failed is named, exactly as
+/// the `fetch` global names it for the throws of its own argument conversion.
+const FETCH_CONTEXT: &str = "Failed to execute 'fetch'";
+
+/// The `RequestInit` member this engine cannot serve, or `None` when it can
+/// serve every one the page named.
+///
+/// `RequestInit` declares the Fetch Standard's fifteen members
+/// (`idl/fetch/Request.webidl`) and this engine serves three of them. The other
+/// twelve are refused *by name* rather than ignored, because ignoring one means
+/// sending a different request than the page asked for, silently: a `mode` or a
+/// `credentials` this engine has no CORS to honour, a `signal` it has no
+/// cancellation to reach, an `integrity` it does not check. The refusal names
+/// the member so that a page can tell which one it was.
+///
+/// The order is the dictionary's own declaration order, which is the standard's,
+/// so a call naming two unserved members always reports the same one.
+///
+/// Presence is the `Option` a member of a dictionary without a default is, and
+/// it is `Some` for a member the page *named* even when the value is `null`:
+/// `{signal: null}` is a present `signal`, exactly as
+/// `{keepalive: false}` is a present `keepalive`. `method`, `headers` and `body`
+/// are the three that are served and so the three this never names.
+///
+/// **The refusal is by presence and not by value, so it over-refuses, and that
+/// is deliberate.** A page that writes out the standard's default explicitly —
+/// `{keepalive: false}`, `{signal: null}`, `{window: null}`, `{integrity: ""}`,
+/// `{cache: "default"}` — asks for exactly the request this engine would have
+/// sent anyway, and is refused here where a browser proceeds. Being
+/// value-aware would mean deciding, per member, which values this engine's
+/// behaviour happens to coincide with, and a wrong acceptance sends a request
+/// the page did not ask for while a wrong refusal only says so. The two error
+/// directions are not equally bad, so this errs at the visible one.
+pub fn refused_request_init_member(init: &RequestInit) -> Option<&'static str> {
+    if init.referrer.is_some() {
+        return Some("referrer");
+    }
+    if init.referrer_policy.is_some() {
+        return Some("referrerPolicy");
+    }
+    if init.mode.is_some() {
+        return Some("mode");
+    }
+    if init.credentials.is_some() {
+        return Some("credentials");
+    }
+    if init.cache.is_some() {
+        return Some("cache");
+    }
+    if init.redirect.is_some() {
+        return Some("redirect");
+    }
+    if init.integrity.is_some() {
+        return Some("integrity");
+    }
+    if init.keepalive.is_some() {
+        return Some("keepalive");
+    }
+    if init.signal.is_some() {
+        return Some("signal");
+    }
+    if init.duplex.is_some() {
+        return Some("duplex");
+    }
+    if init.priority.is_some() {
+        return Some("priority");
+    }
+    if init.window.is_some() {
+        return Some("window");
+    }
+    None
+}
+
+/// The request `fetch()` sends, built from the converted `RequestInit`. This is
+/// the Fetch Standard's *Request* constructor reduced to the steps an engine
+/// with no `Request` object, no CORS and no redirect policy of its own has to
+/// run (`<https://fetch.spec.whatwg.org/#dom-request>`).
+///
+/// The steps are the standard's, in the standard's order, for the three members
+/// that reach them:
+///
+/// 1. `init["method"]`: a value that is not a *method* is a `TypeError`, one
+///    that is a *forbidden method* is a `TypeError`, and a value that is either
+///    is then normalised (`<https://fetch.spec.whatwg.org/#concept-method>`,
+///    <https://fetch.spec.whatwg.org/#concept-method-normalize>). An absent
+///    `method` is `GET`, which is what the request starts as.
+/// 2. `init["headers"]`: *fill* the request's header list with them, under guard
+///    `"request"` — so a *forbidden request-header* is dropped silently, and a
+///    page cannot name its own `Content-Length`, `Host` or `Cookie`.
+/// 3. `init["body"]`: a non-null `body` with a `GET` or a `HEAD` method is a
+///    `TypeError`, and otherwise the body is *extracted with type* and the type
+///    is appended as `Content-Type` when there is one and the header list does
+///    not already name it
+///    (<https://fetch.spec.whatwg.org/#concept-bodyinit-extract>).
+///
+/// The URL and the initializer have already been resolved and refused by the
+/// time this runs, so what is left is the request the driver is handed.
+///
+/// # Why these failures are rejections and not throws
+///
+/// The standard runs all of these steps *inside* the `Request` constructor,
+/// which `fetch()` invokes inside its own steps and converts to a promise
+/// rejection: "If this throws an exception, reject p with it and return p"
+/// (`<https://fetch.spec.whatwg.org/#dom-global-fetch>`, step 2). So every
+/// `Err` here is a rejection, and the *argument conversions* — the dictionary
+/// and each member's — are the only throws on this path, which is the
+/// distinction the `fetch` global's own comment records.
+pub fn request_from_init(
+    init: RequestInit,
+    url: Url,
+    initiator: Url,
+    origin: Origin,
+) -> Result<FetchRequest, JsError> {
+    // Step 1's first two clauses. `method_token` is the `method = token`
+    // production of RFC 9110 §5.6.2, which the XHR `open()` steps 2 to 4 also
+    // run: the same standard defines both, so the two share the checker.
+    let method = match &init.method {
+        Some(bytes) => {
+            let Some(mut normalized) = method_token(bytes) else {
+                return Err(JsError::type_error(format!(
+                    "{FETCH_CONTEXT}: the method is not a valid HTTP method token"
+                )));
+            };
+            if FORBIDDEN_METHODS
+                .iter()
+                .any(|forbidden| bytes.eq_ignore_ascii_case(forbidden))
+            {
+                return Err(JsError::type_error(format!(
+                    "{FETCH_CONTEXT}: the method is forbidden"
+                )));
+            }
+            if NORMALIZED_METHODS
+                .iter()
+                .any(|known| bytes.eq_ignore_ascii_case(known))
+            {
+                normalized.make_ascii_uppercase();
+            }
+            // `method_token` admits exactly HTTP's `tchar`s, which `http` also
+            // accepts, so a rejection here is unreachable; it is an `Err` rather
+            // than an `unwrap` because page input may not panic an engine.
+            http::Method::from_bytes(normalized.as_bytes()).map_err(|_| {
+                JsError::type_error(format!(
+                    "{FETCH_CONTEXT}: the method is not a valid HTTP method token"
+                ))
+            })?
+        }
+        None => http::Method::GET,
+    };
+
+    // Step 2. The list is the request's, so its guard is `"request"` and a
+    // forbidden request-header name is dropped rather than faulted.
+    let mut headers = match init.headers {
+        Some(headers) => fill_header_list(FETCH_CONTEXT, headers, HeadersGuard::Request)?,
+        None => Vec::new(),
+    };
+
+    // Step 3's null test: the outer `None` is an absent member and the inner one
+    // the IDL's nullable `body`.
+    let body = match init.body {
+        Some(Some(body)) => Some(body),
+        Some(None) | None => None,
+    };
+    if body.is_some() && (method == http::Method::GET || method == http::Method::HEAD) {
+        return Err(JsError::type_error(format!(
+            "{FETCH_CONTEXT}: a request with a body cannot be a GET or a HEAD"
+        )));
+    }
+    let body = match body {
+        Some(body) => {
+            let (bytes, body_type) = extract_body(body);
+            if let Some(body_type) = body_type
+                && !headers
+                    .iter()
+                    .any(|(name, _)| name.as_slice() == CONTENT_TYPE)
+            {
+                // The standard appends this pair to `this's headers` — the
+                // request's `Headers` object, so through the guarded append —
+                // where the `Response` constructor appends to its *header list*
+                // directly. The two come to the same thing here: `Content-Type`
+                // is neither a *forbidden request-header name* nor a `proxy-` or
+                // `sec-` name, so the `"request"` guard permits it, and the
+                // request's list has no `Headers` record for a guarded append to
+                // find. A `Content-Type` the page wrote is what the `any` above
+                // finds, under any casing — names are stored lowercased.
+                headers.push((CONTENT_TYPE.to_vec(), body_type.as_bytes().to_vec()));
+            }
+            Some(bytes)
+        }
+        None => None,
+    };
+
+    Ok(FetchRequest {
+        url,
+        method,
+        headers: header_pairs(headers),
+        body,
+        initiator,
+        origin,
+    })
 }
 
 // ---------------------------------------------------------------------------

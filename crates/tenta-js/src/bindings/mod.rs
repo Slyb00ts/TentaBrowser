@@ -2253,3 +2253,411 @@ mod prelude_helpers {
         );
     }
 }
+
+/// The `fetch()` initializer's rules: the Fetch Standard's *Request* constructor
+/// steps this engine runs (`super::host::request_from_init`), and the refusal of
+/// the members it does not serve.
+///
+/// They are engine-independent on purpose, and that is what makes this the place
+/// for them: which of the dictionary's fifteen members is served, what a method
+/// normalises to, whether a body is allowed, and what a body contributes are all
+/// decided over the *converted* dictionary, so none of them needs an isolate.
+/// The half that does — the argument conversion, i.e. what V8 value becomes a
+/// `RequestInit` at all, and the `TypeError` a value that is not an object gets —
+/// is asserted against a real engine in
+/// `crates/tenta-js-v8/tests/dom_fetch.rs`.
+#[cfg(test)]
+mod request_init {
+    use super::host::{refused_request_init_member, request_from_init};
+    use super::*;
+    use crate::fetch::FetchRequest;
+    use tenta_core::Origin;
+    use url::Url;
+
+    fn url(text: &str) -> Url {
+        Url::parse(text).expect("a test URL")
+    }
+
+    /// The request `init` builds for a document at `http://origin.test/x`.
+    fn request_for(init: RequestInit) -> Result<FetchRequest, JsError> {
+        let url = url("http://origin.test/x");
+        request_from_init(init, url.clone(), url, Origin::Tracked)
+    }
+
+    /// An initializer naming one `method` and nothing else.
+    fn method_of(bytes: &[u8]) -> RequestInit {
+        RequestInit {
+            method: Some(bytes.to_vec()),
+            ..Default::default()
+        }
+    }
+
+    /// An initializer with a `POST` method and `body` — the shape a request with
+    /// a payload needs, because a `GET` may not carry one.
+    fn post(body: Option<BufferSourceOrUsvString>) -> RequestInit {
+        RequestInit {
+            method: Some(b"POST".to_vec()),
+            body: Some(body),
+            ..Default::default()
+        }
+    }
+
+    /// A body's bytes as the `BufferSource` arm of `BodyInit`.
+    fn bytes(body: &[u8]) -> BufferSourceOrUsvString {
+        BufferSourceOrUsvString::BufferSource(body.to_vec())
+    }
+
+    fn text(body: &str) -> BufferSourceOrUsvString {
+        BufferSourceOrUsvString::UsvString(body.to_owned())
+    }
+
+    /// The `headers` member from a page's own pairs.
+    fn header_init(pairs: &[(&str, &str)]) -> HeadersInit {
+        HeadersInit::SequenceOfSequenceOfByteString(
+            pairs
+                .iter()
+                .map(|(name, value)| vec![name.as_bytes().to_vec(), value.as_bytes().to_vec()])
+                .collect(),
+        )
+    }
+
+    /// The header list as the page-visible pairs the driver would send: names
+    /// are byte-lowercased by the time anything is stored.
+    fn headers(request: &FetchRequest) -> Vec<(&str, &str)> {
+        request
+            .headers
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect()
+    }
+
+    /// The empty initializer is the whole of `fetch(url)`: a `GET` with no
+    /// headers and no body. `fetch(url, {})`, `fetch(url, null)` and
+    /// `fetch(url, undefined)` are the same value, so this is also their test.
+    #[test]
+    fn an_empty_initializer_is_a_get_with_nothing_on_it() {
+        let request = request_for(RequestInit::default()).expect("an empty initializer is valid");
+
+        assert_eq!(request.method, http::Method::GET);
+        assert!(request.headers.is_empty());
+        assert!(request.body.is_none());
+        assert_eq!(
+            refused_request_init_member(&RequestInit::default()),
+            None,
+            "an empty dictionary names no member, so nothing is refused"
+        );
+    }
+
+    /// Twelve of the fifteen members are refused, each one *by name*, and a
+    /// member the page named is present whatever its value — `null` and `false`
+    /// included, because a dictionary member's presence is what `Get` found and
+    /// not what it returned.
+    #[test]
+    fn every_member_this_engine_cannot_serve_is_refused_by_name() {
+        let cases: [(&str, RequestInit); 12] = [
+            (
+                "referrer",
+                RequestInit {
+                    referrer: Some(String::new()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "referrerPolicy",
+                RequestInit {
+                    referrer_policy: Some(ReferrerPolicy::EmptyString),
+                    ..Default::default()
+                },
+            ),
+            (
+                "mode",
+                RequestInit {
+                    mode: Some(RequestMode::Cors),
+                    ..Default::default()
+                },
+            ),
+            (
+                "credentials",
+                RequestInit {
+                    credentials: Some(RequestCredentials::Omit),
+                    ..Default::default()
+                },
+            ),
+            (
+                "cache",
+                RequestInit {
+                    cache: Some(RequestCache::Default),
+                    ..Default::default()
+                },
+            ),
+            (
+                "redirect",
+                RequestInit {
+                    redirect: Some(RequestRedirect::Follow),
+                    ..Default::default()
+                },
+            ),
+            (
+                "integrity",
+                RequestInit {
+                    integrity: Some(String::new()),
+                    ..Default::default()
+                },
+            ),
+            // `false` — a named member with the falsy value is still named.
+            (
+                "keepalive",
+                RequestInit {
+                    keepalive: Some(false),
+                    ..Default::default()
+                },
+            ),
+            // `null` — the nullable arm, present and null, is still present.
+            (
+                "signal",
+                RequestInit {
+                    signal: Some(None),
+                    ..Default::default()
+                },
+            ),
+            (
+                "duplex",
+                RequestInit {
+                    duplex: Some(RequestDuplex::Half),
+                    ..Default::default()
+                },
+            ),
+            (
+                "priority",
+                RequestInit {
+                    priority: Some(RequestPriority::Low),
+                    ..Default::default()
+                },
+            ),
+            // `null` is the only value the standard allows `window`.
+            (
+                "window",
+                RequestInit {
+                    window: Some(AnyValue::NULL),
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (name, init) in cases {
+            assert_eq!(
+                refused_request_init_member(&init),
+                Some(name),
+                "the member `{name}` is not served, so it must be refused by name"
+            );
+        }
+    }
+
+    /// Only one name is reported however many members are named, and it is the
+    /// first in the standard's own declaration order — so the refusal is a
+    /// function of the dictionary and not of insertion order in the call.
+    #[test]
+    fn the_first_refused_member_in_declaration_order_is_the_one_named() {
+        let init = RequestInit {
+            window: Some(AnyValue::NULL),
+            keepalive: Some(true),
+            mode: Some(RequestMode::NoCors),
+            // `method` and `body` are served, so naming them changes nothing.
+            method: Some(b"POST".to_vec()),
+            body: Some(Some(text("hi"))),
+            ..Default::default()
+        };
+
+        assert_eq!(refused_request_init_member(&init), Some("mode"));
+    }
+
+    /// `normalize a method` byte-uppercases the six it names and leaves every
+    /// other method in the case the page wrote it in
+    /// (<https://fetch.spec.whatwg.org/#concept-method-normalize>).
+    #[test]
+    fn a_method_is_normalized_only_where_the_standard_says_so() {
+        let normalized = |bytes: &[u8]| {
+            request_for(method_of(bytes))
+                .expect("a valid method")
+                .method
+                .as_str()
+                .to_owned()
+        };
+
+        // The six the standard uppercases, spelled the way a page would.
+        assert_eq!(normalized(b"get"), "GET");
+        assert_eq!(normalized(b"pOsT"), "POST");
+        assert_eq!(normalized(b"delete"), "DELETE");
+        assert_eq!(normalized(b"options"), "OPTIONS");
+        assert_eq!(normalized(b"head"), "HEAD");
+        assert_eq!(normalized(b"put"), "PUT");
+        // And everything else keeps its case. `patch` is the standard's own
+        // example: "PATCH is much more likely to succeed".
+        assert_eq!(normalized(b"patch"), "patch");
+        assert_eq!(normalized(b"CHICKEN"), "CHICKEN");
+        assert_eq!(normalized(b"chicken"), "chicken");
+    }
+
+    /// A value that is not a *method* is a `TypeError`, and the *method*
+    /// production is HTTP's `token`: non-empty and made of `tchar`s only
+    /// (RFC 9110 §5.6.2).
+    #[test]
+    fn a_value_that_is_not_a_method_token_is_a_type_error() {
+        for bytes in [b"".as_slice(), b"GE T", b"GET\t", b"g\xc3\xa9t", b"GET\x00"] {
+            let error = request_for(method_of(bytes)).expect_err("not a method token");
+            assert_eq!(error.kind(), JsErrorKind::Type, "method {bytes:?}");
+            assert!(
+                error.message().contains("not a valid HTTP method token"),
+                "unexpected message for {bytes:?}: {}",
+                error.message()
+            );
+        }
+    }
+
+    /// `CONNECT`, `TRACE` and `TRACK` are the *forbidden methods*, matched
+    /// byte-case-insensitively, and the exception is a `TypeError` — not XHR's
+    /// `SecurityError`, which is a different standard's answer to the same
+    /// question (<https://fetch.spec.whatwg.org/#forbidden-method>).
+    #[test]
+    fn a_forbidden_method_is_a_type_error() {
+        for bytes in [b"CONNECT".as_slice(), b"trace", b"Track"] {
+            let error = request_for(method_of(bytes)).expect_err("a forbidden method");
+            assert_eq!(error.kind(), JsErrorKind::Type, "method {bytes:?}");
+            assert!(
+                error.message().contains("forbidden"),
+                "unexpected message for {bytes:?}: {}",
+                error.message()
+            );
+        }
+    }
+
+    /// "If either `init["body"]` exists and is non-null … and request's method is
+    /// `GET` or `HEAD`, then throw a `TypeError`"
+    /// (<https://fetch.spec.whatwg.org/#dom-request>, the constructor's body
+    /// step). A null body is not a body, and `POST` is not `GET`.
+    #[test]
+    fn a_body_on_a_get_or_a_head_is_a_type_error() {
+        let with = |method: &[u8], body: Option<BufferSourceOrUsvString>| {
+            request_for(RequestInit {
+                method: Some(method.to_vec()),
+                body: Some(body),
+                ..Default::default()
+            })
+        };
+
+        for method in [b"GET".as_slice(), b"get", b"HEAD"] {
+            let error = with(method, Some(text("hi"))).expect_err("a body on a GET or HEAD");
+            assert_eq!(error.kind(), JsErrorKind::Type, "method {method:?}");
+            assert!(
+                error.message().contains("GET or a HEAD"),
+                "unexpected message: {}",
+                error.message()
+            );
+            // A null body is explicitly not a body, so the same method is fine.
+            assert!(
+                with(method, None).is_ok(),
+                "a null body is not a body for {method:?}"
+            );
+        }
+
+        assert!(
+            with(b"POST", Some(text("hi"))).is_ok(),
+            "a POST is the request a body is for"
+        );
+        assert!(
+            with(b"PATCH", Some(bytes(b"x"))).is_ok(),
+            "and so is any other method the token production admits"
+        );
+    }
+
+    /// *Extract a body with type* for the two arms `BodyInit` has: a scalar
+    /// value string becomes its UTF-8 bytes **and** a `Content-Type`, and a
+    /// buffer source becomes its bytes and nothing else
+    /// (<https://fetch.spec.whatwg.org/#concept-bodyinit-extract>).
+    #[test]
+    fn a_string_body_contributes_a_content_type_and_a_buffer_source_does_not() {
+        let request = request_for(post(Some(text("héllo")))).expect("a POST with a body");
+        assert_eq!(request.body, Some("héllo".as_bytes().to_vec()));
+        assert_eq!(
+            headers(&request),
+            vec![("content-type", "text/plain;charset=UTF-8")],
+            "the string arm infers the standard's type and it is appended"
+        );
+
+        let request =
+            request_for(post(Some(bytes(&[0xff, 0x00, 0x41])))).expect("a POST with a body");
+        assert_eq!(request.body, Some(vec![0xff, 0x00, 0x41]));
+        assert!(
+            request.headers.is_empty(),
+            "a buffer source contributes no type, so nothing is appended"
+        );
+    }
+
+    /// The append is skipped when the list already names `Content-Type`,
+    /// whatever case the page spelled it in — names are stored lowercased, so
+    /// the test for it is a plain equality.
+    #[test]
+    fn a_content_type_the_page_named_is_not_replaced() {
+        let request = request_for(RequestInit {
+            headers: Some(header_init(&[("Content-Type", "text/plain")])),
+            ..post(Some(text("hi")))
+        })
+        .expect("a POST with a body");
+
+        assert_eq!(
+            headers(&request),
+            vec![("content-type", "text/plain")],
+            "the page's own `Content-Type` is the only one"
+        );
+    }
+
+    /// The initializer's headers are *filled* through the `"request"` guard, so
+    /// a *forbidden request-header* is dropped silently rather than thrown on.
+    /// This is the half that keeps the transport the only author of the framing
+    /// header: a page's `Content-Length` never reaches a driver.
+    #[test]
+    fn the_initializer_headers_are_filled_under_the_request_guard() {
+        let request = request_for(RequestInit {
+            headers: Some(header_init(&[
+                ("X-Token", "abc"),
+                ("Content-Length", "999"),
+                ("Host", "elsewhere.test"),
+                ("Cookie", "a=b"),
+                ("Proxy-Authorization", "secret"),
+                ("X-Forwarded-For", "1.2.3.4"),
+            ])),
+            ..Default::default()
+        })
+        .expect("filling a request list never throws");
+
+        assert_eq!(
+            headers(&request),
+            vec![("x-token", "abc"), ("x-forwarded-for", "1.2.3.4")],
+            "the four forbidden names are gone and the other two are not"
+        );
+    }
+
+    /// The value-dependent half of the forbidden request-header rule survives
+    /// the guard: `X-HTTP-Method-Override` is forbidden only when its value
+    /// names a forbidden method, so the pair test is not the name test.
+    #[test]
+    fn a_method_override_header_is_forbidden_only_for_a_forbidden_method() {
+        let filled = |value: &str| {
+            request_for(RequestInit {
+                headers: Some(header_init(&[("X-HTTP-Method-Override", value)])),
+                ..Default::default()
+            })
+            .expect("filling a request list never throws")
+        };
+
+        assert!(
+            headers(&filled("TRACE")).is_empty(),
+            "`TRACE` is a forbidden method, so the header is a forbidden request-header"
+        );
+        assert_eq!(
+            headers(&filled("PATCH")),
+            vec![("x-http-method-override", "PATCH")],
+            "`PATCH` is not, so the same name is allowed"
+        );
+    }
+}
