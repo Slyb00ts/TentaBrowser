@@ -251,6 +251,10 @@ pub fn layout_block(
     }
 }
 
+/// Whether flex and grid containers lay their items out as such rather than
+/// falling back to block flow.
+const FLEX_GRID_ITEMS_LAID_OUT: bool = false;
+
 /// The fragment flags that follow from the box alone.
 fn fragment_flags(cx: &LayoutCx, tree: &BoxTree, id: BoxId) -> FragFlags {
     let b = tree.get(id);
@@ -264,7 +268,13 @@ fn fragment_flags(cx: &LayoutCx, tree: &BoxTree, id: BoxId) -> FragFlags {
     {
         flags |= FragFlags::CLIPS_OVERFLOW;
     }
-    if tree.is_paint_atomic(id) {
+    // Flex and grid containers are still laid out as blocks, so their items
+    // stack in normal flow and overflow into later siblings. Painting them
+    // atomically would put them above the later blocks' backgrounds, which
+    // no flow layout does; the flag applies once the items are really laid out
+    // as flex or grid items.
+    let atomic_item = tree.is_flex_grid_item(id);
+    if tree.is_paint_atomic(id) && (!atomic_item || FLEX_GRID_ITEMS_LAID_OUT) {
         flags |= FragFlags::PAINT_ATOMIC;
     }
     flags

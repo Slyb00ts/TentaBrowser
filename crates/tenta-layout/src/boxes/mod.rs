@@ -85,9 +85,14 @@ impl BoxTree {
                 b.kind,
                 BoxKind::InlineBlock | BoxKind::Flex | BoxKind::Grid | BoxKind::Table(_)
             );
-        let item = b.parent != BoxId::NONE
+        atomic_inline || self.is_flex_grid_item(id)
+    }
+
+    /// True for the in-flow children of a flex or grid container.
+    pub fn is_flex_grid_item(&self, id: BoxId) -> bool {
+        let b = self.get(id);
+        b.parent != BoxId::NONE
             && matches!(self.get(b.parent).kind, BoxKind::Flex | BoxKind::Grid)
-            && !b.flags.contains(BoxFlags::OUT_OF_FLOW);
-        atomic_inline || item
+            && !b.flags.contains(BoxFlags::OUT_OF_FLOW)
     }
 }

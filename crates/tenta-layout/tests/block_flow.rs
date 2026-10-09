@@ -163,7 +163,8 @@ mod behaviour {
         assert!(flags("clip").contains(FragFlags::CLIPS_OVERFLOW | FragFlags::ESTABLISHES_BFC));
         assert!(flags("root").contains(FragFlags::ESTABLISHES_BFC));
         assert!(!flags("root").contains(FragFlags::CLIPS_OVERFLOW));
-        assert!(flags("item").contains(FragFlags::PAINT_ATOMIC));
+        // The container is laid out as a block, so its item is not atomic yet.
+        assert!(!flags("item").contains(FragFlags::PAINT_ATOMIC));
         assert!(!flags("flex").contains(FragFlags::PAINT_ATOMIC));
     }
 
