@@ -164,11 +164,11 @@ mod behaviour {
         assert!(flags("clip").contains(FragFlags::CLIPS_OVERFLOW | FragFlags::ESTABLISHES_BFC));
         assert!(flags("root").contains(FragFlags::ESTABLISHES_BFC));
         assert!(!flags("root").contains(FragFlags::CLIPS_OVERFLOW));
-        // A flex container really lays its items out, so they paint atomically;
-        // a grid container is still laid out as a block, so its items do not.
+        // Flex and grid containers lay their items out, so those paint atomically.
         assert!(flags("item").contains(FragFlags::PAINT_ATOMIC));
         assert!(!flags("flex").contains(FragFlags::PAINT_ATOMIC));
-        assert!(!flags("cell").contains(FragFlags::PAINT_ATOMIC));
+        assert!(flags("cell").contains(FragFlags::PAINT_ATOMIC));
+        assert!(!flags("grid").contains(FragFlags::PAINT_ATOMIC));
     }
 
     #[test]

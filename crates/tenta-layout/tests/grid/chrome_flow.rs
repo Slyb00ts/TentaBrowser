@@ -1,0 +1,167 @@
+// Expected rectangles recorded from Chrome 154 (getBoundingClientRect, document coordinates).
+
+use super::Case;
+
+pub(super) const CASES: &[Case] = &[
+    Case {
+        name: "implicit_rows_auto",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:100px 100px"><div id=a style="height:10px"></div><div id=b style="height:20px"></div><div id=d style="height:30px"></div><div id=e style="height:15px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 50.0]),
+            ("a", [0.0, 0.0, 100.0, 10.0]),
+            ("b", [100.0, 0.0, 100.0, 20.0]),
+            ("d", [0.0, 20.0, 100.0, 30.0]),
+            ("e", [100.0, 20.0, 100.0, 15.0]),
+        ],
+    },
+    Case {
+        name: "grid_auto_rows_px",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:100px 100px;grid-auto-rows:25px"><div id=a></div><div id=b></div><div id=d></div><div id=e></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 50.0]),
+            ("a", [0.0, 0.0, 100.0, 25.0]),
+            ("b", [100.0, 0.0, 100.0, 25.0]),
+            ("d", [0.0, 25.0, 100.0, 25.0]),
+            ("e", [100.0, 25.0, 100.0, 25.0]),
+        ],
+    },
+    Case {
+        name: "grid_auto_rows_cycle",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:100px;grid-auto-rows:10px 20px"><div id=a></div><div id=b></div><div id=d></div><div id=e></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 60.0]),
+            ("a", [0.0, 0.0, 100.0, 10.0]),
+            ("b", [0.0, 10.0, 100.0, 20.0]),
+            ("d", [0.0, 30.0, 100.0, 10.0]),
+            ("e", [0.0, 40.0, 100.0, 20.0]),
+        ],
+    },
+    Case {
+        name: "grid_auto_columns_column_flow",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-rows:20px 20px;grid-auto-flow:column;grid-auto-columns:60px"><div id=a></div><div id=b></div><div id=d></div><div id=e></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 40.0]),
+            ("a", [0.0, 0.0, 60.0, 20.0]),
+            ("b", [0.0, 20.0, 60.0, 20.0]),
+            ("d", [60.0, 0.0, 60.0, 20.0]),
+            ("e", [60.0, 20.0, 60.0, 20.0]),
+        ],
+    },
+    Case {
+        name: "column_flow_no_template_columns",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-rows:30px 30px;grid-auto-flow:column;width:400px"><div id=a style="width:40px"></div><div id=b style="width:50px"></div><div id=d style="width:60px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 400.0, 60.0]),
+            ("a", [0.0, 0.0, 40.0, 30.0]),
+            ("b", [0.0, 30.0, 50.0, 30.0]),
+            ("d", [195.0, 0.0, 60.0, 30.0]),
+        ],
+    },
+    Case {
+        name: "explicit_then_implicit_columns",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:50px;grid-auto-columns:70px;grid-auto-flow:column;grid-template-rows:20px"><div id=a></div><div id=b></div><div id=d></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 20.0]),
+            ("a", [0.0, 0.0, 50.0, 20.0]),
+            ("b", [50.0, 0.0, 70.0, 20.0]),
+            ("d", [120.0, 0.0, 70.0, 20.0]),
+        ],
+    },
+    Case {
+        name: "row_sparse_skips",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:repeat(3,50px);grid-auto-flow:row"><div id=a style="grid-column:span 2;height:10px"></div><div id=b style="grid-column:span 2;height:10px"></div><div id=d style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 20.0]),
+            ("a", [0.0, 0.0, 100.0, 10.0]),
+            ("b", [0.0, 10.0, 100.0, 10.0]),
+            ("d", [100.0, 10.0, 50.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "row_dense_backfills",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:repeat(3,50px);grid-auto-flow:row dense"><div id=a style="grid-column:span 2;height:10px"></div><div id=b style="grid-column:span 2;height:10px"></div><div id=d style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 20.0]),
+            ("a", [0.0, 0.0, 100.0, 10.0]),
+            ("b", [0.0, 10.0, 100.0, 10.0]),
+            ("d", [100.0, 0.0, 50.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "column_dense_backfills",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-rows:repeat(3,20px);grid-auto-flow:column dense;grid-auto-columns:40px"><div id=a style="grid-row:span 2"></div><div id=b style="grid-row:span 2"></div><div id=d></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 60.0]),
+            ("a", [0.0, 0.0, 40.0, 40.0]),
+            ("b", [40.0, 0.0, 40.0, 40.0]),
+            ("d", [0.0, 40.0, 40.0, 20.0]),
+        ],
+    },
+    Case {
+        name: "column_sparse",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-rows:repeat(3,20px);grid-auto-flow:column;grid-auto-columns:40px"><div id=a style="grid-row:span 2"></div><div id=b style="grid-row:span 2"></div><div id=d></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 60.0]),
+            ("a", [0.0, 0.0, 40.0, 40.0]),
+            ("b", [40.0, 0.0, 40.0, 40.0]),
+            ("d", [40.0, 40.0, 40.0, 20.0]),
+        ],
+    },
+    Case {
+        name: "auto_placed_around_fixed",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:repeat(3,50px)"><div id=a style="grid-column:2;grid-row:1;height:10px"></div><div id=b style="height:10px"></div><div id=d style="height:10px"></div><div id=e style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 20.0]),
+            ("a", [50.0, 0.0, 50.0, 10.0]),
+            ("b", [0.0, 0.0, 50.0, 10.0]),
+            ("d", [100.0, 0.0, 50.0, 10.0]),
+            ("e", [0.0, 10.0, 50.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "span_rows_auto_distribution",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:100px 100px"><div id=a style="grid-row:span 2;height:100px"></div><div id=b style="height:10px"></div><div id=d style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 100.0]),
+            ("a", [0.0, 0.0, 100.0, 100.0]),
+            ("b", [100.0, 0.0, 100.0, 10.0]),
+            ("d", [100.0, 50.0, 100.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "order_property_places",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:50px 50px"><div id=a style="order:2;height:10px"></div><div id=b style="order:1;height:10px"></div><div id=d style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 20.0]),
+            ("a", [0.0, 10.0, 50.0, 10.0]),
+            ("b", [50.0, 0.0, 50.0, 10.0]),
+            ("d", [0.0, 0.0, 50.0, 10.0]),
+        ],
+    },
+];

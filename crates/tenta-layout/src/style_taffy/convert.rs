@@ -362,6 +362,23 @@ pub(crate) fn preferred_aspect_ratio(style: &stylo::ComputedValues) -> Option<f3
     aspect_ratio(style.get_position().aspect_ratio)
 }
 
+/// Whether `align-self` of a grid item resolves to `normal`: the item names no
+/// block-axis alignment and the container's `align-items` is `normal` too.
+/// Conversion maps `normal` to `stretch`, so the computed values decide.
+pub(crate) fn block_alignment_is_normal(
+    item: &stylo::ComputedValues,
+    container: &stylo::ComputedValues,
+) -> bool {
+    let value = |flags: stylo::AlignFlags| flags.value();
+    match value(item.get_position().align_self.0) {
+        stylo::AlignFlags::NORMAL => true,
+        stylo::AlignFlags::AUTO => {
+            value(container.get_position().align_items.0) == stylo::AlignFlags::NORMAL
+        }
+        _ => false,
+    }
+}
+
 /// A converted style, bound to the computed values its `calc()` handles point into.
 pub(crate) struct ConvertedStyle<'a> {
     style: taffy::Style<stylo::Atom>,
@@ -404,6 +421,12 @@ impl ConvertedStyle<'_> {
     /// ratio to the used size instead.
     pub(crate) fn without_aspect_ratio(mut self) -> Self {
         self.style.aspect_ratio = None;
+        self
+    }
+
+    /// Aligns the item to the start of its grid area in the block axis.
+    pub(crate) fn start_aligned(mut self) -> Self {
+        self.style.align_self = Some(taffy::AlignSelf::START);
         self
     }
 

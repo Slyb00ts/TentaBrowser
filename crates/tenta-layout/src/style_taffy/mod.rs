@@ -16,4 +16,6 @@ mod grid;
 mod tests;
 
 pub(crate) use calc::resolve as resolve_calc;
-pub(crate) use convert::{ConvertedStyle, preferred_aspect_ratio, to_taffy_style};
+pub(crate) use convert::{
+    ConvertedStyle, block_alignment_is_normal, preferred_aspect_ratio, to_taffy_style,
+};

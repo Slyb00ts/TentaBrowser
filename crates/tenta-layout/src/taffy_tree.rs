@@ -19,18 +19,22 @@ use std::slice::Iter;
 use smallvec::SmallVec;
 use style::Atom;
 use taffy::{
-    AvailableSpace, Cache, CacheTree, Layout, LayoutInput, LayoutOutput, LayoutPartialTree, NodeId,
-    RequestedAxis, ResolveOrZero, RunMode, Size, Style, TraversePartialTree, compute_cached_layout,
-    compute_flexbox_layout,
+    AvailableSpace, Cache, CacheTree, Layout, LayoutInput, LayoutOutput, LayoutPartialTree, Line,
+    NodeId, RequestedAxis, ResolveOrZero, RunMode, Size, SizingMode, Style, TraversePartialTree,
+    compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
 };
 
 use crate::block::layout_block;
-use crate::block_sizes::{SizeLimits, intrinsic_inline_sizes_of_block, replaced_content_size};
+use crate::block_sizes::{
+    self, SizeLimits, intrinsic_inline_sizes_of_block, replaced_content_size,
+};
 use crate::box_tree::{BoxFlags, BoxId, BoxKind, BoxTree, LayoutBox, LayoutCx};
 use crate::constraint::own_direction;
 use crate::fragment::{FragFlags, FragId, FragmentBuilder};
 use crate::space::{AvailableSize, ConstraintSpace};
-use crate::style_taffy::{ConvertedStyle, preferred_aspect_ratio, resolve_calc, to_taffy_style};
+use crate::style_taffy::{
+    ConvertedStyle, block_alignment_is_normal, preferred_aspect_ratio, resolve_calc, to_taffy_style,
+};
 use crate::types::{Direction, Edges, OverflowKind, PositionKind};
 
 /// Whether the box is a scroll container, whose automatic minimum size is zero.
@@ -113,6 +117,11 @@ pub(crate) struct TreeView<'a, 'c> {
     children: HashMap<BoxId, Vec<NodeId>>,
     caches: HashMap<BoxId, Cache>,
     layouts: HashMap<BoxId, Layout>,
+    /// First baselines of the root's children, taken from their final layouts.
+    baselines: HashMap<BoxId, Option<f32>>,
+    /// The grid area each of a grid root's children was last laid out in, the
+    /// containing block its percentages resolve against.
+    areas: HashMap<BoxId, Size<Option<f32>>>,
     _memo: MemoScope,
 }
 
@@ -127,6 +136,8 @@ impl<'a, 'c> TreeView<'a, 'c> {
             children: HashMap::new(),
             caches: HashMap::new(),
             layouts: HashMap::new(),
+            baselines: HashMap::new(),
+            areas: HashMap::new(),
             _memo: MemoScope::enter(),
         };
         view.convert(root);
@@ -168,6 +179,19 @@ impl<'a, 'c> TreeView<'a, 'c> {
         items.sort_by_key(|&c| tree.get(c).style.get_position().order);
         for &item in &items {
             self.convert(item);
+        }
+        if matches!(tree.get(container).kind, BoxKind::Grid) {
+            for &item in &items {
+                let style = &tree.get(item).style;
+                // `normal` behaves as `start` for items with a preferred aspect
+                // ratio, which Taffy no longer sees on the item style.
+                if preferred_aspect_ratio(style).is_some_and(|r| r > 0.0)
+                    && block_alignment_is_normal(style, &tree.get(container).style)
+                {
+                    let converted = self.styles.remove(&item).expect("converted above");
+                    self.styles.insert(item, converted.start_aligned());
+                }
+            }
         }
         self.children
             .insert(container, items.into_iter().map(node_id).collect());
@@ -385,13 +409,49 @@ impl<'a, 'c> TreeView<'a, 'c> {
     }
 
     fn compute_uncached(&mut self, id: BoxId, mut inputs: LayoutInput) -> LayoutOutput {
-        if matches!(self.tree.get(id).kind, BoxKind::Flex) {
+        if matches!(self.tree.get(id).kind, BoxKind::Flex | BoxKind::Grid) {
             self.apply_aspect_ratio(id, &mut inputs);
             self.prepare(id);
-            compute_flexbox_layout(self, node_id(id), inputs)
+            self.solve(id, inputs)
         } else {
             self.measure_item(id, inputs)
         }
+    }
+
+    /// Runs the container algorithm `id`'s `display` selects.
+    pub(crate) fn solve(&mut self, id: BoxId, inputs: LayoutInput) -> LayoutOutput {
+        match self.tree.get(id).kind {
+            BoxKind::Grid => compute_grid_layout(self, node_id(id), inputs),
+            _ => compute_flexbox_layout(self, node_id(id), inputs),
+        }
+    }
+
+    /// The root container's content-box inline size under a min-content or
+    /// max-content constraint.
+    fn content_width_under(&mut self, space: AvailableSpace) -> f32 {
+        let id = self.root;
+        let frame = block_sizes::frame_of(self.tree, id, 0.0);
+        let edges = frame.padding.horizontal() + frame.border.horizontal();
+        let output = self.solve(
+            id,
+            LayoutInput {
+                run_mode: RunMode::ComputeSize,
+                sizing_mode: SizingMode::ContentSize,
+                axis: RequestedAxis::Horizontal,
+                known_dimensions: Size::NONE,
+                known_dimensions_are_definite: Size {
+                    width: true,
+                    height: true,
+                },
+                parent_size: Size::NONE,
+                available_space: Size {
+                    width: space,
+                    height: AvailableSpace::MaxContent,
+                },
+                vertical_margins_are_collapsible: Line::FALSE,
+            },
+        );
+        (output.size.width - edges).max(0.0)
     }
 
     /// Produces the fragments of the root container's children from the layouts
@@ -414,8 +474,10 @@ impl<'a, 'c> TreeView<'a, 'c> {
             let Some(layout) = self.layouts.get(&id).copied() else {
                 continue;
             };
-            let space = self.item_space(layout.size.width, Some(layout.size.height), percent_base);
+            let base = self.areas.get(&id).copied().unwrap_or(percent_base);
+            let space = self.item_space(layout.size.width, Some(layout.size.height), base);
             let result = layout_block(self.cx, tree, id, &space, out);
+            self.baselines.insert(id, result.first_baseline);
             // Taffy applies `position: relative` offsets and resolves auto
             // margins itself, so its location and margins replace the block
             // entry point's.
@@ -432,6 +494,46 @@ impl<'a, 'c> TreeView<'a, 'c> {
             frags.push(result.frag);
         }
         frags
+    }
+}
+
+impl TreeView<'_, '_> {
+    /// The grid container's first baseline, from the final layouts of its items
+    /// (CSS Grid 1, 6.2): the first item of the first row, preferring one that
+    /// is baseline-aligned, at its own first baseline or else its bottom edge.
+    ///
+    /// Taffy reports a baseline only when a row holds two baseline-aligned
+    /// items and otherwise answers with the item's bottom edge. The first row
+    /// is taken as the items whose margin box starts topmost, which can miss an
+    /// item that is aligned away from the top of the same row.
+    pub(crate) fn grid_first_baseline(&self) -> Option<f32> {
+        let container = self.style(self.root);
+        let top = |layout: &Layout| layout.location.y - layout.margin.top;
+        let items: Vec<(BoxId, &Layout)> = self.children[&self.root]
+            .iter()
+            .filter_map(|&node| {
+                let id = box_id(node);
+                self.layouts.get(&id).map(|layout| (id, layout))
+            })
+            .collect();
+        let first_top = items.iter().map(|(_, l)| top(l)).min_by(f32::total_cmp)?;
+        let in_first_row = || {
+            items
+                .iter()
+                .filter(move |(_, l)| top(l) <= first_top + 0.01)
+        };
+        let baseline_aligned = |id: &BoxId| {
+            self.style(*id)
+                .align_self
+                .or(container.align_items)
+                .map(|a| a.keyword)
+                == Some(taffy::AlignItemsKeyword::Baseline)
+        };
+        let (id, layout) = in_first_row()
+            .find(|(id, _)| baseline_aligned(id))
+            .or_else(|| in_first_row().next())?;
+        let own = self.baselines.get(id).copied().flatten();
+        Some(layout.location.y + own.unwrap_or(layout.size.height))
     }
 }
 
@@ -485,6 +587,13 @@ impl LayoutPartialTree for TreeView<'_, '_> {
         if inputs.run_mode == RunMode::PerformHiddenLayout {
             return LayoutOutput::HIDDEN;
         }
+        let id = box_id(node);
+        if inputs.run_mode == RunMode::PerformLayout
+            && self.tree.get(id).parent == self.root
+            && matches!(self.tree.get(self.root).kind, BoxKind::Grid)
+        {
+            self.areas.insert(id, inputs.parent_size);
+        }
         compute_cached_layout(self, node, inputs, |view, node, inputs| {
             view.compute_uncached(box_id(node), inputs)
         })
@@ -506,4 +615,14 @@ impl CacheTree for TreeView<'_, '_> {
     fn cache_clear(&mut self, node: NodeId) {
         self.caches.remove(&box_id(node));
     }
+}
+
+/// The `(min-content, max-content)` inline sizes of a flex or grid container's
+/// content box, as the container would size itself under each constraint.
+pub(crate) fn intrinsic_inline_sizes(cx: &mut LayoutCx, tree: &BoxTree, id: BoxId) -> (f32, f32) {
+    let mut view = TreeView::new(cx, tree, id);
+    (
+        view.content_width_under(AvailableSpace::MinContent),
+        view.content_width_under(AvailableSpace::MaxContent),
+    )
 }

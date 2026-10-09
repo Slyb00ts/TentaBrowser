@@ -41,7 +41,7 @@
 
 ["block-whitespace-margin-collapse"]
 "first block keeps its declared geometry" = "pass"
-"formatting whitespace does not interrupt sibling margin collapse" = "deferred:M4 grid"
+"formatting whitespace does not interrupt sibling margin collapse" = "pass"
 
 ["bootstrap-float-clearfix"]
 "percentage float keeps the block containing width" = "deferred:M1.1 floats"
@@ -75,16 +75,16 @@
 "round quantizes nested custom property math" = "pass"
 
 ["contextual-grid-gap"]
-"first cell starts at the grid origin" = "deferred:M4 flex and grid"
-"functional column gap uses root and viewport context" = "deferred:M4 flex and grid"
-"rem row gap uses the computed root font size" = "deferred:M4 flex and grid"
-"both contextual gaps place the final cell" = "deferred:M4 flex and grid"
+"first cell starts at the grid origin" = "pass"
+"functional column gap uses root and viewport context" = "pass"
+"rem row gap uses the computed root font size" = "pass"
+"both contextual gaps place the final cell" = "pass"
 
 ["direction-rtl"]
 "inherited RTL places first flex item at inline start" = "pass"
 "inherited RTL reverses the flex row" = "pass"
-"inherited RTL places first grid track at inline start" = "deferred:M4 grid"
-"inherited RTL reverses explicit grid track placement" = "deferred:M4 grid"
+"inherited RTL places first grid track at inline start" = "pass"
+"inherited RTL reverses explicit grid track placement" = "pass"
 "inherited RTL resolves block under-constraint from right" = "pass"
 
 ["display-contents-cascade"]
@@ -183,12 +183,12 @@
 "quirks author dimensions use border box" = "deferred:M6 forms"
 
 ["grid-auto-repeat"]
-"auto-fill creates all fitting tracks" = "deferred:M4 flex and grid"
-"auto-fit collapses empty tracks" = "deferred:M4 flex and grid"
+"auto-fill creates all fitting tracks" = "pass"
+"auto-fit collapses empty tracks" = "pass"
 
 ["grid-shorthand"]
-"grid shorthand creates explicit columns" = "deferred:M4 flex and grid"
-"custom property grid shorthand creates explicit columns" = "deferred:M4 flex and grid"
+"grid shorthand creates explicit columns" = "pass"
+"custom property grid shorthand creates explicit columns" = "pass"
 
 ["img-density-and-alt"]
 "raw intrinsic image keeps its 648 CSS pixel width" = "deferred:M2 images"
@@ -212,15 +212,15 @@
 ["item-self-alignment"]
 "flex item centers itself on cross axis" = "pass"
 "flex item aligns itself to cross end" = "pass"
-"grid item aligns center and inline end" = "deferred:M4 flex and grid"
-"grid item aligns block end and inline center" = "deferred:M4 flex and grid"
-"place self sets both grid axes" = "deferred:M4 flex and grid"
-"place items aligns first grid child" = "deferred:M4 flex and grid"
-"place items aligns second grid child" = "deferred:M4 flex and grid"
+"grid item aligns center and inline end" = "pass"
+"grid item aligns block end and inline center" = "pass"
+"place self sets both grid axes" = "pass"
+"place items aligns first grid child" = "pass"
+"place items aligns second grid child" = "pass"
 "align content distributes flex lines" = "pass"
 "align content reaches cross end" = "pass"
-"place content aligns first grid track" = "deferred:M4 flex and grid"
-"place content aligns second grid track" = "deferred:M4 flex and grid"
+"place content aligns first grid track" = "pass"
+"place content aligns second grid track" = "pass"
 
 ["legacy-center"]
 "legacy center aligns inline content" = "deferred:M1b"
@@ -310,7 +310,7 @@
 "auto block wrapper contains its percentage image" = "deferred:M2 images"
 
 ["replaced-grid-order"]
-"order-modified description occupies the first grid cell" = "deferred:M2 images"
+"order-modified description occupies the first grid cell" = "pass"
 "media wrapper shares the first row" = "deferred:M2 images"
 "percentage image uses the wrapper content box" = "deferred:M2 images"
 

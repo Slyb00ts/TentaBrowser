@@ -15,7 +15,7 @@ use crate::fragment::{FragFlags, FragId, Fragment, FragmentBuilder, FragmentKind
 use crate::inline::layout_inline;
 use crate::space::{AvailableSize, BlockResult, ConstraintSpace, MarginStrut, NoFloats};
 use crate::types::{Edges, OverflowKind, PositionKind, Rect};
-use crate::{block_sizes, flex, list, quirks, relative};
+use crate::{block_sizes, container, list, quirks, relative};
 
 /// Lays out the block box `id` within `space`, pushing its fragment (and its
 /// descendants') into `out`.
@@ -41,8 +41,8 @@ pub fn layout_block(
                 .all(|&c| tree.get(c).flags.contains(BoxFlags::OUT_OF_FLOW)),
         "a block holds in-flow block children or an inline formatting context, not both"
     );
-    if matches!(b.kind, BoxKind::Flex) {
-        return flex::layout_flex(cx, tree, id, space, out);
+    if matches!(b.kind, BoxKind::Flex | BoxKind::Grid) {
+        return container::layout_container(cx, tree, id, space, out);
     }
     let m = constraint::resolve_box(cx, tree, id, space);
     let direction = constraint::own_direction(&b.style);

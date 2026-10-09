@@ -1,0 +1,258 @@
+// Expected rectangles recorded from Chrome 154 (getBoundingClientRect, document coordinates).
+
+use super::Case;
+
+pub(super) const CASES: &[Case] = &[
+    Case {
+        name: "aspect_ratio_auto_width",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:100px 100px"><div id=a style="aspect-ratio:2"></div><div id=b style="aspect-ratio:1;justify-self:start;width:30px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 50.0]),
+            ("a", [0.0, 0.0, 100.0, 50.0]),
+            ("b", [100.0, 0.0, 30.0, 30.0]),
+        ],
+    },
+    Case {
+        name: "aspect_ratio_explicit_stretch",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:100px;grid-template-rows:80px;align-items:stretch"><div id=a style="aspect-ratio:2;width:60px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 80.0]),
+            ("a", [0.0, 0.0, 60.0, 80.0]),
+        ],
+    },
+    Case {
+        name: "fr_min_content_floor",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:1fr 1fr;width:100px"><div id=a style="width:80px;height:10px"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 100.0, 10.0]),
+            ("a", [0.0, 0.0, 80.0, 10.0]),
+            ("b", [80.0, 0.0, 20.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "fr_min_width_zero",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:1fr 1fr;width:100px"><div id=a style="width:80px;height:10px;min-width:0"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 100.0, 10.0]),
+            ("a", [0.0, 0.0, 80.0, 10.0]),
+            ("b", [80.0, 0.0, 20.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "minmax_zero_fr",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);width:100px"><div id=a style="width:80px;height:10px"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 100.0, 10.0]),
+            ("a", [0.0, 0.0, 80.0, 10.0]),
+            ("b", [50.0, 0.0, 50.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "item_overflow_hidden_fr",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:1fr 1fr;width:100px"><div id=a style="width:80px;height:10px;overflow:hidden"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 100.0, 10.0]),
+            ("a", [0.0, 0.0, 80.0, 10.0]),
+            ("b", [80.0, 0.0, 20.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "visibility_hidden_takes_space",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:50px 50px"><div id=a style="visibility:hidden;height:10px"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 10.0]),
+            ("a", [0.0, 0.0, 50.0, 10.0]),
+            ("b", [50.0, 0.0, 50.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "span_all_implicit_columns",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;"><div id=a style="grid-column:1/-1;height:10px"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 20.0]),
+            ("a", [0.0, 0.0, 800.0, 10.0]),
+            ("b", [0.0, 10.0, 800.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "padding_percent_item",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:200px"><div id=a style="padding:10%;height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 50.0]),
+            ("a", [0.0, 0.0, 200.0, 50.0]),
+        ],
+    },
+    Case {
+        name: "auto_margins_with_stretch",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:100px;grid-template-rows:50px"><div id=a style="margin:auto 10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 50.0]),
+            ("a", [10.0, 25.0, 80.0, 0.0]),
+        ],
+    },
+    Case {
+        name: "fit_content_rows",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-rows:fit-content(25px) 1fr;grid-template-columns:100px;height:100px"><div id=a style="height:60px"></div><div id=b></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 100.0]),
+            ("a", [0.0, 0.0, 100.0, 60.0]),
+            ("b", [0.0, 60.0, 100.0, 40.0]),
+        ],
+    },
+    Case {
+        name: "baseline_pair_with_padding",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:auto auto;align-items:baseline;width:200px"><div id=a style="font-size:32px;padding-top:5px">Ag</div><div id=b style="font-size:12px">Ag</div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 200.0, 42.0]),
+            ("a", [0.0, 0.0, 112.2188, 42.0]),
+            ("b", [112.2188, 23.0, 87.7812, 14.0]),
+        ],
+    },
+    Case {
+        name: "nested_auto_fill_grid",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:200px 1fr;width:500px"><div id=a style="display:grid;grid-template-columns:repeat(auto-fill,60px)"><div id=x style='height:5px'></div><div id=y style='height:5px'></div><div id=z style='height:5px'></div><div id=w style='height:5px'></div></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 500.0, 10.0]),
+            ("a", [0.0, 0.0, 200.0, 10.0]),
+            ("x", [0.0, 0.0, 60.0, 5.0]),
+            ("y", [60.0, 0.0, 60.0, 5.0]),
+            ("z", [120.0, 0.0, 60.0, 5.0]),
+            ("w", [0.0, 5.0, 60.0, 5.0]),
+            ("b", [200.0, 0.0, 300.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "grid_in_flex_column",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=f style="display:flex;flex-direction:column;width:300px"><div id=c style="display:grid;grid-template-columns:1fr 2fr"><div id=a style="height:10px"></div><div id=b style="height:10px"></div></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("f", [0.0, 0.0, 300.0, 10.0]),
+            ("c", [0.0, 0.0, 300.0, 10.0]),
+            ("a", [0.0, 0.0, 100.0, 10.0]),
+            ("b", [100.0, 0.0, 200.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "grid_in_flex_column_stretch_height",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=f style="display:flex;flex-direction:column;height:200px;width:300px"><div id=c style="display:grid;grid-template-columns:1fr;grid-template-rows:1fr 1fr;flex:1"><div id=a></div><div id=b></div></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("f", [0.0, 0.0, 300.0, 200.0]),
+            ("c", [0.0, 0.0, 300.0, 200.0]),
+            ("a", [0.0, 0.0, 300.0, 100.0]),
+            ("b", [0.0, 100.0, 300.0, 100.0]),
+        ],
+    },
+    Case {
+        name: "grid_percent_height_chain",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=p style="height:300px"><div id=c style="display:grid;grid-template-columns:1fr;grid-template-rows:25% 25%;height:50%"><div id=a></div><div id=b></div></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 800.0, 300.0]),
+            ("c", [0.0, 0.0, 800.0, 150.0]),
+            ("a", [0.0, 0.0, 800.0, 37.5]),
+            ("b", [0.0, 37.5, 800.0, 37.5]),
+        ],
+    },
+    Case {
+        name: "column_dense_explicit",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:repeat(3,40px);grid-auto-flow:column dense"><div id=a style="grid-row:2;height:10px"></div><div id=b style="height:10px"></div><div id=d style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 20.0]),
+            ("a", [0.0, 10.0, 40.0, 10.0]),
+            ("b", [0.0, 0.0, 40.0, 10.0]),
+            ("d", [40.0, 0.0, 40.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "row_dense_with_fixed_placement",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:repeat(3,40px);grid-auto-flow:dense"><div id=a style="grid-column:3;height:10px"></div><div id=b style="grid-column:span 3;height:10px"></div><div id=d style="height:10px"></div><div id=e style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 20.0]),
+            ("a", [80.0, 0.0, 40.0, 10.0]),
+            ("b", [0.0, 10.0, 120.0, 10.0]),
+            ("d", [0.0, 0.0, 40.0, 10.0]),
+            ("e", [40.0, 0.0, 40.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "many_span_rows_distribution",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:50px 50px;grid-template-rows:auto auto auto"><div id=a style="grid-row:1/4;height:90px"></div><div id=b style="height:10px"></div><div id=d style="height:10px"></div><div id=e style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 90.0]),
+            ("a", [0.0, 0.0, 50.0, 90.0]),
+            ("b", [50.0, 0.0, 50.0, 10.0]),
+            ("d", [50.0, 30.0, 50.0, 10.0]),
+            ("e", [50.0, 60.0, 50.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "span_two_auto_tracks_text",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:auto auto;width:300px"><div id=a style="grid-column:1/3">a fairly long line of text</div><div id=b>x</div><div id=d>y</div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 300.0, 36.0]),
+            ("a", [0.0, 0.0, 300.0, 18.0]),
+            ("b", [0.0, 18.0, 149.9844, 18.0]),
+            ("d", [149.9844, 18.0, 150.0156, 18.0]),
+        ],
+    },
+    Case {
+        name: "justify_content_space_evenly_rtl",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:40px 40px;direction:rtl;justify-content:space-evenly;width:300px"><div id=a style="height:10px"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 300.0, 10.0]),
+            ("a", [186.6719, 0.0, 40.0, 10.0]),
+            ("b", [73.3438, 0.0, 40.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "inline_grid_rtl_in_ltr",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:inline-grid;grid-template-columns:30px 50px;direction:rtl"><div id=a style="height:10px"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 4.0, 80.0, 10.0]),
+            ("a", [50.0, 4.0, 30.0, 10.0]),
+            ("b", [0.0, 4.0, 50.0, 10.0]),
+        ],
+    },
+];

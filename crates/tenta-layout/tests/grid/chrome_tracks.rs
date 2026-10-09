@@ -1,0 +1,267 @@
+// Expected rectangles recorded from Chrome 154 (getBoundingClientRect, document coordinates).
+
+use super::Case;
+
+pub(super) const CASES: &[Case] = &[
+    Case {
+        name: "px_columns",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:100px 150px;width:400px"><div id=a style="height:20px"></div><div id=b style="height:30px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 400.0, 30.0]),
+            ("a", [0.0, 0.0, 100.0, 20.0]),
+            ("b", [100.0, 0.0, 150.0, 30.0]),
+        ],
+    },
+    Case {
+        name: "fr_columns",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:1fr 2fr 1fr;width:400px"><div id=a style="height:20px"></div><div id=b style="height:20px"></div><div id=d style="height:20px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 400.0, 20.0]),
+            ("a", [0.0, 0.0, 100.0, 20.0]),
+            ("b", [100.0, 0.0, 200.0, 20.0]),
+            ("d", [300.0, 0.0, 100.0, 20.0]),
+        ],
+    },
+    Case {
+        name: "percent_columns",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:25% 50%;width:400px"><div id=a style="height:10px"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 400.0, 10.0]),
+            ("a", [0.0, 0.0, 100.0, 10.0]),
+            ("b", [100.0, 0.0, 200.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "mixed_px_fr",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:100px 1fr 50px;width:400px"><div id=a style="height:10px"></div><div id=b style="height:10px"></div><div id=d style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 400.0, 10.0]),
+            ("a", [0.0, 0.0, 100.0, 10.0]),
+            ("b", [100.0, 0.0, 250.0, 10.0]),
+            ("d", [350.0, 0.0, 50.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "auto_columns_stretch",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:auto auto;width:300px"><div id=a style="height:10px"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 300.0, 10.0]),
+            ("a", [0.0, 0.0, 150.0, 10.0]),
+            ("b", [150.0, 0.0, 150.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "auto_with_width_items",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:auto auto;width:300px"><div id=a style="width:50px;height:10px"></div><div id=b style="width:70px;height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 300.0, 10.0]),
+            ("a", [0.0, 0.0, 50.0, 10.0]),
+            ("b", [140.0, 0.0, 70.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "minmax_px_fr",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:minmax(100px,1fr) minmax(50px,2fr);width:300px"><div id=a style="height:10px"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 300.0, 10.0]),
+            ("a", [0.0, 0.0, 100.0, 10.0]),
+            ("b", [100.0, 0.0, 200.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "minmax_min_wins",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:minmax(200px,1fr) 1fr;width:300px"><div id=a style="height:10px"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 300.0, 10.0]),
+            ("a", [0.0, 0.0, 200.0, 10.0]),
+            ("b", [200.0, 0.0, 100.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "minmax_auto_px",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:minmax(auto,120px) 1fr;width:300px"><div id=a style="width:80px;height:10px"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 300.0, 10.0]),
+            ("a", [0.0, 0.0, 80.0, 10.0]),
+            ("b", [120.0, 0.0, 180.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "repeat_count",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:repeat(3,60px);width:400px"><div id=a style="height:10px"></div><div id=b style="height:10px"></div><div id=d style="height:10px"></div><div id=e style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 400.0, 20.0]),
+            ("a", [0.0, 0.0, 60.0, 10.0]),
+            ("b", [60.0, 0.0, 60.0, 10.0]),
+            ("d", [120.0, 0.0, 60.0, 10.0]),
+            ("e", [0.0, 10.0, 60.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "repeat_pattern",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:repeat(2,50px 1fr);width:400px"><div id=a style="height:10px"></div><div id=b style="height:10px"></div><div id=d style="height:10px"></div><div id=e style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 400.0, 10.0]),
+            ("a", [0.0, 0.0, 50.0, 10.0]),
+            ("b", [50.0, 0.0, 150.0, 10.0]),
+            ("d", [200.0, 0.0, 50.0, 10.0]),
+            ("e", [250.0, 0.0, 150.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "rows_px",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-rows:30px 40px;grid-template-columns:100px;height:200px"><div id=a></div><div id=b></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 200.0]),
+            ("a", [0.0, 0.0, 100.0, 30.0]),
+            ("b", [0.0, 30.0, 100.0, 40.0]),
+        ],
+    },
+    Case {
+        name: "rows_fr_definite_height",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-rows:1fr 3fr;grid-template-columns:100px;height:200px"><div id=a></div><div id=b></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 200.0]),
+            ("a", [0.0, 0.0, 100.0, 50.0]),
+            ("b", [0.0, 50.0, 100.0, 150.0]),
+        ],
+    },
+    Case {
+        name: "rows_fr_indefinite_height",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-rows:1fr 2fr;grid-template-columns:100px"><div id=a style="height:30px"></div><div id=b style="height:20px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 90.0]),
+            ("a", [0.0, 0.0, 100.0, 30.0]),
+            ("b", [0.0, 30.0, 100.0, 20.0]),
+        ],
+    },
+    Case {
+        name: "rows_percent_definite",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-rows:25% 50%;grid-template-columns:100px;height:200px"><div id=a></div><div id=b></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 200.0]),
+            ("a", [0.0, 0.0, 100.0, 50.0]),
+            ("b", [0.0, 50.0, 100.0, 100.0]),
+        ],
+    },
+    Case {
+        name: "rows_auto_content",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:100px 100px"><div id=a style="height:35px"></div><div id=b style="height:20px"></div><div id=d style="height:10px"></div><div id=e style="height:40px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 75.0]),
+            ("a", [0.0, 0.0, 100.0, 35.0]),
+            ("b", [100.0, 0.0, 100.0, 20.0]),
+            ("d", [0.0, 35.0, 100.0, 10.0]),
+            ("e", [100.0, 35.0, 100.0, 40.0]),
+        ],
+    },
+    Case {
+        name: "min_content_track",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:min-content 1fr;width:300px"><div id=a>word another</div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 300.0, 36.0]),
+            ("a", [0.0, 0.0, 54.2656, 36.0]),
+            ("b", [54.2656, 0.0, 245.7344, 10.0]),
+        ],
+    },
+    Case {
+        name: "max_content_track",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:max-content 1fr;width:300px"><div id=a>word another</div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 300.0, 18.0]),
+            ("a", [0.0, 0.0, 93.3906, 18.0]),
+            ("b", [93.3906, 0.0, 206.6094, 10.0]),
+        ],
+    },
+    Case {
+        name: "fit_content_track",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:fit-content(60px) 1fr;width:300px"><div id=a>word another thing</div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 300.0, 54.0]),
+            ("a", [0.0, 0.0, 60.0, 54.0]),
+            ("b", [60.0, 0.0, 240.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "fr_fractional_sum",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:0.5fr 0.25fr;width:400px"><div id=a style="height:10px"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 400.0, 10.0]),
+            ("a", [0.0, 0.0, 200.0, 10.0]),
+            ("b", [200.0, 0.0, 100.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "fr_below_one_indefinite",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:0.5fr 0.25fr"><div id=a style="width:80px;height:10px"></div><div id=b style="width:40px;height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 800.0, 10.0]),
+            ("a", [0.0, 0.0, 80.0, 10.0]),
+            ("b", [400.0, 0.0, 40.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "calc_track",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:calc(50% - 10px) calc(20px + 10%);width:400px"><div id=a style="height:10px"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 400.0, 10.0]),
+            ("a", [0.0, 0.0, 190.0, 10.0]),
+            ("b", [190.0, 0.0, 60.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "overflowing_fixed_tracks",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="display:grid;grid-template-columns:300px 300px;width:400px"><div id=a style="height:10px"></div><div id=b style="height:10px"></div></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("c", [0.0, 0.0, 400.0, 10.0]),
+            ("a", [0.0, 0.0, 300.0, 10.0]),
+            ("b", [300.0, 0.0, 300.0, 10.0]),
+        ],
+    },
+];

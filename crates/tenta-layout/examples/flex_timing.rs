@@ -1,11 +1,13 @@
-//! Times `layout()` on synthetic flex pages of about 2,000 items.
+//! Times `layout()` on synthetic flex and grid pages of about 1,000 to 2,000 items.
 //!
 //! Run: `cargo run --release -p tenta-layout --example flex_timing [runs]`.
 //! Prints p50/p95 of the layout step alone (style and box-tree construction
 //! are done once, outside the timed region) for a wrapping container holding
 //! 2,000 text items, 2,000 rows of three items, and flex containers nested
 //! sixteen levels deep with a block between each pair, and binary trees of
-//! nested flex containers.
+//! nested flex containers, plus 1,000-item grids (six fixed columns, auto-fill
+//! with `minmax`, and dense placement with spans), and nested grids (binary
+//! trees and a three-level 12x12x6 page, which exercise the per-level re-solve).
 
 #[cfg(feature = "embedded-fonts")]
 fn main() {
@@ -16,6 +18,34 @@ fn main() {
     report("wrap: 2,000 text items", &wrap_page(), runs);
     report("rows: 2,000 rows of 3 items", &rows_page(), runs);
     report("nested: 16 levels", &nested_page(), runs);
+    report("grid: 1,000 items, 6 columns", &grid_page(GRID_FIXED), runs);
+    report(
+        "grid: 1,000 items, auto-fill",
+        &grid_page(GRID_AUTO_FILL),
+        runs,
+    );
+    report(
+        "grid: 1,000 items, dense spans",
+        &grid_page(GRID_DENSE),
+        runs,
+    );
+    for depth in [6, 8, 10] {
+        report(
+            &format!("grid tree: binary depth {depth}"),
+            &grid_tree_page(depth),
+            runs,
+        );
+    }
+    report(
+        "grid nested 12x12x6, fixed columns",
+        &grid_nested_page("repeat(4,1fr)"),
+        runs,
+    );
+    report(
+        "grid nested 12x12x6, auto-fill",
+        &grid_nested_page("repeat(auto-fill,minmax(20px,1fr))"),
+        runs,
+    );
     for depth in [6, 8, 10] {
         report(
             &format!("tree: binary depth {depth}"),
@@ -33,6 +63,75 @@ const STYLE: &str = "<!doctype html><style>body{margin:0;font:14px 'Liberation S
      .w{display:flex;flex-wrap:wrap;gap:4px}.w>div{flex:1 1 80px;padding:2px;border:1px solid}\
      .r{display:flex;align-items:center;gap:6px}.r>.a{width:40px}.r>.b{flex:1}.r>.c{padding:0 4px}\
      .n{display:flex}.n>.m{flex:1;padding:1px}</style><body>";
+
+#[cfg(feature = "embedded-fonts")]
+const GRID_FIXED: &str = "grid-template-columns:repeat(6,1fr);gap:4px";
+#[cfg(feature = "embedded-fonts")]
+const GRID_AUTO_FILL: &str = "grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:4px";
+#[cfg(feature = "embedded-fonts")]
+const GRID_DENSE: &str = "grid-template-columns:repeat(8,1fr);grid-auto-flow:row dense;gap:4px";
+
+/// One grid container holding 1,000 items with the given container style;
+/// every seventh item spans two columns.
+#[cfg(feature = "embedded-fonts")]
+fn grid_page(container: &str) -> String {
+    let mut html = String::from(STYLE);
+    html.push_str(&format!("<div style=\"display:grid;{container}\">"));
+    for i in 0..1000 {
+        let span = if i % 7 == 0 {
+            " style=\"grid-column:span 2\""
+        } else {
+            ""
+        };
+        html.push_str(&format!("<div{span}>cell {i} text</div>"));
+    }
+    html.push_str("</div>");
+    html
+}
+
+/// Binary tree of nested grids with two columns per level.
+#[cfg(feature = "embedded-fonts")]
+fn grid_tree_page(depth: u32) -> String {
+    fn node(html: &mut String, depth: u32) {
+        if depth == 0 {
+            html.push_str("leaf");
+            return;
+        }
+        html.push_str("<div class=gn>");
+        for _ in 0..2 {
+            html.push_str("<div>");
+            node(html, depth - 1);
+            html.push_str("</div>");
+        }
+        html.push_str("</div>");
+    }
+    let mut html = String::from(STYLE);
+    html.push_str("<style>.gn{display:grid;grid-template-columns:1fr 1fr}</style>");
+    node(&mut html, depth);
+    html
+}
+
+/// A grid of 12 grids of 12 grids of 6 cells (1,023 boxes of grid and item).
+#[cfg(feature = "embedded-fonts")]
+fn grid_nested_page(columns: &str) -> String {
+    let mut html = String::from(STYLE);
+    html.push_str(&format!(
+        "<style>.g{{display:grid;grid-template-columns:{columns}}}</style><div class=g>"
+    ));
+    for _ in 0..12 {
+        html.push_str("<div class=g>");
+        for _ in 0..12 {
+            html.push_str("<div class=g>");
+            for c in 0..6 {
+                html.push_str(&format!("<div>c{c}</div>"));
+            }
+            html.push_str("</div>");
+        }
+        html.push_str("</div>");
+    }
+    html.push_str("</div>");
+    html
+}
 
 #[cfg(feature = "embedded-fonts")]
 fn wrap_page() -> String {
