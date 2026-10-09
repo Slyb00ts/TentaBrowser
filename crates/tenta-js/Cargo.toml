@@ -40,6 +40,8 @@ url = { workspace = true }
 # dependencies, the same basis as the `http` and `url` entries above.
 encoding_rs = { workspace = true }
 getrandom = { workspace = true }
+# The inspection surface speaks JSON with the realm-side script (`crate::inspect`).
+serde_json = { workspace = true }
 v8 = { workspace = true, optional = true }
 rquickjs = { workspace = true, optional = true }
 

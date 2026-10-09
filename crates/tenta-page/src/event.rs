@@ -4,6 +4,7 @@
 //! loses the oldest events rather than blocking the page thread.
 
 use tenta_core::{FrameId, RequestId, Tier};
+use tenta_js::inspect::{BindingCall, ConsoleCall, ExceptionEvent};
 use tokio::sync::broadcast;
 use url::Url;
 
@@ -12,7 +13,9 @@ use url::Url;
 pub const EVENT_BUFFER: usize = 512;
 
 /// What a page reports while it works.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Not `Eq`: a console argument or an exception value can be a `NaN`.
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum PageEvent {
     /// A request left the page.
@@ -48,6 +51,13 @@ pub enum PageEvent {
     /// reported even when the engine's own deadline stopped it first, so an entry
     /// that happened to finish exactly at the deadline is reported too.
     ScriptTerminated { entry: &'static str },
+    /// Page script called a `console` method. Only produced while someone
+    /// holds an event subscription: describing the arguments is not free.
+    Console(ConsoleCall),
+    /// An exception no script caught, or a promise rejection nobody handled.
+    Exception(ExceptionEvent),
+    /// Page script called a function installed by [`crate::Page::add_binding`].
+    BindingCalled(BindingCall),
 }
 
 /// The receiving end of [`crate::Page::events`].

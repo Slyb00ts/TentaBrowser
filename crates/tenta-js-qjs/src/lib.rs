@@ -10,6 +10,7 @@ mod crypto_tests;
 #[cfg(test)]
 mod geometry_tests;
 mod host;
+mod inspector;
 mod page_engine;
 #[cfg(test)]
 mod related_target_tests;
@@ -193,7 +194,7 @@ impl Engine {
         source: &str,
         timeout: Option<Duration>,
     ) -> Result<String, JsError> {
-        self.entry(timeout, |ctx| {
+        self.entry_with(timeout, false, |ctx| {
             let value: Value = ctx.eval(source)?;
             Coerced::<String>::from_js(ctx, value).map(|v| v.0)
         })
@@ -210,9 +211,19 @@ impl Engine {
     pub fn native_failure(&self) -> Option<&'static str> {
         self.state.world.native_failure.get()
     }
+    /// An entry that runs page script: an exception it ends in is also reported
+    /// to the realm's inspector as uncaught.
     fn entry<R>(
         &self,
         timeout: Option<Duration>,
+        f: impl for<'js> FnOnce(&Ctx<'js>) -> rquickjs::Result<R>,
+    ) -> Result<R, ScriptError> {
+        self.entry_with(timeout, true, f)
+    }
+    fn entry_with<R>(
+        &self,
+        timeout: Option<Duration>,
+        report: bool,
         f: impl for<'js> FnOnce(&Ctx<'js>) -> rquickjs::Result<R>,
     ) -> Result<R, ScriptError> {
         if self.native_failure().is_some() {
@@ -270,7 +281,15 @@ impl Engine {
                         message: "script execution interrupted".into(),
                     })
                 } else {
-                    result.map_err(|e| script_error(&ctx, e))
+                    result.map_err(|e| {
+                        script_error_with(&ctx, e, |exception| {
+                            if report {
+                                self.state
+                                    .inspector
+                                    .report(&ctx, "Uncaught", exception, false);
+                            }
+                        })
+                    })
                 };
                 if let Some(error) = native_failure_error(&ctx) {
                     return Err(error);
@@ -355,6 +374,7 @@ impl Engine {
             Ok(())
         });
         self.state.world.reclaim();
+        self.flush_rejections();
         result
     }
     /// The duration until the page should next drive this engine.
@@ -456,6 +476,7 @@ impl Drop for Engine {
     fn drop(&mut self) {
         self.event_loop.clear_pending_callbacks();
         self.state.clear();
+        self.state.inspector.clear();
         self.context.with(|ctx| {
             self.state.world.clear();
             let _ = ctx.remove_userdata::<QuickJsWorldSlot>();
@@ -471,11 +492,22 @@ fn initialization_error(error: rquickjs::Error) -> ScriptError {
     }
 }
 fn script_error(ctx: &Ctx<'_>, error: rquickjs::Error) -> ScriptError {
+    script_error_with(ctx, error, |_| {})
+}
+
+/// [`script_error`] that also shows `observe` the exception value before it is
+/// turned into text.
+fn script_error_with<'js>(
+    ctx: &Ctx<'js>,
+    error: rquickjs::Error,
+    observe: impl FnOnce(&Value<'js>),
+) -> ScriptError {
     if let Some(error) = native_failure_error(ctx) {
         return error;
     }
     if error.is_exception() {
         let exception = ctx.catch();
+        observe(&exception);
         let name = exception
             .as_object()
             .and_then(|o| match o.get::<_, String>("name") {

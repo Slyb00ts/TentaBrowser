@@ -7,6 +7,7 @@
 //! isolates remain open P2 packages (`docs/spec/05-javascript.md` §4).
 
 mod host;
+mod inspector;
 mod page_engine;
 mod promise;
 mod script_host;
@@ -1396,7 +1397,12 @@ impl Engine {
         source: &str,
         timeout: Option<std::time::Duration>,
     ) -> Result<(), ScriptFailure> {
-        self.run_inner(source, timeout).map(|_| ())
+        // The script is page script, so its exception is an uncaught one the
+        // inspector reports; `run_inner` is the host's own evaluation, whose
+        // exception goes back to its caller instead.
+        let host = Rc::clone(&self.host);
+        self.run_with(timeout, |tc| compile_and_run(tc, source, Some(&host)))
+            .map(|_| ())
     }
 
     /// Discards a termination left pending on the isolate by a watchdog that
@@ -1530,6 +1536,19 @@ impl Engine {
         source: &str,
         timeout: Option<std::time::Duration>,
     ) -> Result<String, ScriptFailure> {
+        self.run_with(timeout, |tc| compile_and_run(tc, source, None))
+    }
+
+    /// [`Self::run_inner`] for a body other than compile-and-run: the same
+    /// entry, deadline, termination and budget handling around whatever `body`
+    /// does inside the context's `TryCatch`.
+    fn run_with<T>(
+        &mut self,
+        timeout: Option<std::time::Duration>,
+        body: impl FnOnce(
+            &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>,
+        ) -> Result<T, ScriptFailure>,
+    ) -> Result<T, ScriptFailure> {
         // One of the three ways script is entered (see
         // `discard_stray_termination`): clear before the watchdog is even
         // spawned, so a stray termination from an earlier entry cannot abort
@@ -1569,7 +1588,7 @@ impl Engine {
             // friends see `HandleScope<Context>`.
             v8::scope!(let scope, &mut context_scope);
             v8::tc_scope!(let tc, scope);
-            let outcome = compile_and_run(tc, source);
+            let outcome = body(tc);
             (outcome, tc.has_terminated())
         };
         self.host.exit_script();
@@ -1714,6 +1733,7 @@ impl Engine {
         self.discard_stray_termination();
         self.isolate.perform_microtask_checkpoint();
         self.host.microtasks_pending.set(false);
+        self.flush_rejections();
         if self.dom.is_some() {
             self.graph_checkpoint();
         }
@@ -2257,14 +2277,15 @@ impl Engine {
             v8::tc_scope!(let tc, scope);
             let function = v8::Local::new(tc, handler);
             let recv: v8::Local<v8::Value> = v8::undefined(tc).into();
-            match timestamp {
+            let returned = match timestamp {
                 Some(ms) => {
                     let arg: v8::Local<v8::Value> = v8::Number::new(tc, ms).into();
-                    let _ = function.call(tc, recv, &[arg]);
+                    function.call(tc, recv, &[arg])
                 }
-                None => {
-                    let _ = function.call(tc, recv, &[]);
-                }
+                None => function.call(tc, recv, &[]),
+            };
+            if returned.is_none() {
+                inspector::report_caught(tc, &self.host);
             }
             tc.has_terminated()
         };
@@ -2331,6 +2352,9 @@ impl Drop for Engine {
         self.event_loop.clear_pending_callbacks();
         self.host.ready.borrow_mut().clear();
         self.host.ready_frames.borrow_mut().clear();
+        // The inspector's dispatcher and any unreported rejections are
+        // `v8::Global`s in the same position.
+        self.host.inspector.clear();
         clear_v8_callback_admission(&mut self.isolate);
 
         // Drain the wrapper world while the isolate is still alive: this
@@ -2534,9 +2558,12 @@ fn build_completion(
     }
 }
 
+/// Compiles and runs `source`. With `report`, an exception the script throws or
+/// a syntax error is also reported to the realm's inspector as uncaught.
 fn compile_and_run(
     tc: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>,
     source: &str,
+    report: Option<&HostState>,
 ) -> Result<String, ScriptFailure> {
     let Some(code) = v8::String::new(tc, source) else {
         return Err(ScriptFailure {
@@ -2555,10 +2582,11 @@ fn compile_and_run(
         } else {
             ScriptErrorKind::Syntax
         };
-        return Err(ScriptFailure {
-            kind,
-            message: exception_message(tc),
-        });
+        let message = exception_message(tc);
+        if let Some(host) = report {
+            inspector::report_caught(tc, host);
+        }
+        return Err(ScriptFailure { kind, message });
     };
     let Some(value) = script.run(tc) else {
         // A terminated run has no exception value; report it as termination so
@@ -2571,9 +2599,13 @@ fn compile_and_run(
                 message: "script execution was terminated".to_owned(),
             });
         }
+        let message = exception_message(tc);
+        if let Some(host) = report {
+            inspector::report_caught(tc, host);
+        }
         return Err(ScriptFailure {
             kind: ScriptErrorKind::Uncaught,
-            message: exception_message(tc),
+            message,
         });
     };
 

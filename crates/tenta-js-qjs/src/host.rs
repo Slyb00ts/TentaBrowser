@@ -73,6 +73,8 @@ pub(crate) struct State {
     /// What the window metrics answer while there is no geometry host: the
     /// page's configured viewport.
     pub viewport: Cell<ViewportMetrics>,
+    /// The realm's inspection surface.
+    pub(crate) inspector: crate::inspector::InspectorState,
     pending: RefCell<HashMap<u64, Pending>>,
     next_promise: Cell<u64>,
     #[cfg(test)]
@@ -90,6 +92,7 @@ impl State {
             xhr_driver: RefCell::new(None),
             geometry_host: RefCell::new(None),
             viewport: Cell::new(ViewportMetrics::default()),
+            inspector: crate::inspector::InspectorState::new(),
             pending: RefCell::default(),
             next_promise: Cell::new(0),
             #[cfg(test)]
@@ -265,7 +268,8 @@ impl ScriptHost for State {
                 Ok::<_, rquickjs::Error>(result.as_bool() == Some(false))
             })();
             if result.is_err() && self.world.native_failure.get().is_none() {
-                ctx.catch();
+                let exception = ctx.catch();
+                self.inspector.report(ctx, "Uncaught", &exception, false);
             }
             result.unwrap_or(false)
         })

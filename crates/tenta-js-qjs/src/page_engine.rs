@@ -18,6 +18,7 @@ use tenta_js::engine::*;
 use tenta_js::event_loop::{Clock, MonoTime, ProvenanceSink};
 use tenta_js::fetch::{FetchCompletion, FetchDriver, FetchOutcome};
 use tenta_js::geometry::GeometryHost;
+use tenta_js::inspect::InspectorSink;
 use tenta_js::xhr::{XhrCompletion, XhrDriver};
 impl PageEngine for Engine {
     fn native_failure(&self) -> Option<&'static str> {
@@ -42,6 +43,26 @@ impl PageEngine for Engine {
     }
     fn evaluate(&mut self, source: &str, timeout: Duration) -> Result<String, ScriptError> {
         self.evaluate_with_timeout(source, Some(timeout))
+    }
+    fn set_inspector_sink(&mut self, sink: Rc<dyn InspectorSink>) {
+        self.install_inspector(sink);
+    }
+    fn inspector_call(
+        &mut self,
+        op: &str,
+        argument: &str,
+        timeout: Duration,
+    ) -> Result<String, ScriptError> {
+        self.call_inspector(op, argument, timeout)
+    }
+    fn inspector_run(
+        &mut self,
+        kind: &str,
+        source: &str,
+        argument: &str,
+        timeout: Duration,
+    ) -> Result<String, ScriptError> {
+        self.run_inspector(kind, source, argument, timeout)
     }
     fn dispatch_lifecycle(&mut self, event: LifecycleEvent) {
         let scheduler = self.event_loop.scheduler();

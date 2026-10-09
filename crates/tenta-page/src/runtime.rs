@@ -44,9 +44,13 @@ use tenta_js::engine::{
 use tenta_js::event_loop::ProvenanceSink;
 use tenta_js::fetch::{FetchCompletions, FetchDriver};
 use tenta_js::geometry::ViewportMetrics;
+use tenta_js::inspect::{
+    self, BindingCall, Completion, ConsoleCall, ExceptionEvent, InspectError, InspectorSink,
+};
 use tenta_js::xhr::{XhrCompletions, XhrDriver};
 use tenta_net::policy::cookies::Site;
 use tenta_net::{Client, NetError, Request, ResourceType};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use url::Url;
 
@@ -79,6 +83,68 @@ impl ProvenanceSink for SettleBridge {
 
     fn task_finished(&self, origin: Origin) {
         self.tracker.borrow_mut().note_task_finished(origin);
+    }
+}
+
+/// What an awaited promise settled with.
+pub(crate) type Settlement = std::result::Result<Completion, InspectError>;
+
+/// The evaluations waiting for a promise to settle, by ticket.
+///
+/// It belongs to the runtime, so an engine that ends takes its waiters with it:
+/// their senders drop and each waiter learns its execution context is gone.
+#[derive(Default)]
+pub(crate) struct AwaitTable {
+    waiting: RefCell<HashMap<u64, oneshot::Sender<Settlement>>>,
+}
+
+impl AwaitTable {
+    pub(crate) fn register(&self, ticket: u64, sender: oneshot::Sender<Settlement>) {
+        self.waiting.borrow_mut().insert(ticket, sender);
+    }
+
+    /// Forgets a waiter that gave up. A settlement that arrives later finds
+    /// nobody and is dropped.
+    pub(crate) fn cancel(&self, ticket: u64) {
+        self.waiting.borrow_mut().remove(&ticket);
+    }
+
+    fn settle(&self, ticket: u64, settlement: Settlement) {
+        if let Some(sender) = self.waiting.borrow_mut().remove(&ticket) {
+            // A waiter that was dropped is not an error.
+            let _ = sender.send(settlement);
+        }
+    }
+}
+
+/// Carries what the realm reports to the page: events to subscribers,
+/// settlements to the evaluations awaiting them.
+struct PageInspector {
+    reporter: Arc<dyn ScriptBudget>,
+    awaits: Rc<AwaitTable>,
+}
+
+impl InspectorSink for PageInspector {
+    fn listening(&self) -> bool {
+        self.reporter.has_subscribers()
+    }
+
+    fn console(&self, call: ConsoleCall) {
+        self.reporter.emit(crate::event::PageEvent::Console(call));
+    }
+
+    fn exception(&self, event: ExceptionEvent) {
+        self.reporter
+            .emit(crate::event::PageEvent::Exception(event));
+    }
+
+    fn binding_called(&self, call: BindingCall) {
+        self.reporter
+            .emit(crate::event::PageEvent::BindingCalled(call));
+    }
+
+    fn settled(&self, ticket: u64, result: Settlement) {
+        self.awaits.settle(ticket, result);
     }
 }
 
@@ -118,6 +184,18 @@ pub(crate) trait ScriptBudget: Send + Sync {
     /// Reports that the watchdog cut an engine entry short. Termination is how
     /// a page survives a runaway, so it is a fact to report, not a crash.
     fn entry_terminated(&self, entry: &'static str);
+    /// Reports a page-level event from inside an engine entry.
+    fn emit(&self, _event: crate::event::PageEvent) {}
+    /// Whether anything is subscribed to page events, so events whose payload
+    /// costs something to build can be skipped when nobody would read them.
+    fn has_subscribers(&self) -> bool {
+        false
+    }
+    /// The names of the bindings every new engine must expose from its first
+    /// script on.
+    fn binding_names(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// The task that runs a retained runtime's turns while no settle call does.
@@ -205,6 +283,8 @@ pub(crate) struct PageRuntime {
     /// dispatch at. The driver holds a handle to it (`tenta_js::xhr::XhrDriver`),
     /// so it is shared rather than owned outright.
     xhrs: Rc<XhrCompletions>,
+    /// The evaluations waiting for a promise of this runtime's realm.
+    awaits: Rc<AwaitTable>,
 }
 
 impl PageRuntime {
@@ -290,6 +370,18 @@ impl PageRuntime {
         ));
         engine.set_fetch_driver(Rc::clone(&driver) as Rc<dyn FetchDriver>);
         engine.set_xhr_driver(driver as Rc<dyn XhrDriver>);
+        // Before any script runs, so the document's first script already finds
+        // `console` and the bindings the host registered.
+        let awaits = Rc::new(AwaitTable::default());
+        engine.set_inspector_sink(Rc::new(PageInspector {
+            reporter: Arc::clone(&script_budget),
+            awaits: Rc::clone(&awaits),
+        }));
+        for name in script_budget.binding_names() {
+            if let Err(error) = inspect::bind(&mut *engine, &name, script_timeout) {
+                tracing::warn!(page = ?page, binding = %name, %error, "a binding could not be installed");
+            }
+        }
         Ok(PageRuntime {
             page,
             engine,
@@ -307,6 +399,7 @@ impl PageRuntime {
             native_memory,
             fetches,
             xhrs,
+            awaits,
         })
     }
 
@@ -453,6 +546,21 @@ impl PageRuntime {
         let outcome = self.bounded("host", run);
         self.tracker.borrow().notify_handle().notify_one();
         outcome
+    }
+
+    /// [`Self::run_in_engine`] for an entry that may leave an evaluation
+    /// waiting on a promise of this realm.
+    pub(crate) fn run_in_engine_awaiting<R>(
+        &mut self,
+        run: impl FnOnce(&mut dyn PageEngine, &AwaitTable) -> R,
+    ) -> R {
+        let awaits = Rc::clone(&self.awaits);
+        self.run_in_engine(|engine| run(engine, &awaits))
+    }
+
+    /// The evaluations waiting for a promise of this runtime's realm.
+    pub(crate) fn awaits(&self) -> &Rc<AwaitTable> {
+        &self.awaits
     }
 
     /// The settle machine this runtime reports into.
@@ -1298,6 +1406,42 @@ mod tests {
     use tenta_js::xhr::{XhrCompletion, XhrDriver, XhrHandle};
 
     #[test]
+    fn an_await_table_delivers_once_and_closes_its_waiters_with_the_runtime() {
+        let table = AwaitTable::default();
+        let (settled_tx, mut settled_rx) = oneshot::channel();
+        let (cancelled_tx, mut cancelled_rx) = oneshot::channel();
+        let (orphan_tx, mut orphan_rx) = oneshot::channel();
+        table.register(1, settled_tx);
+        table.register(2, cancelled_tx);
+        table.register(3, orphan_tx);
+
+        table.settle(1, Ok(Completion::Value(inspect::RemoteValue::Bool(true))));
+        assert_eq!(
+            settled_rx.try_recv().expect("delivered"),
+            Ok(Completion::Value(inspect::RemoteValue::Bool(true)))
+        );
+        // A second settlement for the same ticket finds nobody.
+        table.settle(1, Ok(Completion::Value(inspect::RemoteValue::Null)));
+
+        table.cancel(2);
+        assert!(matches!(
+            cancelled_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        ));
+
+        // Dropping the table is what a navigation does to its waiters.
+        assert!(matches!(
+            orphan_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        drop(table);
+        assert!(matches!(
+            orphan_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        ));
+    }
+
+    #[test]
     fn an_entry_deadline_never_alone_exhausts_the_window_budget() {
         let desktop = tenta_core::Budgets::desktop();
         assert_eq!(entry_timeout(&desktop), Duration::from_millis(7_500));
@@ -1549,6 +1693,7 @@ mod tests {
                 native_memory: NativeMemoryBudget::for_page(1),
                 fetches: Rc::clone(&fetches),
                 xhrs: Rc::clone(&xhrs),
+                awaits: Rc::default(),
             };
             Harness {
                 runtime,

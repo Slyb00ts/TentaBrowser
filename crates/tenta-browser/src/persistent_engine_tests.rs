@@ -20,6 +20,7 @@ use tenta_js::engine::{
 use tenta_js::event_loop::ProvenanceSink;
 use tenta_js::fetch::{FetchCompletion, FetchDriver};
 use tenta_js::geometry::GeometryHost;
+use tenta_js::inspect::InspectorSink;
 use tenta_js::xhr::{XhrCompletion, XhrDriver};
 #[cfg(feature = "quickjs")]
 use tenta_js_qjs::QuickJsEngineFactory;
@@ -98,6 +99,26 @@ impl PageEngine for CountedEngine {
     }
     fn evaluate(&mut self, source: &str, timeout: Duration) -> Result<String, ScriptError> {
         self.inner.evaluate(source, timeout)
+    }
+    fn set_inspector_sink(&mut self, sink: Rc<dyn InspectorSink>) {
+        self.inner.set_inspector_sink(sink)
+    }
+    fn inspector_call(
+        &mut self,
+        op: &str,
+        argument: &str,
+        timeout: Duration,
+    ) -> Result<String, ScriptError> {
+        self.inner.inspector_call(op, argument, timeout)
+    }
+    fn inspector_run(
+        &mut self,
+        kind: &str,
+        source: &str,
+        argument: &str,
+        timeout: Duration,
+    ) -> Result<String, ScriptError> {
+        self.inner.inspector_run(kind, source, argument, timeout)
     }
     fn dispatch_lifecycle(&mut self, event: LifecycleEvent) {
         self.inner.dispatch_lifecycle(event)

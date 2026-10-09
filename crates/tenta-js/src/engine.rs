@@ -215,6 +215,57 @@ pub trait PageEngine {
     /// (`SettleTracker`) is what guarantees the document sees each event once.
     fn dispatch_lifecycle(&mut self, event: LifecycleEvent);
 
+    /// Installs the inspection surface (`crate::inspect`) in the realm and
+    /// points its events at `sink`: the `console` object, the dispatcher
+    /// [`PageEngine::inspector_call`] drives, and the reporting of uncaught
+    /// exceptions and unhandled rejections. Called once, before any page
+    /// script runs, so `console` exists for the document's first script.
+    ///
+    /// The default installs nothing, which leaves the realm without a `console`
+    /// and [`PageEngine::inspector_call`] refusing.
+    fn set_inspector_sink(&mut self, _sink: Rc<dyn crate::inspect::InspectorSink>) {}
+
+    /// One operation of the realm's inspection script, under a deadline of
+    /// `timeout`. `argument` and the returned string are the JSON of
+    /// `crate::inspect`'s protocol. A page exception is part of the reply; an
+    /// `Err` means the engine stopped the entry.
+    ///
+    /// Like [`PageEngine::evaluate`], this does not perform the microtask
+    /// checkpoint; the caller does.
+    fn inspector_call(
+        &mut self,
+        _op: &str,
+        _argument: &str,
+        _timeout: Duration,
+    ) -> Result<String, ScriptError> {
+        Err(ScriptError {
+            kind: ScriptErrorKind::Uncaught,
+            message: "this engine does not provide inspection".to_owned(),
+        })
+    }
+
+    /// Runs page code for the host and reports how it ended, as the JSON of
+    /// `crate::inspect`'s protocol. `kind` is `"eval"`, where `source` is a
+    /// script, or `"call"`, where `source` is a function expression and
+    /// `argument` names its receiver and arguments.
+    ///
+    /// The backend compiles and runs `source` itself, so the page's stack ends
+    /// at its own frame, and hands the completion or the exception to the realm
+    /// script to describe. Deadline and microtask rules are those of
+    /// [`PageEngine::inspector_call`].
+    fn inspector_run(
+        &mut self,
+        _kind: &str,
+        _source: &str,
+        _argument: &str,
+        _timeout: Duration,
+    ) -> Result<String, ScriptError> {
+        Err(ScriptError {
+            kind: ScriptErrorKind::Uncaught,
+            message: "this engine does not provide inspection".to_owned(),
+        })
+    }
+
     /// Applies the page's timer provenance rule. Called once at creation, and
     /// again whenever the page's settle configuration changes.
     fn set_timer_rule(&mut self, rule: TimerRule);

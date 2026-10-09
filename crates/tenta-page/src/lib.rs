@@ -38,11 +38,18 @@ pub use clock::{Clock, ManualClock, SystemClock};
 pub use document::Document;
 pub use event::{PageEvent, PageEvents};
 pub use fetch_policy::{FetchPolicy, HintDisposition, PreloadKind, RecordedHint};
-pub use page::{Goto, Navigation, Page, PageConfig, TestHooks, Viewport};
+pub use page::{
+    EvalOptions, Evaluation, FromRemote, Goto, Navigation, Page, PageConfig, TestHooks, Viewport,
+    World,
+};
 pub use runtime::drop_thread_runtimes;
 pub use settle::{
     Origin, PendingSources, RequestClass, Settle, SettleConfig, SettleState, SettleTracker,
 };
 pub use task::{catch_unwind_future, catch_unwind_task, panic_message};
+pub use tenta_js::inspect::{
+    BindingCall, CallArgument, Completion, ConsoleCall, ExceptionDetails, ExceptionEvent,
+    ObjectPreview, PropertyPreview, RemoteKind, RemoteObject, RemoteValue, StackFrame,
+};
 pub use tenta_net::RedirectHop;
 pub use thread::{PageJob, PageTask, PageThread};

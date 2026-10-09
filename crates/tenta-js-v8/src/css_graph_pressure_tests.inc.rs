@@ -11,7 +11,7 @@ fn run_pressure_without_task_end(engine: &mut Engine, source: &str) -> String {
         let mut context_scope = v8::ContextScope::new(handle_scope, context);
         v8::scope!(let scope, &mut context_scope);
         v8::tc_scope!(let tc, scope);
-        compile_and_run(tc, source)
+        compile_and_run(tc, source, None)
     };
     engine.host.exit_script();
     result.unwrap_or_else(|failure| panic!("wrapper pressure script: {}", failure.message))

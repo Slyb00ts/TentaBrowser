@@ -3371,6 +3371,7 @@ dependencies = [
  "getrandom 0.4.3",
  "http",
  "parking_lot",
+ "serde_json",
  "tenta-core",
  "tenta-css",
  "tenta-dom",

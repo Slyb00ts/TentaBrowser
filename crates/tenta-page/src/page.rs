@@ -42,7 +42,10 @@ use crate::settle::{
 use crate::task::{catch_unwind_future, panic_message};
 use crate::thread::PageThread;
 
+mod evaluate;
 mod retained;
+
+pub use evaluate::{EvalOptions, Evaluation, FromRemote, World};
 
 /// How many raw bytes of a response are kept so a late `<meta charset>` can
 /// restart the parse from the first byte.
@@ -341,6 +344,9 @@ struct PageInner {
     /// waiters never fight over the engine's driver or restart one tracker
     /// under each other.
     settle_gate: tokio::sync::Mutex<()>,
+    /// The binding names engines expose. Separate from `state` so building an
+    /// engine, which reads it, never contends with a holder of the state lock.
+    bindings: Mutex<Vec<String>>,
 }
 
 impl PageInner {
@@ -429,6 +435,21 @@ impl ScriptBudget for PageInner {
         self.emit(PageEvent::ScriptTerminated { entry });
     }
 
+    fn emit(&self, event: PageEvent) {
+        PageInner::emit(self, event);
+    }
+
+    fn has_subscribers(&self) -> bool {
+        self.events
+            .lock()
+            .as_ref()
+            .is_some_and(|sender| sender.receiver_count() > 0)
+    }
+
+    fn binding_names(&self) -> Vec<String> {
+        self.bindings.lock().clone()
+    }
+
     fn crash_native_memory(&self, failure: NativeMemoryFailure) {
         self.mark_crashed_with(
             &format!(
@@ -493,6 +514,7 @@ impl Page {
                 script_cpu: ScriptCpu::new(config.budgets.script_cpu, SCRIPT_CPU_WINDOW),
                 native_memory: NativeMemoryBudget::for_page(config.budgets.page_memory_mb),
                 settle_gate: tokio::sync::Mutex::new(()),
+                bindings: Mutex::new(Vec::new()),
                 config,
             }),
         }

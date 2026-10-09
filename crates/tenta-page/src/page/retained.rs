@@ -38,7 +38,7 @@ use super::{
     MINIMUM_PARK, Page, PageInner, ScriptBudget, TIMERS_PER_TURN, TreeHandle, Weak,
     native_memory_budget_error, settle_loop,
 };
-use crate::runtime::{self, Pump};
+use crate::runtime::{self, AwaitTable, PageRuntime, Pump};
 use crate::settle::{Settle, SettleState};
 use crate::task::{catch_unwind_future, catch_unwind_task, panic_message};
 
@@ -81,6 +81,26 @@ impl Page {
     pub async fn with_engine<R, F>(&self, entry: F) -> Result<R>
     where
         F: FnOnce(&mut dyn PageEngine) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.with_runtime(move |runtime| runtime.run_in_engine(entry))
+            .await
+    }
+
+    /// [`Page::with_engine`] for an entry that may leave an evaluation waiting
+    /// on a promise of the engine's realm.
+    pub(super) async fn with_engine_awaiting<R, F>(&self, entry: F) -> Result<R>
+    where
+        F: FnOnce(&mut dyn PageEngine, &AwaitTable) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.with_runtime(move |runtime| runtime.run_in_engine_awaiting(entry))
+            .await
+    }
+
+    async fn with_runtime<R, F>(&self, entry: F) -> Result<R>
+    where
+        F: FnOnce(&mut PageRuntime) -> R + Send + 'static,
         R: Send + 'static,
     {
         self.require_javascript()?;
@@ -283,10 +303,7 @@ fn refresh_title(inner: &PageInner, document: &SharedDocument) {
 }
 
 /// The page-thread half of [`Page::with_engine`].
-fn enter_engine<R>(
-    inner: &Arc<PageInner>,
-    entry: impl FnOnce(&mut dyn PageEngine) -> R,
-) -> Result<R> {
+fn enter_engine<R>(inner: &Arc<PageInner>, entry: impl FnOnce(&mut PageRuntime) -> R) -> Result<R> {
     {
         let state = inner.state.lock();
         if state.closed {
@@ -302,7 +319,7 @@ fn enter_engine<R>(
     let page = inner.config.id;
     let ran = catch_unwind(AssertUnwindSafe(|| {
         runtime::with_runtime(page, |runtime| {
-            let value = runtime.run_in_engine(entry);
+            let value = entry(runtime);
             refresh_title(inner, runtime.document());
             value
         })

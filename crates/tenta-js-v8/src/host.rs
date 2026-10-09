@@ -197,6 +197,9 @@ pub struct HostState {
     /// entry builds and throws values; a half-set flag would make the two
     /// disagree.
     pub native_dispatch: std::cell::Cell<bool>,
+    /// The realm's inspection surface: the dispatcher, the sink its events go
+    /// to and the rejections waiting to be reported.
+    pub(crate) inspector: crate::inspector::InspectorState,
 }
 
 impl HostState {
@@ -222,6 +225,7 @@ impl HostState {
             geometry_host: RefCell::new(None),
             viewport: Cell::new(ViewportMetrics::default()),
             native_dispatch: std::cell::Cell::new(false),
+            inspector: crate::inspector::InspectorState::new(),
         })
     }
 
@@ -1067,7 +1071,7 @@ fn define(
 }
 
 /// Fetches the host state from the current context's slot.
-fn host_state(scope: &mut v8::PinScope) -> Option<Rc<HostState>> {
+pub(crate) fn host_state(scope: &mut v8::PinScope) -> Option<Rc<HostState>> {
     scope.get_current_context().get_slot::<HostState>()
 }
 

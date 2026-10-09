@@ -83,6 +83,11 @@ pub use tenta_page::page::{Goto, Navigation, Page, Viewport};
 pub use tenta_page::settle::{
     Origin, PendingSources, RequestClass, Settle, SettleConfig, SettleState,
 };
+pub use tenta_page::{
+    BindingCall, CallArgument, Completion, ConsoleCall, EvalOptions, Evaluation, ExceptionDetails,
+    ExceptionEvent, FromRemote, ObjectPreview, PropertyPreview, RemoteKind, RemoteObject,
+    RemoteValue, StackFrame, World,
+};
 pub use tenta_search::{
     BlockClass, Freshness, Kind, Locale, Mode, Provider, ProviderId, ProviderMeta, SafeSearch,
     SearchError, SearchRequest, SearchResponse, SearchResult, WarmReport,

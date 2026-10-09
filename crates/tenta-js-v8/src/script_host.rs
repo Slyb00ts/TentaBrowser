@@ -294,6 +294,9 @@ impl ScriptHost for V8ScriptHost {
             } else {
                 None
             };
+            if result.is_none() {
+                crate::inspector::report_caught(tc, &self.host);
+            }
             self.host.exit_script();
 
             // Only an event handler acts on its return value, and only on exactly

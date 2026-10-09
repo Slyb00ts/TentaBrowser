@@ -32,4 +32,8 @@ pub use tenta_page::document::Document;
 pub use tenta_page::fetch_policy::{FetchPolicy, HintDisposition, PreloadKind, RecordedHint};
 pub use tenta_page::page::{Goto, Navigation, Page, Viewport};
 pub use tenta_page::settle::{Settle, SettleConfig, SettleState};
-pub use tenta_page::{PageEvent, PageEvents};
+pub use tenta_page::{
+    BindingCall, CallArgument, Completion, ConsoleCall, EvalOptions, Evaluation, ExceptionDetails,
+    ExceptionEvent, FromRemote, ObjectPreview, PageEvent, PageEvents, PropertyPreview, RemoteKind,
+    RemoteObject, RemoteValue, StackFrame, World,
+};
