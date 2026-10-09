@@ -402,3 +402,129 @@ fn fractional_font_sizes_keep_chrome_precision() {
         ],
     );
 }
+
+#[test]
+fn every_element_has_the_display_the_standard_gives_it() {
+    let block = [
+        "html",
+        "body",
+        "address",
+        "blockquote",
+        "center",
+        "div",
+        "figure",
+        "figcaption",
+        "footer",
+        "form",
+        "header",
+        "hr",
+        "legend",
+        "listing",
+        "main",
+        "p",
+        "plaintext",
+        "pre",
+        "search",
+        "xmp",
+        "article",
+        "aside",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "hgroup",
+        "nav",
+        "section",
+        "dir",
+        "dd",
+        "dl",
+        "dt",
+        "menu",
+        "ol",
+        "ul",
+        "details",
+        "summary",
+        "fieldset",
+        "option",
+    ];
+    let inline = [
+        "span", "a", "b", "strong", "i", "em", "u", "s", "code", "kbd", "samp", "small", "big",
+        "sub", "sup", "mark", "q",
+    ];
+    let none = [
+        "base", "basefont", "datalist", "link", "meta", "noembed", "noframes", "param", "rp",
+        "script", "style", "template", "title",
+    ];
+    // `html`, `body` and `head` are parsed structure, so they are checked on
+    // the document's own elements; the rest are fixtures keyed by tag name.
+    let fixtures = block
+        .iter()
+        .chain(&inline)
+        .chain(&none)
+        .filter(|tag| !["html", "body", "plaintext"].contains(tag))
+        .map(|tag| format!("<{tag} id=t-{tag}></{tag}>"))
+        .collect::<String>()
+        // `plaintext` swallows the rest of the document, so it goes last.
+        + "<plaintext id=t-plaintext>";
+    let page = standards(&fixtures);
+    let mut triples: Vec<(String, &str)> = Vec::new();
+    for tag in block.iter().filter(|tag| !["html", "body"].contains(tag)) {
+        triples.push((format!("t-{tag}"), "block"));
+    }
+    for tag in &inline {
+        triples.push((format!("t-{tag}"), "inline"));
+    }
+    for tag in &none {
+        triples.push((format!("t-{tag}"), "none"));
+    }
+    let (doc, engine) = &page;
+    let failures: Vec<String> = triples
+        .iter()
+        .filter_map(|(id, expected)| {
+            let actual = value(doc, engine, id, "display");
+            (actual != *expected).then(|| format!("#{id}: expected `{expected}`, got `{actual}`"))
+        })
+        .collect();
+    assert!(
+        failures.is_empty(),
+        "display differs:\n{}",
+        failures.join("\n")
+    );
+    check(&page, &[("body", "display", "block")]);
+}
+
+#[test]
+fn table_parts_and_controls_have_their_display() {
+    let page = standards(
+        "<table id=table><caption id=caption>c</caption><colgroup id=colgroup><col id=col></colgroup>\
+         <thead id=thead><tr id=tr><td id=td>x</td><th id=th>y</th></tr></thead>\
+         <tbody id=tbody></tbody><tfoot id=tfoot></tfoot></table>\
+         <input id=input><button id=button>b</button><select id=select></select>\
+         <textarea id=textarea></textarea><meter id=meter></meter><progress id=progress></progress>\
+         <ul><li id=li>x</li></ul>",
+    );
+    check(
+        &page,
+        &[
+            ("table", "display", "table"),
+            ("caption", "display", "table-caption"),
+            ("colgroup", "display", "table-column-group"),
+            ("col", "display", "table-column"),
+            ("thead", "display", "table-header-group"),
+            ("tbody", "display", "table-row-group"),
+            ("tfoot", "display", "table-footer-group"),
+            ("tr", "display", "table-row"),
+            ("td", "display", "table-cell"),
+            ("th", "display", "table-cell"),
+            ("input", "display", "inline-block"),
+            ("button", "display", "inline-block"),
+            ("select", "display", "inline-block"),
+            ("textarea", "display", "inline-block"),
+            ("meter", "display", "inline-block"),
+            ("progress", "display", "inline-block"),
+            ("li", "display", "list-item"),
+        ],
+    );
+}

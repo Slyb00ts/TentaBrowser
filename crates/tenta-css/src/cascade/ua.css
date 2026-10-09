@@ -70,6 +70,9 @@ audio:not([controls]) {
 [popover]:not(:popover-open):not(dialog[open]) {
   display: none;
 }
+dialog:popover-open {
+  display: block;
+}
 dialog:not([open]) {
   display: none;
 }
@@ -203,7 +206,7 @@ textarea[dir=auto i], pre[dir=auto i] {
    the spec's nested-sectioning `h1` rules are not repeated because headless
    Chrome 153 computes `h1` in `section`/`article > section`/`nav` as 32px with
    21.44px margins (measured). */
-article, aside, hgroup, nav, section {
+article, aside, h1, h2, h3, h4, h5, h6, hgroup, nav, section {
   display: block;
 }
 h1, h2, h3, h4, h5, h6 {
@@ -446,6 +449,9 @@ input:is([type=button i], [type=submit i], [type=reset i], [type=checkbox i],
 }
 optgroup {
   font-weight: bolder;
+}
+option {
+  display: block;
 }
 ::placeholder {
   color: #757575;
