@@ -724,7 +724,7 @@ async fn a_navigation_ends_the_wait_for_a_promise() {
         rig.load(&page, "/other.html").await;
         let outcome = waiting.await.expect("task");
         assert!(
-            matches!(&outcome, Err(Error::Other { code, .. }) if code == "execution_context_destroyed"),
+            matches!(&outcome, Err(Error::Other { code, .. }) if code == "navigated_while_awaiting"),
             "{name}: {outcome:?}"
         );
         rig.finish(page).await;
