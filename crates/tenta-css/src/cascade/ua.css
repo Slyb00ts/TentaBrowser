@@ -1,0 +1,525 @@
+/*
+ * User-agent stylesheet.
+ * Derived and modified from the "Rendering" section of the WHATWG HTML Living
+ * Standard (https://html.spec.whatwg.org/multipage/rendering.html). The
+ * standard is licensed under CC BY 4.0; to the extent portions of it are
+ * incorporated into source code, those portions are licensed under the
+ * BSD 3-Clause License instead, reproduced below. This text is MODIFIED from
+ * the standard: rules were reordered, merged, extended and omitted.
+ * Values follow the standard where it is implementable and the observable
+ * defaults of headless Chrome where the two differ.
+ *
+ * Copyright © WHATWG (Apple, Google, Mozilla, Microsoft). All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ *    contributors may be used to endorse or promote products derived from this
+ *    software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+/* 15.3.1 Hidden elements */
+area, base, basefont, datalist, head, link, meta, noembed, noframes, param,
+rp, script, style, template, title {
+  display: none;
+}
+[hidden]:not([hidden=until-found i]) {
+  display: none;
+}
+input[type=hidden i] {
+  display: none !important;
+}
+embed[hidden] {
+  display: inline;
+  height: 0;
+  width: 0;
+}
+/* The `scripting` media feature is not in Stylo's servo flavour, so the
+   spec's scripting-conditional `noscript` rule is written unconditionally.
+   Screenshots target Chrome with scripting enabled, where `noscript` content
+   is not rendered. A future no-JS tier must still hide `noscript` (a tier that
+   renders its content would diverge from the reference). Chrome reports the
+   element's own computed `display` as `inline` while rendering nothing; we
+   report `none`. */
+noscript {
+  display: none !important;
+}
+audio:not([controls]) {
+  display: none !important;
+}
+[popover]:not(:popover-open):not(dialog[open]) {
+  display: none;
+}
+dialog:not([open]) {
+  display: none;
+}
+
+/* 15.3.2 The page */
+html, body {
+  display: block;
+}
+body {
+  margin: 8px;
+}
+
+/* 15.3.3 Flow content */
+address, blockquote, center, dialog, div, figure, figcaption, footer, form,
+header, hr, legend, listing, main, p, plaintext, pre, search, xmp {
+  display: block;
+}
+form {
+  margin-top: 0em;
+}
+p {
+  margin-block: 1em;
+}
+blockquote, figure {
+  margin-block: 1em;
+  margin-inline: 40px;
+}
+address {
+  font-style: italic;
+}
+/* `-webkit-center` parses as the `-moz-center` keyword (see DP-12). Chrome
+   keeps it even under an inherited `text-align: right`. */
+center {
+  text-align: -webkit-center;
+}
+dialog {
+  position: absolute;
+  inset-inline-start: 0;
+  inset-inline-end: 0;
+  width: fit-content;
+  height: fit-content;
+  margin: auto;
+  border: solid;
+  padding: 1em;
+  background-color: Canvas;
+  color: CanvasText;
+}
+listing, pre, xmp {
+  font-family: monospace;
+  white-space: pre;
+  margin-block: 1em;
+}
+plaintext {
+  font-family: monospace;
+  white-space: pre-wrap;
+}
+
+/* 15.3.4 Phrasing content */
+abbr[title], acronym[title] {
+  text-decoration: dotted underline;
+}
+b, strong {
+  font-weight: bolder;
+}
+big {
+  font-size: larger;
+}
+cite, dfn, em, i, var {
+  font-style: italic;
+}
+code, kbd, samp, tt {
+  font-family: monospace;
+}
+del, s, strike {
+  text-decoration: line-through;
+}
+ins, u {
+  text-decoration: underline;
+}
+mark {
+  background-color: yellow;
+  color: black;
+}
+small {
+  font-size: smaller;
+}
+sub {
+  vertical-align: sub;
+  font-size: smaller;
+}
+sup {
+  vertical-align: super;
+  font-size: smaller;
+}
+q::before {
+  content: open-quote;
+}
+q::after {
+  content: close-quote;
+}
+/* `display: ruby` and `ruby-text` are not parsed by Stylo's servo flavour, so
+   ruby boxes fall back to inline. */
+slot {
+  display: contents;
+}
+::marker {
+  unicode-bidi: isolate;
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+}
+
+/* 15.3.5 Bidirectionality. The spec's `:dir()` rules are not parsed by Stylo,
+   so only explicit `dir` values set a direction. */
+bdi {
+  unicode-bidi: isolate;
+}
+bdo {
+  unicode-bidi: bidi-override;
+}
+[dir=ltr i] {
+  direction: ltr;
+}
+[dir=rtl i] {
+  direction: rtl;
+}
+textarea[dir=auto i], pre[dir=auto i] {
+  unicode-bidi: plaintext;
+}
+
+/* 15.3.6 Sections and headings. Chrome ships one flat size per heading level:
+   the spec's nested-sectioning `h1` rules are not repeated because headless
+   Chrome 153 computes `h1` in `section`/`article > section`/`nav` as 32px with
+   21.44px margins (measured). */
+article, aside, hgroup, nav, section {
+  display: block;
+}
+h1, h2, h3, h4, h5, h6 {
+  font-weight: bold;
+}
+h1 {
+  font-size: 2em;
+  margin-block: 0.67em;
+}
+h2 {
+  font-size: 1.5em;
+  margin-block: 0.83em;
+}
+h3 {
+  font-size: 1.17em;
+  margin-block: 1em;
+}
+h4 {
+  margin-block: 1.33em;
+}
+h5 {
+  font-size: 0.83em;
+  margin-block: 1.67em;
+}
+h6 {
+  font-size: 0.67em;
+  margin-block: 2.33em;
+}
+
+/* 15.3.7 Lists */
+dir, dd, dl, dt, menu, ol, ul {
+  display: block;
+}
+li {
+  display: list-item;
+  text-align: match-parent;
+}
+dd {
+  margin-inline-start: 40px;
+}
+dl {
+  margin-block: 1em;
+}
+dir, menu, ol, ul {
+  margin-block: 1em;
+  padding-inline-start: 40px;
+}
+:is(dir, dl, menu, ol, ul) :is(dir, dl, menu, ol, ul) {
+  margin-block: 0;
+}
+ol {
+  list-style-type: decimal;
+}
+dir, menu, ul {
+  list-style-type: disc;
+}
+:is(dir, menu, ol, ul) :is(dir, menu, ul) {
+  list-style-type: circle;
+}
+:is(dir, menu, ol, ul) :is(dir, menu, ol, ul) :is(dir, menu, ul) {
+  list-style-type: square;
+}
+
+/* 15.3.8 Tables */
+table {
+  display: table;
+  box-sizing: border-box;
+  border-spacing: 2px;
+  border-collapse: separate;
+  border-color: gray;
+  text-indent: initial;
+}
+caption {
+  display: table-caption;
+  text-align: -webkit-center;
+}
+colgroup {
+  display: table-column-group;
+}
+col {
+  display: table-column;
+}
+thead {
+  display: table-header-group;
+  vertical-align: middle;
+}
+tbody {
+  display: table-row-group;
+  vertical-align: middle;
+}
+tfoot {
+  display: table-footer-group;
+  vertical-align: middle;
+}
+tr {
+  display: table-row;
+  vertical-align: inherit;
+}
+td, th {
+  display: table-cell;
+  vertical-align: inherit;
+  padding: 1px;
+}
+/* `-moz-center-or-inherit` is the engine's form of the spec's "centre unless
+   the parent's text-align is not its initial value" (Chrome's
+   `-internal-center`). It parses only in user-agent sheets and computes to
+   plain `center`, or to the parent's value when that is not `start`. */
+th {
+  font-weight: bold;
+  text-align: -moz-center-or-inherit;
+}
+td[nowrap], th[nowrap] {
+  white-space: nowrap;
+}
+
+/* `border` attribute: a non-zero border gives the table an outset frame and
+   each cell a one-pixel inset line. `:-servo-nonzero-border` tests the table's
+   own attribute, so cells are reached through their table with child
+   combinators; nested tables keep their own rules. The width comes from the
+   presentational hint. */
+table:-servo-nonzero-border {
+  border-style: outset;
+}
+table:-servo-nonzero-border > tr > :is(td, th),
+table:-servo-nonzero-border > :is(thead, tbody, tfoot) > tr > :is(td, th) {
+  border-width: 1px;
+  border-style: inset;
+  border-color: gray;
+}
+
+/* `frame`: the spec's per-side border styles. A non-void frame needs a width
+   when the `border` attribute does not provide one. */
+table[frame=void i] {
+  border-style: hidden;
+}
+table[frame=above i] {
+  border-style: solid hidden hidden hidden;
+}
+table[frame=below i] {
+  border-style: hidden hidden solid hidden;
+}
+table[frame=hsides i] {
+  border-style: solid hidden solid hidden;
+}
+table[frame=lhs i] {
+  border-style: hidden hidden hidden solid;
+}
+table[frame=rhs i] {
+  border-style: hidden solid hidden hidden;
+}
+table[frame=vsides i] {
+  border-style: hidden solid hidden solid;
+}
+table[frame=box i], table[frame=border i] {
+  border-style: solid;
+}
+table[frame]:not([frame=void i]) {
+  border-width: 1px;
+}
+
+/* `rules`: which cell boundaries are drawn. The cell rules come after the
+   `border` rules so that they win at equal specificity. */
+table:is([rules=none i], [rules=groups i], [rules=rows i], [rules=cols i], [rules=all i]) {
+  border-collapse: collapse;
+}
+table[rules=none i] > tr > :is(td, th),
+table[rules=none i] > :is(thead, tbody, tfoot) > tr > :is(td, th) {
+  border-width: 0;
+}
+table[rules=groups i] > :is(thead, tbody, tfoot) {
+  border-block-width: 1px;
+  border-block-style: solid;
+  border-color: gray;
+}
+table:is([rules=rows i], [rules=all i]) > tr > :is(td, th),
+table:is([rules=rows i], [rules=all i]) > :is(thead, tbody, tfoot) > tr > :is(td, th) {
+  border-block-width: 1px;
+  border-block-style: solid;
+  border-color: gray;
+}
+table:is([rules=cols i], [rules=all i]) > tr > :is(td, th),
+table:is([rules=cols i], [rules=all i]) > :is(thead, tbody, tfoot) > tr > :is(td, th) {
+  border-inline-width: 1px;
+  border-inline-style: solid;
+  border-color: gray;
+}
+
+/* 15.3.10 Form controls */
+input, select, button, textarea {
+  margin: 0em;
+  font: 13.3333px sans-serif;
+  letter-spacing: normal;
+  word-spacing: normal;
+  line-height: normal;
+  text-transform: none;
+  text-indent: 0;
+  text-shadow: none;
+  text-align: start;
+  display: inline-block;
+  color: FieldText;
+}
+input {
+  padding: 1px 2px;
+  border: 2px inset;
+  background-color: Field;
+}
+input[type=checkbox i], input[type=radio i] {
+  margin: 3px 3px 3px 4px;
+  padding: 0;
+  border: none;
+  background-color: transparent;
+}
+input:is([type=button i], [type=submit i], [type=reset i]), button {
+  padding: 1px 6px;
+  border: 2px outset ButtonFace;
+  background-color: ButtonFace;
+  color: ButtonText;
+  text-align: center;
+}
+textarea {
+  font-family: monospace;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  padding: 2px;
+  border: 1px solid;
+  background-color: Field;
+}
+select {
+  border: 1px solid;
+  border-color: #767676;
+  background-color: Field;
+}
+/* Chrome sizes these controls border-box (measured in headless Chrome 153);
+   text, number, password, file, image and range inputs and textarea stay
+   content-box outside quirks mode. */
+button, select, meter, progress,
+input:is([type=button i], [type=submit i], [type=reset i], [type=checkbox i],
+         [type=radio i], [type=color i], [type=search i]) {
+  box-sizing: border-box;
+}
+optgroup {
+  font-weight: bolder;
+}
+::placeholder {
+  color: #757575;
+}
+
+/* 15.3.11 The hr element */
+hr {
+  color: gray;
+  border-style: inset;
+  border-width: 1px;
+  margin-block: 0.5em;
+  margin-inline: auto;
+  overflow: hidden;
+}
+
+/* 15.3.12 Fieldsets and legends */
+fieldset {
+  display: block;
+  margin-inline: 2px;
+  border: groove 2px ThreeDFace;
+  padding-block: 0.35em 0.625em;
+  padding-inline: 0.75em;
+  min-inline-size: min-content;
+}
+legend {
+  padding-inline: 2px;
+}
+
+/* 15.3.13 Details and summary */
+details, summary {
+  display: block;
+}
+/* The spec's `counter-increment: list-item 0` is not parsed by Stylo's servo
+   flavour; the disclosure marker does not depend on it. */
+details > summary:first-of-type {
+  display: list-item;
+  list-style: disclosure-closed inside;
+}
+details[open] > summary:first-of-type {
+  list-style-type: disclosure-open;
+}
+/* The spec hides the closed content with `content-visibility: hidden`, which
+   Stylo's servo flavour does not have (gecko-only property). */
+details:not([open]) > :not(summary:first-of-type) {
+  display: none !important;
+}
+
+/* 15.4 Replaced elements and embedded content */
+iframe {
+  border: 2px inset;
+}
+/* Known gap: the standard (and Chrome) remove the border when `frameborder`
+   is zero or unparsable as a number; a selector cannot say "unparsable", so
+   only the literal "0" is matched here. A presentational hint can cover the
+   rest later. */
+iframe[frameborder="0"] {
+  border: none;
+}
+video {
+  object-fit: contain;
+}
+
+/* 15.5 Widgets: box defaults only. Appearance is left to the widget layer. */
+meter, progress {
+  display: inline-block;
+  vertical-align: -0.2em;
+}
+
+/* Links. `:any-link` covers `a` and `area` (an `area` is `display: none`
+   anyway). There is deliberately no `:visited` rule: the engine never reports
+   visited state, so visited links must render exactly like unvisited ones.
+   Deviation from the plan, which listed `#551a8b` for visited links. */
+:any-link {
+  color: #0000ee;
+  text-decoration: underline;
+  cursor: pointer;
+}
