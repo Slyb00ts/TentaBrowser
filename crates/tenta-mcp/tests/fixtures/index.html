@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+<title>Fixture Home</title>
+<link rel="stylesheet" href="/site.css">
+</head>
+<body>
+<header><nav aria-label="Main">
+  <a id="to-form" href="/form.html">Contact form</a>
+  <a id="to-about" href="/about.html">About us</a>
+</nav></header>
+<main>
+  <h1>Welcome to the fixture</h1>
+  <p>Plain text paragraph with <a href="https://example.com/out">an outside link</a>.</p>
+  <button id="toggle" type="button">Toggle details</button>
+  <p id="note" class="gone">This note is hidden by a stylesheet.</p>
+  <p hidden>Hidden by the attribute.</p>
+  <p aria-hidden="true">Hidden from assistive technology.</p>
+  <p style="display: none">Hidden inline.</p>
+  <ul><li>First item</li><li>Second item</li></ul>
+</main>
+<script>
+document.getElementById('toggle').addEventListener('click', function () {
+  var note = document.getElementById('note');
+  note.className = '';
+  note.textContent = 'The note is now visible.';
+});
+</script>
+</body>
+</html>

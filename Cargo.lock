@@ -3513,10 +3513,20 @@ dependencies = [
 name = "tenta-mcp"
 version = "0.0.1"
 dependencies = [
+ "base64",
+ "getrandom 0.4.3",
+ "httparse",
+ "png",
+ "serde",
+ "serde_json",
  "tenta-browser",
  "tenta-core",
- "tenta-page",
+ "tenta-dom",
  "tenta-search",
+ "tenta-testutil",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

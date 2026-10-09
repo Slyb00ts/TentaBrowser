@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use tentabrowser::{
     BrowserContext, ClientProfile, ContextOptions, DownloadPolicy, Engine, FsPolicy, JsEngine,
-    Profile, Tier,
+    Profile, SettleConfig, Tier,
 };
 
 use crate::cli::{Global, default_profile};
@@ -53,6 +53,18 @@ pub fn build_engine_with(
     tier: Tier,
     js: JsEngine,
 ) -> CliResult<Engine> {
+    build_engine_settled(global, page_threads, tier, js, None)
+}
+
+/// [`build_engine_with`] with the settle tunables of the pages named; `None`
+/// keeps the library's.
+pub fn build_engine_settled(
+    global: &Global,
+    page_threads: usize,
+    tier: Tier,
+    js: JsEngine,
+    settle: Option<SettleConfig>,
+) -> CliResult<Engine> {
     let profile = resolve_profile(global.profile.as_deref())?;
     let session_dir = session_cache_dir(global);
     let policy = fs_policy(global, session_dir.as_deref())?;
@@ -67,6 +79,9 @@ pub fn build_engine_with(
         .page_threads(global.page_threads.unwrap_or(page_threads));
     if let Some(dir) = &session_dir {
         builder = builder.session_cache_dir(dir);
+    }
+    if let Some(settle) = settle {
+        builder = builder.settle(settle);
     }
     builder.build().map_err(CliError::from)
 }

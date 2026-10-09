@@ -8,8 +8,36 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# Click, type, fill, key presses and evaluation run the page-side script in a
+# script engine; without it those tools answer `tier_denied`.
+v8 = ["tenta-browser/v8"]
+# `browser_screenshot` and layout-aware snapshots need the render pipeline.
+render = ["tenta-browser/render"]
+
+[[test]]
+name = "tools"
+required-features = ["v8"]
+
+[[test]]
+name = "scenario"
+required-features = ["v8", "render"]
+
 [dependencies]
 tenta-core = { workspace = true }
 tenta-browser = { workspace = true }
-tenta-page = { workspace = true }
+tenta-dom = { workspace = true }
+# MC3 adds `browser_web_search` on top of this crate.
 tenta-search = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util", "io-std", "rt-multi-thread"] }
+httparse = { workspace = true }
+getrandom = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+base64 = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tenta-testutil = { workspace = true }
+png = { workspace = true }

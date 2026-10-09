@@ -1,0 +1,18 @@
+<!doctype html>
+<html><head><title>Dynamic</title></head>
+<body>
+<h1>Dynamic page</h1>
+<div id="slot">waiting</div>
+<button id="start" type="button">Start</button>
+<script>
+document.getElementById('start').addEventListener('click', function () {
+  setTimeout(function () {
+    var late = document.createElement('p');
+    late.id = 'late';
+    late.textContent = 'Loaded later';
+    document.body.appendChild(late);
+    document.getElementById('slot').textContent = 'done';
+  }, 400);
+});
+</script>
+</body></html>

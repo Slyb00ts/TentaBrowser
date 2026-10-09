@@ -127,6 +127,13 @@ pub enum Command {
     /// `--allowed-origin`, can drive the browser; set a token on shared
     /// machines.
     Cdp(CdpArgs),
+    /// Serve the Model Context Protocol, so agents can drive the browser with
+    /// tools (`browser_navigate`, `browser_snapshot`, `browser_click`, ...).
+    /// Speaks newline-delimited JSON-RPC on stdin and stdout by default;
+    /// `--http` serves streamable HTTP on loopback instead. Logs go to
+    /// stderr. Page scripts and screenshots need a build with `--features
+    /// v8,render`.
+    Mcp(McpArgs),
     /// Print the version.
     Version,
 }
@@ -161,6 +168,91 @@ pub struct CdpArgs {
     /// Pages that may be open at once.
     #[arg(long, value_name = "N", default_value_t = 16)]
     pub max_targets: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct McpArgs {
+    /// Serve streamable HTTP instead of stdio. Without `--token` on loopback a
+    /// random bearer token is generated and printed on stderr after the URL.
+    /// Session-less (stateless, protocol 2026-07-28) clients of one server all
+    /// share ONE browser session: cookies, page and refs. Use stdio, or one
+    /// server per agent, when agents must not see each other.
+    #[arg(long)]
+    pub http: bool,
+
+    /// Serve HTTP on loopback with no bearer token. Any local process, and any
+    /// web page allowed by `--allowed-origin`, can then drive the browser.
+    #[arg(long, requires = "http", conflicts_with = "token")]
+    pub no_auth: bool,
+
+    /// Address to listen on (with `--http`). A non-loopback address needs a
+    /// token.
+    #[arg(
+        long,
+        value_name = "ADDR",
+        default_value = "127.0.0.1",
+        requires = "http"
+    )]
+    pub host: std::net::IpAddr,
+
+    /// Port to listen on (with `--http`); 0 picks a free one. The endpoint is
+    /// printed on stderr.
+    #[arg(long, value_name = "PORT", default_value_t = 8931, requires = "http")]
+    pub port: u16,
+
+    /// Require this bearer token (`Authorization: Bearer ...`) on every HTTP
+    /// request. Needed (16 bytes or more) to listen on a non-loopback
+    /// address. Prefer the environment variable: a flag is visible in the
+    /// process list.
+    #[arg(
+        long,
+        value_name = "TOKEN",
+        env = "TENTA_MCP_TOKEN",
+        hide_env_values = true,
+        requires = "http"
+    )]
+    pub token: Option<String>,
+
+    /// Accept HTTP requests that carry this `Origin`, matched exactly
+    /// (repeatable). Without any, only clients that send no `Origin` (not web
+    /// pages) are served.
+    #[arg(long, value_name = "ORIGIN", requires = "http")]
+    pub allowed_origin: Vec<String>,
+
+    /// Accept this `Host` name besides IP addresses and `localhost`
+    /// (repeatable), for a server behind a named proxy.
+    #[arg(long, value_name = "HOST", requires = "http")]
+    pub allowed_host: Vec<String>,
+
+    /// All sessions share one browser context (cookies and storage) instead
+    /// of one each.
+    #[arg(long)]
+    pub share_context: bool,
+
+    /// Page viewport as WIDTHxHEIGHT in CSS pixels.
+    #[arg(long, value_name = "WxH", default_value = "1280x800", value_parser = parse_viewport)]
+    pub viewport: (u32, u32),
+
+    /// Sessions that may be open at once.
+    #[arg(long, value_name = "N", default_value_t = 16)]
+    pub max_sessions: usize,
+
+    /// Print the version of the tool list and its schemas, then exit.
+    #[arg(long)]
+    pub schema_version: bool,
+}
+
+fn parse_viewport(text: &str) -> Result<(u32, u32), String> {
+    let (width, height) = text
+        .split_once(['x', 'X'])
+        .ok_or_else(|| "expected WIDTHxHEIGHT, such as 1280x800".to_owned())?;
+    let parse = |part: &str| {
+        part.parse::<u32>()
+            .ok()
+            .filter(|value| (1..=16384).contains(value))
+            .ok_or_else(|| "each side must be a number from 1 to 16384".to_owned())
+    };
+    Ok((parse(width)?, parse(height)?))
 }
 
 #[derive(Debug, Args)]

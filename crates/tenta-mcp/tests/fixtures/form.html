@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head>
+<title>Contact</title>
+<style>
+body { margin: 0; font: 16px sans-serif; }
+#name { position: absolute; left: 20px; top: 20px; width: 200px; height: 30px; border: 2px solid #36c; padding: 0; margin: 0; }
+#agree { position: absolute; left: 300px; top: 20px; width: 20px; height: 20px; margin: 0; }
+#send { position: absolute; left: 20px; top: 80px; width: 120px; height: 40px; border: 0; margin: 0; padding: 0; background: #2a9d4a; }
+#out { position: absolute; left: 20px; top: 150px; width: 400px; height: 30px; }
+</style>
+</head>
+<body>
+<form id="f" action="/result.html" method="get">
+  <label for="name">Your name</label>
+  <input id="name" name="name" type="text" placeholder="name">
+  <input id="agree" name="agree" type="checkbox" aria-label="Agree to terms">
+  <input id="secret" name="secret" type="password" aria-label="Secret" style="position:absolute;left:20px;top:200px">
+  <button id="send" type="button">Greet</button>
+  <button id="go" type="submit" style="position:absolute;left:200px;top:80px;width:100px;height:40px">Submit</button>
+</form>
+<div id="out">idle</div>
+<script>
+window.log = [];
+var name = document.getElementById('name');
+['keydown', 'keyup'].forEach(function (type) {
+  name.addEventListener(type, function (e) { window.log.push(type + ':' + e.key); });
+});
+name.addEventListener('input', function () { window.log.push('input:' + name.value); });
+document.getElementById('send').addEventListener('click', function () {
+  document.getElementById('out').textContent = 'Hello, ' + name.value + '!';
+});
+document.getElementById('agree').addEventListener('change', function (e) {
+  window.log.push('change:' + e.target.checked);
+});
+</script>
+</body>
+</html>
