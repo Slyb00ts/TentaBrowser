@@ -155,6 +155,10 @@ pub struct HostState {
     /// `.then` after a script entry would sit unrun for as long as the page
     /// happened to have no timer scheduled.
     pub microtasks_pending: std::cell::Cell<bool>,
+    /// Image events delivered since the wrapper graph was last collected, and
+    /// when that was. A collection is a full garbage collection, so a stream of
+    /// one-event entries pays for it only now and then (`Engine::settle_images`).
+    pub image_graph_debt: std::cell::Cell<(usize, Option<std::time::Instant>)>,
     /// The driver `fetch()` hands its requests to, or `None` before one is
     /// installed.
     ///
@@ -219,6 +223,7 @@ impl HostState {
             ready_frames: Rc::new(RefCell::new(VecDeque::new())),
             script_depth: std::cell::Cell::new(0),
             microtasks_pending: std::cell::Cell::new(false),
+            image_graph_debt: std::cell::Cell::new((0, None)),
             fetch_driver: RefCell::new(None),
             cookies,
             xhr_driver: RefCell::new(None),

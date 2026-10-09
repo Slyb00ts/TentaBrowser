@@ -45,9 +45,13 @@ use crate::thread::PageThread;
 mod evaluate;
 #[cfg(feature = "render")]
 mod geometry;
+#[cfg(feature = "render")]
+mod image_loader;
 mod retained;
 #[cfg(feature = "render")]
 mod screenshot;
+#[cfg(feature = "render")]
+pub(crate) use image_loader::{ImageLoader, PageImageHost};
 
 pub use evaluate::{EvalOptions, Evaluation, FromRemote, World};
 #[cfg(feature = "render")]
@@ -370,7 +374,7 @@ impl PageState {
     }
 }
 
-struct PageInner {
+pub(crate) struct PageInner {
     config: PageConfig,
     frame: FrameId,
     state: Mutex<PageState>,
@@ -1467,7 +1471,7 @@ async fn navigate(
     // The render session of the document this one replaces, with its pinned
     // images and retained bodies, ends with it, not at the next render.
     #[cfg(feature = "render")]
-    crate::render::release(inner.config.id);
+    crate::render::release_unless(inner.config.id, generation);
     inner.emit(PageEvent::TierChanged { tier: Tier::Dom });
 
     // `DOMContentLoaded` reaches page script here: after the parse has run the
@@ -2677,6 +2681,18 @@ async fn settle_loop(
         // instead of after another park.
         if let Some(reason) = inner.crash_reason() {
             return Err(Error::Crashed { reason });
+        }
+        // Images that entered the document, or whose source changed, start
+        // loading here, and the ones whose load ended report to their
+        // elements: all before the check below asks whether anything still
+        // delays `load`, so an image the turn's scripts added holds it back,
+        // and the `load` event of an element comes before the window's.
+        #[cfg(feature = "render")]
+        {
+            image_loader::pump(inner, tracker, tree, initial_generation);
+            if let Some(reason) = inner.crash_reason() {
+                return Err(Error::Crashed { reason });
+            }
         }
         let mutated = with_document(inner, tree, |document| document.mutation_generation());
         if mutated != mutation_generation {

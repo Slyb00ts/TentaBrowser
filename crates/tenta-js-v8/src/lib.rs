@@ -18,11 +18,12 @@ mod world;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Once};
+use std::time::Duration;
 
 use tenta_js::bindings::WrapperWorld;
 use tenta_js::bindings::host::{
-    HostContext, HostObject, SharedContext, SharedDocument, deliver_xhr_completion, encode_host,
-    encode_node, insert_fetched_response,
+    HostContext, HostObject, SharedContext, SharedDocument, deliver_image_events,
+    deliver_xhr_completion, encode_host, encode_node, insert_fetched_response,
 };
 use tenta_js::bindings::{
     Handle, clear_v8_callback_admission, handle_from_v8, handle_to_v8,
@@ -33,6 +34,7 @@ use tenta_js::dom::events::{DispatchTarget, EventKind, EventRecord, ScriptHost, 
 use tenta_js::engine::{LifecycleEvent, ScriptErrorKind};
 use tenta_js::event_loop::{Clock, EventLoop, FiringRelease, MonoTime};
 use tenta_js::fetch::{FetchCompletion, FetchOutcome};
+use tenta_js::image::{ImageEvent, ImageHost};
 use tenta_js::storage::PageStorage;
 use tenta_js::xhr::XhrCompletion;
 use tenta_net::CookieJar;
@@ -1916,6 +1918,75 @@ impl Engine {
         self.graph_checkpoint();
     }
 
+    /// Installs the page's image state for the document this engine is bound
+    /// to (`complete`, `naturalWidth`, `naturalHeight`, `currentSrc`,
+    /// `decode()`).
+    ///
+    /// Also defines the `Image` constructor, which only a page that loads
+    /// images has: a failure to define it is not an error of the host.
+    pub fn set_image_host(&mut self, host: Rc<dyn ImageHost>) {
+        if let Some(dom) = &self.dom {
+            dom.ctx.set_image_host(host);
+        }
+        if self.native_failure().is_none() {
+            let _ = self.run_inner(tenta_js::image::IMAGE_CONSTRUCTOR_SOURCE, None);
+        }
+    }
+
+    /// Delivers the image loads that ended: a trusted `load` or `error` at
+    /// each element, and the settlement of the `decode()` promises waiting on
+    /// it.
+    ///
+    /// The shape is [`Self::settle_xhr`]'s, for the same reason: the entry runs
+    /// from the page's turn with no V8 callback on the stack, so it marks itself
+    /// through [`HostState::enter_native_dispatch`] and every scope the dispatch
+    /// and the promise settlement open is a plain `HandleScope`. An empty batch
+    /// returns before anything is armed or charged.
+    pub fn settle_images(
+        &mut self,
+        events: Vec<ImageEvent>,
+        current: &mut dyn FnMut(usize, &ImageEvent) -> bool,
+    ) {
+        let _entry = self.entered();
+        if events.is_empty() || self.native_failure().is_some() {
+            return;
+        }
+        // A listener runs script, so the entry starts with nothing pending,
+        // like every other way in.
+        self.discard_stray_termination();
+        for (index, event) in events.iter().enumerate() {
+            if self.native_failure().is_some() || !current(index, event) {
+                continue;
+            }
+            let Some(dom) = &self.dom else {
+                return;
+            };
+            {
+                let _native = self.host.enter_native_dispatch();
+                deliver_image_events(&dom.ctx, std::slice::from_ref(event));
+            }
+            // This event's task is over: its microtasks run before the next
+            // event's, but the wrapper graph is only walked once, below.
+            self.isolate.perform_microtask_checkpoint();
+            self.host.microtasks_pending.set(false);
+            self.flush_rejections();
+        }
+        // Collecting the wrapper graph is a full garbage collection (about 2 ms
+        // on a small heap, more on a big one), which a stream of one-event
+        // entries cannot each afford. It runs once enough events have been
+        // delivered or enough time has passed since the last one.
+        let (debt, last) = self.host.image_graph_debt.get();
+        let debt = debt + events.len();
+        let now = std::time::Instant::now();
+        let waited = last.map_or(Duration::MAX, |last| now.duration_since(last));
+        if debt >= IMAGE_GRAPH_EVENTS || waited >= IMAGE_GRAPH_INTERVAL {
+            self.host.image_graph_debt.set((0, Some(now)));
+            self.graph_checkpoint();
+        } else {
+            self.host.image_graph_debt.set((debt, last.or(Some(now))));
+        }
+    }
+
     /// Fires one user-agent lifecycle event — `DOMContentLoaded` or `load` — as
     /// a real DOM event at the target HTML prescribes.
     ///
@@ -2447,6 +2518,11 @@ pub fn evaluate(source: &str) -> Result<String, JsError> {
 /// (<https://webidl.spec.whatwg.org/#idl-DOMException>).
 /// Native binding failures use the captured prototype and native own-property
 /// definitions, without calling the page-visible constructor.
+/// Image events after which the wrapper graph is collected, and the longest
+/// it goes uncollected while events keep arriving.
+const IMAGE_GRAPH_EVENTS: usize = 1024;
+const IMAGE_GRAPH_INTERVAL: Duration = Duration::from_millis(250);
+
 const DOM_EXCEPTION_BOOTSTRAP: &str = r#"
 (function () {
   "use strict";

@@ -280,6 +280,12 @@ async fn drive(inner: &Arc<PageInner>, tree: Weak<RefCell<DomDocument>>, notify:
             refresh_title(inner, &document);
             wakeup
         });
+        // Images the page added or changed since the last turn, and the loads
+        // that ended, between settle calls as during them.
+        #[cfg(feature = "render")]
+        if wakeup.is_some() {
+            pump_images(inner, &tree);
+        }
         let Some(wakeup) = wakeup else {
             return;
         };
@@ -297,6 +303,23 @@ async fn drive(inner: &Arc<PageInner>, tree: Weak<RefCell<DomDocument>>, notify:
             None => notified.await,
         }
     }
+}
+
+/// One turn of image work for the retained document `tree`.
+#[cfg(feature = "render")]
+fn pump_images(inner: &Arc<PageInner>, tree: &Weak<RefCell<DomDocument>>) {
+    let page = inner.config.id;
+    let Some(document) = tree.upgrade() else {
+        return;
+    };
+    let Some(tracker) =
+        runtime::with_runtime_for(page, &document, |runtime| Rc::clone(runtime.tracker()))
+    else {
+        return;
+    };
+    drop(document);
+    let navigation = inner.state.lock().document_navigation_id;
+    super::image_loader::pump(inner, &tracker, &Some(tree.clone()), navigation);
 }
 
 /// Re-reads the title the page serves other threads, if the tree changed.

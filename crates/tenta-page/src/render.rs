@@ -24,7 +24,7 @@ pub use tenta_render::{ImageFormat, RasterStats, Screenshot, StageTimes, WorkCou
 use url::Url;
 
 use crate::images::{ImageLedger, Loaded};
-use crate::page::Viewport;
+use crate::page::{ImageLoader, Viewport};
 use crate::styles::{StyleSignature, StyleState};
 
 /// A rectangle of the document in CSS pixels, from its top-left corner.
@@ -137,12 +137,16 @@ struct PageRender {
     navigation: u64,
     session: Rc<RefCell<RenderSession>>,
     sheets: Rc<tokio::sync::Mutex<Sheets>>,
+    /// Loads the document's images as they enter it; it shares the session's
+    /// store and the sheets' image ledger.
+    loader: Rc<ImageLoader>,
 }
 
 /// What a screenshot works with.
 pub(crate) struct Handles {
     pub session: Rc<RefCell<RenderSession>>,
     pub sheets: Rc<tokio::sync::Mutex<Sheets>>,
+    pub loader: Rc<ImageLoader>,
 }
 
 thread_local! {
@@ -174,12 +178,15 @@ pub(crate) fn handles(
                 },
                 ..RenderConfig::default()
             });
+            let session = Rc::new(RefCell::new(session));
+            let loader = ImageLoader::new(Rc::downgrade(&session));
             renders.insert(
                 page,
                 PageRender {
                     navigation,
-                    session: Rc::new(RefCell::new(session)),
+                    session,
                     sheets: Rc::new(tokio::sync::Mutex::new(Sheets::default())),
+                    loader,
                 },
             );
         }
@@ -187,8 +194,45 @@ pub(crate) fn handles(
         Handles {
             session: Rc::clone(&render.session),
             sheets: Rc::clone(&render.sheets),
+            loader: Rc::clone(&render.loader),
         }
     })
+}
+
+/// The image loader of `page`'s current render session, if it has one.
+pub(crate) fn loader_of(page: PageId) -> Option<Rc<ImageLoader>> {
+    RENDERS.with(|cell| {
+        cell.borrow()
+            .get(&page)
+            .map(|render| Rc::clone(&render.loader))
+    })
+}
+
+/// Whether `page` has a render session for the document of `navigation`.
+pub(crate) fn loader_exists(page: PageId, navigation: u64) -> bool {
+    RENDERS.with(|cell| {
+        cell.borrow()
+            .get(&page)
+            .is_some_and(|render| render.navigation == navigation)
+    })
+}
+
+/// Drops the session of `page` unless it renders the document of
+/// `navigation`: a document that installs keeps the session its images began
+/// loading into while it was parsed, and ends the one of the document it
+/// replaces.
+pub(crate) fn release_unless(page: PageId, navigation: u64) {
+    let render = RENDERS.with(|cell| {
+        let mut renders = cell.borrow_mut();
+        if renders
+            .get(&page)
+            .is_some_and(|render| render.navigation == navigation)
+        {
+            return None;
+        }
+        renders.remove(&page)
+    });
+    drop(render);
 }
 
 /// Drops the session of `page`, if it has one.

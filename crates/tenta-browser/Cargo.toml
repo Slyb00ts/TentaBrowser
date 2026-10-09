@@ -71,6 +71,10 @@ required-features = ["render"]
 name = "images"
 required-features = ["render"]
 
+[[test]]
+name = "image_events"
+required-features = ["render", "v8"]
+
 [[example]]
 name = "js_xhr"
 required-features = ["v8"]

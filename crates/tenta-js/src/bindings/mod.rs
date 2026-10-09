@@ -1399,13 +1399,17 @@ mod prelude_helpers {
 
     /// The `decode(input)` shape: no options, so not a streaming call.
     fn decode(host: &HostObject, bytes: &[u8]) -> String {
-        host.decode(Some(bytes.to_vec()), None)
+        <HostObject as TextDecoderOps>::decode(host, Some(bytes.to_vec()), None)
             .expect("valid input decodes without a `fatal` error")
     }
 
     /// The `decode(input, options)` shape.
     fn decode_with(host: &HostObject, bytes: &[u8], stream: bool) -> Result<String, JsError> {
-        host.decode(Some(bytes.to_vec()), Some(TextDecodeOptions { stream }))
+        <HostObject as TextDecoderOps>::decode(
+            host,
+            Some(bytes.to_vec()),
+            Some(TextDecodeOptions { stream }),
+        )
     }
 
     /// A label is never kept: what the constructor resolves it to is an
@@ -1643,13 +1647,17 @@ mod prelude_helpers {
 
         assert_eq!(decode_with(&host, &[0xC9], true).expect("no error"), "");
         assert_eq!(
-            host.decode(None, None).expect("no error"),
+            <HostObject as TextDecoderOps>::decode(&host, None, None).expect("no error"),
             "\u{FFFD}",
             "an absent input still flushes the held byte"
         );
         assert_eq!(
-            host.decode(Some(Vec::new()), Some(Default::default()))
-                .expect("no error"),
+            <HostObject as TextDecoderOps>::decode(
+                &host,
+                Some(Vec::new()),
+                Some(Default::default())
+            )
+            .expect("no error"),
             "",
             "an explicit empty input on a flushed decoder is the empty string"
         );
@@ -1664,7 +1672,7 @@ mod prelude_helpers {
         let host = decoder(&realm, None, true, false);
 
         assert_eq!(
-            host.decode(Some(vec![0xFF]), None)
+            <HostObject as TextDecoderOps>::decode(&host, Some(vec![0xFF]), None)
                 .expect_err("0xFF opens no sequence in UTF-8")
                 .kind(),
             JsErrorKind::Type
@@ -1675,7 +1683,7 @@ mod prelude_helpers {
             "an incomplete sequence is not malformed while it may still continue"
         );
         assert_eq!(
-            host.decode(None, None)
+            <HostObject as TextDecoderOps>::decode(&host, None, None)
                 .expect_err("the flush completes a sequence that cannot")
                 .kind(),
             JsErrorKind::Type

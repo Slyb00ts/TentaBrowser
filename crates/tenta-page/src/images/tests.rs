@@ -168,6 +168,7 @@ impl Env {
             extra_headers: &[],
             document_url: &self.document_url,
             deadline: Instant::now() + wait,
+            rolling: None,
         }
     }
 
@@ -218,6 +219,65 @@ async fn images_are_requested_as_images_with_the_document_as_initiator() {
     assert_eq!(seen[0].url, "http://fixture.test/a.png");
     assert_eq!(seen[0].resource_type, ResourceType::Image);
     assert_eq!(seen[0].initiator.as_ref().map(Url::as_str), Some(DOC_URL));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_streaming_load_takes_wants_that_arrive_while_it_waits_and_reports_each_as_it_ends() {
+    let env = Env::new(
+        vec![
+            (
+                "http://fixture.test/a.png",
+                (OK, "image/png", png(2, 2, [1, 0, 0, 255])),
+            ),
+            (
+                "http://fixture.test/b.png",
+                (OK, "image/png", png(3, 3, [2, 0, 0, 255])),
+            ),
+        ],
+        Duration::from_millis(80),
+    );
+    let feed = std::cell::RefCell::new(vec![want("http://fixture.test/a.png")]);
+    let wake = tokio::sync::Notify::new();
+    let ended = std::cell::RefCell::new(Vec::new());
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let late = async {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                feed.borrow_mut().push(want("http://fixture.test/b.png"));
+                wake.notify_one();
+            };
+            let ctx = ImageContext {
+                rolling: Some(Duration::from_secs(30)),
+                ..env.ctx(Duration::from_secs(30))
+            };
+            let mut ledger = ImageLedger::default();
+            let driving = drive(
+                env.settings,
+                &ctx,
+                &mut ledger,
+                Some(&wake),
+                || std::mem::take(&mut *feed.borrow_mut()),
+                |index, loaded| {
+                    ended
+                        .borrow_mut()
+                        .push((index, loaded.result.map(|d| d.image.width)));
+                },
+            );
+            tokio::join!(late, driving);
+        })
+        .await;
+    let ended = ended.into_inner();
+    assert_eq!(ended.len(), 2, "{ended:?}");
+    assert!(
+        ended.contains(&(0, Ok(2))) && ended.contains(&(1, Ok(3))),
+        "{ended:?}"
+    );
+    assert_eq!(
+        env.peak.load(Ordering::SeqCst),
+        2,
+        "the late want ran beside the first, not after it"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

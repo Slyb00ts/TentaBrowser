@@ -46,6 +46,7 @@ use crate::bindings::host::SharedDocument;
 use crate::event_loop::ProvenanceSink;
 use crate::fetch::{FetchCompletion, FetchDriver};
 use crate::geometry::{GeometryHost, ViewportMetrics};
+use crate::image::{ImageEvent, ImageHost};
 use crate::storage::PageStorage;
 use crate::xhr::{XhrCompletion, XhrDriver};
 
@@ -297,6 +298,36 @@ pub trait PageEngine {
     /// a page with no layout (see [`crate::geometry`]). The default ignores
     /// the host, so a backend that has no geometry members yet needs no code.
     fn set_geometry_host(&mut self, _host: Rc<dyn GeometryHost>) {}
+
+    /// Gives the engine the page's image state, replacing any host installed
+    /// before. `complete`, `naturalWidth`, `naturalHeight`, `currentSrc` and
+    /// `decode()` read it. An engine that never receives one reports every
+    /// image as complete with no size, which is what a page that loads no
+    /// images shows. The default ignores the host, so a backend without these
+    /// members needs no code.
+    fn set_image_host(&mut self, _host: Rc<dyn ImageHost>) {}
+
+    /// Reports the loads that ended: each event is fired at its element as a
+    /// trusted `load` or `error` (neither bubbles nor is cancelable), and the
+    /// `decode()` promises waiting on the element settle. One entry for the
+    /// whole batch, entered like [`PageEngine::settle_xhr`]: with no V8
+    /// callback on the stack, so the backend opens a plain scope. An empty
+    /// batch must not be entered at all.
+    ///
+    /// Each event is its own task: the microtask queue is drained after every
+    /// one, as HTML's "queue an element task" does, but the wrapper graph is
+    /// checked once for the batch, because that walk is what makes a flood of
+    /// single-event entries superlinear. `current(index, event)` is asked just
+    /// before event `index` is fired, in order, and an event it refuses is
+    /// skipped: an earlier handler of the same batch may have changed the
+    /// element's source. It must not call back into script. The default does
+    /// nothing.
+    fn settle_images(
+        &mut self,
+        _events: Vec<ImageEvent>,
+        _current: &mut dyn FnMut(usize, &ImageEvent) -> bool,
+    ) {
+    }
 
     /// Settles the promises this batch of completions names, as one entry: the
     /// values are built, the settlements queued as microtasks, and the engine

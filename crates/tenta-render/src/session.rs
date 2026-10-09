@@ -90,7 +90,7 @@ pub struct RenderSession {
     /// Incremented by every layout, to tie the display list to its fragments.
     epoch: u64,
     display: Option<RetainedList>,
-    images: ImageTable,
+    pub(crate) images: ImageTable,
     work: WorkCounters,
     #[cfg(test)]
     fail_next_layout: bool,

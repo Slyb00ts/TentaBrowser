@@ -79,6 +79,20 @@ pub(crate) struct ImageContext<'a> {
     pub document_url: &'a Url,
     /// A fetch that cannot finish before this is not started.
     pub deadline: Instant,
+    /// When set, each image gets this long from the moment it is admitted
+    /// instead of sharing `deadline`: a loader that runs for the life of the
+    /// page has no single end to count towards.
+    pub rolling: Option<Duration>,
+}
+
+impl ImageContext<'_> {
+    /// The instant an image admitted now must be done by.
+    fn deadline(&self) -> Instant {
+        match self.rolling {
+            Some(each) => self.clock.now() + each,
+            None => self.deadline,
+        }
+    }
 }
 
 /// What one image task returns.
@@ -144,14 +158,53 @@ pub(crate) async fn load_images(
     ctx: &ImageContext<'_>,
     ledger: &mut ImageLedger,
 ) -> Vec<Loaded> {
-    let cancel = CancelOnDrop(Arc::new(AtomicBool::new(false)));
     let ImagePlan { wants, decode } = plan;
-    let mut slots: Vec<Option<Result<Decoded, String>>> = (0..wants.len()).map(|_| None).collect();
+    let mut slots: Vec<Option<Loaded>> = (0..wants.len()).map(|_| None).collect();
+    let mut batch = Some(wants);
+    drive(
+        decode,
+        ctx,
+        ledger,
+        None,
+        || batch.take().unwrap_or_default(),
+        |index, loaded| slots[index] = Some(loaded),
+    )
+    .await;
+    slots.into_iter().flatten().collect()
+}
+
+/// Fetches and decodes images as they are asked for, until nothing is asked
+/// for and nothing is running. `next` is called whenever the loop looks for
+/// work and returns the wants that arrived since; `wake`, when given, is
+/// notified when more arrive while the loop waits on a fetch. `done` receives
+/// each outcome as soon as its image ends, with the index of its want in
+/// arrival order.
+///
+/// The per-host and total limits and the page's budgets apply to the whole
+/// call, so one long-lived call serves an unbounded stream of wants under the
+/// same bounds a plan gets.
+pub(crate) async fn drive(
+    decode: DecodeSettings,
+    ctx: &ImageContext<'_>,
+    ledger: &mut ImageLedger,
+    wake: Option<&tokio::sync::Notify>,
+    mut next: impl FnMut() -> Vec<ImageWant>,
+    mut done: impl FnMut(usize, Loaded),
+) {
+    let cancel = CancelOnDrop(Arc::new(AtomicBool::new(false)));
+    let mut wants: Vec<ImageWant> = Vec::new();
     let mut running: JoinSet<Finished> = JoinSet::new();
     let mut tasks: HashMap<tokio::task::Id, Running> = HashMap::new();
     let mut per_host: HashMap<String, usize> = HashMap::new();
-    let mut pending: VecDeque<usize> = (0..wants.len()).collect();
-    while !pending.is_empty() || !running.is_empty() {
+    let mut pending: VecDeque<usize> = VecDeque::new();
+    loop {
+        for want in next() {
+            pending.push_back(wants.len());
+            wants.push(want);
+        }
+        if pending.is_empty() && running.is_empty() {
+            return;
+        }
         let mut at = 0;
         while at < pending.len() && running.len() < MAX_TOTAL {
             let index = pending[at];
@@ -177,8 +230,14 @@ pub(crate) async fn load_images(
             };
             let (byte_limit, reserved) = match admission {
                 Admission::Fail(reason) => {
-                    slots[index] = Some(Err(reason));
                     pending.remove(at);
+                    done(
+                        index,
+                        Loaded {
+                            want: want.clone(),
+                            result: Err(reason),
+                        },
+                    );
                     continue;
                 }
                 Admission::Defer => {
@@ -208,7 +267,7 @@ pub(crate) async fn load_images(
                 fs_policy: ctx.fs_policy.clone(),
                 extra_headers: ctx.extra_headers.to_vec(),
                 document_url: ctx.document_url.clone(),
-                remaining: ctx.deadline.saturating_duration_since(ctx.clock.now()),
+                remaining: ctx.deadline().saturating_duration_since(ctx.clock.now()),
                 byte_limit,
                 decode: settings,
                 cancel: Arc::clone(&cancel.0),
@@ -229,11 +288,26 @@ pub(crate) async fn load_images(
         if running.is_empty() {
             // Nothing is running that could free the budget the rest wait on.
             for index in pending.drain(..) {
-                slots[index] = Some(Err("the page's byte budget is spent".to_owned()));
+                done(
+                    index,
+                    Loaded {
+                        want: wants[index].clone(),
+                        result: Err("the page's byte budget is spent".to_owned()),
+                    },
+                );
             }
-            break;
+            continue;
         }
-        let Some(joined) = running.join_next_with_id().await else {
+        let joined = match wake {
+            Some(wake) => {
+                tokio::select! {
+                    joined = running.join_next_with_id() => joined,
+                    () = wake.notified() => continue,
+                }
+            }
+            None => running.join_next_with_id().await,
+        };
+        let Some(joined) = joined else {
             continue;
         };
         let (id, finished) = match joined {
@@ -253,32 +327,34 @@ pub(crate) async fn load_images(
         {
             *count = count.saturating_sub(1);
         }
-        if let Some(finished) = finished {
-            ledger.bytes += finished.charged;
-            if let Some((body, kind)) = finished.retained {
-                let cap = if kind == ImageKind::Svg {
-                    MAX_RETAINED_SVG
-                } else {
-                    MAX_RETAINED_RASTER
-                };
-                if body.len() <= cap && ledger.retained + body.len() <= MAX_RETAINED_TOTAL {
-                    ledger.retained += body.len();
-                    ledger
-                        .bodies
-                        .insert(wants[task.index].key.clone(), (body, kind));
+        let result = match finished {
+            Some(finished) => {
+                ledger.bytes += finished.charged;
+                if let Some((body, kind)) = finished.retained {
+                    let cap = if kind == ImageKind::Svg {
+                        MAX_RETAINED_SVG
+                    } else {
+                        MAX_RETAINED_RASTER
+                    };
+                    if body.len() <= cap && ledger.retained + body.len() <= MAX_RETAINED_TOTAL {
+                        ledger.retained += body.len();
+                        ledger
+                            .bodies
+                            .insert(wants[task.index].key.clone(), (body, kind));
+                    }
                 }
+                finished.result
             }
-            slots[task.index] = Some(finished.result);
-        }
+            None => Err("the image task ended abnormally".to_owned()),
+        };
+        done(
+            task.index,
+            Loaded {
+                want: wants[task.index].clone(),
+                result,
+            },
+        );
     }
-    wants
-        .into_iter()
-        .zip(slots)
-        .map(|(want, result)| Loaded {
-            want,
-            result: result.unwrap_or_else(|| Err("the image task ended abnormally".to_owned())),
-        })
-        .collect()
 }
 
 /// Charges one request, reserving its body limit against the byte budget.
@@ -286,7 +362,7 @@ fn admit(ctx: &ImageContext<'_>, ledger: &ImageLedger) -> Admission {
     if ledger.requests >= ctx.budgets.network_requests {
         return Admission::Fail("the page's request budget is spent".to_owned());
     }
-    if ctx.deadline <= ctx.clock.now() {
+    if ctx.rolling.is_none() && ctx.deadline <= ctx.clock.now() {
         return Admission::Fail("the image wait ended before this image was requested".to_owned());
     }
     let committed = ledger.bytes.saturating_add(ledger.reserved);

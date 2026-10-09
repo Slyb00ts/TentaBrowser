@@ -134,6 +134,8 @@ impl Settle {
 pub struct PendingSources {
     pub parser_running: bool,
     pub pending_scripts: u32,
+    /// Images still loading that delay the `load` event.
+    pub pending_images: u32,
     /// In-flight foreground requests that had not been reclassified.
     pub foreground_requests: u32,
     pub navigation_pending: bool,
@@ -148,6 +150,7 @@ impl PendingSources {
     pub fn is_empty(&self) -> bool {
         !self.parser_running
             && self.pending_scripts == 0
+            && self.pending_images == 0
             && self.foreground_requests == 0
             && !self.navigation_pending
             && self.service_worker_fetches == 0
@@ -242,6 +245,8 @@ pub struct SettleTracker {
 
     parser_running: bool,
     pending_scripts: u32,
+    /// Images whose load delays the `load` event (HTML "delay the load event").
+    delaying_images: u32,
     navigation_pending: bool,
     service_worker_fetches: u32,
     tracked_tasks: u32,
@@ -290,6 +295,7 @@ impl SettleTracker {
             condition_met: false,
             parser_running: false,
             pending_scripts: 0,
+            delaying_images: 0,
             navigation_pending: false,
             service_worker_fetches: 0,
             tracked_tasks: 0,
@@ -347,8 +353,8 @@ impl SettleTracker {
     }
 
     /// Whether something the document itself started still holds `load` back:
-    /// a parser writing into the tree, or a script still awaiting its fetch or
-    /// its turn to run.
+    /// a parser writing into the tree, a script still awaiting its fetch or
+    /// its turn to run, or an image still loading (HTML "delay the load event").
     ///
     /// The page asks this before it fires `load`, because the event is defined
     /// over the document's own work rather than over the navigation's: a
@@ -356,7 +362,7 @@ impl SettleTracker {
     /// page that reported `load` when the parse ended would report it while
     /// scripts were still arriving (`docs/spec/02-architecture.md` §5.1).
     pub fn load_delayed(&self) -> bool {
-        self.parser_running || self.pending_scripts > 0
+        self.parser_running || self.pending_scripts > 0 || self.delaying_images > 0
     }
 
     pub fn domcontentloaded_fired(&self) -> bool {
@@ -464,6 +470,19 @@ impl SettleTracker {
     /// Releases the count one such script held.
     fn release_pending_script(&mut self) {
         self.pending_scripts = self.pending_scripts.saturating_sub(1);
+        self.signal_state_change();
+    }
+
+    /// Counts one more image as delaying `load`. [`ImageDelay::hold`] is the
+    /// only intended caller, for the reason [`Self::hold_pending_script`] is.
+    fn hold_image(&mut self) {
+        self.delaying_images = self.delaying_images.saturating_add(1);
+        self.quiet_since = None;
+        self.signal_state_change();
+    }
+
+    fn release_image(&mut self) {
+        self.delaying_images = self.delaying_images.saturating_sub(1);
         self.signal_state_change();
     }
 
@@ -650,6 +669,7 @@ impl SettleTracker {
         PendingSources {
             parser_running: self.parser_running,
             pending_scripts: self.pending_scripts,
+            pending_images: self.delaying_images,
             foreground_requests: self
                 .requests
                 .values()
@@ -734,6 +754,7 @@ impl SettleTracker {
     fn network_sources_empty(&self) -> bool {
         !self.parser_running
             && self.pending_scripts == 0
+            && self.delaying_images == 0
             && !self.navigation_pending
             && self.service_worker_fetches == 0
             && !self.requests.values().any(RequestRecord::holds_settle)
@@ -844,6 +865,33 @@ impl PendingScripts {
 impl Drop for PendingScripts {
     fn drop(&mut self) {
         self.tracker.borrow_mut().release_pending_script();
+    }
+}
+
+/// One image counted as delaying the `load` event until the guard drops.
+///
+/// An image that enters the document before `load` is part of the document's
+/// load chain: `load` waits for it to be decoded or to fail. After `load` the
+/// count still moves, so the network states see the work, but nothing is
+/// waiting on it. The guard owns its tracker for the reason [`PendingScripts`]
+/// does.
+pub struct ImageDelay {
+    tracker: Rc<RefCell<SettleTracker>>,
+}
+
+impl ImageDelay {
+    /// Counts one image as delaying `load` until the guard drops.
+    pub fn hold(tracker: &Rc<RefCell<SettleTracker>>) -> ImageDelay {
+        tracker.borrow_mut().hold_image();
+        ImageDelay {
+            tracker: Rc::clone(tracker),
+        }
+    }
+}
+
+impl Drop for ImageDelay {
+    fn drop(&mut self) {
+        self.tracker.borrow_mut().release_image();
     }
 }
 
@@ -1201,6 +1249,22 @@ mod tests {
     /// what `defer`/`async` need, since theirs run in parallel with the parse,
     /// and it is also what tells a pair of add-and-release calls apart from
     /// setting the count outright.
+    #[test]
+    fn a_loading_image_delays_load_until_its_guard_drops() {
+        let (tracker, _) = tracker(Settle::Load);
+        let tracker = Rc::new(RefCell::new(tracker));
+        assert!(!tracker.borrow().load_delayed());
+        let first = ImageDelay::hold(&tracker);
+        let second = ImageDelay::hold(&tracker);
+        assert!(tracker.borrow().load_delayed());
+        assert_eq!(tracker.borrow().pending().pending_images, 2);
+        drop(first);
+        assert!(tracker.borrow().load_delayed(), "one image still loads");
+        drop(second);
+        assert!(!tracker.borrow().load_delayed());
+        assert!(tracker.borrow().pending().is_empty());
+    }
+
     #[test]
     fn a_held_script_counts_until_the_guard_drops() {
         let (tracker, _clock) = tracker(Settle::NetworkIdle);

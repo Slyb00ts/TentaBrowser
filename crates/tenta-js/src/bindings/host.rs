@@ -82,6 +82,7 @@ use crate::dom::events::{
 };
 use crate::event_loop::SharedClock;
 use crate::fetch::{FetchOutcome, FetchRequest, FetchStartError, FetchedResponse, header_pairs};
+use crate::image::{ImageEvent, ImageHost, ImageSnapshot};
 use crate::storage::PageStorage;
 use crate::xhr::{XhrHandle, XhrRequest};
 
@@ -1717,6 +1718,16 @@ pub struct HostContext {
     /// `dom/nodes/DOMImplementation-createHTMLDocument-with-saved-implementation.html`
     /// asserts.
     pub implementation: RefCell<Option<HostKey>>,
+    /// The page's image state (`complete`, `naturalWidth`, ...), installed by
+    /// the page for the document that is current. `None` for a document the
+    /// page does not load images for.
+    pub image_host: RefCell<Option<Rc<dyn ImageHost>>>,
+    /// The `decode()` promises still waiting for their element's load to end,
+    /// as resolver bits, by element.
+    image_decodes: RefCell<HashMap<NodeRef, Vec<u64>>>,
+    /// Elements script touched whose load the page has not reported yet, kept
+    /// alive so an unreferenced `new Image()` still loads and fires.
+    image_pins: RefCell<HashMap<NodeRef, AttrOwnerPin>>,
 }
 
 impl HostContext {
@@ -1840,6 +1851,9 @@ impl HostContext {
             storage_keys: RefCell::new([None, None]),
             crypto_key: RefCell::new(None),
             implementation: RefCell::new(None),
+            image_host: RefCell::new(None),
+            image_decodes: RefCell::new(HashMap::new()),
+            image_pins: RefCell::new(HashMap::new()),
         })
     }
 
@@ -1898,6 +1912,9 @@ impl HostContext {
             storage_keys: RefCell::new([None, None]),
             crypto_key: RefCell::new(None),
             implementation: RefCell::new(None),
+            image_host: RefCell::new(None),
+            image_decodes: RefCell::new(HashMap::new()),
+            image_pins: RefCell::new(HashMap::new()),
         });
         self.documents.install(ctx.clone());
         Ok(ctx)
@@ -1960,6 +1977,7 @@ impl HostContext {
         name: QualName,
         value: String,
     ) -> Result<(), JsError> {
+        let local = name.local;
         self.doc
             .borrow_mut()
             .mutate(Mutation::SetAttribute {
@@ -1968,7 +1986,63 @@ impl HostContext {
                 value,
             })
             .map_err(|e| mutation_error(&e))?;
+        self.note_image_attribute(element, local);
         Ok(())
+    }
+
+    /// Tells the page's image loader that script changed an attribute that
+    /// can select another image. Only the loader decides whether the element
+    /// is one; this just keeps a detached `new Image()` from going unseen.
+    fn note_image_attribute(&self, element: NodeId, local: Atom) {
+        if !matches!(
+            local.as_ref(),
+            "src" | "srcset" | "sizes" | "loading" | "type" | "media" | "poster"
+        ) {
+            return;
+        }
+        self.note_image_element(element);
+    }
+
+    /// Tells the image host that script touched `element`, and pins the
+    /// element when the host will report its load.
+    fn note_image_element(&self, element: NodeId) {
+        let host = self.image_host.borrow().clone();
+        let Some(host) = host else {
+            return;
+        };
+        if !host.attribute_changed(element) {
+            return;
+        }
+        let reference = self.doc.borrow().node_ref(element);
+        if self.image_pins.borrow().contains_key(&reference) {
+            return;
+        }
+        if let Ok(pin) = AttrOwnerPin::new(self.doc.clone(), element) {
+            self.image_pins.borrow_mut().insert(reference, pin);
+        }
+    }
+
+    /// A clone is a new element with its source copied, and HTML runs "update
+    /// the image data" for it: the host is told about the clone and every
+    /// image below it.
+    fn note_cloned_images(&self, clone: NodeId) {
+        if self.image_host.borrow().is_none() {
+            return;
+        }
+        let images: Vec<NodeId> = {
+            let doc = self.doc.borrow();
+            doc.descendants_inclusive(clone)
+                .filter(|node| doc.tag(*node) == Some(atoms::IMG))
+                .collect()
+        };
+        for image in images {
+            self.note_image_element(image);
+        }
+    }
+
+    /// Installs the page's image state for this document.
+    pub fn set_image_host(&self, host: Rc<dyn ImageHost>) {
+        *self.image_host.borrow_mut() = Some(host);
     }
 
     /// Removes an element attribute, detaching any exposed Attr with its last
@@ -1994,6 +2068,7 @@ impl HostContext {
                 name: stored_name,
             })
             .map_err(|e| mutation_error(&e))?;
+        self.note_image_attribute(element, stored_name.local);
         let key = self.detach_cached_attr(reference, stored_name, value.clone());
         Ok(Some((stored_name, value, key)))
     }
@@ -3836,6 +3911,7 @@ impl NodeOps for HostObject {
                 .map_err(|e| mutation_error(&e))?
         };
 
+        self.context().note_cloned_images(new_id);
         let doc = doc.borrow();
         Ok(Handle::from_bits(encode_node(
             self.slot(),
@@ -7057,6 +7133,152 @@ impl HTMLImageElementOps for HostObject {
     }
     fn set_src(&self, value: &str) {
         self.reflect_attribute("src", value);
+    }
+    fn srcset(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("srcset"))
+    }
+    fn set_srcset(&self, value: &str) {
+        self.reflect_attribute("srcset", value);
+    }
+    fn sizes(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("sizes"))
+    }
+    fn set_sizes(&self, value: &str) {
+        self.reflect_attribute("sizes", value);
+    }
+    fn alt(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("alt"))
+    }
+    fn set_alt(&self, value: &str) {
+        self.reflect_attribute("alt", value);
+    }
+    fn loading(&self) -> Result<String, JsError> {
+        // An enumerated attribute limited to known values: `lazy`, else the
+        // `eager` default.
+        let lazy = self.reflect_string("loading").eq_ignore_ascii_case("lazy");
+        Ok(if lazy { "lazy" } else { "eager" }.to_owned())
+    }
+    fn set_loading(&self, value: &str) {
+        self.reflect_attribute("loading", value);
+    }
+    fn decoding(&self) -> Result<String, JsError> {
+        let value = self.reflect_string("decoding").to_ascii_lowercase();
+        Ok(match value.as_str() {
+            "sync" | "async" => value,
+            _ => "auto".to_owned(),
+        })
+    }
+    fn set_decoding(&self, value: &str) {
+        self.reflect_attribute("decoding", value);
+    }
+    fn width(&self) -> u32 {
+        self.image_dimension("width", |snapshot| snapshot.natural_width)
+    }
+    fn set_width(&self, value: u32) {
+        self.reflect_attribute("width", &value.to_string());
+    }
+    fn height(&self) -> u32 {
+        self.image_dimension("height", |snapshot| snapshot.natural_height)
+    }
+    fn set_height(&self, value: u32) {
+        self.reflect_attribute("height", &value.to_string());
+    }
+    fn natural_width(&self) -> u32 {
+        self.image_snapshot().natural_width
+    }
+    fn natural_height(&self) -> u32 {
+        self.image_snapshot().natural_height
+    }
+    fn complete(&self) -> bool {
+        self.image_snapshot().complete
+    }
+    fn current_src(&self) -> Result<String, JsError> {
+        Ok(self.image_snapshot().current_src)
+    }
+
+    fn decode(&self) -> Result<Promise<()>, JsError> {
+        // https://html.spec.whatwg.org/multipage/embedded-content.html#dom-img-decode
+        // The page decodes an image as part of loading it, so an image that is
+        // completely available is already decoded: the promise settles with
+        // the load. One that is still loading is parked until its `load` or
+        // `error` is delivered (`deliver_image_events`).
+        let script = self.script_host()?;
+        let promise = script
+            .new_promise()
+            .ok_or_else(|| JsError::type_error("decode: the promise could not be created"))?;
+        let snapshot = self.image_snapshot();
+        let rejected = snapshot.broken || (snapshot.complete && snapshot.current_src.is_empty());
+        if rejected {
+            script.settle_promise(
+                promise.resolver,
+                PromiseOutcome::Reject(HostValue::DomException {
+                    name: "EncodingError",
+                    message: "The source image cannot be decoded.",
+                }),
+            );
+        } else if snapshot.complete {
+            script.settle_promise(
+                promise.resolver,
+                PromiseOutcome::Resolve(HostValue::Undefined),
+            );
+        } else if let HostObject::Node { ctx, node } = self {
+            ctx.image_decodes
+                .borrow_mut()
+                .entry(*node)
+                .or_default()
+                .push(promise.resolver);
+        }
+        Ok(Promise::from_bits(promise.promise))
+    }
+
+    fn onload(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
+        self.event_handler(EventHandlerName::new("onload"))
+    }
+    fn set_onload(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
+        self.set_event_handler(EventHandlerName::new("onload"), value)
+    }
+    fn onerror(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
+        self.event_handler(EventHandlerName::new("onerror"))
+    }
+    fn set_onerror(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
+        self.set_event_handler(EventHandlerName::new("onerror"), value)
+    }
+}
+
+impl HostObject {
+    /// What the page's image loader reports for the anchored element. Without
+    /// a loader the element is complete exactly when it has nothing to load.
+    fn image_snapshot(&self) -> ImageSnapshot {
+        let (doc, id) = self.anchor();
+        let host = self.context().image_host.borrow().clone();
+        match host {
+            Some(host) => host.snapshot(id),
+            // No host: the page loads no images, so there is nothing pending.
+            // The element is complete, and `decode()` rejects as it does for an
+            // image with no usable source.
+            None => ImageSnapshot {
+                complete: true,
+                ..ImageSnapshot::default()
+            },
+        }
+    }
+
+    /// `width` or `height`: the content attribute when it holds a non-negative
+    /// integer (HTML's rules for parsing one), else the natural size
+    /// `natural` picks from the snapshot. No layout is consulted.
+    fn image_dimension(&self, name: &str, natural: impl FnOnce(&ImageSnapshot) -> u32) -> u32 {
+        let attribute = self.reflect_string(name);
+        let digits = attribute
+            .trim_start()
+            .bytes()
+            .take_while(u8::is_ascii_digit)
+            .count();
+        if digits > 0
+            && let Ok(value) = attribute.trim_start()[..digits].parse::<u32>()
+        {
+            return value;
+        }
+        natural(&self.image_snapshot())
     }
 }
 
@@ -12776,6 +12998,55 @@ pub fn deliver_xhr_completion(
         FetchOutcome::Failed(_) => xhr_request_error_steps(ctx, target, key, "error"),
     }
     true
+}
+
+/// Reports the image loads that ended: a trusted `load` or `error` at each
+/// element, then the `decode()` promises that were waiting on it
+/// (<https://html.spec.whatwg.org/multipage/images.html#update-the-image-data>,
+/// "queue an element task ... fire an event named load / error").
+///
+/// The caller holds the native-dispatch guard, as for `deliver_xhr_completion`:
+/// a listener runs with no callback on the stack. An element reclaimed since
+/// the load began is skipped, and a listener that removes the element does not
+/// stop the events after it.
+pub fn deliver_image_events(ctx: &SharedContext, events: &[ImageEvent]) {
+    for event in events {
+        let alive = ctx.doc.borrow().resolve(event.node).is_ok();
+        if alive && event.kind != crate::image::ImageEventKind::Release {
+            let target = DispatchTarget::node(ctx.slot, event.node);
+            fire_xhr_event(ctx, target, event.kind.event_type(), EventKind::Plain);
+        }
+        // The element may be let go of now that its handlers have run.
+        let pin = ctx.image_pins.borrow_mut().remove(&event.node);
+        drop(pin);
+        let resolvers = ctx.image_decodes.borrow_mut().remove(&event.node);
+        let Some(resolvers) = resolvers else {
+            continue;
+        };
+        let Some(script) = ctx.script.borrow().clone() else {
+            continue;
+        };
+        for resolver in resolvers {
+            let outcome = match event.kind {
+                crate::image::ImageEventKind::Load => PromiseOutcome::Resolve(HostValue::Undefined),
+                // A release leaves the element's state as it was, so a
+                // `decode()` that was parked on a lazy image keeps waiting.
+                crate::image::ImageEventKind::Release => {
+                    ctx.image_decodes
+                        .borrow_mut()
+                        .entry(event.node)
+                        .or_default()
+                        .push(resolver);
+                    continue;
+                }
+                _ => PromiseOutcome::Reject(HostValue::DomException {
+                    name: "EncodingError",
+                    message: "The source image cannot be decoded.",
+                }),
+            };
+            script.settle_promise(resolver, outcome);
+        }
+    }
 }
 
 /// The standard's *handle response*, run through to *handle response

@@ -13,8 +13,8 @@ mod viewport;
 
 pub use geometry::{BoxQuads, ElementGeometry, Quad, element_geometry, hit_test, node_boxes};
 pub use images::{
-    DataUrl, DecodeSettings, Decoded, ImageKind, ImagePlan, ImageStats, ImageWant, LazyRegion,
-    Rerender, WantOrigin, decode_data_url, decode_image,
+    DataUrl, DecodeSettings, Decoded, ElementImage, ImageKind, ImagePlan, ImageStats, ImageStatus,
+    ImageWant, LazyRegion, Rerender, WantOrigin, decode_data_url, decode_image, is_image_element,
 };
 pub use screenshot::{
     Capture, ImageFormat, RenderError, Screenshot, ScreenshotOptions, StageTimes,

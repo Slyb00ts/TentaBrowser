@@ -13,6 +13,7 @@
 //! [`RenderSession::plan_images`]: crate::RenderSession::plan_images
 
 mod data_url;
+mod element;
 mod media;
 mod select;
 #[cfg(test)]
@@ -33,6 +34,7 @@ use tenta_paint::{
 use url::Url;
 
 pub use data_url::{DataUrl, decode_data_url};
+pub use element::{ElementImage, ImageStatus};
 pub(crate) use media::MediaEnv;
 
 /// How far outside the viewport a `loading=lazy` image or a background still
@@ -290,38 +292,11 @@ impl ImageTable {
         let mut nodes = HashMap::new();
         let mut order = Vec::new();
         for node in doc.descendants(doc.document_node()) {
-            if doc.namespace(node) != Some(atoms::NS_HTML) {
+            if !is_image_element(doc, node) {
                 continue;
             }
-            let is_image = match doc.tag(node) {
-                Some(tag) if tag == atoms::IMG => true,
-                // A video's poster is its image until it plays.
-                Some(tag) if tag == atoms::VIDEO => doc.attribute_str(node, "poster").is_some(),
-                Some(tag) if tag == atoms::INPUT => doc
-                    .attribute(node, atoms::TYPE)
-                    .is_some_and(|t| t.eq_ignore_ascii_case("image")),
-                _ => false,
-            };
-            if !is_image {
-                continue;
-            }
-            let source = if doc.tag(node) == Some(atoms::IMG) {
-                select::select(doc, node, base, env)
-            } else {
-                let value = if doc.tag(node) == Some(atoms::VIDEO) {
-                    doc.attribute_str(node, "poster")
-                } else {
-                    doc.attribute(node, atoms::SRC)
-                };
-                value
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .and_then(|s| base.join(s).ok())
-                    .map(|url| select::Source { url, density: 1.0 })
-            };
-            let lazy = doc
-                .attribute(node, atoms::LOADING)
-                .is_some_and(|v| v.trim().eq_ignore_ascii_case("lazy"));
+            let source = image_source(doc, node, base, env);
+            let lazy = is_lazy(doc, node);
             let dimension = |name| {
                 doc.attribute(node, name)
                     .and_then(parse_dimension)
@@ -593,6 +568,52 @@ impl ImageTable {
             .copied()
             .filter(|l| self.store.get(l.id).is_some())
     }
+}
+
+/// Whether `node` is an element that shows an image from a URL: an `<img>`, an
+/// `<input type=image>`, or a `<video>` with a `poster`.
+pub fn is_image_element(doc: &Document, node: NodeId) -> bool {
+    if doc.namespace(node) != Some(atoms::NS_HTML) {
+        return false;
+    }
+    match doc.tag(node) {
+        Some(tag) if tag == atoms::IMG => true,
+        // A video's poster is its image until it plays.
+        Some(tag) if tag == atoms::VIDEO => doc.attribute_str(node, "poster").is_some(),
+        Some(tag) if tag == atoms::INPUT => doc
+            .attribute(node, atoms::TYPE)
+            .is_some_and(|t| t.eq_ignore_ascii_case("image")),
+        _ => false,
+    }
+}
+
+/// The source an image element selects for `env`, or `None` when it has none
+/// that resolves.
+pub(crate) fn image_source(
+    doc: &Document,
+    node: NodeId,
+    base: &Url,
+    env: &MediaEnv,
+) -> Option<select::Source> {
+    if doc.tag(node) == Some(atoms::IMG) {
+        return select::select(doc, node, base, env);
+    }
+    let value = if doc.tag(node) == Some(atoms::VIDEO) {
+        doc.attribute_str(node, "poster")
+    } else {
+        doc.attribute(node, atoms::SRC)
+    };
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| base.join(s).ok())
+        .map(|url| select::Source { url, density: 1.0 })
+}
+
+/// Whether the element asks to be loaded lazily.
+pub(crate) fn is_lazy(doc: &Document, node: NodeId) -> bool {
+    doc.attribute(node, atoms::LOADING)
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("lazy"))
 }
 
 /// The key of a URL: the URL without its fragment.

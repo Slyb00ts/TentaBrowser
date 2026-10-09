@@ -289,6 +289,9 @@ pub(crate) struct PageRuntime {
     xhrs: Rc<XhrCompletions>,
     /// The evaluations waiting for a promise of this runtime's realm.
     awaits: Rc<AwaitTable>,
+    /// What script reports about image elements, until the page loop looks.
+    #[cfg(feature = "render")]
+    images: Rc<crate::page::PageImageHost>,
 }
 
 impl PageRuntime {
@@ -374,6 +377,17 @@ impl PageRuntime {
         ));
         engine.set_fetch_driver(Rc::clone(&driver) as Rc<dyn FetchDriver>);
         engine.set_xhr_driver(driver as Rc<dyn XhrDriver>);
+        // The image state script reads (`complete`, `naturalWidth`, ...) and the
+        // elements it touches. Installed with the drivers, before any script.
+        #[cfg(feature = "render")]
+        let images = Rc::new(crate::page::PageImageHost::new(
+            page,
+            Rc::downgrade(&document),
+            tracker.borrow().notify_handle(),
+            config.max_tier >= tenta_core::Tier::Render,
+        ));
+        #[cfg(feature = "render")]
+        engine.set_image_host(Rc::clone(&images) as Rc<dyn tenta_js::image::ImageHost>);
         // Before any script runs, so the document's first script already finds
         // `console` and the bindings the host registered.
         let awaits = Rc::new(AwaitTable::default());
@@ -405,6 +419,8 @@ impl PageRuntime {
             fetches,
             xhrs,
             awaits,
+            #[cfg(feature = "render")]
+            images,
         };
         // After the bindings, so an init script can call them; a script that
         // throws leaves the others and the document unaffected.
@@ -494,6 +510,35 @@ impl PageRuntime {
             }
         }
         self.engine.next_wakeup()
+    }
+
+    /// Takes the image elements script touched since the last call.
+    #[cfg(feature = "render")]
+    pub(crate) fn take_image_dirty(&self) -> Vec<tenta_core::NodeId> {
+        self.images.take_dirty()
+    }
+
+    /// Whether the document changed since the last probe for image elements.
+    #[cfg(feature = "render")]
+    pub(crate) fn image_probe(&self, generation: u64) -> bool {
+        self.images.changed_since_probe(generation)
+    }
+
+    /// Reports the image loads that ended: a `load` or `error` at each
+    /// element, as one bounded engine entry with a microtask checkpoint after
+    /// each event. `current` is asked before each event (see
+    /// [`PageEngine::settle_images`]).
+    #[cfg(feature = "render")]
+    pub(crate) fn dispatch_image_events(
+        &mut self,
+        events: Vec<tenta_js::image::ImageEvent>,
+        current: &mut dyn FnMut(usize, &tenta_js::image::ImageEvent) -> bool,
+    ) {
+        if events.is_empty() || self.script_budget.crash_reason().is_some() {
+            return;
+        }
+        self.bounded("image", |engine| engine.settle_images(events, current));
+        self.tracker.borrow().notify_handle().notify_one();
     }
 
     /// Runs one engine entry under the page's per-entry script deadline, when
@@ -1715,6 +1760,13 @@ mod tests {
                 fetches: Rc::clone(&fetches),
                 xhrs: Rc::clone(&xhrs),
                 awaits: Rc::default(),
+                #[cfg(feature = "render")]
+                images: Rc::new(crate::page::PageImageHost::new(
+                    PageId(1),
+                    std::rc::Weak::new(),
+                    Arc::new(tokio::sync::Notify::new()),
+                    true,
+                )),
             };
             Harness {
                 runtime,

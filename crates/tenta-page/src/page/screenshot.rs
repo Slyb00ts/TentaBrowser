@@ -67,10 +67,13 @@ impl Page {
     /// then fetched and decoded, a few at a time and under a 20 s wait for them
     /// all; one that cannot be loaded is reported as
     /// [`PageEvent::ImageFailed`] and drawn as a broken image. A `loading=lazy`
-    /// image far below a viewport capture is left unloaded. Images are loaded by
-    /// the render, not the load event: `load` does not wait for them. The
-    /// screenshot does not wait for the page's scripts: settle the page first to
-    /// capture what they build.
+    /// image far below a viewport capture is left unloaded. Images that entered
+    /// the document are already loading (or loaded) by the time of the capture,
+    /// and the capture first waits for those, so it does not fetch them again;
+    /// the ones it finds only by laying the page out (CSS backgrounds, lazy
+    /// images near the viewport) it fetches itself. The screenshot does not
+    /// wait for the page's scripts: settle the page first to capture what they
+    /// build.
     ///
     /// Concurrent screenshots of one page run one after the other. Fails with
     /// [`Error::TierDenied`] when the page's ceiling is below the render tier,
@@ -190,6 +193,21 @@ pub(super) async fn rendered_with<R>(
         viewport,
         inner.config.system_fonts,
     );
+    // The images the document began loading when they entered it are not
+    // fetched again: the capture waits for them first, and only then takes the
+    // ledger the loader holds while it works. Waiting after taking it would
+    // wait for a loader that is waiting for us.
+    if region.is_some() {
+        let waited = until_replaced(
+            &inner,
+            generation,
+            tokio::time::timeout(IMAGE_WAIT, handles.loader.wait_idle()),
+        )
+        .await;
+        if waited.is_none() {
+            return Err(replaced(&inner));
+        }
+    }
     // Held to the end: it orders this screenshot against the others of the
     // page, and the fetches below need the cache it guards.
     let mut sheets = handles.sheets.lock().await;
@@ -252,6 +270,9 @@ pub(super) async fn rendered_with<R>(
             region,
         )
         .await?;
+        // Images only the capture loaded (`loading=lazy`) complete their
+        // elements, which report it.
+        handles.loader.rescan_deferred();
     }
 
     with_document(&inner, navigation, |doc| {
@@ -296,6 +317,7 @@ async fn load_planned_images(
             extra_headers: &inner.config.extra_headers,
             document_url: &document_url,
             deadline,
+            rolling: None,
         };
         let Some(loaded) = until_replaced(
             inner,

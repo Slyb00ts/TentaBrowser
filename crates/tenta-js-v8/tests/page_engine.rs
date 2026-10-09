@@ -24,6 +24,7 @@ use tenta_js::engine::{
 use tenta_js::geometry::{
     ClientMetrics, GeometryHost, OffsetMetrics, RectF64, ScrollMetrics, ViewportMetrics,
 };
+use tenta_js::image::{ImageEvent, ImageEventKind, ImageHost, ImageSnapshot};
 use tenta_js_v8::V8EngineFactory;
 use tenta_net::CookieJar;
 
@@ -1014,4 +1015,159 @@ fn window_metrics_are_replaceable_accessors() {
         engine.evaluate(ILLEGAL, Duration::from_secs(5)).unwrap(),
         "true,true"
     );
+}
+
+/// An image host that loads nothing itself and asks the engine to pin every
+/// element script touches.
+#[derive(Default)]
+struct PinningHost {
+    touched: RefCell<Vec<NodeId>>,
+}
+
+impl ImageHost for PinningHost {
+    fn snapshot(&self, _node: NodeId) -> ImageSnapshot {
+        ImageSnapshot {
+            complete: true,
+            ..ImageSnapshot::default()
+        }
+    }
+
+    fn attribute_changed(&self, node: NodeId) -> bool {
+        self.touched.borrow_mut().push(node);
+        true
+    }
+}
+
+const MAKE_AN_UNREFERENCED_IMAGE: &str = "(function () { \
+    var i = document.createElement('img'); i.setAttribute('src', 'x.png'); })(); 'ok'";
+
+fn forget_detached(engine: &mut Box<dyn PageEngine>, document: &SharedDocument) {
+    engine.trim_memory();
+    document.borrow_mut().sweep_detached();
+}
+
+#[test]
+fn a_touched_element_is_pinned_until_its_event_and_never_outlives_the_engine() {
+    let (document, _target) = test_document();
+    let mut engine = engine_over(&document);
+    let host = Rc::new(PinningHost::default());
+    engine.set_image_host(Rc::clone(&host) as Rc<dyn ImageHost>);
+
+    engine
+        .evaluate(MAKE_AN_UNREFERENCED_IMAGE, Duration::from_secs(5))
+        .expect("script ran");
+    let node = host.touched.borrow()[0];
+    forget_detached(&mut engine, &document);
+    assert!(
+        document.borrow().is_live(node),
+        "the pin keeps an element nothing references through a sweep"
+    );
+
+    let reference = document.borrow().node_ref(node);
+    let release = ImageEvent {
+        node: reference,
+        kind: ImageEventKind::Release,
+    };
+    engine.settle_images(vec![release], &mut |_, _| true);
+    forget_detached(&mut engine, &document);
+    assert!(
+        !document.borrow().is_live(node),
+        "the release lets the sweep reclaim it"
+    );
+
+    // An element whose event never comes does not keep the document alive
+    // either: dropping the engine drops its pins.
+    engine
+        .evaluate(MAKE_AN_UNREFERENCED_IMAGE, Duration::from_secs(5))
+        .expect("script ran");
+    drop(engine);
+    assert_eq!(Rc::strong_count(&document), 1, "no pin outlives the engine");
+}
+
+#[test]
+fn an_event_the_page_calls_stale_is_skipped_and_the_rest_are_delivered() {
+    let (document, _target) = test_document();
+    let mut engine = engine_over(&document);
+    engine.set_image_host(Rc::new(PinningHost::default()) as Rc<dyn ImageHost>);
+    engine
+        .evaluate(
+            "var log = []; var a = document.createElement('img'); var b = document.createElement('img'); \
+             a.onload = function () { log.push('a'); Promise.resolve().then(function () { log.push('a-micro'); }); }; \
+             b.onload = function () { log.push('b'); }; document.body.append(a, b); 'ok'",
+            Duration::from_secs(5),
+        )
+        .expect("script ran");
+    let nodes: Vec<NodeId> = document.borrow().get_elements_by_tag_name("img");
+    let events: Vec<ImageEvent> = nodes
+        .iter()
+        .map(|node| ImageEvent {
+            node: document.borrow().node_ref(*node),
+            kind: ImageEventKind::Load,
+        })
+        .collect();
+    let mut asked = Vec::new();
+    engine.settle_images(events.clone(), &mut |index, _| {
+        asked.push(index);
+        index != 1
+    });
+    assert_eq!(asked, [0, 1]);
+    engine.settle_images(vec![events[1]], &mut |_, _| true);
+    assert_eq!(
+        engine
+            .evaluate("log.join()", Duration::from_secs(5))
+            .unwrap(),
+        "a,a-micro,b"
+    );
+    engine
+        .evaluate("log.length = 0", Duration::from_secs(5))
+        .unwrap();
+    engine.settle_images(events, &mut |_, _| true);
+    assert_eq!(
+        engine
+            .evaluate("log.join()", Duration::from_secs(5))
+            .unwrap(),
+        "a,a-micro,b",
+        "each event is its own task: a's microtask ran before b's event"
+    );
+}
+
+#[test]
+fn single_event_entries_stay_cheap_however_many_elements_are_pinned() {
+    let (document, _target) = test_document();
+    let mut engine = engine_over(&document);
+    let host = Rc::new(PinningHost::default());
+    engine.set_image_host(Rc::clone(&host) as Rc<dyn ImageHost>);
+    engine
+        .evaluate(
+            "window.n = 0; for (var i = 0; i < 1000; i++) { var p = document.createElement('img'); \
+               p.onload = function () { n++; }; p.setAttribute('src', 'x.png?' + i); } 'ok'",
+            Duration::from_secs(20),
+        )
+        .expect("script ran");
+    assert_eq!(host.touched.borrow().len(), 1000);
+    let events: Vec<ImageEvent> = host
+        .touched
+        .borrow()
+        .iter()
+        .map(|node| ImageEvent {
+            node: document.borrow().node_ref(*node),
+            kind: ImageEventKind::Load,
+        })
+        .collect();
+    // The worst shape: loads finishing one at a time, one entry each. Each used
+    // to end in a full garbage collection (about 2 ms and growing with the
+    // heap); now the wrapper graph is collected every few hundred events.
+    let started = Instant::now();
+    for event in events {
+        engine.settle_images(vec![event], &mut |_, _| true);
+    }
+    let took = started.elapsed();
+    assert_eq!(
+        engine
+            .evaluate("String(n)", Duration::from_secs(5))
+            .unwrap(),
+        "1000"
+    );
+    // About 50 ms in a debug build here; the old cost was 2 s and up.
+    assert!(took < Duration::from_millis(800), "{took:?}");
 }

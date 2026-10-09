@@ -580,9 +580,33 @@ interface HTMLAnchorElement : HTMLElement {
   attribute USVString href;
 };
 
+// IM4: the members script reads to follow an image's loading. The state behind
+// `complete`, `naturalWidth`, `naturalHeight` and `currentSrc` belongs to the
+// page (`ImageHost`, `crates/tenta-js/src/image.rs`): an image is fetched when
+// its element enters the document or its source attributes change, whether or
+// not the element is connected, and `load` and `error` are queued as tasks.
+// `width` and `height` reflect the content attributes and fall back to the
+// natural size; no layout is consulted. `decoding` and `loading` are plain
+// reflected strings; `loading=lazy` is honoured by the loader, not by these
+// members. `crossOrigin` and `referrerPolicy` are not declared: CORS-mode image
+// requests are not implemented.
 [Exposed=Window]
 interface HTMLImageElement : HTMLElement {
   attribute USVString src;
+  attribute USVString srcset;
+  attribute DOMString sizes;
+  attribute DOMString alt;
+  attribute DOMString loading;
+  attribute DOMString decoding;
+  attribute unsigned long width;
+  attribute unsigned long height;
+  readonly attribute unsigned long naturalWidth;
+  readonly attribute unsigned long naturalHeight;
+  readonly attribute boolean complete;
+  readonly attribute USVString currentSrc;
+  [NewObject] Promise<undefined> decode();
+  attribute EventHandler onload;
+  attribute EventHandler onerror;
 };
 
 [Exposed=Window]

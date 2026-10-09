@@ -33,6 +33,7 @@ use tenta_js::engine::{
 use tenta_js::event_loop::{Clock, MonoTime, ProvenanceSink};
 use tenta_js::fetch::{FetchCompletion, FetchDriver};
 use tenta_js::geometry::GeometryHost;
+use tenta_js::image::{ImageEvent, ImageHost};
 use tenta_js::inspect::InspectorSink;
 use tenta_js::xhr::{XhrCompletion, XhrDriver};
 
@@ -243,6 +244,24 @@ impl PageEngine for Engine {
     /// default cannot shadow it.
     fn settle_xhr(&mut self, completions: Vec<XhrCompletion>) {
         Engine::settle_xhr(self, completions);
+    }
+
+    fn set_image_host(&mut self, host: Rc<dyn ImageHost>) {
+        Engine::set_image_host(self, host);
+    }
+
+    /// Entered under [`Origin::Tracked`], like the lifecycle events: a `load`
+    /// handler of an image is part of loading the document, so a timer it
+    /// schedules is a deferral of that load.
+    fn settle_images(
+        &mut self,
+        events: Vec<ImageEvent>,
+        current: &mut dyn FnMut(usize, &ImageEvent) -> bool,
+    ) {
+        let scheduler = self.host.scheduler.clone();
+        scheduler.with_origin(Origin::Tracked, || {
+            Engine::settle_images(self, events, current);
+        });
     }
 
     fn next_wakeup(&self) -> Option<Duration> {

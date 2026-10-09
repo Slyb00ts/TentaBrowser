@@ -171,6 +171,30 @@ impl Rig {
         self.page_with(path, viewport, false).await
     }
 
+    /// A page, with its event subscription made before the navigation.
+    async fn page_with_events(
+        &self,
+        path: &str,
+        viewport: Viewport,
+    ) -> (Page, tenta_browser::PageEvents) {
+        let page = self
+            .context
+            .new_page(PageOptions {
+                viewport,
+                ..PageOptions::default()
+            })
+            .await
+            .expect("page");
+        let events = page.events();
+        page.goto(
+            &self.server.url(path),
+            Goto::default().wait_until(Settle::Load).timeout(PATIENCE),
+        )
+        .await
+        .expect("navigation");
+        (page, events)
+    }
+
     async fn page_with(&self, path: &str, viewport: Viewport, javascript: bool) -> Page {
         let page = self
             .context
@@ -384,8 +408,10 @@ async fn a_failing_image_is_a_broken_image_not_a_failed_screenshot() {
         ("text.png", b"<html>not an image</html>".to_vec()),
     ])
     .await;
-    let page = rig.page("/broken.html", viewport(200, 60, 1.0)).await;
-    let mut events = page.events();
+    // The images fail while the page loads, so the subscription comes first.
+    let (page, mut events) = rig
+        .page_with_events("/broken.html", viewport(200, 60, 1.0))
+        .await;
     let frame = shoot(&page).await;
     let mut failed = image_failures(&mut events);
     failed.sort();
@@ -407,12 +433,13 @@ async fn one_url_is_fetched_once_however_many_elements_use_it() {
     ])
     .await;
     let page = rig.page("/many.html", viewport(100, 40, 1.0)).await;
-    let before = rig.server.requests_served();
+    // The document and the one image: they began loading when they entered
+    // the document, so `load` has waited for them.
+    assert_eq!(rig.server.requests_served(), 2);
     let _ = shoot(&page).await;
-    assert_eq!(rig.server.requests_served() - before, 1);
-    // A second screenshot reuses the session's images.
+    // The capture reuses what the loader installed, and so does the next.
     let _ = shoot(&page).await;
-    assert_eq!(rig.server.requests_served() - before, 1);
+    assert_eq!(rig.server.requests_served(), 2);
     rig.finish();
 }
 
@@ -1155,7 +1182,7 @@ async fn images_match_chrome_pixels_at_known_points() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn images_are_fetched_by_the_render_after_the_load_event() {
+async fn images_are_fetched_when_they_enter_the_document_not_at_the_capture() {
     let rig = Rig::new(vec![
         (
             "late.html",
@@ -1165,13 +1192,17 @@ async fn images_are_fetched_by_the_render_after_the_load_event() {
     ])
     .await;
     let page = rig.page("/late.html", viewport(40, 40, 1.0)).await;
-    // `goto` waited for `load`, which does not wait for images: only the
-    // document has been requested.
+    // `goto` waited for `load`, which waits for the images: the document and
+    // the image have been requested already.
     let after_load = rig.server.requests_served();
-    assert_eq!(after_load, 1, "just the document");
+    assert_eq!(after_load, 2, "the document and its image");
     let frame = shoot(&page).await;
     assert_eq!(frame.pixel(5, 5), RED);
-    assert_eq!(rig.server.requests_served(), after_load + 1);
+    assert_eq!(
+        rig.server.requests_served(),
+        after_load,
+        "the capture fetches nothing"
+    );
     rig.finish();
 }
 

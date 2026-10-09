@@ -74,6 +74,21 @@ impl Site {
                         held.notified().await;
                         return;
                     }
+                    if path.ends_with(".png") {
+                        // `/slow.png` answers once the gate is notified.
+                        if path == "/slow.png" {
+                            held.notified().await;
+                        }
+                        let body = red_png(4, 4);
+                        let head = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(head.as_bytes()).await;
+                        let _ = stream.write_all(&body).await;
+                        let _ = stream.shutdown().await;
+                        return;
+                    }
                     if path == "/slow" {
                         held.notified().await;
                     }
@@ -414,6 +429,28 @@ fn decode_png(bytes: &[u8]) -> Decoded {
     }
 }
 
+/// A solid red PNG of `width` x `height` pixels.
+fn red_png(width: u32, height: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().expect("png header");
+    let pixels: Vec<u8> = (0..width * height).flat_map(|_| [255, 0, 0, 255]).collect();
+    writer.write_image_data(&pixels).expect("png pixels");
+    drop(writer);
+    out
+}
+
+/// A page whose one image arrives when the site's gate opens.
+const WITH_IMAGE: &str = "<!doctype html><html><body style=\"margin:0\">\
+    <img src=\"/slow.png\" style=\"display:block\">\
+    <script>\
+    window.log = [];\
+    document.getElementsByTagName('img')[0].onload = function () { log.push('img'); };\
+    addEventListener('load', function () { log.push('window'); });\
+    </script></body></html>";
+
 const INDEX: &str = "<!doctype html><html><head><title>Fixture</title></head>\
     <body><p>hello</p><script>document.title += '!';</script></body></html>";
 
@@ -486,6 +523,49 @@ async fn a_navigation_reports_its_lifecycle_in_order_under_one_loader() {
     assert_eq!(frame["url"], url.as_str());
     assert_eq!(frame["mimeType"], "text/html");
     assert_eq!(frame["securityOrigin"], fixture.site.base.as_str());
+    fixture.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn load_waits_for_the_images_of_the_document() {
+    let fixture = Fixture::start(&[("/img", WITH_IMAGE)]).await;
+    let mut page = fixture.page().await;
+    page.begin().await;
+    let loader = page.navigate(&fixture.site.url("/img")).await;
+    let before = page.events_through(&loader, "DOMContentLoaded").await;
+    assert_eq!(
+        before.last().map(String::as_str),
+        Some("lifecycle:DOMContentLoaded")
+    );
+
+    // The image has not arrived, so neither `load` nor the events after it have
+    // been reported, however long the client waits.
+    let early = tokio::time::timeout(
+        Duration::from_millis(400),
+        page.events_through(&loader, "load"),
+    )
+    .await;
+    assert!(
+        early.is_err(),
+        "load was reported while an image was loading"
+    );
+
+    fixture.site.gate.notify_one();
+    let after = page.events_through(&loader, "networkIdle").await;
+    let at = |name: &str| after.iter().position(|event| event == name);
+    assert!(
+        at("lifecycle:load").is_some() && at("Page.loadEventFired").is_some(),
+        "{after:?}"
+    );
+    assert!(
+        at("lifecycle:load") < at("lifecycle:networkIdle"),
+        "{after:?}"
+    );
+    assert_eq!(
+        page.evaluate("log.join(',') + ' ' + document.getElementsByTagName('img')[0].naturalWidth")
+            .await,
+        "img,window 4"
+    );
     fixture.stop().await;
 }
 
