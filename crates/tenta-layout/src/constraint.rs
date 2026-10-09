@@ -219,6 +219,12 @@ fn margin_value(margin: &Margin, basis: f32) -> Option<f32> {
     }
 }
 
+/// The used `margin-top` of box `id` (`auto` is zero) when its containing
+/// block is `basis` wide.
+pub(crate) fn margin_top_of(tree: &BoxTree, id: BoxId, basis: f32) -> f32 {
+    margin_value(&tree.get(id).style.get_margin().margin_top, basis).unwrap_or(0.0)
+}
+
 /// Converts a `width`/`height`-style length to a content-box size.
 fn to_content_box(value: f32, border_box_sizing: bool, edges: f32) -> f32 {
     if border_box_sizing {

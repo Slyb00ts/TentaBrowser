@@ -26,12 +26,14 @@ pub fn layout(cx: &mut LayoutCx, tree: &BoxTree) -> FragmentTree {
     space.direction = own_direction(&tree.get(tree.root).style);
 
     let mut out = FragmentBuilder::new();
+    crate::float::reset();
     let result = layout_block(cx, tree, tree.root, &space, &mut out);
     let root = result.frag;
     let root_fragment = out.get_mut(root);
     root_fragment.rect.y += result.margin_before.collapsed();
     root_fragment.flags |= FragFlags::STACKING_CONTEXT;
     positioned::place_all(cx, tree, &mut out, root, (width, height));
+    crate::float::reset_floats();
     let root_fragment = out.get_mut(root);
     let extent = root_fragment
         .overflow

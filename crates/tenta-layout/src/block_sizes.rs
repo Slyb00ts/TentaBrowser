@@ -14,7 +14,7 @@ use crate::box_tree::{BoxFlags, BoxId, BoxKind, BoxTree, LayoutCx};
 use crate::inline::intrinsic_inline_content_sizes;
 use crate::quirks;
 use crate::space::ConstraintSpace;
-use crate::types::{Edges, IntrinsicSize, ReplacedKind};
+use crate::types::{ClearSide, Edges, FloatSide, IntrinsicSize, ReplacedKind};
 
 /// A length-percentage in CSS pixels. A percentage needs `basis`; without one
 /// the value is unresolvable and `None` is returned.
@@ -119,25 +119,54 @@ pub fn intrinsic_inline_sizes_of_block(cx: &mut LayoutCx, tree: &BoxTree, id: Bo
             (w, w)
         }
         (_, Some(ifc)) => intrinsic_inline_content_sizes(cx, tree, ifc),
-        _ => {
-            let mut min = 0.0_f32;
-            let mut max = 0.0_f32;
-            for &child in &b.children {
-                // Floats are left out until float layout exists.
-                if tree.get(child).flags.contains(BoxFlags::OUT_OF_FLOW) {
-                    continue;
-                }
-                let margin = frame_of(tree, child, 0.0).margin;
-                let extra = margin.left + margin.right;
-                let (child_min, child_max) = intrinsic_inline_contribution(cx, tree, child);
-                min = min.max(child_min + extra);
-                max = max.max(child_max + extra);
-            }
-            (min, max)
-        }
+        _ => block_children_sizes(cx, tree, id),
     };
     b.intrinsic_inline.set(Some(sizes));
     sizes
+}
+
+/// The content sizes of a block container whose children are blocks and
+/// floats. Floats that share a row add up until something clears them; an
+/// in-flow block child does not combine with them (only inline content does,
+/// in `intrinsic_inline_content_sizes`).
+fn block_children_sizes(cx: &mut LayoutCx, tree: &BoxTree, id: BoxId) -> (f32, f32) {
+    let b = tree.get(id);
+    let direction = crate::constraint::own_direction(&b.style);
+    let mut min = 0.0_f32;
+    let mut max = 0.0_f32;
+    let (mut left, mut right) = (0.0_f32, 0.0_f32);
+    for &child in &b.children {
+        let child_box = tree.get(child);
+        let out_of_flow = child_box.flags.contains(BoxFlags::OUT_OF_FLOW);
+        let side = if out_of_flow && crate::float::is_float(tree, child) {
+            crate::float::float_side(&child_box.style, direction)
+        } else if out_of_flow {
+            continue;
+        } else {
+            None
+        };
+        let clear = crate::float::clear_side(&child_box.style, direction);
+        if clear != ClearSide::None {
+            max = max.max(left + right);
+            if matches!(clear, ClearSide::Left | ClearSide::Both) {
+                left = 0.0;
+            }
+            if matches!(clear, ClearSide::Right | ClearSide::Both) {
+                right = 0.0;
+            }
+        }
+        let margin = frame_of(tree, child, 0.0).margin;
+        let extra = margin.left + margin.right;
+        let (child_min, child_max) = intrinsic_inline_contribution(cx, tree, child);
+        min = min.max(child_min + extra);
+        match side {
+            Some(FloatSide::Left) => left += child_max + extra,
+            Some(FloatSide::Right) => right += child_max + extra,
+            // Floats only share a line with inline content of their own block.
+            None => max = max.max(child_max + extra),
+        }
+    }
+    (min, max.max(left + right))
 }
 
 /// The border-box `(min-content, max-content)` contribution of box `id` to the

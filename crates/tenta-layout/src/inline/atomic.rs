@@ -26,7 +26,7 @@ const UNCONSTRAINED: f32 = 1.0e6;
 /// baseline is that of its last line box; a scroll container, a box that has
 /// no line box, is replaced or contains its layout sits on the baseline with its
 /// bottom margin edge, which is the `None` answer.
-pub(super) fn layout_atomic(
+pub(crate) fn layout_atomic(
     cx: &mut LayoutCx,
     tree: &BoxTree,
     box_id: BoxId,

@@ -44,9 +44,9 @@
 "formatting whitespace does not interrupt sibling margin collapse" = "pass"
 
 ["bootstrap-float-clearfix"]
-"percentage float keeps the block containing width" = "deferred:M1.1 floats"
-"viewport-height float continues below its child" = "deferred:M1.1 floats"
-"clearfix keeps centered float content in the first band" = "deferred:M1.1 floats"
+"percentage float keeps the block containing width" = "pass"
+"viewport-height float continues below its child" = "pass"
+"clearfix keeps centered float content in the first band" = "pass"
 
 ["box-sizing"]
 "content-box fixed" = "deferred:M4 flex"
@@ -63,8 +63,8 @@
 "important winners" = "pass"
 
 ["clear-float"]
-"float" = "deferred:M1.1 floats"
-"cleared block" = "deferred:M1.1 floats"
+"float" = "pass"
+"cleared block" = "pass"
 
 ["contextual-css-math"]
 "min width uses actual viewport" = "pass"
@@ -132,21 +132,21 @@
 "display contents flex body keeps its intended inset" = "pass"
 
 ["float-bfc-continuation"]
-"float keeps its BFC band across wrappers" = "deferred:M1.1 floats"
-"direct flow uses the first available band" = "deferred:M1.1 floats"
-"later wrapper heading remains beside float" = "deferred:M1.1 floats"
-"later wrapper block remains beside float" = "deferred:M1.1 floats"
-"band widens after float bottom" = "deferred:M1.1 floats"
+"float keeps its BFC band across wrappers" = "pass"
+"direct flow uses the first available band" = "pass"
+"later wrapper heading remains beside float" = "pass"
+"later wrapper block remains beside float" = "pass"
+"band widens after float bottom" = "pass"
 
 ["float-flow-bands"]
-"right float occupies its band" = "deferred:M1.1 floats"
-"float-avoiding intro uses available band" = "deferred:M1.1 floats"
-"heading remains beside float" = "deferred:M1.1 floats"
-"first inline atomic box shares one line" = "deferred:M1.1 floats"
-"second inline atomic box shares one line" = "deferred:M1.1 floats"
-"hidden duplicate consumes no flow height" = "deferred:M1.1 floats"
-"later block remains in float band" = "deferred:M1.1 floats"
-"clear moves below float bottom" = "deferred:M1.1 floats"
+"right float occupies its band" = "pass"
+"float-avoiding intro uses available band" = "pass"
+"heading remains beside float" = "pass"
+"first inline atomic box shares one line" = "pass"
+"second inline atomic box shares one line" = "pass"
+"hidden duplicate consumes no flow height" = "pass"
+"later block remains in float band" = "pass"
+"clear moves below float bottom" = "pass"
 
 ["font-metric-line-height"]
 "small normal sans lines use grid-fitted metrics" = "pass"
@@ -256,9 +256,9 @@
 "full-width block child" = "pass"
 
 ["mixed-float-run"]
-"first left float starts the band" = "deferred:M1.1 floats"
-"same-side floats remain adjacent" = "deferred:M1.1 floats"
-"trailing right float shares the band" = "deferred:M1.1 floats"
+"first left float starts the band" = "pass"
+"same-side floats remain adjacent" = "pass"
+"trailing right float shares the band" = "pass"
 
 ["modern-containing-block-triggers"]
 "filter containing block" = "pass"
@@ -277,14 +277,14 @@
 "streamed hydration contracts" = "deferred:JS-on render path (no section 7 milestone; H1 --features v8 plus P2 streams/scroll)"
 
 ["nested-float-clearance"]
-"earlier tall float keeps its full shared-BFC endpoint" = "deferred:M1.1 floats"
-"later shorter descendant float shares the remaining band" = "deferred:M1.1 floats"
-"clearfix advances following flow below the tallest float" = "deferred:M1.1 floats"
+"earlier tall float keeps its full shared-BFC endpoint" = "pass"
+"later shorter descendant float shares the remaining band" = "pass"
+"clearfix advances following flow below the tallest float" = "pass"
 
 ["opposing-header-floats"]
-"inline wrapper exposes left float to header BFC" = "deferred:M1.1 floats"
-"opposing float shares the same band" = "deferred:M1.1 floats"
-"cleared navigation follows the float band" = "deferred:M1.1 floats"
+"inline wrapper exposes left float to header BFC" = "pass"
+"opposing float shares the same band" = "pass"
+"cleared navigation follows the float band" = "pass"
 
 ["percentage-height-indefinite-parent"]
 "content sizes the indefinite percentage-height chain" = "deferred:M4 flex and grid"
@@ -315,11 +315,11 @@
 "percentage image uses the wrapper content box" = "pass"
 
 ["right-float-navigation"]
-"first inline item stays at band start" = "deferred:M1.1 floats"
-"second inline item keeps source order" = "deferred:M1.1 floats"
-"last right float is visually first" = "deferred:M1.1 floats"
-"middle right float follows inward" = "deferred:M1.1 floats"
-"first right float reaches band end" = "deferred:M1.1 floats"
+"first inline item stays at band start" = "pass"
+"second inline item keeps source order" = "pass"
+"last right float is visually first" = "pass"
+"middle right float follows inward" = "pass"
+"first right float reaches band end" = "pass"
 
 ["supports-var-feature-query"]
 "variable feature query enables implemented grid support" = "pass"

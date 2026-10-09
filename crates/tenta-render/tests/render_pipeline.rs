@@ -1224,3 +1224,126 @@ fn a_fixed_box_in_an_opacity_group_inside_an_overflow_clip_is_drawn_at_half() {
         img.px(110, 10)
     );
 }
+
+// ------------------------------------------------------------ float paint order
+// CSS 2.1 Appendix E: in-flow block backgrounds, then floats, then inline
+// content, then positioned boxes.
+
+const FLOAT_PAGE: &str = "<!doctype html><style>body{margin:0}</style>";
+
+#[test]
+fn a_float_paints_above_the_background_of_a_later_in_flow_block() {
+    let html = format!(
+        "{FLOAT_PAGE}<div style='float:left;width:60px;height:60px;background:#f00'></div>\
+         <div style='height:40px;background:#00f'></div>"
+    );
+    let (_, img) = page(&html, 200, 120).viewport();
+    // The block starts at the origin underneath the float.
+    assert_eq!(img.px(10, 10), RED);
+    assert_eq!(img.px(59, 59), RED);
+    assert_eq!(img.px(100, 10), BLUE);
+    assert_eq!(img.px(100, 50), WHITE);
+}
+
+#[test]
+fn inline_content_paints_above_a_float_it_overlaps() {
+    // The float's negative margin lets the line start inside it.
+    let html = format!(
+        "{FLOAT_PAGE}<div style='float:left;width:100px;height:30px;margin-right:-80px;background:#f00'></div>\
+         <div style=\"height:30px;background:#00f;color:#fff;font:20px 'Liberation Sans'\">MMMM</div>"
+    );
+    let (_, img) = page(&html, 200, 120).viewport();
+    assert_eq!(img.px(5, 28), RED);
+    assert_eq!(img.px(150, 28), BLUE);
+    // White glyph pixels sit on top of the red float, not hidden by it.
+    let white_on_float = img.count(WHITE, 20..100, 0..30);
+    assert!(
+        white_on_float > 20,
+        "{white_on_float} white pixels over the float"
+    );
+}
+
+#[test]
+fn a_later_float_paints_above_an_earlier_one() {
+    let html = format!(
+        "{FLOAT_PAGE}<div style='float:left;width:60px;height:40px;background:#f00'></div>\
+         <div style='float:left;width:60px;height:40px;margin-left:-30px;background:#0f0'></div>"
+    );
+    let (_, img) = page(&html, 200, 120).viewport();
+    assert_eq!(img.px(10, 10), RED);
+    assert_eq!(img.px(40, 10), GREEN);
+    assert_eq!(img.px(80, 10), GREEN);
+}
+
+#[test]
+fn a_positioned_box_paints_above_a_float() {
+    let html = format!(
+        "{FLOAT_PAGE}<div style='position:relative'>\
+         <div style='float:left;width:60px;height:40px;background:#f00'></div>\
+         <div style='position:absolute;left:0;top:0;width:20px;height:20px;background:#00f'></div></div>"
+    );
+    let (_, img) = page(&html, 200, 120).viewport();
+    assert_eq!(img.px(10, 10), BLUE);
+    assert_eq!(img.px(30, 10), RED);
+}
+
+#[test]
+fn a_cleared_block_and_the_containing_float_paint_where_layout_put_them() {
+    let html = format!(
+        "{FLOAT_PAGE}<div style='overflow:hidden'>\
+         <div style='float:right;width:50px;height:30px;background:#f00'></div></div>\
+         <div style='clear:both;height:20px;background:#00f'></div>"
+    );
+    let (_, img) = page(&html, 200, 120).viewport();
+    assert_eq!(img.px(190, 10), RED);
+    assert_eq!(img.px(149, 10), WHITE);
+    // The overflow:hidden parent contains the float, so the next block follows it.
+    assert_eq!(img.px(10, 35), BLUE);
+    assert_eq!(img.px(10, 29), WHITE);
+}
+
+#[test]
+fn a_negative_z_index_child_of_a_float_paints_below_the_float() {
+    let html = format!(
+        "{FLOAT_PAGE}<div style='float:left;width:60px;height:40px;background:#f00'>\
+         <div style='position:relative;z-index:-1;width:30px;height:30px;background:#0f0'></div></div>"
+    );
+    let (_, img) = page(&html, 200, 120).viewport();
+    // A float is not a stacking context, so the child sits in the root's
+    // negative layer, beneath the float's own background.
+    assert_eq!(img.px(10, 10), RED);
+    assert_eq!(img.count(GREEN, 0..60, 0..40), 0);
+}
+
+#[test]
+fn a_positioned_child_of_a_float_paints_above_it() {
+    let html = format!(
+        "{FLOAT_PAGE}<div style='float:left;width:60px;height:40px;background:#f00'>\
+         <div style='position:absolute;left:5px;top:5px;width:20px;height:20px;background:#00f'></div></div>"
+    );
+    let (_, img) = page(&html, 200, 120).viewport();
+    assert_eq!(img.px(10, 10), BLUE);
+    assert_eq!(img.px(40, 30), RED);
+}
+
+#[test]
+fn text_inside_a_float_is_drawn_over_its_background() {
+    let html = format!(
+        "{FLOAT_PAGE}<div style=\"float:left;width:100px;height:30px;background:#f00;color:#fff;font:20px 'Liberation Sans'\">MMM</div>"
+    );
+    let (_, img) = page(&html, 200, 120).viewport();
+    assert_eq!(img.px(98, 28), RED);
+    assert!(img.count(WHITE, 0..100, 0..30) > 20);
+}
+
+#[test]
+fn a_float_inside_an_inline_block_paints_within_it() {
+    let html = format!(
+        "{FLOAT_PAGE}<span style='display:inline-block;width:100px;height:50px;background:#00f'>\
+         <div style='float:left;width:30px;height:30px;background:#f00'></div></span>"
+    );
+    let (_, img) = page(&html, 200, 120).viewport();
+    assert_eq!(img.px(10, 10), RED);
+    assert_eq!(img.px(60, 10), BLUE);
+    assert_eq!(img.px(110, 10), WHITE);
+}

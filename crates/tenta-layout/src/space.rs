@@ -40,8 +40,11 @@ pub struct ConstraintSpace {
     /// content alone would give, which is what an item's automatic minimum
     /// size is made of.
     pub content_block_size: bool,
-    /// Position of this content box inside its block formatting context;
-    /// floats use it to translate exclusions.
+    /// Position inside the block formatting context, used to translate float
+    /// exclusions. For a space handed to `layout_block` it is the left edge of
+    /// the containing block's content box and the predicted top of the box's
+    /// border box; for a space handed to `layout_inline` it is the origin of
+    /// the content box. A block formatting context root measures from itself.
     pub bfc_offset: (f32, f32),
     /// Inline base direction of the containing block.
     pub direction: Direction,
@@ -129,8 +132,20 @@ pub trait FloatContext {
     /// `at_least`; returns its `(inline, block)` offset.
     fn place_float(&mut self, side: FloatSide, size: (f32, f32), at_least: f32) -> (f32, f32);
 
-    /// Block offset below the floats `clear` names.
+    /// Block offset below the floats `clear` names; zero when there are none.
     fn clear_offset(&self, clear: ClearSide) -> f32;
+
+    /// The nearest block offset below `block_offset` where the occupied range
+    /// for `block_size` can change: the lowest bottom edge among the floats
+    /// that intersect it. `None` when no float does.
+    fn next_edge(&self, _block_offset: f32, _block_size: f32) -> Option<f32> {
+        None
+    }
+
+    /// True when the context holds no float at all.
+    fn is_empty(&self) -> bool {
+        true
+    }
 }
 
 /// A [`FloatContext`] with no floats: every band is free and a float lands
@@ -182,10 +197,10 @@ pub struct BlockResult {
     pub first_baseline: Option<f32>,
     /// Last baseline from the border-box top.
     pub last_baseline: Option<f32>,
-    /// Floats extending past this block's bottom edge, so a following sibling
-    /// can wrap around them without reopening this type.
+    /// Reserved: floats are shared through the formatting context's float set
+    /// rather than returned, so this stays empty.
     pub floats_out: Vec<FloatExclusion>,
-    /// Exclusion areas this block's formatting context exposes to its parent.
+    /// Reserved, like `floats_out`.
     pub exclusions: Vec<FloatExclusion>,
     /// The block has no content, height, padding or border, so its top and
     /// bottom margins collapse through it into one adjoining margin.

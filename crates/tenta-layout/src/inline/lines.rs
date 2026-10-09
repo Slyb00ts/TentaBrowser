@@ -14,7 +14,8 @@ use super::style::{Align, BlockInfo, BoxInfo, Handling, Infos, LineHeight, leadi
 use super::valign::{self, LineBox, Member};
 use super::whitespace::{self, Prepared};
 use super::{align, bidi};
-use crate::box_tree::{BoxId, BoxTree, InlineFormattingContext, LayoutCx};
+use crate::box_tree::{BoxId, BoxTree, InlineFormattingContext, InlineItem, LayoutCx};
+use crate::float;
 use crate::font::VerticalMetrics;
 use crate::fragment::{
     FragId, Fragment, FragmentBuilder, FragmentKind, InlineStatic, TextFragment,
@@ -23,7 +24,8 @@ use crate::relative;
 use crate::space::{AvailableSize, ConstraintSpace, FloatContext, InlineResult};
 use crate::text::chunk::ShapedChunk;
 use crate::types::{
-    Direction, Edges, Glyph, GlyphRun, OverflowKind, PaintStyle, PositionKind, Rect,
+    ClearSide, Direction, Edges, FloatSide, Glyph, GlyphRun, OverflowKind, PaintStyle,
+    PositionKind, Rect,
 };
 
 /// Slack for the comparison of widths that were summed in a different order
@@ -37,6 +39,8 @@ struct Fit {
     forced: bool,
     /// The line ends at a soft hyphen, which is shown.
     hyphen: bool,
+    /// The first unbreakable piece is wider than the room it was given.
+    wide: bool,
 }
 
 /// The distance from `x` to the next tab stop, `stop` apart. A tab at a stop
@@ -167,6 +171,7 @@ fn fit_line(
     let mut pending_hang = 0.0_f32;
     let mut cut: Option<usize> = None;
     let mut overflowing = false;
+    let mut wide = false;
     let mut k = start;
     while k < atoms.len() {
         if matches!(atoms[k].kind, AtomKind::Forced) {
@@ -178,6 +183,7 @@ fn fit_line(
                 end,
                 forced: true,
                 hyphen: false,
+                wide,
             };
         }
         if k > start && atoms[k].opp == Opp::Soft {
@@ -216,6 +222,7 @@ fn fit_line(
                     end,
                     forced: false,
                     hyphen: hyphen.is_some(),
+                    wide,
                 };
             }
             let room = avail - pending;
@@ -225,6 +232,7 @@ fn fit_line(
                     end: k + 1,
                     forced: false,
                     hyphen: false,
+                    wide,
                 };
             }
             let breakable = matches!(&atoms[k].kind, AtomKind::Text(t) if t.splittable);
@@ -240,9 +248,11 @@ fn fit_line(
                     end: b,
                     forced: false,
                     hyphen: false,
+                    wide,
                 };
             }
             overflowing = true;
+            wide = true;
         }
         pending += width;
         pending_hang += hang;
@@ -252,6 +262,7 @@ fn fit_line(
         end: atoms.len(),
         forced: false,
         hyphen: false,
+        wide,
     }
 }
 
@@ -1299,6 +1310,39 @@ fn atomic_extent(atomic: &atoms::AtomicAtom) -> (f32, f32) {
     (above, total - above)
 }
 
+/// Places the floats that did not fit beside the content of their line, now
+/// that the line's bottom is known.
+#[allow(clippy::too_many_arguments)]
+fn place_deferred(
+    deferred: &[BoxId],
+    tree: &BoxTree,
+    laid: &HashMap<BoxId, float::LaidFloat>,
+    floats: &mut dyn FloatContext,
+    out: &mut FragmentBuilder,
+    root: BoxId,
+    direction: Direction,
+    at_least: f32,
+) {
+    for &box_id in deferred {
+        let (Some(entry), Some(side)) = (
+            laid.get(&box_id),
+            float::float_side(&tree.get(box_id).style, direction),
+        ) else {
+            continue;
+        };
+        float::position_float(
+            out,
+            tree,
+            box_id,
+            entry,
+            floats,
+            (side, direction),
+            at_least,
+        );
+        out.add_inline_float(root, entry.frag);
+    }
+}
+
 /// Breaks `ifc` into lines and builds their fragments.
 /// Whether the out-of-flow box was block-level before it was blockified, which
 /// puts its static position at the inline start of the line below the content
@@ -1352,6 +1396,31 @@ pub(super) fn build_lines(
     let line_paint = super::style::line_paint(&tree.get(ifc.root).paint);
 
     let strut = leading(infos.get(ifc.root).line_height, infos.get(ifc.root).metrics);
+    let strut_height = strut.0 + strut.1;
+    let has_floats = ifc
+        .items
+        .iter()
+        .any(|item| matches!(item, InlineItem::Float { box_id } if float::is_float(tree, *box_id)));
+    // Floats met so far: laid out when first seen, placed at the line that
+    // holds them, or below it when they do not fit beside its content.
+    let mut handled: HashSet<BoxId> = HashSet::new();
+    // `<br clear>`: the clearance owed after the forced break with that
+    // ordinal among the context's forced breaks.
+    let br_clear: HashMap<usize, ClearSide> = ifc
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            InlineItem::ForcedBreak { box_id } => Some(*box_id),
+            _ => None,
+        })
+        .zip(&prepared.br_forced)
+        .filter_map(|(box_id, &ordinal)| {
+            let clear = float::clear_side(&tree.get(box_id).style, block.direction);
+            (clear != ClearSide::None).then_some((ordinal, clear))
+        })
+        .collect();
+    let mut forced_seen = 0_usize;
+    let mut laid: HashMap<BoxId, float::LaidFloat> = HashMap::new();
     let mut lines: SmallVec<[FragId; 8]> = SmallVec::new();
     let mut y = 0.0_f32;
     let mut start = 0;
@@ -1366,75 +1435,165 @@ pub(super) fn build_lines(
         overflow: Rect::default(),
         inline_extent: 0.0,
     };
-    while start < built.atoms.len() {
-        let band = floats.band(y, strut.0 + strut.1);
-        let avail = (width - band.left - band.right).max(0.0);
-        let indent = if align::is_indented(&block, first, after_forced) {
-            block.indent
-        } else {
-            0.0
-        };
-        let fit = fit_line(
-            &mut built.atoms,
-            &built.shaped,
-            start,
-            avail - indent,
-            indent,
-        );
-        let empty = carry.is_empty()
-            && built.atoms[start..fit.end].iter().all(|a| {
-                matches!(
-                    a.kind,
-                    AtomKind::Open { .. } | AtomKind::Close { .. } | AtomKind::Static { .. }
-                ) && a.width == 0.0
-            });
-        if empty {
-            // A line with nothing in it takes no room, but an absolutely
-            // positioned box in it still has its place.
-            for atom in &built.atoms[start..fit.end] {
-                if let AtomKind::Static { box_id } = atom.kind {
-                    let x = match block.direction {
-                        Direction::Ltr => band.left,
-                        Direction::Rtl => band.left + avail,
+    'lines: while start < built.atoms.len() {
+        // Floats that did not fit beside the content before them wait for the
+        // end of the line.
+        let mut deferred: Vec<BoxId> = Vec::new();
+        // The block extent the available width is measured over: the strut at
+        // first, the line's own height once it is known.
+        let mut query = strut_height;
+        let mut rechecks = 0;
+        let (line, band, fit) = 'position: loop {
+            let band = floats.band(y, query);
+            let avail = (width - band.left - band.right).max(0.0);
+            let indent = if align::is_indented(&block, first, after_forced) {
+                block.indent
+            } else {
+                0.0
+            };
+            let fit = fit_line(
+                &mut built.atoms,
+                &built.shaped,
+                start,
+                avail - indent,
+                indent,
+            );
+            if has_floats {
+                let mut placed_one = false;
+                for index in start..fit.end {
+                    let AtomKind::Static { box_id } = built.atoms[index].kind else {
+                        continue;
                     };
-                    out.add_inline_static(InlineStatic {
-                        root: ifc.root,
-                        box_id,
-                        x,
-                        y,
-                        line: lines.len(),
-                        rtl: block.direction == Direction::Rtl,
-                    });
+                    if !float::is_float(tree, box_id) || !handled.insert(box_id) {
+                        continue;
+                    }
+                    let Some(side) = float::float_side(&tree.get(box_id).style, block.direction)
+                    else {
+                        continue;
+                    };
+                    let entry = *laid
+                        .entry(box_id)
+                        .or_insert_with(|| float::lay_out_float(cx, tree, box_id, space, out));
+                    let before: f32 = built.atoms[start..index].iter().map(|a| a.width).sum();
+                    if before <= EPSILON || before + entry.size.0 <= avail + EPSILON {
+                        let at = (side, block.direction);
+                        float::position_float(out, tree, box_id, &entry, floats, at, y);
+                        out.add_inline_float(ifc.root, entry.frag);
+                        placed_one = true;
+                    } else {
+                        deferred.push(box_id);
+                    }
+                }
+                if placed_one {
+                    // The line is narrower now.
+                    continue 'position;
                 }
             }
-            start = fit.end;
-            continue;
-        }
-        let last = fit.end >= built.atoms.len();
-        let input = LineIn {
-            range: start..fit.end,
-            y,
-            left: band.left,
-            avail,
-            indent,
-            align: align::line_align(&block, last || fit.forced),
-            hyphen: fit.hyphen,
+            if fit.wide
+                && infos.get(ifc.root).wraps
+                && (band.left > 0.0 || band.right > 0.0)
+                && let Some(next) = floats.next_edge(y, query)
+            {
+                // Its first unbreakable piece does not fit beside the floats,
+                // so the line goes below the nearest one.
+                y = next;
+                query = strut_height;
+                continue 'position;
+            }
+            let empty = carry.is_empty()
+                && built.atoms[start..fit.end].iter().all(|a| {
+                    matches!(
+                        a.kind,
+                        AtomKind::Open { .. } | AtomKind::Close { .. } | AtomKind::Static { .. }
+                    ) && a.width == 0.0
+                });
+            if empty {
+                // A line with nothing in it takes no room, but an absolutely
+                // positioned box in it still has its place.
+                for atom in &built.atoms[start..fit.end] {
+                    if let AtomKind::Static { box_id } = atom.kind
+                        && !float::is_float(tree, box_id)
+                    {
+                        // A block-level box ignores floats: it would sit at the
+                        // start edge of the content box.
+                        let x = match (block.direction, is_block_level(tree, box_id)) {
+                            (Direction::Ltr, true) => 0.0,
+                            (Direction::Rtl, true) => width,
+                            (Direction::Ltr, false) => band.left,
+                            (Direction::Rtl, false) => band.left + avail,
+                        };
+                        out.add_inline_static(InlineStatic {
+                            root: ifc.root,
+                            box_id,
+                            x,
+                            y,
+                            line: lines.len(),
+                            rtl: block.direction == Direction::Rtl,
+                        });
+                    }
+                }
+                place_deferred(
+                    &deferred,
+                    tree,
+                    &laid,
+                    floats,
+                    out,
+                    ifc.root,
+                    block.direction,
+                    y,
+                );
+                start = fit.end;
+                continue 'lines;
+            }
+            let last = fit.end >= built.atoms.len();
+            let indent = if align::is_indented(&block, first, after_forced) {
+                block.indent
+            } else {
+                0.0
+            };
+            let input = LineIn {
+                range: start..fit.end,
+                y,
+                left: band.left,
+                avail,
+                indent,
+                align: align::line_align(&block, last || fit.forced),
+                hyphen: fit.hyphen,
+            };
+            let ctx = Ctx {
+                tree,
+                infos: &infos,
+                prepared: &prepared,
+                atoms: &built,
+                block: &block,
+                root: ifc.root,
+                quirks: cx.quirks,
+                line_paint: line_paint.clone(),
+                ellipsis: ellipsis.as_ref(),
+                containing_height: space.percentage_base.1,
+            };
+            let saved = carry.clone();
+            let mark = out.checkpoint();
+            let line = assemble(&ctx, out, &mut carry, &input);
+            if rechecks < 2 {
+                // A line taller than the strut may reach floats the strut did
+                // not; it is built again for the room it really has.
+                let taller = query.max(line.height);
+                if floats.band(y, taller) != band {
+                    out.truncate(mark);
+                    carry = saved;
+                    query = taller;
+                    rechecks += 1;
+                    continue 'position;
+                }
+            }
+            break (line, band, fit);
         };
-        let ctx = Ctx {
-            tree,
-            infos: &infos,
-            prepared: &prepared,
-            atoms: &built,
-            block: &block,
-            root: ifc.root,
-            quirks: cx.quirks,
-            line_paint: line_paint.clone(),
-            ellipsis: ellipsis.as_ref(),
-            containing_height: space.percentage_base.1,
-        };
-        let line = assemble(&ctx, out, &mut carry, &input);
         lines.push(line.frag);
         for &(box_id, x, after_content, rtl) in &line.statics {
+            if float::is_float(tree, box_id) {
+                continue;
+            }
             // A block-level box sits at the inline start, below the content
             // that precedes it on the line.
             let block_level = is_block_level(tree, box_id);
@@ -1445,8 +1604,8 @@ pub(super) fn build_lines(
             };
             let (x, y) = if block_level {
                 let start = match block.direction {
-                    Direction::Ltr => band.left,
-                    Direction::Rtl => band.left + avail,
+                    Direction::Ltr => 0.0,
+                    Direction::Rtl => width,
                 };
                 (start, if after_content { y + line.height } else { y })
             } else {
@@ -1467,7 +1626,23 @@ pub(super) fn build_lines(
         result.last_baseline = Some(y + line.ascent);
         result.inline_extent = result.inline_extent.max(line.content);
         result.overflow = result.overflow.union(&line.extent.translated(band.left, y));
+        place_deferred(
+            &deferred,
+            tree,
+            &laid,
+            floats,
+            out,
+            ifc.root,
+            block.direction,
+            y + line.height,
+        );
         y += line.height;
+        if fit.forced {
+            if let Some(&clear) = br_clear.get(&forced_seen) {
+                y = y.max(floats.clear_offset(clear));
+            }
+            forced_seen += 1;
+        }
         start = fit.end;
         first = false;
         after_forced = fit.forced;
@@ -1499,18 +1674,45 @@ pub(super) fn intrinsic_sizes(
 
     let mut max = 0.0_f32;
     let mut line = block.indent.max(0.0);
+    // Floats side by side, until a `clear` ends the row.
+    let (mut floats_left, mut floats_right) = (0.0_f32, 0.0_f32);
     let mut hang = 0.0_f32;
     let mut min = 0.0_f32;
     let mut piece = 0.0_f32;
     let mut piece_hang = 0.0_f32;
     for atom in atoms {
         if matches!(atom.kind, AtomKind::Forced) {
-            max = max.max(line - hang);
+            max = max.max(line - hang + floats_left + floats_right);
             line = 0.0;
             hang = 0.0;
             min = min.max(piece - piece_hang);
             piece = 0.0;
             piece_hang = 0.0;
+            continue;
+        }
+        if let AtomKind::Static { box_id } = atom.kind
+            && float::is_float(tree, box_id)
+        {
+            // A float shares the line with the text around it.
+            let margin = crate::block_sizes::frame_of(tree, box_id, 0.0).margin;
+            let extra = margin.left + margin.right;
+            let (float_min, float_max) =
+                crate::block_sizes::intrinsic_inline_contribution(cx, tree, box_id);
+            min = min.max(float_min + extra);
+            let clear = float::clear_side(&tree.get(box_id).style, block.direction);
+            if clear != ClearSide::None {
+                max = max.max(floats_left + floats_right);
+                if matches!(clear, ClearSide::Left | ClearSide::Both) {
+                    floats_left = 0.0;
+                }
+                if matches!(clear, ClearSide::Right | ClearSide::Both) {
+                    floats_right = 0.0;
+                }
+            }
+            match float::float_side(&tree.get(box_id).style, block.direction) {
+                Some(FloatSide::Right) => floats_right += float_max + extra,
+                _ => floats_left += float_max + extra,
+            }
             continue;
         }
         let breaks = matches!(atom.opp, Opp::Soft | Opp::Anywhere);
@@ -1533,7 +1735,7 @@ pub(super) fn intrinsic_sizes(
             piece_hang = atom.hang;
         }
     }
-    max = max.max(line - hang);
+    max = max.max(line - hang + floats_left + floats_right);
     min = min.max(piece - piece_hang);
     (min, max)
 }

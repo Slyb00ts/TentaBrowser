@@ -3,8 +3,7 @@
 // Everything below shapes text, which needs the bundled fonts.
 #[cfg(feature = "embedded-fonts")]
 mod align;
-#[cfg(feature = "embedded-fonts")]
-mod atomic;
+pub(crate) mod atomic;
 #[cfg(feature = "embedded-fonts")]
 mod atoms;
 #[cfg(feature = "embedded-fonts")]

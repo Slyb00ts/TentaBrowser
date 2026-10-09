@@ -164,7 +164,60 @@ pub struct FragmentBuilder {
     /// Where inline layout met the placeholders of absolutely positioned boxes,
     /// until block layout collects them.
     inline_statics: Vec<InlineStatic>,
+    /// Floats inline layout placed, until block layout collects them.
+    inline_floats: Vec<(BoxId, FragId)>,
     containing_blocks: HashMap<FragId, FragId>,
+}
+
+/// How much a [`FragmentBuilder`] held at some moment, so a speculative layout
+/// can be discarded.
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct Checkpoint {
+    frags: usize,
+    candidates: usize,
+    statics: usize,
+    floats: usize,
+}
+
+impl FragmentBuilder {
+    /// Remembers the current contents.
+    pub(crate) fn checkpoint(&self) -> Checkpoint {
+        Checkpoint {
+            frags: self.frags.len(),
+            candidates: self.static_candidates.len(),
+            statics: self.inline_statics.len(),
+            floats: self.inline_floats.len(),
+        }
+    }
+
+    /// Drops everything pushed since `mark`.
+    pub(crate) fn truncate(&mut self, mark: Checkpoint) {
+        self.frags.truncate(mark.frags);
+        self.static_candidates.truncate(mark.candidates);
+        self.inline_statics.truncate(mark.statics);
+        self.inline_floats.truncate(mark.floats);
+    }
+
+    /// Records that inline layout of the context rooted at `root` placed the
+    /// float fragment `frag`, in the coordinates of the context's content box.
+    #[cfg(feature = "embedded-fonts")]
+    pub(crate) fn add_inline_float(&mut self, root: BoxId, frag: FragId) {
+        self.inline_floats.push((root, frag));
+    }
+
+    /// Removes and returns the floats recorded for the context rooted at `root`.
+    pub(crate) fn take_inline_floats(&mut self, root: BoxId) -> Vec<FragId> {
+        let mut mine = Vec::new();
+        self.inline_floats.retain(|&(owner, frag)| {
+            if owner == root {
+                mine.push(frag);
+                false
+            } else {
+                true
+            }
+        });
+        mine
+    }
 }
 
 impl FragmentBuilder {
@@ -199,6 +252,7 @@ impl FragmentBuilder {
 
     /// Records where inline layout of the context rooted at `root` met the
     /// placeholder of an absolutely positioned box.
+    #[cfg(feature = "embedded-fonts")]
     pub(crate) fn add_inline_static(&mut self, mark: InlineStatic) {
         self.inline_statics.push(mark);
     }

@@ -6,15 +6,27 @@ Usage: record_geometry.py replaced_cases.py GROUP out.rs
 The cases module defines GROUP as a list of (name, (viewport width, height), html).
 Every element with an `id` is recorded in document coordinates, after all images
 have decoded, as a Rust `Case` table (see crates/tenta-render/tests/replaced.rs).
-Needs Google Chrome; the path is CHROME below.
+Needs Google Chrome; the path is CHROME below. HTML needs a <head> and a
+closing </body> for the font declarations and the recording script.
 """
 import json, os, re, subprocess, sys, tempfile, importlib.util, html as htmllib
 
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
+# The bundled faces, declared so Chrome measures the same advances and metrics
+# as the engine. Injected into <head> at record time; the stored HTML stays plain.
+FONTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "crates", "tenta-layout", "fonts")
+FONT_CSS = """<style>
+@font-face{font-family:'Liberation Sans';font-weight:400;src:url('file://%s/LiberationSans-Regular.ttf')}
+@font-face{font-family:'Liberation Sans';font-weight:700;src:url('file://%s/LiberationSans-Bold.ttf')}
+@font-face{font-family:'Liberation Serif';font-weight:400;src:url('file://%s/LiberationSerif-Regular.ttf')}
+</style>""" % ((os.path.normpath(FONTS),) * 3)
+
 SCRIPT = """
 <script>
 (async () => {
+  try { await Promise.all([document.fonts.load("16px 'Liberation Sans'"), document.fonts.load("bold 16px 'Liberation Sans'"), document.fonts.load("16px 'Liberation Serif'")]); } catch (e) {}
+  await document.fonts.ready;
   const imgs = [...document.images];
   await Promise.all(imgs.map(i => i.decode().catch(() => {})));
   await new Promise(r => setTimeout(r, 50));
@@ -33,7 +45,7 @@ SCRIPT = """
 
 def run(name, viewport, html, workdir, extra=(0, 0)):
     path = os.path.join(workdir, name + ".html")
-    doc = html.replace("</body>", SCRIPT + "</body>")
+    doc = html.replace("<head>", "<head>" + FONT_CSS, 1).replace("</body>", SCRIPT + "</body>")
     with open(path, "w") as f:
         f.write(doc)
     cmd = [CHROME, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run",

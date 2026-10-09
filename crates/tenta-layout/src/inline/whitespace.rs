@@ -198,6 +198,9 @@ pub(super) enum Entry {
 pub(super) struct Prepared {
     pub(super) chunks: Vec<Chunk>,
     pub(super) entries: Vec<Entry>,
+    /// For each `<br>` item, in order, how many forced breaks precede its own
+    /// among all the forced breaks of the context.
+    pub(super) br_forced: Vec<usize>,
 }
 
 /// Reads the boxes `ifc` mentions into `infos`.
@@ -259,13 +262,17 @@ pub(super) fn prepare(doc: &Document, infos: &Infos, ifc: &InlineFormattingConte
                 b.prev_space = false;
                 b.in_word = false;
             }
-            InlineItem::ForcedBreak { .. } => b.forced(&mut Seg::default()),
+            InlineItem::ForcedBreak { .. } => {
+                b.out.br_forced.push(b.forced_n);
+                b.forced(&mut Seg::default());
+            }
             InlineItem::SoftBreak => {
                 b.end_chunk();
                 b.out.entries.push(Entry::Soft);
             }
-            InlineItem::AbsPos { box_id } => b.event(Event::Static { box_id: *box_id }),
-            InlineItem::Float { .. } => {}
+            InlineItem::AbsPos { box_id } | InlineItem::Float { box_id } => {
+                b.event(Event::Static { box_id: *box_id })
+            }
         }
     }
     b.trim_trailing(&mut Seg::default());
@@ -294,6 +301,8 @@ struct Builder {
     trailing: bool,
     /// The text so far ends inside a word, for `capitalize`.
     in_word: bool,
+    /// Forced breaks pushed so far.
+    forced_n: usize,
 }
 
 impl Default for Builder {
@@ -304,6 +313,7 @@ impl Default for Builder {
             prev_space: true,
             trailing: false,
             in_word: false,
+            forced_n: 0,
         }
     }
 }
@@ -340,6 +350,7 @@ impl Builder {
         self.trim_trailing(seg);
         self.end_chunk();
         self.out.entries.push(Entry::Forced);
+        self.forced_n += 1;
         self.prev_space = true;
         self.in_word = false;
     }
