@@ -307,3 +307,45 @@ Per-run TentaBrowser commands (ports vary):
 - `S-static-text-cli`: the same against `/static-article/index.html`
 - `S-search-fast`: `target/release/tentabrowser search "rust browser engine" --provider ddg --warm --json --limit 10 --allow-private-network --search-endpoint duckduckgo_html=http://127.0.0.1:<port>/duckduckgo_html/rust-browser-engine.html`
 - `S-search-cli-cold`: the same without `--warm` and without `--json`
+
+# Render pipeline harness (`bench/render.py`)
+
+`bench/render.py` compares two release builds of the `render_bench` example of
+`tenta-render` (style flush, box tree, layout, display list, raster, PNG encode,
+RSS). Scenarios are listed by `render_bench --list` and defined in
+`bench/scenarios.toml` (`S-screenshot`/`S-fullpage` stay the CLI comparison
+entries; the in-process ones are `S-screenshot-inproc`, `S-fullpage-inproc`, `S-style-10k`, `S-layout-5k`, `S-dl-5k`,
+`S-raster-1280`, `S-fullpage-12000`, `S-fixtures`, `S-font-init`).
+
+```
+CARGO_INCREMENTAL=0 cargo build --release -p tenta-render --example render_bench
+cp target/release/examples/render_bench /tmp/render-bench-before    # build of the parent commit
+# apply the change, rebuild
+python3 bench/render.py --baseline /tmp/render-bench-before \
+  --candidate target/release/examples/render_bench --runs 25 --warmup 2 \
+  [--scenario S-layout-5k ...] [--output bench/baselines/<stamp>-render-<label>.json]
+```
+
+One example process runs one scenario and prints a JSON line per iteration.
+Pair order alternates (ABBA) and iterations are pooled per
+`variant/cache/position`. Only `cold` is cold. The chunk cache is per thread
+and survives a new `RenderSession`, so a session scenario is cold only in the
+`first` iteration of a process and `warm-text` afterwards; `--fresh-process`
+runs one iteration per process (use `--runs 40` or more) to sample that
+repeatedly. `S-layout-5k` `distinct-text` is cold in every iteration (new text
+each time). `S-font-init`: the first build of a process is the number for the
+1 ms budget, later builds (`clone`) are shared-data clones. Session scenarios
+report style, box tree and layout as one `layout` stage; `S-layout-5k` times
+the three separately. The 1 MB `S-fullpage-inproc` article is cut off at the
+16 384 px limit (`detail.clamped`); `S-fullpage-12000` (the first 5 sections,
+12 156 px) is the one to compare with the 120 ms budget.
+
+A change is reported only beyond max(10%, the split-half p50 spread of either
+subject), and the driver says which limit applied. Passing the same binary as
+both subjects prints the measured A/A noise (`identical_binaries` is recorded).
+`--smoke` allows fewer than 20 runs for a quick check and marks the report
+`claim: false`; so does a 1-minute load of 8 or more (`machine_loaded`). Do not
+record a baseline then.
+
+No baseline has been recorded yet: the machine was loaded (1-minute load
+average 26-40 when this harness landed), and numbers taken then are not claims.

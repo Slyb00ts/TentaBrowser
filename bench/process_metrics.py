@@ -51,6 +51,7 @@ def run_json_process(
     timeout_s: float,
     validate_payload: Callable[[object], dict],
     command_args: tuple[str, ...] = (),
+    parse_output: Callable[[str], object] = json.loads,
 ) -> dict:
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
         started = time.perf_counter_ns()
@@ -91,7 +92,7 @@ def run_json_process(
     if proc.returncode != 0:
         raise RuntimeError(f"{binary} exited {proc.returncode}; stderr: {error[-1000:]}")
     try:
-        payload = validate_payload(json.loads(output))
+        payload = validate_payload(parse_output(output))
     except (json.JSONDecodeError, ValueError) as exc:
         raise RuntimeError(f"invalid output from {binary}: {exc}; stdout: {output[-1000:]}") from exc
     return {

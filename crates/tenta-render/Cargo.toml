@@ -21,6 +21,7 @@ tenta-html = { workspace = true }
 tenta-css = { workspace = true, features = ["test-util"] }
 tenta-testutil = { workspace = true }
 png = { workspace = true }
+serde_json = { workspace = true }
 
 [[bench]]
 name = "render"

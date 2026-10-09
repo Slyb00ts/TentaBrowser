@@ -3230,6 +3230,7 @@ dependencies = [
  "hashbrown 0.16.1",
  "http",
  "parking_lot",
+ "png",
  "serde",
  "serde_json",
  "tenta-core",
@@ -3501,6 +3502,7 @@ dependencies = [
  "tenta-dom",
  "tenta-html",
  "tenta-js",
+ "tenta-layout",
  "tenta-net",
  "tenta-render",
  "tokio",
@@ -3561,6 +3563,7 @@ name = "tenta-render"
 version = "0.0.1"
 dependencies = [
  "png",
+ "serde_json",
  "tenta-core",
  "tenta-css",
  "tenta-dom",

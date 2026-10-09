@@ -388,3 +388,94 @@ path = "/rtc-loopback/index.html"
 mode = "inprocess"
 applicable_to = ["tentabrowser", "chromium"]
 definition = "two pages, audio + 720p30 VP8 both ways via local signalling and `coturn`"
+
+# Render pipeline scenarios, driven by `bench/render.py` against the
+# `render_bench` example of `tenta-render` (JSON line per iteration). The
+# staged scenarios time style flush, box tree and layout separately; the
+# session scenarios (`S-screenshot`, `S-fullpage*`, `S-fixtures`) time the
+# product path, whose layout stage covers all three. `cold` iterations use a new
+# session or text the shaping caches have never seen, `warm` ones repeat.
+# `S-screenshot` and `S-fullpage` above stay the cross-implementation CLI
+# comparisons; the `-inproc` entries below are the engine measurements of the
+# same pages and are not comparable with them.
+
+[[scenario]]
+name = "S-screenshot-inproc"
+phase = "P3"
+fixture = "static-article"
+path = "/static-article/index.html"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "Viewport 1280×800 PNG of the first 9 article sections through RenderSession: new session (cold only in the first iteration of a process, warm-text after), unchanged, relayout after a mutation"
+
+[[scenario]]
+name = "S-fullpage-inproc"
+phase = "P3"
+fixture = "static-article"
+path = "/static-article/index.html"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "Full-page capture of the whole 1 MB article, clamped at 16 384 px; same variants as S-screenshot-inproc"
+
+[[scenario]]
+name = "S-style-10k"
+phase = "P3"
+fixture = "none"
+path = "/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "Initial style traversal of 10 000 elements and 200 rules (spec 06 §7 budget in 04 §8), new style engine each iteration"
+
+[[scenario]]
+name = "S-layout-5k"
+phase = "P3"
+fixture = "none"
+path = "/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "Style flush, box tree and layout of a 5 000-box text page at 1280×800, single-threaded; cold = distinct text every iteration, warm = the same document again; budget 10 ms (spec 06 §7)"
+
+[[scenario]]
+name = "S-dl-5k"
+phase = "P3"
+fixture = "none"
+path = "/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "Display list build from the fragments of the 5 000-box text page; budget 2 ms (spec 06 §7)"
+
+[[scenario]]
+name = "S-raster-1280"
+phase = "P3"
+fixture = "static-article"
+path = "/static-article/index.html"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "Raster of a prebuilt display list of the first 9 article sections at 1280×800, then Fast PNG encode; budgets 8 ms and 4 ms (spec 06 §7)"
+
+[[scenario]]
+name = "S-fullpage-12000"
+phase = "P3"
+fixture = "static-article"
+path = "/static-article/index.html"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "Full-page capture of the first 5 article sections (12 156 × 1280 px, not clamped), new session, unchanged and relayout; budget 120 ms (spec 06 §7). `S-fullpage` runs the whole 1 MB article, which the 16 384 px capture limit clamps"
+
+[[scenario]]
+name = "S-fixtures"
+phase = "P3"
+fixture = "render"
+path = "/render/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "Viewport screenshot of each tests/fixtures/render page in a new session; session start-up and encode floor"
+
+[[scenario]]
+name = "S-font-init"
+phase = "P3"
+fixture = "none"
+path = "/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "Construction of the embedded font system; the first build of a process is the one the 1 ms budget applies to (spec 06 §7), later builds are clones"
