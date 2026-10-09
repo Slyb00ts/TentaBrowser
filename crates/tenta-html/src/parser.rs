@@ -3,13 +3,18 @@
 
 use encoding_rs::Encoding;
 
-use crate::encoding::{Confidence, Decoder, PRESCAN_LIMIT, encoding_from_meta_label, sniff};
+use crate::encoding::{Confidence, Decoder, PRESCAN_LIMIT, encoding_from_meta_label, sniff_input};
 use crate::input::Input;
 use crate::preload::{PreloadHint, PreloadScanner};
 use crate::scan::ScanMode;
 use crate::sink::{ElementFlags, QualName, QuirksMode, TreeSink};
 use crate::tokenizer::{Tokenizer, TokenizerOpts, TokenizerResult};
 use crate::tree_builder::{TreeBuilder, TreeBuilderOpts};
+
+/// Bytes buffered before sniffing runs. A UTF-8 sequence is at most four bytes,
+/// so waiting for three bytes past the prescan window lets the sniffer see every
+/// sequence that starts inside it whole, whatever the chunk boundaries were.
+const SNIFF_DECISION_LENGTH: usize = PRESCAN_LIMIT + 3;
 
 /// What a [`Parser::feed`] call decided.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -434,15 +439,16 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
         // Buffer until there is enough input to run the sniffing algorithm.
         if let Some(buffer) = &mut self.sniff_buffer {
             buffer.extend_from_slice(bytes);
-            if buffer.len() < PRESCAN_LIMIT && !last {
+            if buffer.len() < SNIFF_DECISION_LENGTH && !last {
                 return ParseStatus::Continue;
             }
             let buffered = std::mem::take(buffer);
             self.sniff_buffer = None;
-            let sniffed = sniff(
+            let sniffed = sniff_input(
                 &buffered,
                 self.options.transport_charset.as_deref(),
                 &self.options.default_locale,
+                !last,
             );
             self.confidence = sniffed.confidence;
             self.decoder = Some(Decoder::new(sniffed.encoding));

@@ -50,11 +50,34 @@ fn sniff_bom(bytes: &[u8]) -> Option<(&'static Encoding, usize)> {
     Encoding::for_bom(bytes)
 }
 
-/// The WHATWG encoding sniffing algorithm.
+/// How many bytes UTF-8 detection may look at. The parser passes what it
+/// already holds, so this only bounds a very large first chunk.
+const UTF8_DETECTION_LIMIT: usize = 64 * 1024;
+
+/// The WHATWG encoding sniffing algorithm, for `bytes` that start a document.
 ///
 /// `transport_charset` is the `charset` parameter of the `Content-Type`
 /// header, if the response had one. `default_locale` picks the fallback.
+/// A prefix of at least a prescan window is taken as the start of a longer
+/// document; callers that hold the whole document use [`sniff_input`].
 pub fn sniff(bytes: &[u8], transport_charset: Option<&str>, default_locale: &str) -> Sniffed {
+    sniff_input(
+        bytes,
+        transport_charset,
+        default_locale,
+        bytes.len() >= PRESCAN_LIMIT,
+    )
+}
+
+/// [`sniff`] for `bytes` the parser holds, where `more_input` says whether
+/// bytes beyond them will still arrive. That decides whether a UTF-8 sequence
+/// open at the end of `bytes` is truncated or invalid.
+pub(crate) fn sniff_input(
+    bytes: &[u8],
+    transport_charset: Option<&str>,
+    default_locale: &str,
+    more_input: bool,
+) -> Sniffed {
     if let Some((encoding, bom_length)) = sniff_bom(bytes) {
         return Sniffed {
             encoding,
@@ -71,9 +94,20 @@ pub fn sniff(bytes: &[u8], transport_charset: Option<&str>, default_locale: &str
             bom_length: 0,
         };
     }
-    if let Some(encoding) = prescan(&bytes[..bytes.len().min(PRESCAN_LIMIT)]) {
+    let window = &bytes[..bytes.len().min(PRESCAN_LIMIT)];
+    if let Some(encoding) = prescan(window) {
         return Sniffed {
             encoding,
+            confidence: Confidence::Tentative,
+            bom_length: 0,
+        };
+    }
+    // Browsers detect UTF-8 here instead of decoding it as the locale's
+    // legacy encoding. Tentative, so a later `<meta charset>` still applies.
+    let detection = &bytes[..bytes.len().min(UTF8_DETECTION_LIMIT)];
+    if is_probably_utf8(detection, more_input || bytes.len() > UTF8_DETECTION_LIMIT) {
+        return Sniffed {
+            encoding: UTF_8,
             confidence: Confidence::Tentative,
             bom_length: 0,
         };
@@ -82,6 +116,22 @@ pub fn sniff(bytes: &[u8], transport_charset: Option<&str>, default_locale: &str
         encoding: default_encoding_for_locale(default_locale),
         confidence: Confidence::Tentative,
         bom_length: 0,
+    }
+}
+
+/// Whether `window` reads as UTF-8 rather than a legacy 8-bit encoding: it
+/// must contain a non-ASCII character and no invalid sequence. ASCII alone
+/// says nothing about the encoding, so it is left to the locale default.
+///
+/// `more_bytes_follow` tells whether `window` cuts the document short. Then a
+/// sequence still open at the end of the window counts as a multi-byte
+/// character: its lead byte is already non-ASCII, and the parser's chunk
+/// boundaries must not decide the encoding. Without more input it is invalid.
+fn is_probably_utf8(window: &[u8], more_bytes_follow: bool) -> bool {
+    match std::str::from_utf8(window) {
+        Ok(text) => !text.is_ascii(),
+        Err(error) if error.error_len().is_none() => more_bytes_follow,
+        Err(_) => false,
     }
 }
 
@@ -559,6 +609,126 @@ mod tests {
         assert_eq!(default_encoding_for_locale("pl-PL"), WINDOWS_1250);
         assert_eq!(default_encoding_for_locale("en-GB"), WINDOWS_1252);
         assert_eq!(sniff(b"<html>", None, "pl").encoding, WINDOWS_1250);
+    }
+
+    #[test]
+    fn undeclared_utf8_with_non_ascii_is_detected() {
+        let bytes = "<p>łamanie kształtowanie</p>".as_bytes();
+        let sniffed = sniff(bytes, None, "en-GB");
+        assert_eq!(sniffed.encoding, UTF_8);
+        assert_eq!(sniffed.confidence, Confidence::Tentative);
+    }
+
+    #[test]
+    fn pure_ascii_keeps_the_locale_default() {
+        assert_eq!(sniff(b"<p>plain</p>", None, "pl").encoding, WINDOWS_1250);
+        assert_eq!(sniff(b"<p>plain</p>", None, "en").encoding, WINDOWS_1252);
+    }
+
+    #[test]
+    fn windows_1252_bytes_are_not_mistaken_for_utf8() {
+        // 0xE9 opens a three-byte sequence that the following ASCII breaks.
+        assert_eq!(
+            sniff(b"<p>caf\xe9 au lait</p>", None, "en").encoding,
+            WINDOWS_1252
+        );
+        // A valid UTF-8 character followed by an invalid byte is still invalid.
+        assert_eq!(
+            sniff(b"<p>\xc5\x82\xe9</p>", None, "en").encoding,
+            WINDOWS_1252
+        );
+    }
+
+    #[test]
+    fn sequence_cut_by_the_prescan_window_counts_as_utf8() {
+        let mut document = String::from("<p>ł");
+        while document.len() < PRESCAN_LIMIT - 1 {
+            document.push('a');
+        }
+        document.push('ł');
+        let cut_at_window_end = format!("{document}</p>");
+        assert_eq!(cut_at_window_end.as_bytes()[PRESCAN_LIMIT - 1], 0xC5);
+        assert_eq!(
+            sniff(cut_at_window_end.as_bytes(), None, "en").encoding,
+            UTF_8
+        );
+    }
+
+    #[test]
+    fn sequence_cut_by_the_end_of_the_document_is_invalid() {
+        let mut document = String::from("<p>ł");
+        while document.len() < PRESCAN_LIMIT - 1 {
+            document.push('a');
+        }
+        document.push('ł');
+        assert_eq!(document.len(), PRESCAN_LIMIT + 1);
+        let truncated = &document.as_bytes()[..PRESCAN_LIMIT];
+        assert_eq!(
+            sniff_input(truncated, None, "en", false).encoding,
+            WINDOWS_1252
+        );
+    }
+
+    #[test]
+    fn detection_sees_buffered_bytes_past_the_prescan_window() {
+        let mut document = String::from("<head>");
+        while document.len() < PRESCAN_LIMIT + 100 {
+            document.push('a');
+        }
+        document.push_str("</head><body>łamanie</body>");
+        assert_eq!(
+            sniff_input(document.as_bytes(), None, "en", false).encoding,
+            UTF_8
+        );
+    }
+
+    #[test]
+    fn a_sequence_open_at_the_end_of_held_bytes_depends_on_more_input() {
+        let mut document = String::from("<p>");
+        while document.len() < PRESCAN_LIMIT - 1 {
+            document.push('a');
+        }
+        document.push('ł');
+        let held = &document.as_bytes()[..PRESCAN_LIMIT];
+        assert_eq!(sniff_input(held, None, "en", true).encoding, UTF_8);
+        assert_eq!(sniff_input(held, None, "en", false).encoding, WINDOWS_1252);
+    }
+
+    #[test]
+    fn invalid_utf8_past_the_window_still_selects_the_locale_default() {
+        let mut document = String::from("<p>ł");
+        while document.len() < PRESCAN_LIMIT + 10 {
+            document.push('a');
+        }
+        let mut bytes = document.into_bytes();
+        bytes.extend_from_slice(b"\xe9</p>");
+        assert_eq!(
+            sniff_input(&bytes, None, "en", false).encoding,
+            WINDOWS_1252
+        );
+    }
+
+    #[test]
+    fn declarations_still_win_over_detection() {
+        let utf8 = "<p>łamanie</p>".as_bytes();
+        assert_eq!(
+            sniff(b"<meta charset=iso-8859-2><p>\xb3</p>", None, "en").encoding,
+            encoding_rs::ISO_8859_2
+        );
+        let mut with_meta = b"<meta charset=iso-8859-2>".to_vec();
+        with_meta.extend_from_slice(utf8);
+        assert_eq!(
+            sniff(&with_meta, None, "en").encoding,
+            encoding_rs::ISO_8859_2
+        );
+
+        let transport = sniff(utf8, Some("windows-1250"), "en");
+        assert_eq!(transport.encoding, WINDOWS_1250);
+        assert_eq!(transport.confidence, Confidence::Certain);
+
+        let mut with_bom = b"\xef\xbb\xbf".to_vec();
+        with_bom.extend_from_slice(utf8);
+        assert_eq!(sniff(&with_bom, Some("windows-1250"), "en").bom_length, 3);
     }
 
     #[test]

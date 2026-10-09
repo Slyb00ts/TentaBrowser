@@ -722,3 +722,86 @@ fn an_empty_feed_between_chunks_keeps_the_character_reference_tail() {
 
     assert_eq!(serialize(&tree, 0, true), parse_whole("x&notit;y"));
 }
+
+/// Feeds `bytes` in pieces of `chunk` bytes and reports the encoding in use
+/// and the serialized tree. Ending the input first lets a short document be
+/// sniffed, as it would be in a real load.
+fn feed_in_chunks(bytes: &[u8], chunk: usize) -> (Option<&'static encoding_rs::Encoding>, String) {
+    let mut parser = Parser::new(Tree::new(), ParserOptions::default());
+    for piece in bytes.chunks(chunk) {
+        parser.feed(piece);
+    }
+    parser.feed_last(b"");
+    let encoding = parser.encoding();
+    (encoding, serialize(&parser.finish(), 0, true))
+}
+
+/// No BOM, charset or meta. The only non-ASCII byte pair is the `ł` at offsets
+/// 1023 and 1024, so it straddles the prescan window's end.
+fn character_straddling_byte_1024(tail: &str) -> Vec<u8> {
+    let mut html = String::from("<p>");
+    while html.len() < 1023 {
+        html.push('a');
+    }
+    html.push('ł');
+    html.push_str(tail);
+    html.into_bytes()
+}
+
+#[test]
+fn a_character_straddling_the_prescan_window_is_utf8_whatever_the_chunking() {
+    let bytes = character_straddling_byte_1024("</p>");
+    assert_eq!(&bytes[1023..1025], b"\xc5\x82");
+    let (whole_encoding, whole) = feed_in_chunks(&bytes, bytes.len());
+    assert_eq!(whole_encoding, Some(encoding_rs::UTF_8));
+    assert!(whole.ends_with("ł\"\n"), "{whole}");
+    for chunk in [1, 2, 3, 7, 1024] {
+        let (encoding, tree) = feed_in_chunks(&bytes, chunk);
+        assert_eq!(encoding, Some(encoding_rs::UTF_8), "chunk size {chunk}");
+        assert_eq!(tree, whole, "chunk size {chunk}");
+    }
+}
+
+#[test]
+fn invalid_utf8_at_the_window_end_stays_windows_1252_whatever_the_chunking() {
+    // The C5 is followed by ASCII, which is not a continuation byte.
+    let mut bytes = character_straddling_byte_1024("</p>");
+    bytes[1024] = b'x';
+    assert_eq!(bytes[1023], 0xC5);
+    for chunk in [1, 2, 3, 7, 1024, bytes.len()] {
+        let (encoding, _) = feed_in_chunks(&bytes, chunk);
+        assert_eq!(
+            encoding,
+            Some(encoding_rs::WINDOWS_1252),
+            "chunk size {chunk}"
+        );
+    }
+}
+
+#[test]
+fn undeclared_utf8_polish_text_is_decoded_as_utf8_whatever_the_chunking() {
+    // The document has no BOM, charset or meta, so the sniffed encoding is the
+    // detected UTF-8 and the text must survive chunk boundaries inside characters.
+    let html = "<!doctype html><title>Łamanie</title><p>kształtowanie zażółć</p>";
+    let bytes = html.as_bytes();
+    let (encoding, whole) = feed_in_chunks(bytes, bytes.len());
+    assert_eq!(encoding, Some(encoding_rs::UTF_8));
+    assert!(whole.contains("kształtowanie zażółć"), "{whole}");
+    for chunk in [1, 2, 3, 7] {
+        assert_eq!(feed_in_chunks(bytes, chunk).1, whole, "chunk size {chunk}");
+    }
+}
+
+#[test]
+fn polish_text_past_the_prescan_window_is_found_in_the_bytes_already_held() {
+    // Delivered as one chunk, the sniffer holds the whole document, so the
+    // first non-ASCII character lies beyond the 1024-byte prescan window.
+    let mut html = String::from("<!doctype html><head>");
+    while html.len() < 2000 {
+        html.push_str("<meta name=x content=y>");
+    }
+    html.push_str("</head><body><p>łamanie</p>");
+    let mut parser = Parser::new(Tree::new(), ParserOptions::default());
+    parser.feed_last(html.as_bytes());
+    assert_eq!(parser.encoding(), Some(encoding_rs::UTF_8));
+}
