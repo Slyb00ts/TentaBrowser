@@ -1,3 +1,7 @@
+// Portions are ported and modified from Chromium Blink's box_border_painter.cc
+// (Copyright 2015 The Chromium Authors, BSD-3-Clause) and color.cc (Copyright
+// (C) 2003-2008 Apple Inc., BSD-2-Clause). See THIRD_PARTY_NOTICES.md.
+
 //! Border painting after Blink's `BoxBorderPainter`.
 //!
 //! Uniform solid and double borders are filled as rings. Everything else is

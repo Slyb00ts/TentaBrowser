@@ -1,3 +1,7 @@
+// Portions are ported and modified from Chromium Blink's box_border_painter.cc
+// and styled_stroke_data.cc (Copyright 2015 The Chromium Authors; Copyright (C)
+// 2013 Google Inc.; BSD-3-Clause). See THIRD_PARTY_NOTICES.md.
+
 //! Dash and dot placement for dashed and dotted border sides, after Blink's
 //! `StyledStrokeData` and `DrawLineWithStyle`. Marks are produced along one
 //! side as spans and dot centres, so the caller draws them as rectangles and
