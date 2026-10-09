@@ -64,6 +64,25 @@ pub struct StyleSource {
     pub media: Option<String>,
     /// `disabled` state of the owner.
     pub disabled: bool,
+    /// The bodies of every sheet `text` imports, directly or through other
+    /// imports, fetched by the host before the engine sees the source. The
+    /// engine parses `text` with a Stylo `StylesheetLoader` that serves an
+    /// `@import` from here by [`ImportedSheet::url`], so Stylo itself applies
+    /// the import's `media`, `layer()` and `supports()`. An import with no
+    /// entry is treated as a failed fetch: it contributes nothing.
+    pub imports: Vec<ImportedSheet>,
+}
+
+/// One prefetched `@import` target.
+#[derive(Clone, Debug)]
+pub struct ImportedSheet {
+    /// The absolute URL the `@import` rule resolved to: the lookup key.
+    pub url: Url,
+    /// The URL the body was finally served from, the base for the sheet's own
+    /// `url()` and nested imports.
+    pub final_url: Url,
+    /// Decoded stylesheet text.
+    pub text: String,
 }
 
 /// A pseudo-element whose style the engine resolves.

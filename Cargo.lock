@@ -3479,6 +3479,7 @@ dependencies = [
  "parking_lot",
  "serde_json",
  "tenta-core",
+ "tenta-css",
  "tenta-dom",
  "tenta-html",
  "tenta-js",

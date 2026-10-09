@@ -73,6 +73,78 @@ impl FsPolicy {
         check_against(path, &self.write_roots, false)
     }
 
+    /// Opens a file for reading, refusing anything but a regular file inside a
+    /// read root, and returns it with its length.
+    ///
+    /// The final component is never followed (`O_NOFOLLOW`) and the open never
+    /// blocks (`O_NONBLOCK`), so a symlink swapped in after the policy check or
+    /// a FIFO cannot redirect or hang the read. After the open the path is
+    /// resolved again and must still lead to the opened file inside a read
+    /// root, which catches a directory swapped between check and open. A file
+    /// longer than `max_len` is an error, not a truncated read; callers should
+    /// still bound their read at `max_len`, since the file may grow afterwards.
+    pub fn open_read(&self, path: &Path, max_len: u64) -> io::Result<(File, u64)> {
+        let denied =
+            |message: &'static str| io::Error::new(io::ErrorKind::PermissionDenied, message);
+        let checked = self
+            .check_read(path)
+            .map_err(|_| denied("path outside read roots"))?;
+        if !std::fs::symlink_metadata(&checked)?.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "path is not a regular file",
+            ));
+        }
+
+        let mut opts = OpenOptions::new();
+        opts.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x00200000;
+            opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        let file = opts.open(&checked)?;
+
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "opened path is not a regular file",
+            ));
+        }
+        if metadata.len() > max_len {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "file exceeds the size limit",
+            ));
+        }
+
+        let resolved =
+            std::fs::canonicalize(&checked).map_err(|_| denied("path changed after open"))?;
+        let inside_root = self
+            .read_roots
+            .iter()
+            .filter_map(|root| std::fs::canonicalize(root).ok())
+            .any(|root| resolved.starts_with(root));
+        if !inside_root {
+            return Err(denied("path left the read roots after open"));
+        }
+        #[cfg(unix)]
+        {
+            let now = std::fs::metadata(&resolved)?;
+            if now.dev() != metadata.dev() || now.ino() != metadata.ino() {
+                return Err(denied("path now names a different file"));
+            }
+        }
+        Ok((file, metadata.len()))
+    }
+
     /// Opens a file for writing with protection against TOCTOU symlink attacks and FIFOs.
     ///
     /// Checks that `path` resolves inside a write root and opens it atomically
@@ -705,5 +777,63 @@ mod tests {
             mode, 0o700,
             "create_dir_all should create directories with 0700 permissions"
         );
+    }
+
+    #[test]
+    fn open_read_returns_the_file_and_its_length() {
+        let dir = temp_dir("open-read");
+        let file = dir.join("a.css");
+        std::fs::write(&file, b"abcd").unwrap();
+        let policy = FsPolicy::none().allow_read(&dir);
+        let (mut handle, len) = policy.open_read(&file, 4).unwrap();
+        let mut text = String::new();
+        io::Read::read_to_string(&mut handle, &mut text).unwrap();
+        assert_eq!((text.as_str(), len), ("abcd", 4));
+    }
+
+    #[test]
+    fn open_read_rejects_an_oversize_file_instead_of_truncating() {
+        let dir = temp_dir("open-read-big");
+        let file = dir.join("a.css");
+        std::fs::write(&file, b"abcde").unwrap();
+        let policy = FsPolicy::none().allow_read(&dir);
+        let error = policy.open_read(&file, 4).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn open_read_refuses_paths_outside_the_roots() {
+        let dir = temp_dir("open-read-in");
+        let outside = temp_dir("open-read-out").join("secret");
+        std::fs::write(&outside, b"x").unwrap();
+        let policy = FsPolicy::none().allow_read(&dir);
+        let error = policy.open_read(&outside, 10).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_read_refuses_a_symlink_out_of_the_root() {
+        let dir = temp_dir("open-read-link");
+        let outside = temp_dir("open-read-link-out").join("secret");
+        std::fs::write(&outside, b"x").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("alias")).unwrap();
+        let policy = FsPolicy::none().allow_read(&dir);
+        assert!(policy.open_read(&dir.join("alias"), 10).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_read_does_not_hang_on_a_fifo() {
+        let dir = temp_dir("open-read-fifo");
+        let fifo = dir.join("pipe");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let policy = FsPolicy::none().allow_read(&dir);
+        let error = policy.open_read(&fifo, 10).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 }

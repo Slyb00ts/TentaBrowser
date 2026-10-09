@@ -37,6 +37,7 @@ mod device;
 mod diff;
 pub mod dom;
 mod engine;
+mod imports;
 mod pseudo;
 #[cfg(feature = "test-util")]
 pub mod test_util;
@@ -46,6 +47,8 @@ mod ua;
 
 pub use atoms::AtomMaps;
 pub use engine::StyleEngine;
+pub use imports::import_urls;
 pub use types::{
-    ChangeHint, FontMetrics, FontMetricsData, PseudoKind, Style, StyleDiff, StyleEnv, StyleSource,
+    ChangeHint, FontMetrics, FontMetricsData, ImportedSheet, PseudoKind, Style, StyleDiff,
+    StyleEnv, StyleSource,
 };
