@@ -520,7 +520,7 @@ impl Crawler {
             .timeout(self.timeout);
         let navigation = page.goto(url.as_str(), goto).await;
         let document = match navigation {
-            Ok(_) => page.take_document(),
+            Ok(_) => page.take_document().await,
             Err(error) => Err(error),
         };
         let _ = page.close().await;

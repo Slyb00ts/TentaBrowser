@@ -497,7 +497,7 @@ impl BrowserContext {
             .goto(url, Goto::default().wait_until(Settle::Load))
             .await;
         let document = match outcome {
-            Ok(_) => page.take_document(),
+            Ok(_) => page.take_document().await,
             Err(error) => Err(error),
         };
         let _ = page.close().await;

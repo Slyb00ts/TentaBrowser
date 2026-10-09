@@ -42,6 +42,12 @@ pub enum PageEvent {
     Crashed { reason: String },
     /// The page's active tier changed.
     TierChanged { tier: Tier },
+    /// The watchdog cut an engine entry short because it outran its deadline.
+    /// The page survives; `entry` names the kind of entry that was stopped
+    /// (`timers`, `fetch`, `host`, ...). An entry that used its whole deadline is
+    /// reported even when the engine's own deadline stopped it first, so an entry
+    /// that happened to finish exactly at the deadline is reported too.
+    ScriptTerminated { entry: &'static str },
 }
 
 /// The receiving end of [`crate::Page::events`].

@@ -39,6 +39,7 @@ pub use document::Document;
 pub use event::{PageEvent, PageEvents};
 pub use fetch_policy::{FetchPolicy, HintDisposition, PreloadKind, RecordedHint};
 pub use page::{Goto, Navigation, Page, PageConfig, TestHooks, Viewport};
+pub use runtime::drop_thread_runtimes;
 pub use settle::{
     Origin, PendingSources, RequestClass, Settle, SettleConfig, SettleState, SettleTracker,
 };

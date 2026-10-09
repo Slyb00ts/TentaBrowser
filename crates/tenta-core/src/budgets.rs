@@ -46,7 +46,9 @@ pub struct Budgets {
     pub context_memory_mb: u32,
     /// JS heap limit per isolate or runtime in MB (desktop default 256).
     pub js_heap_mb: u32,
-    /// Total script CPU time a page may consume.
+    /// Script CPU time a page may consume within any sliding 30 s window of wall
+    /// time (`docs/spec/18-decisions.md` D-033). A rate limit, not a lifetime
+    /// total: a long-lived idle page never reaches it.
     pub script_cpu: Duration,
     /// Per-call deadline for `evaluate`.
     pub evaluate_time: Duration,
@@ -72,7 +74,7 @@ impl Budgets {
             page_memory_mb: 256,
             context_memory_mb: 64,
             js_heap_mb: 256,
-            script_cpu: Duration::from_secs(60),
+            script_cpu: Duration::from_secs(15),
             evaluate_time: Duration::from_secs(30),
             dom_nodes: 2_000_000,
             worker_threads: 32,
@@ -86,7 +88,7 @@ impl Budgets {
             page_memory_mb: 96,
             context_memory_mb: 24,
             js_heap_mb: 96,
-            script_cpu: Duration::from_secs(30),
+            script_cpu: Duration::from_millis(7_500),
             evaluate_time: Duration::from_secs(15),
             dom_nodes: 500_000,
             worker_threads: 4,

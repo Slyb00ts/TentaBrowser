@@ -36,6 +36,11 @@ use tenta_page::page::{Goto, Navigation, Page, PageConfig, TestHooks, Viewport};
 use tenta_page::settle::{Settle, SettleConfig};
 use tenta_page::thread::{PageJob, PageTask, PageThread};
 
+/// Page ids are unique per process, because a page's engine lives in a
+/// thread-local table keyed by id and a test binary runs its tests on shared
+/// threads.
+static NEXT_PAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// The URL every fixture is served at. A `.test` name can never resolve, so a
 /// request that reached the network would fail loudly instead of hanging.
 pub const URL: &str = "http://fixture.test/";
@@ -134,6 +139,33 @@ pub async fn drive<F: Future + 'static>(thread: &TestThread, operation: F) -> F:
         .await
 }
 
+/// Runs `test` on one task set that also serves the page thread's queues for as
+/// long as it runs.
+///
+/// [`drive`] gives every operation a task set of its own, so a task the page
+/// spawns outlives the operation that spawned it only here: the engine a page
+/// keeps has a driver task, and a test about what that driver does between
+/// operations needs it to stay.
+pub async fn with_page_thread<F: Future>(thread: &TestThread, test: F) -> F::Output {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async move {
+            let serving = tokio::task::spawn_local({
+                let thread = thread.clone();
+                async move {
+                    loop {
+                        thread.drain();
+                        tokio::time::sleep(TICK).await;
+                    }
+                }
+            });
+            let outcome = test.await;
+            serving.abort();
+            outcome
+        })
+        .await
+}
+
 // -------------------------------------------------------------- the record
 
 /// A task provenance event the engine reported.
@@ -174,6 +206,11 @@ pub struct TrimObservation {
 #[derive(Debug, Default)]
 pub struct Record {
     pub engine_creations: usize,
+    /// Engines that were dropped, which is how a test sees the page end one.
+    pub engine_drops: usize,
+    /// Times the page asked the engine to run its due timers: one per turn, so
+    /// an idle page that is not being turned leaves it alone.
+    pub timer_pumps: usize,
     /// Native page ledgers seen by each factory creation.
     pub native_memories: Vec<tenta_core::NativeMemoryBudget>,
     pub scripts: Vec<ScriptRun>,
@@ -426,6 +463,7 @@ impl Drop for StubEngine {
         // See `ScriptContext`: this is what lets the loop and the document a
         // callback holds be freed at all.
         let _ = self.context.scheduler.replace(None);
+        self.context.record.lock().unwrap().engine_drops += 1;
     }
 }
 
@@ -524,6 +562,7 @@ impl PageEngine for StubEngine {
     }
 
     fn pump_due_timers(&mut self, max_tasks: usize) -> usize {
+        self.context.record.lock().unwrap().timer_pumps += 1;
         // The loop fires every timer due now and runs the tasks they queue, so
         // the bound is on how many times one turn may do that.
         let mut fired = 0;
@@ -819,16 +858,37 @@ impl Harness {
         self.goto(Goto::new().wait_until(wait_until)).await
     }
 
-    /// Reads the page's document without holding the page lock across another
-    /// page call.
-    pub fn document<R>(&self, f: impl FnOnce(&DomDocument) -> R) -> R {
-        let document = self.page.document().expect("the page installed a document");
-        f(&document)
+    /// Reads the page's document: the installed one, or the tree the page's
+    /// retained engine is bound to. Neither holds a lock across another page
+    /// call.
+    pub fn document<R: Send + 'static>(
+        &self,
+        read: impl FnOnce(&DomDocument) -> R + Send + 'static,
+    ) -> R {
+        let read = match self.page.document() {
+            Some(document) => return read(&document),
+            None => read,
+        };
+        let mut answer = Box::pin(self.page.with_engine(move |engine| {
+            let shared = engine.document();
+            let document = shared.borrow();
+            read(&document)
+        }));
+        // The first poll queues the entry as a page task, running the queue
+        // runs it, and the second poll finds its answer.
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(answer.as_mut().poll(&mut context).is_pending());
+        self.thread.drain();
+        match answer.as_mut().poll(&mut context) {
+            std::task::Poll::Ready(value) => value.expect("the page kept an engine"),
+            std::task::Poll::Pending => panic!("the engine entry did not run"),
+        }
     }
 
-    /// Whether the installed document matches `selector`.
+    /// Whether the document matches `selector`.
     pub fn has(&self, selector: &str) -> bool {
-        self.document(|document| has_selector(document, selector))
+        let selector = selector.to_owned();
+        self.document(move |document| has_selector(document, &selector))
     }
 
     /// The path of every request the fixture answered, in order. A fixture
@@ -966,7 +1026,7 @@ impl Builder {
             }) as Arc<dyn PageEngineFactory>
         });
         let page = Page::new(PageConfig {
-            id: PageId(1),
+            id: PageId(NEXT_PAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
             context: ContextId(1),
             client,
             thread: Arc::new(thread.clone()),

@@ -61,3 +61,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] 
 [[example]]
 name = "js_xhr"
 required-features = ["v8"]
+
+[[example]]
+name = "idle_page_rss"
+required-features = ["wpt-driver"]

@@ -51,7 +51,7 @@
 //! while let Some(event) = events.try_next() {
 //!     println!("{event:?}");
 //! }
-//! let title = page.document().and_then(|doc| doc.metadata().title);
+//! let title = page.title();
 //! page.close().await?;
 //! # let _ = title;
 //! # Ok(())

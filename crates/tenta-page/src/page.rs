@@ -35,12 +35,14 @@ use crate::event::{EVENT_BUFFER, PageEvent, PageEvents};
 use crate::fetch_policy::{FetchPolicy, RecordedHint};
 use crate::runtime;
 use crate::runtime::ScriptBudget;
-use crate::script_cpu::ScriptCpu;
+use crate::script_cpu::{SCRIPT_CPU_WINDOW, ScriptCpu};
 use crate::settle::{
     Origin, PendingScripts, RequestClass, Settle, SettleConfig, SettleState, SettleTracker,
 };
-use crate::task::{catch_unwind_future, catch_unwind_task, panic_message};
+use crate::task::{catch_unwind_future, panic_message};
 use crate::thread::PageThread;
+
+mod retained;
 
 /// How many raw bytes of a response are kept so a late `<meta charset>` can
 /// restart the parse from the first byte.
@@ -292,6 +294,30 @@ struct PageState {
     navigation_generation: u64,
     /// The navigation generation of the currently installed document.
     document_navigation_id: u64,
+    /// Whether the page keeps a live engine bound to its document. While it
+    /// does, the tree is the engine's and `document` is empty.
+    engine_held: bool,
+    /// Navigations running on the page thread right now. A navigation builds
+    /// its own engine at its first script, so a host entry may not build one
+    /// for the document it is replacing.
+    navigations_in_flight: usize,
+    /// The title of the tree an engine keeps, which no other thread can read
+    /// from the tree itself; refreshed whenever the tree's mutation generation
+    /// moved since `title_generation`.
+    title: Option<String>,
+    title_generation: Option<u64>,
+}
+
+impl PageState {
+    /// Re-reads the title of `document` if it changed since the last look.
+    fn cache_title(&mut self, document: &DomDocument) {
+        let generation = document.mutation_generation();
+        if self.title_generation == Some(generation) {
+            return;
+        }
+        self.title_generation = Some(generation);
+        self.title = document.metadata().title.filter(|title| !title.is_empty());
+    }
 }
 
 struct PageInner {
@@ -311,6 +337,10 @@ struct PageInner {
     /// One native accounting state for the page, including all navigations
     /// and any Send wire that outlives a navigation's engine.
     native_memory: NativeMemoryBudget,
+    /// Held for the length of one settle call over a kept engine, so two
+    /// waiters never fight over the engine's driver or restart one tracker
+    /// under each other.
+    settle_gate: tokio::sync::Mutex<()>,
 }
 
 impl PageInner {
@@ -379,9 +409,10 @@ impl ScriptBudget for PageInner {
             return;
         }
         let reason = format!(
-            "the page ran out of script time: {} ms spent of a {} ms budget",
+            "the page ran out of script time: {} ms spent of a {} ms budget within {} s",
             self.script_cpu.spent().as_millis(),
             self.script_cpu.budget().as_millis(),
+            self.script_cpu.window().as_secs(),
         );
         self.mark_crashed(&reason);
     }
@@ -392,6 +423,10 @@ impl ScriptBudget for PageInner {
 
     fn native_memory(&self) -> NativeMemoryBudget {
         self.native_memory.clone()
+    }
+
+    fn entry_terminated(&self, entry: &'static str) {
+        self.emit(PageEvent::ScriptTerminated { entry });
     }
 
     fn crash_native_memory(&self, failure: NativeMemoryFailure) {
@@ -446,13 +481,18 @@ impl Page {
                     closed: false,
                     navigation_generation: 0,
                     document_navigation_id: 0,
+                    engine_held: false,
+                    navigations_in_flight: 0,
+                    title: None,
+                    title_generation: None,
                 }),
                 // Lazy event channel: allocated on first events() call (N-R3-5)
                 events: Mutex::new(None),
                 // Notified when generation changes (B-R3-1)
                 generation_changed: Notify::new(),
-                script_cpu: ScriptCpu::new(config.budgets.script_cpu),
+                script_cpu: ScriptCpu::new(config.budgets.script_cpu, SCRIPT_CPU_WINDOW),
                 native_memory: NativeMemoryBudget::for_page(config.budgets.page_memory_mb),
+                settle_gate: tokio::sync::Mutex::new(()),
                 config,
             }),
         }
@@ -522,7 +562,22 @@ impl Page {
         self.inner.state.lock().hints.clone()
     }
 
+    /// The document's title, for a page that keeps an engine as well as one that
+    /// does not. For a kept engine it is the title as of the last engine entry,
+    /// so it can lag a script's very latest write by one turn.
+    pub fn title(&self) -> Option<String> {
+        let state = self.inner.state.lock();
+        match &state.document {
+            Some(document) => document.metadata().title.filter(|title| !title.is_empty()),
+            None => state.title.clone(),
+        }
+    }
+
     /// The parsed document, for extraction.
+    ///
+    /// Empty while the page keeps a live engine: the tree is then the engine's,
+    /// on the page thread, and [`Page::with_engine`] is the way to read it.
+    /// [`Page::take_document`] ends the engine and moves the tree out.
     ///
     /// The returned guard holds the page's state lock, so drop it before
     /// calling another method on the same page: keeping it alive across
@@ -543,10 +598,10 @@ impl Page {
 
     /// Takes the parsed document and the navigation out of the page.
     ///
-    /// The runtime needs no unwinding here: a document is installed exactly
-    /// when the engine that was bound to it is gone, so a page that has a
-    /// document has no engine still holding it.
-    pub fn take_document(&self) -> Result<Document> {
+    /// A page that keeps an engine ends it first, on the page thread: the tree
+    /// can only leave once nothing is bound to it, and its realm goes with it.
+    pub async fn take_document(&self) -> Result<Document> {
+        retained::release_engine(&self.inner).await?;
         let mut state = self.inner.state.lock();
         if let Some(reason) = &state.crashed {
             return Err(Error::Crashed {
@@ -577,29 +632,20 @@ impl Page {
     }
 
     /// Navigates, waits for `options.wait_until`, then evaluates `source` in
-    /// the loaded document's JavaScript world before that world is released.
+    /// the loaded document's JavaScript world.
     ///
     /// The completion is converted to a string by JavaScript. A returned
     /// Promise is not awaited, and work queued by this expression is not part
-    /// of the navigation's preceding settle. This is an atomic operation
-    /// because the current page runtime is released when `goto` returns.
+    /// of the navigation's preceding settle. The evaluation happens inside the
+    /// navigation, before it returns, and the page then keeps the same engine
+    /// like any other navigation.
     pub async fn goto_with_eval(
         &self,
         url: &str,
         options: Goto,
         source: &str,
     ) -> Result<(Navigation, String)> {
-        if self.inner.config.max_tier < Tier::Js {
-            return Err(Error::TierDenied {
-                needed: Tier::Js,
-                ceiling: self.inner.config.max_tier,
-            });
-        }
-        if !self.inner.config.javascript {
-            return Err(Error::unsupported(
-                "this page was created with JavaScript disabled",
-            ));
-        }
+        self.require_javascript()?;
         let url =
             Url::parse(url).map_err(|err| Error::invalid(format!("invalid URL {url:?}: {err}")))?;
         let outcome = self
@@ -702,7 +748,7 @@ impl Page {
     /// and drops its socket; the DOM is reclaimed when the last handle drops.
     /// `BrowserContext::close` uses this to close its pages without an await.
     pub fn begin_close(&self) -> bool {
-        {
+        let engine_held = {
             let mut state = self.inner.state.lock();
             if state.closed {
                 return false;
@@ -711,8 +757,15 @@ impl Page {
             // Bump generation to cancel any in-flight navigation; close is terminal
             state.navigation_generation = state.navigation_generation.wrapping_add(1);
             // Wake any settle waiters so they check the new generation and closed flag immediately (B-R3-1)
+            let engine_held = state.engine_held;
             drop(state);
             self.inner.generation_changed.notify_waiters();
+            engine_held
+        };
+        // A kept engine only the page thread can drop, and a context closing its
+        // pages has no await to wait for it with.
+        if engine_held {
+            retained::teardown_later(&self.inner);
         }
         // Area wrappers may outlive the page runtime; close the session here
         // so they cannot retain or write page data after terminal close.
@@ -734,25 +787,7 @@ impl Page {
         let thread = Arc::clone(&self.inner.config.thread);
         let (reply, answer) = oneshot::channel();
         let posted = thread.post_task(Box::new(move || {
-            // Reclaiming a live engine can panic — teardown of two isolates on
-            // one page thread used to, which is why the page thread exists
-            // around this. The page thread's own `catch_unwind_task` logs and
-            // moves on (`tenta_page::task`), and a logged panic leaves a page
-            // that crashed looking merely closed, so this task takes the
-            // wrapper itself and records the failure on the page, exactly as
-            // `goto_url`'s job does for a panicking navigation.
-            let reporter = Arc::clone(&inner);
-            let teardown = catch_unwind_task(move || {
-                // A closed page has no engine: the navigation that built it is
-                // cancelled and unwinds on this thread, and this is the one
-                // place that can reclaim it without waiting for that.
-                drop(runtime::take_runtime(inner.config.id));
-                let document = inner.state.lock().document.take();
-                drop(document);
-            });
-            if let Err(reason) = teardown {
-                reporter.mark_crashed(&reason);
-            }
+            retained::teardown(&inner);
             let _ = reply.send(());
         }));
         match posted {
@@ -766,6 +801,22 @@ impl Page {
     }
 }
 
+/// Counts a navigation as in flight for as long as it runs, however it ends.
+struct InFlight(Arc<PageInner>);
+
+impl InFlight {
+    fn enter(inner: &Arc<PageInner>) -> InFlight {
+        inner.state.lock().navigations_in_flight += 1;
+        InFlight(Arc::clone(inner))
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.state.lock().navigations_in_flight -= 1;
+    }
+}
+
 /// The navigation itself, running on the page thread.
 /// `generation` is the navigation generation at the time goto_url was called;
 /// if it changes, a concurrent goto or close cancelled this navigation.
@@ -776,6 +827,7 @@ async fn navigate(
     generation: u64,
     evaluation: Option<String>,
 ) -> Result<NavigateOutcome> {
+    let _in_flight = InFlight::enter(&inner);
     // Check if this navigation was cancelled; if so, return an aborted error.
     let check_cancelled = |inner: &Arc<PageInner>| -> Result<()> {
         let state = inner.state.lock();
@@ -962,6 +1014,10 @@ async fn navigate(
 
     // Check if this navigation was cancelled before continuing with the parse
     check_cancelled(&inner)?;
+    // The response head commits the navigation: the previous document, and the
+    // engine the page kept for it, end here. A navigation dropped before this
+    // point leaves them as they were.
+    retained::release(&inner);
 
     let final_url = response.url.clone();
     let status = response.status.as_u16();
@@ -1098,10 +1154,11 @@ async fn navigate(
     });
 
     // The tree becomes the page's at the first install point at which the page
-    // owns it alone; a tree an engine is bound to is still shared until the
-    // engine is gone (`DeferredDocument`). An evaluation also keeps the tree
-    // shared until it runs after settle. The engine is not released here:
-    // the settle call this navigation is about to run pumps it.
+    // owns it alone; a tree an engine is bound to stays the engine's, and the
+    // page keeps that engine once the navigation settles (`DeferredDocument`).
+    // An evaluation also keeps the tree shared until it runs after settle. The
+    // engine is not released here: the settle call this navigation is about to
+    // run pumps it.
     {
         let mut state = inner.state.lock();
         if evaluation.is_none()
@@ -1192,7 +1249,7 @@ async fn navigate(
     if tracker.borrow().wait_until().needs_condition() {
         let met = {
             let tracker = tracker.borrow();
-            condition_met(&inner, &deferred, tracker.wait_until())
+            condition_met(&inner, &deferred.handle(), tracker.wait_until())
         };
         tracker.borrow_mut().note_condition_met(met);
     }
@@ -1200,7 +1257,7 @@ async fn navigate(
     let settle = match wait_for_settle(
         &inner,
         &tracker,
-        &deferred,
+        &deferred.handle(),
         deadline,
         timeout_millis,
         true,
@@ -1232,7 +1289,7 @@ async fn navigate(
                 error: None,
                 navigation_id: generation,
             };
-            {
+            let kept = {
                 let mut state = inner.state.lock();
                 // Check if this navigation was cancelled before writing to state (B-R3-1/N-R4-2)
                 if state.navigation_generation != generation || state.closed {
@@ -1241,11 +1298,13 @@ async fn navigate(
                         message: "navigation was cancelled".into(),
                     });
                 }
-                if let Some(document) = deferred.take() {
-                    state.document = Some(document);
-                }
+                let kept = deferred.install(&mut state);
                 state.navigation = Some(navigation.clone());
                 state.settle = Some(SettleState::Timeout { pending });
+                kept
+            };
+            if let Some(tree) = kept {
+                retained::start_pump(&inner, tree);
             }
             return Ok(NavigateOutcome {
                 navigation,
@@ -1287,7 +1346,7 @@ async fn navigate(
         error: None,
         navigation_id: generation,
     };
-    {
+    let kept = {
         let mut state = inner.state.lock();
         // Check if this navigation was cancelled before writing to state (B-R3-1/N-R4-1)
         if state.navigation_generation != generation || state.closed {
@@ -1296,11 +1355,13 @@ async fn navigate(
                 message: "navigation was cancelled".into(),
             });
         }
-        if let Some(document) = deferred.take() {
-            state.document = Some(document);
-        }
+        let kept = deferred.install(&mut state);
         state.navigation = Some(navigation.clone());
         state.settle = Some(settle);
+        kept
+    };
+    if let Some(tree) = kept {
+        retained::start_pump(&inner, tree);
     }
     Ok(NavigateOutcome {
         navigation,
@@ -1433,11 +1494,11 @@ enum ParseStep {
 /// script's task only fetches it: the text is handed to `deferred`, and the
 /// drain runs the queue in document order once the document is parsed.
 ///
-/// A known limitation, recorded rather than fixed: a navigation lives for one
-/// settle call, and a caller who asks for less than `load` ends it while an
-/// `async` script may still be in flight. That script then never runs — the
-/// engine it would have run in goes with the navigation. Closing this means
-/// keeping the engine alive past the settlement the caller asked for.
+/// A known limitation, recorded rather than fixed: this queue lives for one
+/// navigation, and a caller who asks for less than `load` ends it while an
+/// `async` script may still be in flight. That script's fetch is aborted with
+/// the queue, so it never runs even though the page keeps its engine. Closing
+/// this means handing the in-flight fetches to the kept engine's driver.
 struct ScriptJobs {
     /// The settle call of the navigation that owns this queue.
     tracker: Rc<RefCell<SettleTracker>>,
@@ -2167,34 +2228,28 @@ const MINIMUM_PARK: Duration = Duration::from_millis(1);
 async fn wait_for_settle(
     inner: &Arc<PageInner>,
     tracker: &Rc<RefCell<SettleTracker>>,
-    deferred: &DeferredDocument,
+    tree: &TreeHandle,
     deadline: Instant,
     timeout_millis: u64,
     condition_already_evaluated: bool,
     generation: u64,
 ) -> Result<SettleState> {
-    let outcome = settle_loop(
+    settle_loop(
         inner,
         tracker,
-        deferred,
+        tree,
         deadline,
         timeout_millis,
         condition_already_evaluated,
         generation,
     )
-    .await;
-    // The settle call is over. Nothing the engine reports afterwards belongs to
-    // it, and the next navigation attaches a tracker of its own. Only this
-    // navigation's runtime is detached: a newer navigation's engine is feeding
-    // a newer settle call.
-    runtime::end_settle(inner.config.id, deferred.shared());
-    outcome
+    .await
 }
 
 async fn settle_loop(
     inner: &Arc<PageInner>,
     tracker: &Rc<RefCell<SettleTracker>>,
-    deferred: &DeferredDocument,
+    tree: &TreeHandle,
     deadline: Instant,
     timeout_millis: u64,
     condition_already_evaluated: bool,
@@ -2209,7 +2264,7 @@ async fn settle_loop(
     // Mutations are detected by generation rather than by a callback
     // (`docs/spec/02-architecture.md` §5.1): one `u64` compare per turn.
     let mut mutation_generation =
-        with_document(inner, deferred, |document| document.mutation_generation());
+        with_document(inner, tree, |document| document.mutation_generation());
     loop {
         // The generation waiter is registered before the check, so a bump
         // between the check and the select below is never lost
@@ -2240,10 +2295,11 @@ async fn settle_loop(
         // second navigation of the same page is interleaved at awaits and
         // acting on whichever runtime is in the table would drive its engine
         // (`crates/tenta-page/src/runtime.rs`).
-        let engine_wakeup = deferred
-            .shared()
+        let engine_wakeup = tree
+            .as_ref()
+            .and_then(Weak::upgrade)
             .and_then(|document| {
-                runtime::with_runtime_for(page, document, |runtime| runtime.turn(TIMERS_PER_TURN))
+                runtime::with_runtime_for(page, &document, |runtime| runtime.turn(TIMERS_PER_TURN))
             })
             .flatten();
         // A crash is raised *inside* that turn — the page's script-CPU budget
@@ -2254,7 +2310,7 @@ async fn settle_loop(
         if let Some(reason) = inner.crash_reason() {
             return Err(Error::Crashed { reason });
         }
-        let mutated = with_document(inner, deferred, |document| document.mutation_generation());
+        let mutated = with_document(inner, tree, |document| document.mutation_generation());
         if mutated != mutation_generation {
             mutation_generation = mutated;
             tracker.borrow_mut().note_dom_mutation();
@@ -2280,8 +2336,8 @@ async fn settle_loop(
             // same turn, so a `load` handler cannot be torn down underneath the
             // continuation it starts.
             tracker.borrow_mut().note_load_fired();
-            if let Some(document) = deferred.shared() {
-                runtime::with_runtime_for(page, document, |runtime| {
+            if let Some(document) = tree.as_ref().and_then(Weak::upgrade) {
+                runtime::with_runtime_for(page, &document, |runtime| {
                     runtime.dispatch_lifecycle(LifecycleEvent::Load)
                 });
             }
@@ -2290,7 +2346,7 @@ async fn settle_loop(
         // mutation can change it. With an engine it is re-evaluated whenever
         // the tree may have moved.
         if tracker.borrow().wait_until().needs_condition() && !condition_already_evaluated {
-            let met = condition_met(inner, deferred, tracker.borrow().wait_until());
+            let met = condition_met(inner, tree, tracker.borrow().wait_until());
             tracker.borrow_mut().note_condition_met(met);
         }
         match tracker.borrow_mut().evaluate(now) {
@@ -2335,8 +2391,8 @@ async fn settle_loop(
 }
 
 /// Whether the document satisfies a `Selector` or `Text` wait.
-fn condition_met(inner: &Arc<PageInner>, deferred: &DeferredDocument, wait_until: &Settle) -> bool {
-    with_document(inner, deferred, |document| match wait_until {
+fn condition_met(inner: &Arc<PageInner>, tree: &TreeHandle, wait_until: &Settle) -> bool {
+    with_document(inner, tree, |document| match wait_until {
         Settle::Selector(selector) => document
             .query_selector(document.document_node(), selector)
             .ok()
@@ -2348,18 +2404,19 @@ fn condition_met(inner: &Arc<PageInner>, deferred: &DeferredDocument, wait_until
     .unwrap_or(false)
 }
 
+/// How a settle call names the tree it reads. Weak because the tree belongs to
+/// the navigation, the engine or the page, never to the call.
+type TreeHandle = Option<Weak<RefCell<DomDocument>>>;
+
 /// The tree a settle call reads while its navigation is still in flight.
 ///
 /// `PageState` holds its document by value, so a tree the page owns alone is
 /// moved in as soon as the parse hands it over, and every reader finds it
-/// there. A tree an engine is bound to is not owned alone — the engine holds a
-/// handle for as long as the settle runs — so it is installed when the
-/// navigation ends and the engine goes with it. Until then this is the only
-/// place that tree is reachable from, which is what makes the move-out at the
-/// end possible at all.
-///
-/// Every exit from a navigation releases the engine, so a cancelled or failed
-/// navigation cannot leave one behind on the page thread.
+/// there. A tree an engine is bound to is not owned alone, so until the
+/// navigation ends this is the only place it is reachable from. When the
+/// navigation settles the engine is kept and the tree stays its own
+/// ([`DeferredDocument::install`]); every other exit releases the engine, so a
+/// cancelled or failed navigation cannot leave one behind on the page thread.
 struct DeferredDocument {
     page: PageId,
     document: Option<SharedDocument>,
@@ -2377,6 +2434,34 @@ impl DeferredDocument {
     /// read.
     fn shared(&self) -> Option<&SharedDocument> {
         self.document.as_ref()
+    }
+
+    /// A weak handle on the tree, for a settle call to read through. Weak so the
+    /// call never keeps a tree alive that an engine release wants to move out.
+    fn handle(&self) -> TreeHandle {
+        self.document.as_ref().map(Rc::downgrade)
+    }
+
+    /// Ends the navigation's hold on the tree at the point the page settles.
+    ///
+    /// A tree an engine is bound to stays the engine's: the runtime is kept,
+    /// `state.engine_held` records it and the returned handle is what the
+    /// caller starts the engine's driver with. A tree nothing is bound to moves
+    /// into the page. `None` means the tree went to the page, or is still
+    /// shared and the page's installed document is left alone.
+    fn install(&mut self, state: &mut PageState) -> Option<Weak<RefCell<DomDocument>>> {
+        let document = self.document.take()?;
+        if runtime::with_runtime_for(self.page, &document, |_| ()).is_some() {
+            state.document = None;
+            state.engine_held = true;
+            state.cache_title(&document.borrow());
+            return Some(Rc::downgrade(&document));
+        }
+        match Rc::try_unwrap(document) {
+            Ok(cell) => state.document = Some(cell.into_inner()),
+            Err(shared) => self.document = Some(shared),
+        }
+        None
     }
 
     /// Moves the tree into the page, releasing this navigation's engine first.
@@ -2425,14 +2510,14 @@ impl Drop for DeferredDocument {
     }
 }
 
-/// Runs `f` over the tree a settle call reads: the one this navigation still
-/// holds, or the one the page has installed.
+/// Runs `f` over the tree a settle call reads: the one an engine is bound to,
+/// or the one the page has installed.
 fn with_document<R>(
     inner: &Arc<PageInner>,
-    deferred: &DeferredDocument,
+    tree: &TreeHandle,
     f: impl FnOnce(&DomDocument) -> R,
 ) -> Option<R> {
-    if let Some(shared) = deferred.shared() {
+    if let Some(shared) = tree.as_ref().and_then(Weak::upgrade) {
         return Some(f(&shared.borrow()));
     }
     let state = inner.state.lock();
@@ -2476,7 +2561,7 @@ fn commit_error_document(
         error: Some(name.to_owned()),
         navigation_id,
     };
-    {
+    let engine_held = {
         let mut state = inner.state.lock();
         // Check if this navigation was cancelled or the page was closed
         if state.navigation_generation != navigation_id || state.closed {
@@ -2488,6 +2573,12 @@ fn commit_error_document(
         state.settle = Some(SettleState::Settled { busy: false });
         state.tier = Tier::Dom;
         state.document_navigation_id = navigation_id;
+        std::mem::take(&mut state.engine_held)
+    };
+    // The error page replaces the document, so the engine the page kept for the
+    // document it replaces ends with it.
+    if engine_held {
+        drop(runtime::take_runtime(inner.config.id));
     }
     inner.emit(PageEvent::FrameNavigated {
         frame: inner.frame,

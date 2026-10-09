@@ -244,10 +244,13 @@ fn an_engine_without_a_watchdog_arms_nothing_and_does_not_panic() {
 fn a_page_that_burns_its_script_budget_crashes() {
     let harness = Harness::builder(
         "<!doctype html><html><body>\
-         <script>setTimeout(block, 0)</script>\
+         <script>spin 60
+setTimeout(block, 0)</script>\
          </body></html>",
     )
     .watchdog(true)
+    // A terminated entry costs half the window budget (50 ms), so the 60 ms
+    // script before it is what takes the window over.
     .budgets(Budgets::default().evaluate_time(BUDGET).script_cpu(BUDGET))
     .build();
     let mut events = harness.page.events();

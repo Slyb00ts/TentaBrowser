@@ -113,7 +113,7 @@ async fn a_cookie_script_set_is_sent_on_a_later_request() {
         "the loop judged the machine after the fetch was out of it"
     );
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     let echoed = text_of(&document, "#result");
     assert!(
         echoed.contains("fromjs=1"),
@@ -173,7 +173,7 @@ async fn a_cookie_survives_a_navigation() {
         .expect("navigation");
     assert_eq!(second.settle, SettleState::Settled { busy: false });
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert!(
         text_of(&document, "#result").contains("persist=1"),
         "the cookie set before the navigation is still in the context's jar"
@@ -214,7 +214,7 @@ async fn an_httponly_assignment_from_script_is_refused() {
         .expect("navigation");
     assert_eq!(navigation.settle, SettleState::Settled { busy: false });
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     let got = text_of(&document, "#result");
     assert!(
         got.contains("visible=1"),

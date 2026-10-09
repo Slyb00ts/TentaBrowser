@@ -134,7 +134,7 @@ async fn the_fixture_page_settles_its_marker_once_the_fetch_half_works() {
         "the loop judged the machine after the request was out of it, with nothing reclassified"
     );
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#xhr"),
         "xhr: item=alpha&via=xhr",
@@ -213,7 +213,7 @@ async fn a_cross_origin_xhr_is_refused_before_it_reaches_the_other_origin() {
     let navigation = goto_network_idle(&page, &server.url("/index.html")).await;
     assert_eq!(navigation.settle, SettleState::Settled { busy: false });
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#result"),
         "error@4@0@error,after send",
@@ -276,7 +276,7 @@ async fn a_same_origin_xhr_that_redirects_off_origin_is_a_failure() {
     let navigation = goto_network_idle(&page, &server.url("/index.html")).await;
     assert_eq!(navigation.settle, SettleState::Settled { busy: false });
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#result"),
         "error@4@0",
@@ -358,7 +358,7 @@ async fn an_abort_before_the_request_reaches_the_wire_ends_it() {
     let navigation = goto_network_idle(&page, &server.url("/index.html")).await;
     assert_eq!(navigation.settle, SettleState::Settled { busy: false });
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#result"),
         "rs4:0,abort@4,loadend|1:0|0|0",
@@ -434,7 +434,7 @@ async fn a_request_that_outlives_its_timeout_is_reported_to_the_page() {
          machine settled on the timer rather than on `foreground_request_max`"
     );
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#result"),
         "rs4:0,timeout@4,loadend|4|0",
@@ -540,7 +540,7 @@ async fn the_server_receives_the_body_and_the_content_type_that_goes_with_it() {
         "both requests were out of the request table when the loop judged the machine"
     );
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#result"),
         "POST/11:hello=world/ct=text/plain;charset=UTF-8/cl=11|\

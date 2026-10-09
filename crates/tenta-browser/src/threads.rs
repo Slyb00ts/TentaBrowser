@@ -122,6 +122,10 @@ fn page_thread_main(mut work: mpsc::UnboundedReceiver<Work>) {
             }
         }
     });
+    // The tasks that used the engines are gone; tear the engines down here, while
+    // the process can still do it in order, rather than during thread exit.
+    drop(local);
+    tenta_page::drop_thread_runtimes();
 }
 
 /// The fixed pool of page threads.

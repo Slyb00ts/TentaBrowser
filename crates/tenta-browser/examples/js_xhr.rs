@@ -54,6 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(navigation.settle, SettleState::Settled { busy: false });
     let document = page
         .take_document()
+        .await
         .expect("navigation produced a document");
     // Error handlers also set the done marker: assert both successful responses.
     assert_eq!(text_of(&document, "#xhr"), "xhr: item=alpha&via=xhr");

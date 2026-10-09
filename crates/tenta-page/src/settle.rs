@@ -514,6 +514,29 @@ impl SettleTracker {
         self.signal_state_change();
     }
 
+    /// Starts a new settle call over the facts this machine has accumulated.
+    ///
+    /// A page that keeps its engine after `load` goes on starting work, and the
+    /// requests and tracked tasks that work leaves in flight are facts about the
+    /// page rather than about one settle call, so they are kept. What belongs to
+    /// the call being replaced is cleared: the latched outcome, the deadline, the
+    /// quiet and re-entry bookkeeping and the condition. A request that an
+    /// earlier call gave up on stays reclassified, because it is still a request
+    /// that never delivered its body.
+    pub fn begin_settle(&mut self, wait_until: Settle, timeout: Duration) {
+        let now = self.clock.now();
+        self.wait_until = wait_until;
+        self.started = now;
+        self.deadline = Some(now + timeout);
+        self.latched = None;
+        self.condition_met = false;
+        self.quiet_since = None;
+        self.reentries = 0;
+        self.last_mutation = None;
+        self.reclassified_any = self.requests.values().any(|record| record.reclassified);
+        self.signal_state_change();
+    }
+
     /// A Service Worker `fetch` handler is deciding a request.
     pub fn note_service_worker_fetches(&mut self, count: u32) {
         self.service_worker_fetches = count;
@@ -1217,5 +1240,36 @@ mod tests {
             SettleState::Settled { busy: false },
             "settled immediately when last foreground request finished, no polling"
         );
+    }
+
+    /// A latched call is over for good, but a page that keeps its engine starts
+    /// another: the new call forgets the old outcome and deadline and still sees
+    /// the work the page left in flight in between.
+    #[test]
+    fn a_new_settle_call_keeps_the_work_in_flight_and_forgets_the_old_outcome() {
+        let (mut tracker, clock) = tracker(Settle::Load);
+        tracker.note_load_fired();
+        assert_eq!(tracker.evaluate_now(), SettleState::Settled { busy: false });
+
+        tracker.note_request_started(RequestId(9), RequestClass::XhrFetch, Origin::Tracked);
+        tracker.note_task_queued(Origin::Tracked);
+        assert_eq!(
+            tracker.evaluate_now(),
+            SettleState::Settled { busy: false },
+            "a call that has ended stays ended"
+        );
+
+        tracker.begin_settle(Settle::NetworkIdle, Duration::from_secs(3));
+        assert_eq!(
+            tracker.deadline(),
+            Some(clock.now() + Duration::from_secs(3))
+        );
+        assert_eq!(tracker.evaluate_now(), SettleState::Draining);
+
+        tracker.note_request_done(RequestId(9));
+        assert!(matches!(tracker.evaluate_now(), SettleState::Quiet { .. }));
+
+        tracker.note_task_finished(Origin::Tracked);
+        assert_eq!(tracker.evaluate_now(), SettleState::Settled { busy: false });
     }
 }

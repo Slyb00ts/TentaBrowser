@@ -62,7 +62,7 @@ async fn fetch(
         None => page.goto(&args.url, goto).await.map(|_| None),
     };
     let (document, evaluation) = match navigation {
-        Ok(evaluation) => (page.take_document(), evaluation),
+        Ok(evaluation) => (page.take_document().await, evaluation),
         Err(error) => {
             let _ = page.close().await;
             return Err(CliError::from(error));

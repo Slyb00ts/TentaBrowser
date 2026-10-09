@@ -13,6 +13,8 @@ mod extensions;
 mod hooks;
 #[cfg(all(test, any(feature = "v8", feature = "quickjs")))]
 mod native_panic_tests;
+#[cfg(all(test, any(feature = "v8", feature = "quickjs")))]
+mod persistent_engine_tests;
 mod threads;
 /// The `tenta-wpt-driver` transport (`wpt/run.py --product tentabrowser`).
 /// JavaScript is what the driver runs, so it exists only where an engine does.

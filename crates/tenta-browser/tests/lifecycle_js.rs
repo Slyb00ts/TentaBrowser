@@ -116,7 +116,7 @@ async fn the_fixture_page_hears_both_lifecycle_events_once_each_in_order() {
         "the loop judged the machine after both events had been dispatched"
     );
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#status"),
         "lifecycle: \
@@ -177,7 +177,7 @@ async fn a_load_handler_that_queues_a_timer_is_inside_the_settle() {
          rather than on a `load` that was booked but never ran"
     );
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#status"),
         "late: handler,t0,t30",
@@ -229,7 +229,7 @@ async fn both_events_fire_once_each_across_many_settle_iterations() {
     let navigation = goto_network_idle(&page, &server.url("/index.html")).await;
     assert_eq!(navigation.settle, SettleState::Settled { busy: false });
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#status"),
         "counts: t0:dcl=1,load=1 t5:dcl=1,load=1 t20:dcl=1,load=1",
@@ -274,7 +274,7 @@ async fn domcontentloaded_fires_after_the_whole_document_is_parsed() {
     let navigation = goto_network_idle(&page, &server.url("/index.html")).await;
     assert_eq!(navigation.settle, SettleState::Settled { busy: false });
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#late"),
         "dcl: found the element",

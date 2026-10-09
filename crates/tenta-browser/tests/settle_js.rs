@@ -93,7 +93,7 @@ async fn an_inline_script_runs_and_mutates_the_document() {
         .expect("navigation");
     assert_eq!(navigation.status, 200);
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#marker"),
         "after",
@@ -153,7 +153,7 @@ async fn a_runaway_timer_callback_does_not_hang_the_navigation() {
     .expect("navigation");
     assert_eq!(navigation.status, 200);
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#tail"),
         "reached",
@@ -221,7 +221,7 @@ async fn a_runaway_lifecycle_handler_does_not_hang_the_navigation() {
     .expect("navigation");
     assert_eq!(navigation.status, 200);
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#dcl"),
         "the parse ran to its end",
@@ -254,13 +254,14 @@ async fn a_page_that_reaches_its_script_budget_is_crashed() {
     let (server, _temp) = serve(
         "<!doctype html><html><head></head><body>\
          <script>while (true) {}</script>\
+         <script>while (true) {}</script>\
          <p id=\"tail\">the rest of the parse</p>\
          </body></html>",
     )
     .await;
     let engine = js_engine(SettleConfig::library());
-    // `script_cpu` equals `evaluate_time`, so the single terminated entry is the
-    // crossing.
+    // An entry is terminated at half the window budget (50 ms here), so one
+    // terminated entry is survivable and the second is the crossing.
     let context = engine
         .new_context(ContextOptions {
             allow_private_network: true,
@@ -326,7 +327,7 @@ async fn a_throwing_script_does_not_fail_the_navigation() {
         .expect("a throwing script does not fail the navigation");
     assert_eq!(navigation.status, 200);
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(text_of(&document, "#marker"), "before");
     assert!(has(&document, "#tail"), "the parse ran past the script");
     engine.close();
@@ -375,7 +376,7 @@ async fn an_external_script_is_fetched_and_runs_while_the_parse_waits() {
         .expect("navigation");
     assert_eq!(navigation.status, 200);
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#order"),
         "first,middle,last",
@@ -437,7 +438,7 @@ async fn a_script_the_origin_does_not_serve_still_lets_the_parse_finish() {
         "the document and the script, so the script's fetch was really issued"
     );
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#marker"),
         "before",
@@ -483,7 +484,7 @@ async fn a_tracked_deferral_holds_the_settle_until_it_runs() {
         .expect("navigation");
     assert_eq!(navigation.settle, SettleState::Settled { busy: false });
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#marker"),
         "timer-ran",
@@ -525,7 +526,7 @@ async fn a_deferral_under_a_short_rule_lets_the_settle_end_first() {
         .expect("navigation");
     assert_eq!(navigation.settle, SettleState::Settled { busy: false });
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#marker"),
         "before",
@@ -603,7 +604,7 @@ async fn a_tier1_page_builds_no_engine() {
         .expect("navigation");
     assert_eq!(navigation.status, 200);
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#marker"),
         "before",

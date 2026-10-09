@@ -129,7 +129,7 @@ async fn a_fetch_on_a_real_page_resolves_and_the_loop_waits_for_it() {
         "the loop judged the machine after the fetch was out of it, with nothing reclassified"
     );
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#result"),
         format!("200:{}", server.url("/data.json")),
@@ -181,7 +181,7 @@ async fn a_response_header_and_body_reach_script() {
     let navigation = goto_network_idle(&page, &server.url("/index.html")).await;
     assert_eq!(navigation.settle, SettleState::Settled { busy: false });
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#ctype"),
         "application/json",
@@ -228,7 +228,7 @@ async fn a_cross_origin_fetch_rejects_without_reaching_the_network() {
     let navigation = goto_network_idle(&page, &server.url("/index.html")).await;
     assert_eq!(navigation.settle, SettleState::Settled { busy: false });
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#result"),
         "TypeError",
@@ -268,7 +268,7 @@ async fn a_non_ok_status_resolves_rather_than_rejecting() {
     let navigation = goto_network_idle(&page, &server.url("/index.html")).await;
     assert_eq!(navigation.settle, SettleState::Settled { busy: false });
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#result"),
         "503:false",
@@ -347,7 +347,7 @@ async fn a_post_body_and_content_type_reach_the_server() {
     // number that a change to the page would silently invalidate.
     let sent = r#"{"item":"beta","via":"fetch"}"#;
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#method"),
         "POST",
@@ -415,7 +415,7 @@ async fn a_string_body_infers_the_standards_content_type() {
     let navigation = goto_network_idle(&page, &server.url("/index.html")).await;
     assert_eq!(navigation.settle, SettleState::Settled { busy: false });
 
-    let document = page.take_document().expect("document");
+    let document = page.take_document().await.expect("document");
     assert_eq!(text_of(&document, "#ctype"), "text/plain;charset=UTF-8");
     assert_eq!(text_of(&document, "#body"), "plain text");
     engine.close();

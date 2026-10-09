@@ -185,9 +185,9 @@ async fn a_page_that_asks_for_javascript_is_refused() {
         .new_page(PageOptions::default())
         .await
         .expect_err("javascript needs max_tier >= js");
-    #[cfg(not(feature = "v8"))]
+    #[cfg(not(any(feature = "v8", feature = "quickjs")))]
     assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
-    #[cfg(feature = "v8")]
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
     match error {
         Error::TierDenied { needed, ceiling } => {
             assert_eq!(needed, tenta_core::Tier::Js);
@@ -252,7 +252,7 @@ async fn dropping_a_navigation_future_never_installs_the_document() {
     drop(doc);
 
     // Verify the installed document matches the fast navigation
-    let installed_doc = page.take_document().expect("document");
+    let installed_doc = page.take_document().await.expect("document");
     assert_eq!(
         installed_doc.navigation_id(),
         fast_navigation.navigation_id,
@@ -399,7 +399,7 @@ async fn concurrent_goto_cancels_first_with_err_aborted() {
     drop(doc);
 
     // Verify the installed document matches the fast navigation
-    let installed_doc = page.take_document().expect("document");
+    let installed_doc = page.take_document().await.expect("document");
     assert_eq!(
         installed_doc.navigation_id(),
         fast_navigation.navigation_id,

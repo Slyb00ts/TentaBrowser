@@ -1,11 +1,16 @@
 //! The page's JavaScript runtime: one engine bound to one parsed document
 //! (`docs/spec/02-architecture.md` §3).
 //!
-//! A runtime exists only while a page with an engine drives a navigation. It is
-//! built lazily on the first `</script>` pause or a requested evaluation. It
-//! runs script elements against the very tree the parser is writing into, reports the
-//! engine's task provenance to the settle machine, and is dropped when the
-//! navigation that built it ends.
+//! A runtime exists while a page with an engine has a document it is bound to.
+//! It is built lazily on the first `</script>` pause or a requested evaluation.
+//! It runs script elements against the very tree the parser is writing into and
+//! reports the engine's task provenance to the page's settle tracker.
+//!
+//! A navigation does not end it: a page whose navigation settled keeps its
+//! runtime, so timers, fetch completions and later host entries run in the same
+//! realm and the same tracker keeps accounting for them. It is dropped when the
+//! next navigation commits, when the page closes, or when the page hands its
+//! document out.
 //!
 //! *When* a classic script runs is the HTML standard's rule, not this
 //! project's: the local spec leaves script timing to the standard
@@ -42,63 +47,38 @@ use tenta_js::geometry::ViewportMetrics;
 use tenta_js::xhr::{XhrCompletions, XhrDriver};
 use tenta_net::policy::cookies::Site;
 use tenta_net::{Client, NetError, Request, ResourceType};
+use tokio::task::JoinHandle;
 use url::Url;
 
 use crate::fetch::NetFetchDriver;
 use crate::page::{PageConfig, Viewport, next_request_id};
-use crate::settle::{RequestClass, SettleTracker};
+use crate::settle::{RequestClass, Settle, SettleTracker};
 
 thread_local! {
     /// The runtimes of this page thread, by page.
     static RUNTIMES: RefCell<HashMap<PageId, PageRuntime>> = RefCell::new(HashMap::new());
 }
 
-/// Forwards the engine's task provenance into the settle tracker of the settle
-/// call in progress (`docs/spec/02-architecture.md` §5.1).
+/// Forwards the engine's task provenance into the settle tracker of the page
+/// (`docs/spec/02-architecture.md` §5.1).
 ///
-/// The engine is handed this and reports every task it queues and finishes;
-/// the tracker lives behind `Rc<RefCell<_>>` because the page mutates it too.
-/// The handle is read out of the cell before the tracker is touched, so a
-/// callback that re-enters this sink cannot find the cell still borrowed, and
-/// neither direction holds a borrow across anything that can call back in.
-#[derive(Default)]
-pub(crate) struct SettleBridge {
-    tracker: RefCell<Option<Rc<RefCell<SettleTracker>>>>,
-}
-
-impl SettleBridge {
-    fn new() -> SettleBridge {
-        SettleBridge::default()
-    }
-
-    /// Points the bridge at the tracker collecting for the settle call that is
-    /// about to run.
-    fn attach(&self, tracker: Rc<RefCell<SettleTracker>>) {
-        *self.tracker.borrow_mut() = Some(tracker);
-    }
-
-    /// Points the bridge at nothing. The settle call it was collecting for has
-    /// ended, so a task the engine reports afterwards must not reach it.
-    fn detach(&self) {
-        *self.tracker.borrow_mut() = None;
-    }
-
-    fn tracker(&self) -> Option<Rc<RefCell<SettleTracker>>> {
-        self.tracker.borrow().clone()
-    }
+/// The engine is handed this and reports every task it queues and finishes for
+/// as long as it lives, which is why the tracker is the runtime's rather than a
+/// settle call's: work started after `load` is accounted in the same machine a
+/// later settle call evaluates. The tracker lives behind `Rc<RefCell<_>>`
+/// because the page mutates it too; neither direction holds a borrow across
+/// anything that can call back in.
+struct SettleBridge {
+    tracker: Rc<RefCell<SettleTracker>>,
 }
 
 impl ProvenanceSink for SettleBridge {
     fn task_queued(&self, origin: Origin) {
-        if let Some(tracker) = self.tracker() {
-            tracker.borrow_mut().note_task_queued(origin);
-        }
+        self.tracker.borrow_mut().note_task_queued(origin);
     }
 
     fn task_finished(&self, origin: Origin) {
-        if let Some(tracker) = self.tracker() {
-            tracker.borrow_mut().note_task_finished(origin);
-        }
+        self.tracker.borrow_mut().note_task_finished(origin);
     }
 }
 
@@ -135,6 +115,27 @@ pub(crate) trait ScriptBudget: Send + Sync {
     fn native_memory(&self) -> NativeMemoryBudget;
     /// Marks a hard native-byte failure without classifying it as a Rust panic.
     fn crash_native_memory(&self, failure: NativeMemoryFailure);
+    /// Reports that the watchdog cut an engine entry short. Termination is how
+    /// a page survives a runaway, so it is a fact to report, not a crash.
+    fn entry_terminated(&self, entry: &'static str);
+}
+
+/// The task that runs a retained runtime's turns while no settle call does.
+///
+/// Dropping it ends the task, so a runtime that goes away takes its driver
+/// with it and a driver can never outlive the engine it turns.
+pub(crate) struct Pump(JoinHandle<()>);
+
+impl Pump {
+    pub(crate) fn new(task: JoinHandle<()>) -> Pump {
+        Pump(task)
+    }
+}
+
+impl Drop for Pump {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// One engine and the document it is bound to, on the page thread.
@@ -150,9 +151,13 @@ pub(crate) struct PageRuntime {
     /// The assertion in `run_pending_script` still checks that this is a real
     /// parser pause, rather than an ordinary deferred/async script entry.
     parse_in_flight: bool,
-    /// Kept so the bridge can be detached when the settle call ends; the
-    /// engine also holds it, for as long as the engine lives.
-    bridge: Rc<SettleBridge>,
+    /// The page's settle machine. The engine reports into it through the
+    /// bridge, the fetch driver registers requests in it, and a settle call
+    /// restarts it ([`SettleTracker::begin_settle`]); it lives exactly as long as
+    /// this runtime, so work that outlives a settle call stays accounted for.
+    tracker: Rc<RefCell<SettleTracker>>,
+    /// The task that runs this runtime's turns while no settle call does.
+    pump: Option<Pump>,
     /// The engine's collection epoch as of the last turn that looked. A change
     /// means the collector may have freed a wrapper since, which is a "reclaim
     /// now" trigger of its own (`docs/spec/04-dom-and-css.md` §1.1).
@@ -242,13 +247,9 @@ impl PageRuntime {
         // configuration, so the two cannot disagree about what holds a settle
         // open (`docs/spec/02-architecture.md` §5.1).
         engine.set_timer_rule(engine_config.timer_rule);
-        let bridge = Rc::new(SettleBridge::new());
-        // A clone, not the handle itself: `attach` consumes its argument, and
-        // the fetch driver below is registered against this same settle call —
-        // it is the machine the requests it issues are counted in, and the
-        // notification the settle loop parks on is the one it wakes.
-        bridge.attach(Rc::clone(&tracker));
-        engine.set_provenance_sink(Rc::clone(&bridge) as Rc<dyn ProvenanceSink>);
+        engine.set_provenance_sink(Rc::new(SettleBridge {
+            tracker: Rc::clone(&tracker),
+        }) as Rc<dyn ProvenanceSink>);
         // Taken from the engine as built, so the first turn does not read the
         // engine's own construction-time collection as a change that owes a
         // reclaim.
@@ -279,6 +280,8 @@ impl PageRuntime {
         // would be a second place for gate 2 to be forgotten
         // (`NetFetchDriver`).
         let xhrs = Rc::new(XhrCompletions::new());
+        // The driver registers requests in the same machine, and the
+        // notification the page's driver loop parks on is the one it wakes.
         let driver = Rc::new(NetFetchDriver::new(
             config,
             Rc::clone(&tracker),
@@ -295,7 +298,8 @@ impl PageRuntime {
             // created for post-settle evaluation is marked parse-finished
             // before its first engine entry.
             parse_in_flight: true,
-            bridge,
+            tracker,
+            pump: None,
             last_gc_epoch,
             watchdog,
             script_timeout,
@@ -421,18 +425,72 @@ impl PageRuntime {
         };
         let outcome = run(&mut *self.engine);
         self.check_engine_failure();
-        self.script_budget.charge(started.elapsed());
-        if let Some(arm) = &arm
-            && arm.fired()
-        {
+        let elapsed = started.elapsed();
+        self.script_budget.charge(elapsed);
+        // An engine that also enforces its own deadline may stop the entry
+        // before the watchdog's arm fires, and the page cannot tell the two
+        // apart; an entry that used its whole deadline was cut short either way.
+        let cut_short = arm.as_ref().is_some_and(crate::watchdog::Arm::fired)
+            || (!self.script_timeout.is_zero() && elapsed >= self.script_timeout);
+        if cut_short {
             tracing::warn!(
                 page = ?self.page,
                 entry,
                 timeout = ?self.script_timeout,
                 "an engine entry did not return within its deadline and was terminated"
             );
+            self.script_budget.entry_terminated(entry);
         }
         outcome
+    }
+
+    /// Runs a host-supplied entry under the same per-entry deadline, script
+    /// budget and native-failure check the page's own entries get.
+    ///
+    /// The entry may have scheduled work the page's driver has not heard of, so
+    /// the driver is woken afterwards.
+    pub(crate) fn run_in_engine<R>(&mut self, run: impl FnOnce(&mut dyn PageEngine) -> R) -> R {
+        let outcome = self.bounded("host", run);
+        self.tracker.borrow().notify_handle().notify_one();
+        outcome
+    }
+
+    /// The settle machine this runtime reports into.
+    pub(crate) fn tracker(&self) -> &Rc<RefCell<SettleTracker>> {
+        &self.tracker
+    }
+
+    /// The tree this runtime is bound to.
+    pub(crate) fn document(&self) -> &SharedDocument {
+        &self.document
+    }
+
+    /// Records the task that drives this runtime between settle calls.
+    pub(crate) fn set_pump(&mut self, pump: Pump) {
+        self.pump = Some(pump);
+    }
+
+    /// Stops the task that drives this runtime, so a settle call can drive it
+    /// itself. Reports whether one was running.
+    pub(crate) fn stop_pump(&mut self) -> bool {
+        self.pump.take().is_some()
+    }
+
+    /// Ends the runtime and hands its tree back, if nothing else holds it.
+    ///
+    /// The engine goes first: it is the other owner of the tree, so dropping it
+    /// is what makes the tree movable, and it drops on the page thread that
+    /// built it.
+    pub(crate) fn into_document(self) -> Option<tenta_dom::Document> {
+        let PageRuntime {
+            engine,
+            document,
+            pump,
+            ..
+        } = self;
+        drop(pump);
+        drop(engine);
+        Rc::try_unwrap(document).ok().map(RefCell::into_inner)
     }
 
     /// Fires one user-agent lifecycle event into page script, under the same
@@ -792,7 +850,7 @@ fn engine_config(config: &PageConfig, native_memory: NativeMemoryBudget) -> Page
         // A live page follows wall time.
         clock: EngineClock::Real,
         max_heap_bytes: Some(config.budgets.js_heap_mb as usize * 1024 * 1024),
-        script_timeout: Some(config.budgets.evaluate_time),
+        script_timeout: Some(entry_timeout(&config.budgets)),
         locale: config.locale.clone(),
         timezone: None,
         cookies: config.cookies.clone(),
@@ -800,6 +858,17 @@ fn engine_config(config: &PageConfig, native_memory: NativeMemoryBudget) -> Page
         native_memory,
         viewport: viewport_metrics(&config.viewport),
     }
+}
+
+/// The deadline one engine entry gets: `evaluate_time`, but never more than half
+/// of the script CPU the page may spend per window (D-033). An entry terminated
+/// at its deadline is charged its whole length, so a deadline at or above the
+/// window budget would let one terminated runaway crash the page alone.
+fn entry_timeout(budgets: &tenta_core::Budgets) -> Duration {
+    if budgets.script_cpu.is_zero() {
+        return budgets.evaluate_time;
+    }
+    budgets.evaluate_time.min(budgets.script_cpu / 2)
 }
 
 /// The window metrics script sees before a layout answers: the page's viewport,
@@ -829,6 +898,15 @@ fn is_classic_javascript(kind: &str) -> bool {
         || kind.eq_ignore_ascii_case("application/javascript")
         || kind.eq_ignore_ascii_case("application/ecmascript")
         || kind.eq_ignore_ascii_case("text/ecmascript")
+}
+
+/// The runtime of `page`, whatever tree it is bound to.
+///
+/// For the page's own entry points, which act on the engine the page keeps
+/// after a navigation. Work that belongs to one navigation names its tree
+/// through [`with_runtime_for`] instead.
+pub(crate) fn with_runtime<R>(page: PageId, f: impl FnOnce(&mut PageRuntime) -> R) -> Option<R> {
+    RUNTIMES.with(|cell| cell.borrow_mut().get_mut(&page).map(f))
 }
 
 /// The runtime of `page`, if it has one *and* it is still bound to `document`.
@@ -1160,11 +1238,50 @@ pub(crate) fn note_parse_finished(page: PageId, document: &SharedDocument) {
     with_runtime_for(page, document, |runtime| runtime.parse_in_flight = false);
 }
 
-/// The settle call of `page` over `document` has ended: the engine's provenance
-/// has no tracker to feed until a later navigation attaches one.
-pub(crate) fn end_settle(page: PageId, document: Option<&SharedDocument>) {
-    if let Some(document) = document {
-        with_runtime_for(page, document, |runtime| runtime.bridge.detach());
+/// Binds a fresh runtime to a document that has already loaded, for a page
+/// that had no script of its own and is asked to run some.
+///
+/// The settle machine it gets starts after `load`: the document finished
+/// loading without an engine, so nothing is outstanding and no lifecycle event
+/// is owed.
+pub(crate) fn adopt_loaded_document(
+    page: PageId,
+    document: SharedDocument,
+    config: &PageConfig,
+    script_budget: Arc<dyn ScriptBudget>,
+) -> std::result::Result<(), String> {
+    let mut tracker = SettleTracker::new(config.settle, Settle::Load, Arc::clone(&config.clock));
+    tracker.note_domcontentloaded();
+    tracker.note_load_fired();
+    ensure_runtime(
+        page,
+        document.clone(),
+        config,
+        Rc::new(RefCell::new(tracker)),
+        script_budget,
+    )?;
+    note_parse_finished(page, &document);
+    Ok(())
+}
+
+/// Drops every runtime this page thread still holds.
+///
+/// Called as the thread winds down, while the process can still tear an engine
+/// down: a runtime left to thread-local destruction would be dropped during
+/// thread exit instead, after the tasks that used it are gone.
+pub fn drop_thread_runtimes() {
+    let runtimes: Vec<(PageId, PageRuntime)> =
+        RUNTIMES.with(|cell| cell.borrow_mut().drain().collect());
+    // One at a time, so a runtime whose teardown panics does not leave the rest
+    // to thread-local destruction.
+    for (page, runtime) in runtimes {
+        if let Err(reason) = crate::task::catch_unwind_task(|| drop(runtime)) {
+            tracing::error!(
+                ?page,
+                reason,
+                "a page runtime panicked while it was dropped"
+            );
+        }
     }
 }
 
@@ -1179,6 +1296,16 @@ mod tests {
     use tenta_js::engine::{EngineWatchdog, LifecycleEvent, ScriptError, ScriptKind};
     use tenta_js::fetch::{FetchCompletion, FetchDriver, FetchOutcome};
     use tenta_js::xhr::{XhrCompletion, XhrDriver, XhrHandle};
+
+    #[test]
+    fn an_entry_deadline_never_alone_exhausts_the_window_budget() {
+        let desktop = tenta_core::Budgets::desktop();
+        assert_eq!(entry_timeout(&desktop), Duration::from_millis(7_500));
+        let mobile = tenta_core::Budgets::mobile();
+        assert_eq!(entry_timeout(&mobile), Duration::from_millis(3_750));
+        let unbounded = tenta_core::Budgets::desktop().script_cpu(Duration::ZERO);
+        assert_eq!(entry_timeout(&unbounded), unbounded.evaluate_time);
+    }
 
     #[test]
     fn the_default_viewport_is_the_engine_default_metrics() {
@@ -1317,6 +1444,8 @@ mod tests {
     impl ScriptBudget for NullBudget {
         fn charge(&self, _elapsed: Duration) {}
 
+        fn entry_terminated(&self, _entry: &'static str) {}
+
         fn crash_native_memory(&self, _failure: NativeMemoryFailure) {}
 
         fn crash_reason(&self) -> Option<String> {
@@ -1334,6 +1463,8 @@ mod tests {
         fn charge(&self, _elapsed: Duration) {
             self.0.store(true, Ordering::Release);
         }
+
+        fn entry_terminated(&self, _entry: &'static str) {}
 
         fn crash_native_memory(&self, _failure: NativeMemoryFailure) {}
 
@@ -1404,7 +1535,12 @@ mod tests {
                 engine: Box::new(engine),
                 document,
                 parse_in_flight,
-                bridge: Rc::new(SettleBridge::new()),
+                tracker: Rc::new(RefCell::new(SettleTracker::new(
+                    crate::settle::SettleConfig::library(),
+                    Settle::Load,
+                    Arc::new(crate::clock::SystemClock),
+                ))),
+                pump: None,
                 last_gc_epoch: 0,
                 watchdog: microtask_signal
                     .map(|signal| Arc::new(SignalWatchdog(signal)) as Arc<dyn EngineWatchdog>),

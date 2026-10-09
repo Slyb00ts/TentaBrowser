@@ -268,15 +268,9 @@ pub(super) fn target_info(target: &Target) -> Value {
 /// The info of a target that is at `url`. A navigation event is sent before
 /// the page records the navigation, so the event's URL is the one to report.
 fn target_info_at(target: &Target, url: String) -> Value {
-    // Scripted pages keep their document inside the engine, so the title is
-    // known only for pages that parsed one; Chromium shows the URL for a page
-    // without a title as well.
-    let title = target
-        .page()
-        .document()
-        .and_then(|document| document.metadata().title)
-        .filter(|title| !title.is_empty())
-        .unwrap_or_else(|| url.clone());
+    // Scripted pages keep their document inside the engine; `title` serves both.
+    // Chromium shows the URL for a page without a title as well.
+    let title = target.page().title().unwrap_or_else(|| url.clone());
     json!({
         "targetId": target.id(),
         "type": "page",

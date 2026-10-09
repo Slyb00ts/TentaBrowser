@@ -73,23 +73,21 @@ async fn serve_both() -> (FixtureServer, TempDir) {
 
 /// Reads back the marker a page's own script wrote.
 ///
-/// Through the page's *shared* document handle rather than `take_document`, so
-/// the handle the page closes over — and drops on its own thread — is still the
-/// page's. `Document::get_element_by_id` and the character-data read are the
-/// raw tree's, which is what the guard gives; the wrapper
-/// (`tenta_page::document::Document`) is the one `take_document` moves out.
-fn marker_of(page: &tenta_browser::Page, what: &str) -> String {
-    let document = page
-        .document()
-        .unwrap_or_else(|| panic!("{what} still has the document its navigation installed"));
-    let marker = document
-        .get_element_by_id("marker")
-        .unwrap_or_else(|| panic!("{what}'s document has the #marker element"));
-    let text = document.first_child(marker);
-    document
-        .text_data(text)
-        .unwrap_or_else(|| panic!("{what}'s #marker has a text node"))
-        .to_owned()
+/// Through the engine the page keeps for its document: the tree is the engine's
+/// while the page lives, and reading it on the page thread is what proves each
+/// page still answers from the isolate that ran its script.
+async fn marker_of(page: &tenta_browser::Page, what: &str) -> String {
+    let reading = page
+        .with_engine(|engine| {
+            let shared = engine.document();
+            let document = shared.borrow();
+            let marker = document.get_element_by_id("marker")?;
+            let text = document.first_child(marker);
+            document.text_data(text).map(str::to_owned)
+        })
+        .await
+        .unwrap_or_else(|error| panic!("{what} still has its engine: {error:?}"));
+    reading.unwrap_or_else(|| panic!("{what}'s document has a #marker with a text node"))
 }
 
 /// Both pages are on the one page thread, or the test is not testing anything.
@@ -145,7 +143,7 @@ async fn run_two_pages(close_oldest_first: bool) {
         .expect("navigation");
     assert_eq!(older_navigation.status, 200);
     assert_eq!(
-        marker_of(&older, "the older page"),
+        marker_of(&older, "the older page").await,
         "a",
         "the older page's own script ran"
     );
@@ -164,12 +162,12 @@ async fn run_two_pages(close_oldest_first: bool) {
 
     assert_one_page_thread([&older, &newer]);
     assert_eq!(
-        marker_of(&newer, "the newer page"),
+        marker_of(&newer, "the newer page").await,
         "b",
         "the newer page's own script ran"
     );
     assert_eq!(
-        marker_of(&older, "the older page"),
+        marker_of(&older, "the older page").await,
         "a",
         "the older page kept its own global through the second engine's build"
     );
@@ -192,7 +190,7 @@ async fn run_two_pages(close_oldest_first: bool) {
         None,
         "closing {first_name} took {second_name}'s engine down with it"
     );
-    let surviving = marker_of(second, &format!("the {second_name} page"));
+    let surviving = marker_of(second, &format!("the {second_name} page")).await;
     assert!(
         surviving == if close_oldest_first { "b" } else { "a" },
         "the surviving page's script wrote {surviving:?}, so it was read from the \
