@@ -1361,12 +1361,33 @@ Deliberately **not** taken in this slice, each with its reason:
   *declarative partial updates* proposal, where a PI's attributes are parsed out
   of its `data` string and a mutation rewrites that string; that is a
   serialization subsystem of its own, not an `Element` member.
-- `ChildNode.before`/`after`/`replaceWith` (117). The standard's algorithm
-  inserts through *convert nodes into a node* and merges the inserted text with
-  any adjacent `Text` sibling, and this tree's single `Mutation` path performs
-  no adjacent-text merging — `dom/nodes/ChildNode-before.html` is written
-  against the merging. Shipping the members without it would fail most of that
-  file.
+
+### The ParentNode and ChildNode mutation methods
+
+`ParentNode.append`/`prepend`/`replaceChildren` (Element, Document,
+DocumentFragment) and `ChildNode.before`/`after`/`replaceWith` (Element,
+CharacterData, DocumentType) take `(Node or DOMString)...`. The algorithms live
+in `tenta-dom` (`Document::*_nodes`, `Document::replace_children`) and the host
+only resolves the arguments, so both engines share one implementation.
+
+- *Convert nodes into a node*: a lone argument is used as it is, anything else
+  is gathered into a new fragment. Each string is its own Text node and
+  adjacent Text nodes are never merged; the standard has no such step.
+- `before`/`after`/`replaceWith` pick the viable sibling before converting, so
+  arguments that are siblings of the context object do not anchor the
+  insertion; a node without a parent does nothing.
+- `replaceChildren` adopts the node (a child of the same parent included, which
+  queues its own removal record), then replaces all children in one record.
+  The hierarchy check ignores the children being removed, as
+  `ParentNode-replaceChildren.html` expects of a document that holds a doctype
+  and an element.
+- `ReplaceAllWith::Detached` is the replace-all source for one detached Text
+  node, or a doctype when the parent is a document. Replace-all now accepts a
+  Document parent and checks the replacement's own children (no Text, at most
+  one element, doctype only under a document).
+
+Not covered: nodes of another document are refused with `NotSupportedError`
+(no adoption), and `Node.moveBefore` is absent.
 
 ### `window.onload` and the two lifecycle dispatches (P2 slice d-8)
 

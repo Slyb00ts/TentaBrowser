@@ -30,8 +30,8 @@ use tenta_core::{
 use tenta_css::{CssDeclarationBlock, supports_condition, supports_property};
 use tenta_dom::arena::AttrName;
 use tenta_dom::{
-    Document, LiveRangeId, Mutation, NodeHandle, NodeKind, ObserverAgent, ObserverAttachment,
-    RangeBoundary, ReadyState, ReplaceAllWith, SharedObserverAgent,
+    Document, LiveRangeId, Mutation, NodeHandle, NodeKind, NodeOrText, ObserverAgent,
+    ObserverAttachment, RangeBoundary, ReadyState, ReplaceAllWith, SharedObserverAgent,
 };
 use tenta_html::xml::{Parser as XmlParser, XmlOptions};
 use tenta_html::{ElementFlags, Parser as HtmlParser, ParserOptions, QualName, QuirksMode};
@@ -3653,7 +3653,7 @@ impl NodeOps for HostObject {
                 drop(doc);
                 let mut doc = self.anchor().0.borrow_mut();
                 let replacement = if let Some(text) = value.filter(|text| !text.is_empty()) {
-                    ReplaceAllWith::Text(doc.create_text(text))
+                    ReplaceAllWith::Detached(doc.create_text(text))
                 } else {
                     ReplaceAllWith::Empty
                 };
@@ -3847,6 +3847,18 @@ impl NodeOps for HostObject {
 impl ElementOps for HostObject {
     fn remove(&self) {
         self.remove_from_parent();
+    }
+
+    fn before(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.mutate_with_nodes(nodes, Document::before_nodes)
+    }
+
+    fn after(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.mutate_with_nodes(nodes, Document::after_nodes)
+    }
+
+    fn replace_with(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.mutate_with_nodes(nodes, Document::replace_with_nodes)
     }
 
     fn child_element_count(&self) -> u32 {
@@ -4401,7 +4413,15 @@ impl ElementOps for HostObject {
     }
 
     fn append(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
-        self.append_nodes(nodes)
+        self.mutate_with_nodes(nodes, Document::append_nodes)
+    }
+
+    fn prepend(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.mutate_with_nodes(nodes, Document::prepend_nodes)
+    }
+
+    fn replace_children(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.mutate_with_nodes(nodes, Document::replace_children)
     }
 }
 
@@ -4739,7 +4759,15 @@ impl DocumentOps for HostObject {
     }
 
     fn append(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
-        self.append_nodes(nodes)
+        self.mutate_with_nodes(nodes, Document::append_nodes)
+    }
+
+    fn prepend(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.mutate_with_nodes(nodes, Document::prepend_nodes)
+    }
+
+    fn replace_children(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.mutate_with_nodes(nodes, Document::replace_children)
     }
 
     fn body(&self) -> Result<Option<Handle<HTMLElement>>, JsError> {
@@ -4843,7 +4871,7 @@ impl DocumentOps for HostObject {
         let replacement = if value.is_empty() {
             ReplaceAllWith::Empty
         } else {
-            ReplaceAllWith::Text(doc.create_text(value))
+            ReplaceAllWith::Detached(doc.create_text(value))
         };
         let _ = doc.mutate(Mutation::ReplaceAll {
             parent: title,
@@ -5146,6 +5174,22 @@ impl DocumentOps for HostObject {
 }
 
 impl DocumentTypeOps for HostObject {
+    fn remove(&self) {
+        self.remove_from_parent();
+    }
+
+    fn before(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.mutate_with_nodes(nodes, Document::before_nodes)
+    }
+
+    fn after(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.mutate_with_nodes(nodes, Document::after_nodes)
+    }
+
+    fn replace_with(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.mutate_with_nodes(nodes, Document::replace_with_nodes)
+    }
+
     fn name(&self) -> Result<String, JsError> {
         let (doc, id) = self.anchor();
         Ok(doc
@@ -5521,6 +5565,18 @@ impl NodeListOps for HostObject {
 impl CharacterDataOps for HostObject {
     fn remove(&self) {
         self.remove_from_parent();
+    }
+
+    fn before(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.mutate_with_nodes(nodes, Document::before_nodes)
+    }
+
+    fn after(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.mutate_with_nodes(nodes, Document::after_nodes)
+    }
+
+    fn replace_with(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.mutate_with_nodes(nodes, Document::replace_with_nodes)
     }
 
     fn data(&self) -> Result<String, JsError> {
@@ -7200,7 +7256,15 @@ impl SVGElementOps for HostObject {
 }
 impl DocumentFragmentOps for HostObject {
     fn append(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
-        self.append_nodes(nodes)
+        self.mutate_with_nodes(nodes, Document::append_nodes)
+    }
+
+    fn prepend(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.mutate_with_nodes(nodes, Document::prepend_nodes)
+    }
+
+    fn replace_children(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.mutate_with_nodes(nodes, Document::replace_children)
     }
 }
 
@@ -7617,13 +7681,6 @@ struct ResolvedRange {
     /// disconnected *documents* are allowed. Comparing the two documents once
     /// here is what keeps a foreign `NodeId` out of this arena's tree walk.
     same_document: bool,
-}
-
-/// One element of a `ParentNode.append` argument list, after resolution: a node
-/// of *this* document, or a string that has yet to become a text node.
-enum AppendItem {
-    Node(NodeId),
-    Text(String),
 }
 
 /// *length* of a node (<https://dom.spec.whatwg.org/#concept-node-length>): `0`
@@ -8061,57 +8118,29 @@ impl HostObject {
         })
     }
 
-    /// *convert nodes into a node* followed by *append* — what
-    /// `ParentNode.append` is defined as, shared by `Element`, `Document` and
-    /// `DocumentFragment`
+    /// Runs one of the `ParentNode`/`ChildNode` convenience mutations on the
+    /// anchored node with its `(Node or DOMString)...` arguments
     /// (<https://dom.spec.whatwg.org/#converting-nodes-into-a-node>).
     ///
-    /// Each string argument creates a separate Text node. Adjacent Text nodes
-    /// are preserved; appending does not normalize them.
-    fn append_nodes(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
-        let (doc, parent) = self.anchor();
-        // Resolve every node argument first: the resolution reads the document,
-        // and the mutations below hold it mutably.
+    /// Every node argument is resolved first: the resolution reads the
+    /// document, and the mutation holds it mutably. Each string argument
+    /// becomes a separate Text node, and adjacent Text nodes are preserved.
+    fn mutate_with_nodes(
+        &self,
+        nodes: Vec<NodeOrDomString>,
+        apply: fn(&mut Document, NodeId, Vec<NodeOrText>) -> tenta_core::Result<()>,
+    ) -> Result<(), JsError> {
+        let (doc, id) = self.anchor();
         let items = nodes
             .into_iter()
             .map(|item| match item {
                 NodeOrDomString::Node(handle) => {
-                    self.same_document_node(handle).map(AppendItem::Node)
+                    self.same_document_node(handle).map(NodeOrText::Node)
                 }
-                NodeOrDomString::DomString(text) => Ok(AppendItem::Text(text)),
+                NodeOrDomString::DomString(text) => Ok(NodeOrText::Text(text)),
             })
             .collect::<Result<Vec<_>, JsError>>()?;
-        // The single-node case is the one the standard does not route through a
-        // fragment, and routing it anyway would still be observable as one extra
-        // tree the node passes through.
-        let single = match items.as_slice() {
-            [AppendItem::Node(child)] => Some(*child),
-            _ => None,
-        };
-        if let Some(child) = single {
-            let mut doc = doc.borrow_mut();
-            return doc
-                .mutate(Mutation::Append { parent, child })
-                .map_err(|error| mutation_error(&error));
-        }
-        let mut doc = doc.borrow_mut();
-        let fragment = doc.create_fragment();
-        for item in items {
-            let child = match item {
-                AppendItem::Node(child) => child,
-                AppendItem::Text(text) => doc.create_text(&text),
-            };
-            doc.mutate(Mutation::Append {
-                parent: fragment,
-                child,
-            })
-            .map_err(|error| mutation_error(&error))?;
-        }
-        doc.mutate(Mutation::Append {
-            parent,
-            child: fragment,
-        })
-        .map_err(|error| mutation_error(&error))
+        apply(&mut doc.borrow_mut(), id, items).map_err(|error| mutation_error(&error))
     }
 }
 

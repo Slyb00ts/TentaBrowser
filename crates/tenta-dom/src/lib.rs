@@ -26,7 +26,7 @@ pub mod text;
 
 pub use arena::{DocTypeData, NodeFlags, NodeKind, PiData, StyleHandle, WrapperSlot};
 pub use document::{
-    Document, LiveRangeId, MemoryReport, NodeHandle, ObserverAgent, ObserverAttachment,
+    Document, LiveRangeId, MemoryReport, NodeHandle, NodeOrText, ObserverAgent, ObserverAttachment,
     RangeBoundary, ReadyState, SharedObserverAgent, StopPredicate, SweepStats,
     validate_doctype_name, validate_processing_instruction_data,
     validate_processing_instruction_target,

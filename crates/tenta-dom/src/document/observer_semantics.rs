@@ -81,7 +81,7 @@ pub fn may_observe_mutation(
             let removed = document.children(*parent).next().is_some();
             let added = match replacement {
                 ReplaceAllWith::Empty => false,
-                ReplaceAllWith::Text(_) => true,
+                ReplaceAllWith::Detached(_) => true,
                 ReplaceAllWith::ChildrenOf(source) => document.children(*source).next().is_some(),
             };
             (removed && removal_interested(*parent))
@@ -342,7 +342,7 @@ pub fn requests_notification(document: &Document, mutation: &Mutation) -> bool {
             document.children(*parent).next().is_some()
                 || match replacement {
                     ReplaceAllWith::Empty => false,
-                    ReplaceAllWith::Text(_) => true,
+                    ReplaceAllWith::Detached(_) => true,
                     ReplaceAllWith::ChildrenOf(source) => {
                         document.children(*source).next().is_some()
                     }
@@ -619,7 +619,7 @@ fn plan_replace_all(
     let removed = child_nodes(document, parent, capture)?;
     let added = match replacement {
         ReplaceAllWith::Empty => Vec::new(),
-        ReplaceAllWith::Text(node) => one(node, capture)?,
+        ReplaceAllWith::Detached(node) => one(node, capture)?,
         ReplaceAllWith::ChildrenOf(source) => child_nodes(document, source, capture)?,
     };
     if removed.is_empty() && added.is_empty() {

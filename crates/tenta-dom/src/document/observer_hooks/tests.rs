@@ -724,7 +724,7 @@ fn replace_all_queues_one_parent_record_for_same_content_and_empty() {
     document
         .mutate(Mutation::ReplaceAll {
             parent,
-            replacement: ReplaceAllWith::Text(replacement),
+            replacement: ReplaceAllWith::Detached(replacement),
         })
         .unwrap();
     assert_eq!(document.first_child(parent), replacement);

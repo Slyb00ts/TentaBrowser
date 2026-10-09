@@ -656,24 +656,32 @@ interface HTMLScriptElement : HTMLElement {
 
 // Phase 4b-2: the ChildNode mixin (the first `includes` in idl/dom). Frameworks
 // call `node.remove()` to detach a node from its parent; it is shared by Element
-// and CharacterData (Text/Comment).
+// and CharacterData (Text/Comment), and by DocumentType. `before`, `after` and
+// `replaceWith` take the same `(Node or DOMString)...` list as `ParentNode.append`.
 interface mixin ChildNode {
+  undefined before((Node or DOMString)... nodes);
+  undefined after((Node or DOMString)... nodes);
+  undefined replaceWith((Node or DOMString)... nodes);
   undefined remove();
 };
 
 Element includes ChildNode;
 CharacterData includes ChildNode;
+DocumentType includes ChildNode;
 
-// `ParentNode.append` is shared by Element, Document and DocumentFragment.
-// Navigation members already declared directly on the interfaces remain there.
+// `ParentNode.append`, `prepend` and `replaceChildren` are shared by Element,
+// Document and DocumentFragment. Navigation members already declared directly on
+// the interfaces remain there.
 //
-// `append` converts each argument with *convert nodes into a node*: a `Node`
+// Each of them converts each argument with *convert nodes into a node*: a `Node`
 // is used as-is and a string becomes a `Text` containing it.
 //
 // Each string argument creates a separate Text node, including consecutive
 // strings. The operation preserves adjacent Text nodes without normalization.
 interface mixin ParentNode {
+  undefined prepend((Node or DOMString)... nodes);
   undefined append((Node or DOMString)... nodes);
+  undefined replaceChildren((Node or DOMString)... nodes);
 };
 
 Element includes ParentNode;

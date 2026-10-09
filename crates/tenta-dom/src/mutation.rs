@@ -17,8 +17,8 @@ use tenta_html::{Attribute, QualName};
 pub enum ReplaceAllWith {
     /// Remove the current children without adding a node.
     Empty,
-    /// Add one freshly detached text node.
-    Text(NodeId),
+    /// Add one freshly detached text node, or a doctype for a document parent.
+    Detached(NodeId),
     /// Move all children from a detached fragment or parser root.
     ChildrenOf(NodeId),
 }

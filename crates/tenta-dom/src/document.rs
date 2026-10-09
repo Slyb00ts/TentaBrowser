@@ -25,6 +25,8 @@ use crate::mutation::{
 use crate::selectors::SelectorCache;
 use crate::text::{TextChunk, TextRope};
 
+mod child_node;
+pub use child_node::NodeOrText;
 mod ranges;
 pub use ranges::{LiveRangeId, RangeBoundary};
 mod wrapper_claims;
@@ -2165,7 +2167,9 @@ impl Document {
                         "the node to replace is not a child of the parent",
                     ));
                 }
-                self.validate_insert_excluding(parent, new_child, old_child, old_child)?;
+                self.validate_insert_excluding(parent, new_child, old_child, |node| {
+                    node == old_child
+                })?;
                 if self.kind(new_child) == NodeKind::Fragment {
                     self.preflight_range_removals(
                         std::iter::once(old_child).chain(self.children(new_child)),
@@ -2223,28 +2227,35 @@ impl Document {
         }
     }
 
-    /// Validate the restricted internal replace-all sources and every range
-    /// fixup before any tree link changes. In particular, Document parent
-    /// hierarchy constraints are outside this operation's current callers.
+    /// Validate the restricted replace-all sources and every range fixup
+    /// before any tree link changes. The existing children are being removed,
+    /// so a document parent only constrains what the replacement itself holds.
     fn validate_replace_all(&self, parent: NodeId, replacement: ReplaceAllWith) -> Result<()> {
         if !self.arena.is_live(parent)
             || !matches!(
                 self.kind(parent),
-                NodeKind::Element | NodeKind::Fragment | NodeKind::ShadowRoot
+                NodeKind::Element | NodeKind::Fragment | NodeKind::ShadowRoot | NodeKind::Document
             )
         {
             return Err(hierarchy_request(
-                "replace-all parent must be an element or fragment",
+                "replace-all parent must be an element, fragment or document",
             ));
         }
+        let in_document = self.kind(parent) == NodeKind::Document;
         match replacement {
             ReplaceAllWith::Empty => self.preflight_range_removals(self.children(parent)),
-            ReplaceAllWith::Text(node) => {
-                if !self.arena.is_live(node)
-                    || self.kind(node) != NodeKind::Text
-                    || self.parent(node).is_some()
-                {
-                    return Err(hierarchy_request("replace-all text must be detached"));
+            ReplaceAllWith::Detached(node) => {
+                let allowed = self.arena.is_live(node)
+                    && !self.parent(node).is_some()
+                    && match self.kind(node) {
+                        NodeKind::Text => !in_document,
+                        NodeKind::DocType => in_document,
+                        _ => false,
+                    };
+                if !allowed {
+                    return Err(hierarchy_request(
+                        "replace-all node must be a detached text node or a doctype for a document",
+                    ));
                 }
                 self.preflight_range_removals(self.children(parent))
             }
@@ -2273,17 +2284,47 @@ impl Document {
                         "replace-all source must be a detached fragment or parser root",
                     ));
                 }
+                let mut elements = 0;
                 for child in self.children(source) {
-                    if matches!(
-                        self.kind(child),
-                        NodeKind::Document | NodeKind::ShadowRoot | NodeKind::DocType
-                    ) {
-                        return Err(hierarchy_request("replace-all source has an invalid child"));
+                    match self.kind(child) {
+                        NodeKind::Document | NodeKind::ShadowRoot => {
+                            return Err(hierarchy_request(
+                                "replace-all source has an invalid child",
+                            ));
+                        }
+                        NodeKind::DocType if !in_document => {
+                            return Err(hierarchy_request(
+                                "a doctype may only be a child of the document",
+                            ));
+                        }
+                        NodeKind::Text | NodeKind::CData if in_document => {
+                            return Err(hierarchy_request(
+                                "a document cannot contain Text children",
+                            ));
+                        }
+                        NodeKind::Element => elements += 1,
+                        _ => {}
                     }
+                }
+                if in_document && elements > 1 {
+                    return Err(hierarchy_request(
+                        "a document cannot contain multiple elements",
+                    ));
                 }
                 self.preflight_range_removals(self.children(parent).chain(self.children(source)))
             }
         }
+    }
+
+    /// Checks that replacing every child of `parent` with `node` is a valid
+    /// pre-insertion. The children about to be removed are ignored, which is
+    /// what lets a document swap its doctype and root element.
+    ///
+    /// # Errors
+    ///
+    /// Returns `HierarchyRequestError` when the hierarchy would be invalid.
+    pub fn validate_replace_children(&self, parent: NodeId, node: NodeId) -> Result<()> {
+        self.validate_insert_excluding(parent, node, NodeId::NONE, |_| true)
     }
 
     fn replace_all_unobserved(
@@ -2299,7 +2340,7 @@ impl Document {
         }
         let added = match replacement {
             ReplaceAllWith::Empty => 0,
-            ReplaceAllWith::Text(node) => {
+            ReplaceAllWith::Detached(node) => {
                 self.link(parent, node, NodeId::NONE);
                 1
             }
@@ -2520,7 +2561,7 @@ impl Document {
     }
 
     fn validate_insert(&self, parent: NodeId, child: NodeId, before: NodeId) -> Result<()> {
-        self.validate_insert_excluding(parent, child, before, NodeId::NONE)
+        self.validate_insert_excluding(parent, child, before, |_| false)
     }
 
     fn validate_insert_excluding(
@@ -2528,7 +2569,7 @@ impl Document {
         parent: NodeId,
         child: NodeId,
         before: NodeId,
-        excluded: NodeId,
+        excluded: impl Fn(NodeId) -> bool,
     ) -> Result<()> {
         if !self.arena.is_live(parent) || !self.arena.is_live(child) {
             return Err(hierarchy_request("insert with a stale node"));
@@ -2596,12 +2637,12 @@ impl Document {
             if has_element {
                 let existing = self
                     .children(parent)
-                    .any(|node| node != excluded && self.kind(node) == NodeKind::Element);
+                    .any(|node| !excluded(node) && self.kind(node) == NodeKind::Element);
                 let following_doctype = before.is_some()
                     && self
                         .children(parent)
                         .skip_while(|node| *node != before)
-                        .any(|node| node != excluded && self.kind(node) == NodeKind::DocType);
+                        .any(|node| !excluded(node) && self.kind(node) == NodeKind::DocType);
                 if existing || following_doctype {
                     return Err(hierarchy_request(
                         "a document requires one element after its doctype",
@@ -2610,11 +2651,11 @@ impl Document {
             } else if kind == NodeKind::DocType {
                 let existing = self
                     .children(parent)
-                    .any(|node| node != excluded && self.kind(node) == NodeKind::DocType);
+                    .any(|node| !excluded(node) && self.kind(node) == NodeKind::DocType);
                 let preceding_element = self
                     .children(parent)
                     .take_while(|node| *node != before)
-                    .any(|node| node != excluded && self.kind(node) == NodeKind::Element);
+                    .any(|node| !excluded(node) && self.kind(node) == NodeKind::Element);
                 if existing || preceding_element {
                     return Err(hierarchy_request(
                         "a document requires one doctype before its element",

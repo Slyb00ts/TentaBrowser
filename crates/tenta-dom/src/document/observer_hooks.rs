@@ -574,7 +574,9 @@ impl Document {
                         "the node to replace is not a child of the parent",
                     ));
                 }
-                self.validate_insert_excluding(*parent, *new_child, *old_child, *old_child)
+                self.validate_insert_excluding(*parent, *new_child, *old_child, |node| {
+                    node == *old_child
+                })
             }
             Mutation::ReplaceAll {
                 parent,
@@ -770,7 +772,7 @@ impl Document {
         }
         let added = match replacement {
             ReplaceAllWith::Empty => 0,
-            ReplaceAllWith::Text(node) => {
+            ReplaceAllWith::Detached(node) => {
                 observed.check_pre_effect()?;
                 self.link(parent, node, NodeId::NONE);
                 observed.note_effect();
