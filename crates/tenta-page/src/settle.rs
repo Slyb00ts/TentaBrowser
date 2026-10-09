@@ -555,8 +555,13 @@ impl SettleTracker {
 
     /// The result of the `Selector`/`Text` predicate the page evaluated.
     pub fn note_condition_met(&mut self, met: bool) {
-        self.condition_met = met;
-        self.signal_state_change();
+        // Only a change is a state change. The settle loop re-reads the condition
+        // on every turn, so signalling an unchanged answer would wake the loop
+        // that just asked and spin it without ever yielding the page thread.
+        if self.condition_met != met {
+            self.condition_met = met;
+            self.signal_state_change();
+        }
     }
 
     // ------------------------------------------------------------- the state
@@ -832,6 +837,34 @@ mod tests {
             Arc::new(clock.clone()) as Arc<dyn Clock>,
         );
         (tracker, clock)
+    }
+
+    /// Whether a wake-up is waiting on the tracker's notifier, consuming it.
+    fn wakeup_pending(tracker: &SettleTracker) -> bool {
+        use std::future::Future;
+        let notify = tracker.notify_handle();
+        let mut notified = std::pin::pin!(notify.notified());
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        notified.as_mut().poll(&mut cx).is_ready()
+    }
+
+    /// The settle loop re-reads the condition on every turn; an answer that did
+    /// not change must not wake it, or the loop wakes itself and never yields.
+    #[test]
+    fn an_unchanged_condition_does_not_wake_the_settle_loop() {
+        let (mut tracker, _clock) = tracker(Settle::Selector("#never".to_owned()));
+        assert!(!wakeup_pending(&tracker));
+
+        tracker.note_condition_met(false);
+        assert!(
+            !wakeup_pending(&tracker),
+            "an unchanged answer is no change"
+        );
+
+        tracker.note_condition_met(true);
+        assert!(wakeup_pending(&tracker), "a changed answer wakes the loop");
+        tracker.note_condition_met(true);
+        assert!(!wakeup_pending(&tracker));
     }
 
     /// The `S-static-text` settle test of `docs/spec/15-testing-and-benchmarks.md`

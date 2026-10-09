@@ -9,6 +9,7 @@
 
 mod support;
 
+use std::future::Future;
 use std::time::{Duration, Instant};
 
 use support::{Harness, URL, with_page_thread};
@@ -17,6 +18,7 @@ use tenta_js::engine::ScriptKind;
 use tenta_page::PageEvent;
 use tenta_page::page::{Goto, Page};
 use tenta_page::settle::{Settle, SettleState};
+use tenta_page::thread::PageThread;
 
 const PAGE: &str =
     "<!doctype html><html><body><script>start</script><p id=\"tail\">end</p></body></html>";
@@ -371,14 +373,29 @@ async fn closing_a_page_ends_a_running_settle_and_drops_the_engine() {
         with_page_thread(&harness.thread, async {
             load(&harness).await;
             let page = harness.page.clone();
-            let waiting = tokio::task::spawn_local(async move {
+            let mut waiting = std::pin::pin!(
                 page.wait_for_settle(Settle::Selector("#never".to_owned()), PATIENCE)
-                    .await
-            });
-            // Let the wait start and take the engine over.
-            for _ in 0..20 {
-                tokio::task::yield_now().await;
-            }
+            );
+            // One poll posts the wait to the page thread; it needs no more.
+            std::future::poll_fn(|cx| {
+                assert!(waiting.as_mut().poll(cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            // Jobs start in the order they were posted, and the wait runs to its
+            // first park without yielding, so once this later job runs the wait
+            // has taken the engine over. Yielding instead is not a signal: the
+            // wait's own park starves `yield_now` until its deadline.
+            let (started, running) = tokio::sync::oneshot::channel();
+            harness
+                .thread
+                .post_job(Box::new(move || {
+                    Box::pin(async move {
+                        let _ = started.send(());
+                    })
+                }))
+                .expect("post");
+            running.await.expect("the page thread ran the marker job");
 
             if graceful {
                 harness.page.close().await.expect("close");
@@ -386,7 +403,7 @@ async fn closing_a_page_ends_a_running_settle_and_drops_the_engine() {
                 assert!(harness.page.begin_close());
             }
 
-            let outcome = waiting.await.expect("the wait task");
+            let outcome = waiting.await;
             assert!(
                 outcome.is_err(),
                 "the wait ended with an error: {outcome:?}"
