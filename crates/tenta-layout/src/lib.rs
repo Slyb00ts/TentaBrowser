@@ -35,6 +35,8 @@ pub use box_tree::{
     LayoutCx, NoImages, TextSource,
 };
 pub use font::FontSystem;
+#[cfg(feature = "embedded-fonts")]
+pub use font::{ResolvedFont, VerticalMetrics};
 pub use fragment::{
     FragFlags, FragId, Fragment, FragmentBuilder, FragmentKind, FragmentTree, TextFragment,
 };
