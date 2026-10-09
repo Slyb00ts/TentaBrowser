@@ -528,3 +528,95 @@ fn table_parts_and_controls_have_their_display() {
         ],
     );
 }
+
+#[test]
+fn block_and_table_elements_are_bidi_isolates_and_bdo_overrides() {
+    let isolates = [
+        "address",
+        "blockquote",
+        "center",
+        "div",
+        "figure",
+        "figcaption",
+        "footer",
+        "form",
+        "header",
+        "hr",
+        "legend",
+        "listing",
+        "main",
+        "p",
+        "pre",
+        "summary",
+        "xmp",
+        "article",
+        "aside",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "hgroup",
+        "nav",
+        "search",
+        "section",
+        "dir",
+        "dd",
+        "dl",
+        "dt",
+        "menu",
+        "ol",
+        "ul",
+        "li",
+        "bdi",
+        "output",
+    ];
+    let fixtures = isolates
+        .iter()
+        .map(|tag| format!("<{tag} id=t-{tag}></{tag}>"))
+        .collect::<String>()
+        + "<table id=t-table><caption id=t-caption></caption><colgroup id=t-colgroup>\
+           <col id=t-col></colgroup><thead id=t-thead><tr id=t-tr><th id=t-th></th></tr></thead>\
+           <tbody id=t-tbody><tr><td id=t-td></td></tr></tbody><tfoot id=t-tfoot></tfoot></table>\
+           <span id=ltr dir=ltr></span><span id=rtl dir=rtl></span><span id=auto dir=auto></span>\
+           <span id=plain></span><bdo id=bdo></bdo><bdo id=bdod dir=rtl></bdo>\
+           <plaintext id=t-plaintext>";
+    let page = standards(&fixtures);
+    let mut triples: Vec<(String, &str, &str)> = isolates
+        .iter()
+        .chain(&[
+            "plaintext",
+            "table",
+            "caption",
+            "colgroup",
+            "col",
+            "thead",
+            "tbody",
+            "tfoot",
+            "tr",
+            "td",
+            "th",
+        ])
+        .map(|tag| (format!("t-{tag}"), "unicode-bidi", "isolate"))
+        .collect();
+    for id in ["ltr", "rtl", "auto"] {
+        triples.push((id.to_owned(), "unicode-bidi", "isolate"));
+    }
+    triples.push(("plain".to_owned(), "unicode-bidi", "normal"));
+    triples.push(("bdo".to_owned(), "unicode-bidi", "isolate-override"));
+    triples.push(("bdod".to_owned(), "unicode-bidi", "isolate-override"));
+    let (doc, engine) = &page;
+    let failures: Vec<String> = triples
+        .iter()
+        .filter_map(|(id, property, expected)| {
+            let actual = value(doc, engine, id, property);
+            (actual != *expected).then(|| format!("#{id}: expected `{expected}`, got `{actual}`"))
+        })
+        .collect();
+    assert!(
+        failures.is_empty(),
+        "unicode-bidi differs:\n{}",
+        failures.join("\n")
+    );
+}
