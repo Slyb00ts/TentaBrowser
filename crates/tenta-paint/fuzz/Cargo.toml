@@ -1,0 +1,58 @@
+[package]
+name = "tenta-paint-fuzz"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+
+# Excluded from the workspace (see the root Cargo.toml): `cargo fuzz` builds
+# it with its own nightly toolchain and sanitiser flags.
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tenta-paint = { path = ".." }
+
+[[bin]]
+name = "png"
+path = "fuzz_targets/png.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jpeg"
+path = "fuzz_targets/jpeg.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "webp"
+path = "fuzz_targets/webp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gif"
+path = "fuzz_targets/gif.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bmp"
+path = "fuzz_targets/bmp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ico"
+path = "fuzz_targets/ico.rs"
+test = false
+doc = false
+bench = false

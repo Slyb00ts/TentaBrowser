@@ -1,6 +1,47 @@
 //! Image decoding and the decoded-image store.
+//!
+//! Every decoder produces straight RGBA8; `decode` then bounds it by the
+//! [`DecodeLimits`], applies EXIF orientation, shrinks it to the requested
+//! size and premultiplies it, which is what `tiny-skia` composites.
+//!
+//! Memory is bounded by the **peak** of a decode, not by its output: every
+//! decoder estimates what it holds at its largest (see `Ctx::admit`) and
+//! refuses images that do not fit `DecodeLimits::max_transient_bytes`, while the
+//! retained image must fit `max_decoded_bytes`. A decode
+//! can also be stopped by a deadline or a cancel flag ([`DecodeControl`]).
+//!
+//! Images are kept as one contiguous pixmap rather than 256x256 tiles, and a
+//! GIF or animated WebP yields its first frame only (D-035). The raster path
+//! draws an image through a single `tiny-skia` pattern shader, so tiles would
+//! turn one draw into one draw per tile and need seam handling for bilinear
+//! sampling at every tile edge. Decode-time shrinking to the largest drawn size
+//! already bounds memory, which is what tiling is for; revisit it when the GPU
+//! path needs tile-granular upload.
+
+mod bmp;
+mod ctx;
+mod decode;
+mod error;
+mod format;
+mod gif;
+mod ico;
+mod jpeg;
+mod limits;
+mod orient;
+mod pixels;
+mod png;
+mod resize;
+mod store;
+mod webp;
 
 use std::sync::Arc;
+
+pub use ctx::DecodeControl;
+pub use decode::{decode, decode_format, decode_format_with_control, decode_with_control};
+pub use error::DecodeError;
+pub use format::{ImageFormat, sniff_format};
+pub use limits::{DecodeLimits, DecodeParams};
+pub use store::{ImageInfo, ImageStore, StoreError, StoreKey};
 
 /// Handle to an image in an [`ImageStore`].
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -25,61 +66,9 @@ pub struct DecodedImage {
     pub height: u32,
     /// `width * height * 4` bytes.
     pub rgba: Arc<[u8]>,
-}
-
-/// Decoded images by id. Ids are dense and never reused.
-#[derive(Clone, Debug, Default)]
-pub struct ImageStore {
-    images: Vec<DecodedImage>,
-}
-
-impl ImageStore {
-    /// An empty store.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Adds an image and returns its id.
-    pub fn insert(&mut self, image: DecodedImage) -> ImageId {
-        let id = ImageId(self.images.len() as u32);
-        self.images.push(image);
-        id
-    }
-
-    /// The image with this id.
-    pub fn get(&self, id: ImageId) -> Option<&DecodedImage> {
-        self.images.get(id.0 as usize)
-    }
-
-    /// Number of stored images.
-    pub fn len(&self) -> usize {
-        self.images.len()
-    }
-
-    /// True when the store holds no image.
-    pub fn is_empty(&self) -> bool {
-        self.images.is_empty()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ids_are_dense_and_resolve() {
-        let mut store = ImageStore::new();
-        assert!(store.is_empty());
-        let image = DecodedImage {
-            width: 1,
-            height: 1,
-            rgba: Arc::from([0, 0, 0, 255]),
-        };
-        let a = store.insert(image.clone());
-        let b = store.insert(image.clone());
-        assert_eq!((a, b), (ImageId(0), ImageId(1)));
-        assert_eq!(store.get(b), Some(&image));
-        assert_eq!(store.get(ImageId(2)), None);
-        assert_eq!(store.len(), 2);
-    }
+    /// Width of the image as stored in the file, after orientation; the
+    /// pixels above may be a shrunken copy of it.
+    pub source_width: u32,
+    /// Height of the image as stored in the file, after orientation.
+    pub source_height: u32,
 }

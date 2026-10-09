@@ -18,7 +18,11 @@ use std::fmt;
 pub use build::{PaintContext, build};
 pub use dl::{DisplayList, Item, Radii};
 pub use encode::{PngProfile, encode_jpeg, encode_png};
-pub use image::{DecodedImage, ImageId, ImageQuality, ImageStore};
+pub use image::{
+    DecodeControl, DecodeError, DecodeLimits, DecodeParams, DecodedImage, ImageFormat, ImageId,
+    ImageInfo, ImageQuality, ImageStore, StoreError, StoreKey, decode, decode_format,
+    decode_format_with_control, decode_with_control, sniff_format,
+};
 pub use raster::{Pixmap, RasterOptions, RasterOutput, RasterStats, rasterize};
 pub use tenta_layout::types::{
     Affine, BackgroundContent, BackgroundLayer, BackgroundSize, BlendMode, BorderPaint,
