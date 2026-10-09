@@ -141,7 +141,7 @@ fn eval_expression(source: &str) -> String {
     )
 }
 
-fn settle(wait: Wait) -> Settle {
+pub(crate) fn settle(wait: Wait) -> Settle {
     match wait {
         Wait::Load => Settle::Load,
         Wait::DomContent => Settle::DomContent,

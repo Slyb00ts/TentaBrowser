@@ -41,6 +41,8 @@ unsafe_code = "forbid"
 
 [dev-dependencies]
 tenta-testutil = { workspace = true }
+# Decodes the screenshots the `render` tests write.
+png = { workspace = true }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 
 [[bin]]

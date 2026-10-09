@@ -89,6 +89,14 @@ pub fn open_eval(global: &Global) -> CliResult<Session> {
     Ok(Session { engine, context })
 }
 
+/// Opens the engine a `screenshot` renders with: pages may reach Tier 3.
+#[cfg(feature = "render")]
+pub fn open_render(global: &Global) -> CliResult<Session> {
+    let engine = build_engine_for_tier(global, 1, Tier::Render)?;
+    let context = build_context(&engine, global)?;
+    Ok(Session { engine, context })
+}
+
 /// The filesystem policy of the process.
 ///
 /// `--allow-read`, `--allow-write` and `--downloads` are the only thing that

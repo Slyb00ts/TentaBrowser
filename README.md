@@ -113,6 +113,40 @@ opts out), per-host concurrency and spacing are enforced, and `Retry-After`
 on 429 or 503 is waited out before one retry. The `User-Agent` is the
 profile's ordinary Chrome UA, here as everywhere.
 
+### `screenshot`: one URL, one image
+
+```bash
+cargo build --release -p tentabrowser-cli --features render
+tentabrowser screenshot https://example.com/ -o page.png --allow-write .
+tentabrowser screenshot https://example.com/ --full-page -o full.png --allow-write .
+tentabrowser screenshot https://example.com/ --selector main --format jpeg --quality 85 -o main.jpg --allow-write .
+tentabrowser screenshot https://example.com/ --clip 0,0,800,600 --dpr 2 -o - > clip.png
+```
+
+Needs a build with `render` (the `full` feature set includes it); a build
+without it exits `5` before making a request. `-o` takes a file, which needs
+`--allow-write`, or `-` for stdout (refused on a terminal). The default file
+is `screenshot.png`. `--full-page`, `--selector` and `--clip` are mutually
+exclusive; without one of them the viewport is captured. The viewport is
+`--width` by `--height` CSS pixels (default 1280 by 800) at `--dpr` device
+pixels per CSS pixel (default 1). `--quality` (1 to 100, default 90) needs
+`--format jpeg`. `--wait` takes the same values as `fetch`, and the global
+`--timeout` (milliseconds) bounds the navigation. `--js on|off` decides whether
+the page's scripts run before the capture; the default is `on` in a build with
+`v8` and `off` otherwise, and `--js on` needs `v8`, so JavaScript pages need the
+`full` build (exit `5` without it). `--dpr 2` doubles the output size. An
+existing file at `-o` is overwritten without a prompt. `file://` URLs are not
+supported yet; that is planned, and until it lands they fail with
+`net::ERR_BLOCKED_BY_CLIENT` (exit `1`).
+
+One line on stderr says what was written. Anything the rasteriser could not
+draw is listed after it as a warning, and the output is still written; a page
+taller than the size limits is cut and reported as such. `--json` prints that
+line as a JSON object instead. Exit codes: `0` ok, `1` navigation or render
+failed, `2` usage, filesystem policy, a selector that matches nothing or an
+element without a box, `3` the server answered 4xx or 5xx
+(`--allow-http-errors` accepts it), `5` the build has no render backend.
+
 ### Everywhere
 
 `--profile <name|path|none>`, `--user-agent`, `--accept-language`,

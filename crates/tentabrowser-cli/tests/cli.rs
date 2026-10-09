@@ -946,3 +946,596 @@ async fn fetch_with_headers_flag_strips_userinfo() {
         "headers output should contain the host: {err}"
     );
 }
+
+// -------------------------------------------------------------------- screenshot
+
+#[cfg(feature = "render")]
+const SOLID: &str = "<!doctype html><html><head><style>html,body{margin:0}body{background:#00ff00}\
+    #box{width:100px;height:50px;background:#ff0000}</style></head>\
+    <body><div id=\"box\"></div></body></html>";
+
+#[cfg(feature = "render")]
+const LONG: &str = "<!doctype html><html><head><style>html,body{margin:0}\
+    .top{height:1500px;background:#00ff00}.bottom{height:1500px;background:#0000ff}\
+    </style></head><body><div class=\"top\"></div><div class=\"bottom\"></div></body></html>";
+
+#[cfg(all(feature = "render", feature = "v8"))]
+const SCRIPTED: &str = "<!doctype html><html><head><style>html,body{margin:0}</style></head>\
+    <body><script>document.body.style.background = '#ff0000';</script></body></html>";
+
+#[cfg(feature = "render")]
+const SHADOW: &str = "<!doctype html><html><head><style>html,body{margin:0}\
+    #card{width:60px;height:40px;margin:20px;background:#ffffff;box-shadow:0 0 8px #000000}\
+    </style></head><body><div id=\"card\"></div></body></html>";
+
+#[cfg(feature = "render")]
+const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+/// The IEND chunk: the last bytes of a PNG, with no newline after them.
+#[cfg(feature = "render")]
+const PNG_END: [u8; 12] = [0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xAE, 0x42, 0x60, 0x82];
+
+#[cfg(feature = "render")]
+const RED: [u8; 4] = [255, 0, 0, 255];
+#[cfg(feature = "render")]
+const GREEN: [u8; 4] = [0, 255, 0, 255];
+#[cfg(feature = "render")]
+const BLUE: [u8; 4] = [0, 0, 255, 255];
+
+/// Serves the screenshot pages from a directory of their own.
+#[cfg(feature = "render")]
+async fn screenshot_server() -> (FixtureServer, TempDir) {
+    let pages = temp_dir("cli-screenshot-pages");
+    pages.write("solid.html", SOLID);
+    pages.write("long.html", LONG);
+    pages.write("shadow.html", SHADOW);
+    #[cfg(feature = "v8")]
+    pages.write("scripted.html", SCRIPTED);
+    let server = FixtureServer::start(FixtureServerConfig::new(pages.path()))
+        .await
+        .expect("fixture server");
+    (server, pages)
+}
+
+#[cfg(feature = "render")]
+fn utf8(path: &Path) -> &str {
+    path.to_str().expect("utf-8 path")
+}
+
+#[cfg(feature = "render")]
+struct Decoded {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
+
+#[cfg(feature = "render")]
+impl Decoded {
+    fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
+        let at = ((y * self.width + x) * 4) as usize;
+        self.rgba[at..at + 4].try_into().expect("four bytes")
+    }
+}
+
+#[cfg(feature = "render")]
+fn decode_png(bytes: &[u8]) -> Decoded {
+    assert_eq!(&bytes[..8], PNG_SIGNATURE, "a PNG signature");
+    let mut reader = png::Decoder::new(std::io::Cursor::new(bytes))
+        .read_info()
+        .expect("a decodable PNG");
+    let mut rgba = vec![0; reader.output_buffer_size().expect("a sized buffer")];
+    let info = reader.next_frame(&mut rgba).expect("a frame");
+    assert_eq!(info.color_type, png::ColorType::Rgba);
+    rgba.truncate(info.buffer_size());
+    Decoded {
+        width: info.width,
+        height: info.height,
+        rgba,
+    }
+}
+
+#[cfg(feature = "render")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_screenshot_writes_a_png_of_the_requested_size() {
+    let (server, _pages) = screenshot_server().await;
+    let url = server.url("/solid.html");
+    let cli = Cli::new("cli-shot-png");
+    let out = temp_dir("cli-shot-out");
+    let target = out.path().join("solid.png");
+    let output = cli.run(&[
+        "screenshot",
+        &url,
+        "-o",
+        utf8(&target),
+        "--allow-write",
+        utf8(out.path()),
+        "--allow-private-network",
+        "--ephemeral",
+        "--width",
+        "320",
+        "--height",
+        "200",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).is_empty(), "the image went to the file");
+    assert!(
+        stderr(&output).contains("320x200 png"),
+        "{}",
+        stderr(&output)
+    );
+
+    let shot = decode_png(&std::fs::read(&target).expect("the file exists"));
+    assert_eq!((shot.width, shot.height), (320, 200));
+    assert_eq!(shot.pixel(50, 25), RED, "inside the 100x50 box");
+    assert_eq!(shot.pixel(300, 150), GREEN, "the body background");
+}
+
+#[cfg(feature = "render")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stdout_receives_the_exact_png_bytes() {
+    let (server, _pages) = screenshot_server().await;
+    let url = server.url("/solid.html");
+    let cli = Cli::new("cli-shot-stdout");
+    let output = cli.run(&[
+        "screenshot",
+        &url,
+        "-o",
+        "-",
+        "--allow-private-network",
+        "--ephemeral",
+        "--width",
+        "64",
+        "--height",
+        "48",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(output.stdout.starts_with(&PNG_SIGNATURE), "a PNG on stdout");
+    assert!(
+        output.stdout.ends_with(&PNG_END),
+        "no newline appended to the image"
+    );
+    assert!(
+        stderr(&output).contains("wrote stdout"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[cfg(feature = "render")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jpeg_output_carries_the_jpeg_markers() {
+    let (server, _pages) = screenshot_server().await;
+    let url = server.url("/solid.html");
+    let cli = Cli::new("cli-shot-jpeg");
+    let out = temp_dir("cli-shot-jpeg-out");
+    let target = out.path().join("solid.jpg");
+    let output = cli.run(&[
+        "screenshot",
+        &url,
+        "-o",
+        utf8(&target),
+        "--format",
+        "jpeg",
+        "--quality",
+        "75",
+        "--allow-write",
+        utf8(out.path()),
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stderr(&output).contains("jpeg"), "{}", stderr(&output));
+
+    let bytes = std::fs::read(&target).expect("the file exists");
+    assert_eq!(&bytes[..3], [0xFF, 0xD8, 0xFF], "the JPEG start of image");
+    assert_eq!(
+        &bytes[bytes.len() - 2..],
+        [0xFF, 0xD9],
+        "the JPEG end of image"
+    );
+}
+
+#[cfg(feature = "render")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_selector_captures_the_element_and_full_page_the_whole_document() {
+    let (server, _pages) = screenshot_server().await;
+    let solid = server.url("/solid.html");
+    let long = server.url("/long.html");
+    let cli = Cli::new("cli-shot-areas");
+    let out = temp_dir("cli-shot-areas-out");
+    let element = out.path().join("element.png");
+    let selected = cli.run(&[
+        "screenshot",
+        &solid,
+        "-o",
+        utf8(&element),
+        "--selector",
+        "#box",
+        "--allow-write",
+        utf8(out.path()),
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&selected), 0, "{}", stderr(&selected));
+    let shot = decode_png(&std::fs::read(&element).expect("the element image"));
+    assert_eq!(
+        (shot.width, shot.height),
+        (100, 50),
+        "the box is 100x50 CSS px"
+    );
+    assert_eq!(shot.pixel(99, 49), RED);
+
+    let whole = out.path().join("long.png");
+    let full = cli.run(&[
+        "screenshot",
+        &long,
+        "-o",
+        utf8(&whole),
+        "--full-page",
+        "--width",
+        "320",
+        "--height",
+        "200",
+        "--allow-write",
+        utf8(out.path()),
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&full), 0, "{}", stderr(&full));
+    let page = decode_png(&std::fs::read(&whole).expect("the full-page image"));
+    assert_eq!(page.width, 320);
+    assert!(
+        page.height >= 3000,
+        "the scroll extent, not the 200px viewport: {}",
+        page.height
+    );
+    assert_eq!(page.pixel(10, 10), GREEN, "the first screen");
+    assert_eq!(page.pixel(10, 2000), BLUE, "the second half of the page");
+}
+
+#[cfg(feature = "render")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_clip_captures_its_rectangle_in_css_pixels() {
+    let (server, _pages) = screenshot_server().await;
+    let url = server.url("/solid.html");
+    let cli = Cli::new("cli-shot-clip");
+    let out = temp_dir("cli-shot-clip-out");
+    let target = out.path().join("clip.png");
+    let output = cli.run(&[
+        "screenshot",
+        &url,
+        "-o",
+        utf8(&target),
+        "--clip",
+        "10,20,30,40",
+        "--allow-write",
+        utf8(out.path()),
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let shot = decode_png(&std::fs::read(&target).expect("the clip image"));
+    assert_eq!((shot.width, shot.height), (30, 40));
+    assert_eq!(shot.pixel(0, 0), RED, "the clip starts inside the box");
+    assert_eq!(shot.pixel(0, 39), GREEN, "and ends below it");
+}
+
+#[cfg(feature = "render")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_image_file_needs_allow_write_and_is_not_created_when_refused() {
+    let (server, _pages) = screenshot_server().await;
+    let url = server.url("/solid.html");
+    let cli = Cli::new("cli-shot-denied");
+    let out = temp_dir("cli-shot-denied-out");
+    let target = out.path().join("denied.png");
+    let output = cli.run(&[
+        "screenshot",
+        &url,
+        "-o",
+        utf8(&target),
+        "--allow-private-network",
+    ]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("denied by policy"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !target.exists(),
+        "nothing is written when the path is refused"
+    );
+}
+
+#[cfg(feature = "render")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_http_error_is_refused_unless_the_flag_accepts_it() {
+    let (server, _pages) = screenshot_server().await;
+    let url = server.url("/missing.html");
+    let cli = Cli::new("cli-shot-http");
+    let out = temp_dir("cli-shot-http-out");
+    let target = out.path().join("missing.png");
+    let refused = cli.run(&[
+        "screenshot",
+        &url,
+        "-o",
+        utf8(&target),
+        "--allow-write",
+        utf8(out.path()),
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&refused), 3, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("HTTP 404"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(!target.exists());
+
+    let accepted = cli.run(&[
+        "screenshot",
+        &url,
+        "-o",
+        utf8(&target),
+        "--allow-http-errors",
+        "--allow-write",
+        utf8(out.path()),
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&accepted), 0, "{}", stderr(&accepted));
+    assert!(target.exists());
+}
+
+#[cfg(all(feature = "render", feature = "v8"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn scripts_run_before_the_capture_when_the_build_has_v8() {
+    let (server, _pages) = screenshot_server().await;
+    let url = server.url("/scripted.html");
+    let cli = Cli::new("cli-shot-js");
+    let out = temp_dir("cli-shot-js-out");
+    let target = out.path().join("scripted.png");
+    let output = cli.run(&[
+        "screenshot",
+        &url,
+        "-o",
+        utf8(&target),
+        "--width",
+        "64",
+        "--height",
+        "48",
+        "--allow-write",
+        utf8(out.path()),
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let shot = decode_png(&std::fs::read(&target).expect("the image"));
+    assert_eq!(shot.pixel(10, 10), RED, "the script painted the body");
+}
+
+#[test]
+fn screenshot_options_are_refused_before_any_request() {
+    let cli = Cli::new("cli-shot-usage");
+    let url = "http://127.0.0.1:1/";
+    let cases: [&[&str]; 5] = [
+        &["--quality", "0"],
+        &["--quality", "101"],
+        &["--quality", "50"],
+        &["--selector", "#box", "--full-page"],
+        &["--clip", "1,2,0,40"],
+    ];
+    for case in cases {
+        let output = cli.run(&[&["screenshot", url][..], case].concat());
+        assert_eq!(code(&output), 2, "{case:?}: {}", stderr(&output));
+        assert!(stdout(&output).is_empty(), "{case:?}");
+    }
+    let quality = cli.run(&["screenshot", url, "--quality", "50"]);
+    assert!(
+        stderr(&quality).contains("--format jpeg"),
+        "{}",
+        stderr(&quality)
+    );
+}
+
+#[cfg(not(feature = "render"))]
+#[test]
+fn screenshot_without_render_exits_unsupported_before_network_access() {
+    let cli = Cli::new("cli-shot-disabled");
+    let output = cli.run(&["screenshot", "http://127.0.0.1:1/"]);
+    assert_eq!(code(&output), 5, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("--features render"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(stdout(&output).is_empty());
+}
+
+#[cfg(feature = "render")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dpr_doubles_the_output_size_and_the_device_pixels() {
+    let (server, _pages) = screenshot_server().await;
+    let url = server.url("/solid.html");
+    let cli = Cli::new("cli-shot-dpr");
+    let out = temp_dir("cli-shot-dpr-out");
+    let target = out.path().join("dpr.png");
+    let output = cli.run(&[
+        "screenshot",
+        &url,
+        "-o",
+        utf8(&target),
+        "--width",
+        "320",
+        "--height",
+        "200",
+        "--dpr",
+        "2",
+        "--allow-write",
+        utf8(out.path()),
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let shot = decode_png(&std::fs::read(&target).expect("the image"));
+    assert_eq!((shot.width, shot.height), (640, 400));
+    assert_eq!(
+        shot.pixel(150, 80),
+        RED,
+        "the 100x50 box covers 200x100 device px"
+    );
+    assert_eq!(shot.pixel(400, 300), GREEN);
+}
+
+#[cfg(feature = "render")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn json_prints_one_summary_object_on_stderr() {
+    let (server, _pages) = screenshot_server().await;
+    let url = server.url("/solid.html");
+    let cli = Cli::new("cli-shot-json");
+    let out = temp_dir("cli-shot-json-out");
+    let target = out.path().join("summary.png");
+    let output = cli.run(&[
+        "screenshot",
+        &url,
+        "-o",
+        utf8(&target),
+        "--width",
+        "320",
+        "--height",
+        "200",
+        "--json",
+        "--allow-write",
+        utf8(out.path()),
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).is_empty(), "the image went to the file");
+    let summary: Value = serde_json::from_str(stderr(&output).trim()).expect("one JSON object");
+    assert!(
+        summary["url"]
+            .as_str()
+            .expect("url")
+            .ends_with("/solid.html")
+    );
+    assert_eq!(summary["format"], "png");
+    assert_eq!(summary["width"], 320);
+    assert_eq!(summary["height"], 200);
+    assert_eq!(
+        summary["bytes"].as_u64(),
+        Some(std::fs::metadata(&target).expect("the file").len())
+    );
+    assert!(summary["ms"].is_number());
+    assert_eq!(summary["clamped"], false);
+    assert!(summary["skipped"].is_object());
+    assert!(summary["approximated"].is_object());
+}
+
+#[cfg(feature = "render")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_box_shadow_is_reported_as_not_drawn() {
+    let (server, _pages) = screenshot_server().await;
+    let url = server.url("/shadow.html");
+    let cli = Cli::new("cli-shot-shadow");
+    let out = temp_dir("cli-shot-shadow-out");
+    let target = out.path().join("shadow.png");
+    let output = cli.run(&[
+        "screenshot",
+        &url,
+        "-o",
+        utf8(&target),
+        "--allow-write",
+        utf8(out.path()),
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("warning: not drawn: BoxShadow x1"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(target.exists(), "the image is written anyway");
+}
+
+#[cfg(feature = "render")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_selector_that_matches_nothing_is_a_usage_error() {
+    let (server, _pages) = screenshot_server().await;
+    let url = server.url("/solid.html");
+    let cli = Cli::new("cli-shot-nothing");
+    let out = temp_dir("cli-shot-nothing-out");
+    let target = out.path().join("none.png");
+    let output = cli.run(&[
+        "screenshot",
+        &url,
+        "-o",
+        utf8(&target),
+        "--selector",
+        "#no-such-element",
+        "--allow-write",
+        utf8(out.path()),
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(!target.exists());
+}
+
+#[cfg(feature = "render")]
+#[test]
+fn the_default_file_is_refused_without_allow_write() {
+    let cli = Cli::new("cli-shot-default-file");
+    let output = cli.run(&["screenshot", "http://127.0.0.1:1/"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("denied by policy: screenshot.png"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(stdout(&output).is_empty());
+}
+
+#[cfg(all(feature = "render", feature = "v8"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn js_off_leaves_the_scripts_unrun() {
+    let (server, _pages) = screenshot_server().await;
+    let url = server.url("/scripted.html");
+    let cli = Cli::new("cli-shot-js-off");
+    let out = temp_dir("cli-shot-js-off-out");
+    let target = out.path().join("off.png");
+    let output = cli.run(&[
+        "screenshot",
+        &url,
+        "-o",
+        utf8(&target),
+        "--js",
+        "off",
+        "--width",
+        "64",
+        "--height",
+        "48",
+        "--allow-write",
+        utf8(out.path()),
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let shot = decode_png(&std::fs::read(&target).expect("the image"));
+    assert_ne!(shot.pixel(10, 10), RED, "the script did not paint the body");
+}
+
+#[cfg(not(feature = "v8"))]
+#[test]
+fn js_on_needs_a_build_with_v8() {
+    let cli = Cli::new("cli-shot-js-on");
+    let output = cli.run(&["screenshot", "http://127.0.0.1:1/", "--js", "on"]);
+    assert_eq!(code(&output), 5, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("--features v8"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(stdout(&output).is_empty());
+}

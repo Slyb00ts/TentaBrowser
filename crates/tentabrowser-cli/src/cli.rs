@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 
 /// The default fingerprint profile: Chrome 144 for the host operating system
 /// (`docs/spec/21-project-operations.md` §2, O-3).
@@ -103,8 +103,9 @@ pub struct Global {
     #[arg(long, global = true)]
     pub log_unredacted: bool,
 
-    /// Machine-readable output: `fetch --dump json`, `search` as JSON lines.
-    /// `scrape` already prints JSON lines and ignores it.
+    /// Machine-readable output: `fetch --dump json`, `search` as JSON lines,
+    /// and `screenshot`'s summary on stderr as one JSON object. `scrape`
+    /// already prints JSON lines and ignores it.
     #[arg(long, global = true)]
     pub json: bool,
 }
@@ -117,6 +118,8 @@ pub enum Command {
     Search(SearchArgs),
     /// Fetch many URLs politely and print one JSON object per page.
     Scrape(ScrapeArgs),
+    /// Capture a page as a PNG or JPEG image. Needs a build with `--features render`.
+    Screenshot(ScreenshotArgs),
     /// Print the version.
     Version,
 }
@@ -313,6 +316,114 @@ pub enum ScrapeDump {
     Json,
 }
 
+#[derive(Debug, Args)]
+#[command(group(ArgGroup::new("area").args(["full_page", "selector", "clip"])))]
+pub struct ScreenshotArgs {
+    /// The URL to capture.
+    pub url: String,
+
+    /// Image file to write; `-` writes to stdout, which a terminal refuses.
+    /// A file needs --allow-write.
+    #[arg(
+        short = 'o',
+        long = "output",
+        value_name = "FILE",
+        default_value = "screenshot.png"
+    )]
+    pub output: PathBuf,
+
+    /// Capture the whole scrollable page, not the viewport.
+    #[arg(long)]
+    pub full_page: bool,
+
+    /// Capture the border box of the first element matching this CSS selector.
+    #[arg(long, value_name = "CSS")]
+    pub selector: Option<String>,
+
+    /// Capture a rectangle of the document, in CSS pixels, widened to whole
+    /// device pixels.
+    #[arg(long, value_name = "X,Y,W,H", value_parser = parse_clip)]
+    pub clip: Option<[f32; 4]>,
+
+    /// Image encoding.
+    #[arg(long, value_enum, default_value_t = ScreenshotFormat::Png)]
+    pub format: ScreenshotFormat,
+
+    /// JPEG quality, 1 to 100 (default 90). Needs `--format jpeg`.
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u8).range(1..=100))]
+    pub quality: Option<u8>,
+
+    /// Viewport width in CSS pixels.
+    #[arg(long, value_name = "PX", default_value_t = 1280, value_parser = clap::value_parser!(u32).range(1..))]
+    pub width: u32,
+
+    /// Viewport height in CSS pixels.
+    #[arg(long, value_name = "PX", default_value_t = 800, value_parser = clap::value_parser!(u32).range(1..))]
+    pub height: u32,
+
+    /// Device pixels per CSS pixel.
+    #[arg(long, value_name = "N", default_value_t = 1.0, value_parser = parse_dpr)]
+    pub dpr: f32,
+
+    /// How long to wait before capturing.
+    #[arg(long, value_enum, default_value_t = Wait::Load)]
+    pub wait: Wait,
+
+    /// Run the page's scripts. The default is `on` in a build with `v8` and
+    /// `off` otherwise; `on` needs a build with `v8`.
+    #[arg(long, value_enum, value_name = "on|off")]
+    pub js: Option<JsMode>,
+
+    /// Capture a page that answered 4xx or 5xx.
+    #[arg(long)]
+    pub allow_http_errors: bool,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum ScreenshotFormat {
+    Png,
+    Jpeg,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum JsMode {
+    On,
+    Off,
+}
+
+/// `X,Y,W,H` in CSS pixels; the size must be positive.
+fn parse_clip(text: &str) -> Result<[f32; 4], String> {
+    let values = text
+        .split(',')
+        .map(|part| {
+            part.trim()
+                .parse::<f32>()
+                .map_err(|err| format!("{part:?} is not a number: {err}"))
+        })
+        .collect::<Result<Vec<f32>, _>>()?;
+    let [x, y, width, height]: [f32; 4] = values
+        .try_into()
+        .map_err(|_| String::from("expected four numbers: X,Y,W,H"))?;
+    if ![x, y, width, height].iter().all(|value| value.is_finite()) {
+        return Err(String::from("every value must be a finite number"));
+    }
+    if width <= 0.0 || height <= 0.0 {
+        return Err(String::from("the width and height must be positive"));
+    }
+    Ok([x, y, width, height])
+}
+
+fn parse_dpr(text: &str) -> Result<f32, String> {
+    let value: f32 = text
+        .parse()
+        .map_err(|err| format!("{text:?} is not a number: {err}"))?;
+    if value.is_finite() && value > 0.0 {
+        Ok(value)
+    } else {
+        Err(format!("{text} must be a positive number"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,6 +481,35 @@ mod tests {
         assert_eq!(args.provider, ["ddg", "brave"]);
         assert_eq!(args.limit, 5);
         assert_eq!(args.mode, SearchMode::Auto);
+    }
+
+    #[test]
+    fn screenshot_takes_one_area_and_a_quality_in_range() {
+        let cli = Cli::parse_from([
+            "tentabrowser",
+            "screenshot",
+            "https://example.com/",
+            "--clip",
+            "1,2,30,40",
+        ]);
+        let Command::Screenshot(args) = cli.command else {
+            panic!("expected screenshot");
+        };
+        assert_eq!(args.clip, Some([1.0, 2.0, 30.0, 40.0]));
+        assert_eq!(args.output, PathBuf::from("screenshot.png"));
+        assert_eq!((args.width, args.height), (1280, 800));
+
+        let base = ["tentabrowser", "screenshot", "https://example.com/"];
+        let with = |extra: &[&str]| {
+            Cli::try_parse_from(base.iter().chain(extra.iter()).copied()).map(|_| ())
+        };
+        assert!(with(&["--full-page", "--selector", "#a"]).is_err());
+        assert!(with(&["--clip", "1,2,0,40"]).is_err(), "a zero width");
+        assert!(with(&["--clip", "1,2,3"]).is_err(), "three numbers");
+        assert!(with(&["--quality", "0"]).is_err());
+        assert!(with(&["--quality", "101"]).is_err());
+        assert!(with(&["--dpr", "-1"]).is_err());
+        assert!(with(&["--format", "jpeg", "--quality", "100"]).is_ok());
     }
 
     #[test]

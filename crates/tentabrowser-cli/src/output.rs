@@ -1,5 +1,6 @@
 //! Writing results: stdout, a `--allow-write` checked file, JSON shapes.
 
+use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
@@ -18,12 +19,39 @@ pub fn write_stdout(bytes: &[u8]) -> CliResult<()> {
     out.flush().map_err(broken_pipe)
 }
 
+/// Writes `bytes` to stdout exactly as given. Binary output such as an image
+/// must not gain the newline that text gets.
+#[cfg(feature = "render")]
+pub fn write_stdout_exact(bytes: &[u8]) -> CliResult<()> {
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    out.write_all(bytes).map_err(broken_pipe)?;
+    out.flush().map_err(broken_pipe)
+}
+
 /// Writes `bytes` to a path using the filesystem policy for secure file opening.
 pub fn write_file(policy: &FsPolicy, path: &Path, bytes: &[u8]) -> CliResult<()> {
-    let mut file = policy
-        .open_write(path, OpenMode::CreateTruncate)
-        .map_err(|err| CliError::usage(format!("writing {}: {err}", path.display())))?;
+    let mut file = open_for_write(policy, path)?;
     write_all(&mut file, bytes)?;
+    flush_file(&mut file, path)
+}
+
+/// Writes `bytes` to a path exactly as given, without the text newline.
+#[cfg(feature = "render")]
+pub fn write_file_exact(policy: &FsPolicy, path: &Path, bytes: &[u8]) -> CliResult<()> {
+    let mut file = open_for_write(policy, path)?;
+    file.write_all(bytes)
+        .map_err(|err| CliError::usage(format!("writing {}: {err}", path.display())))?;
+    flush_file(&mut file, path)
+}
+
+fn open_for_write(policy: &FsPolicy, path: &Path) -> CliResult<File> {
+    policy
+        .open_write(path, OpenMode::CreateTruncate)
+        .map_err(|err| CliError::usage(format!("writing {}: {err}", path.display())))
+}
+
+fn flush_file(file: &mut File, path: &Path) -> CliResult<()> {
     file.flush()
         .map_err(|err| CliError::usage(format!("writing {}: {err}", path.display())))
 }

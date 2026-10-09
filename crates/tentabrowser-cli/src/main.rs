@@ -4,8 +4,8 @@
 //! By default the process builds an engine with the tier ceiling at `dom`
 //! and sends the first request without a script engine, style or fonts
 //! (`docs/spec/13-performance.md` §1, §2).
-//! `screenshot`, `serve`, `mcp`, `test` and `daemon` arrive with the phases
-//! that implement what they need.
+//! `serve`, `mcp`, `test` and `daemon` arrive with the phases that implement
+//! what they need.
 
 mod cli;
 mod error;
@@ -15,6 +15,7 @@ mod output;
 mod phase;
 mod rate_limit;
 mod scrape;
+mod screenshot;
 mod search;
 mod setup;
 
@@ -60,6 +61,7 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Fetch(args) => fetch::run(&cli.global, args).await,
         Command::Search(args) => search::run(&cli.global, args).await,
         Command::Scrape(args) => scrape::run(&cli.global, args).await,
+        Command::Screenshot(args) => screenshot::run(&cli.global, args).await,
         Command::Version => {
             let mut stdout = std::io::stdout().lock();
             writeln!(stdout, "tentabrowser {}", env!("CARGO_PKG_VERSION"))

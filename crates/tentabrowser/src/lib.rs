@@ -73,6 +73,11 @@ pub use tenta_browser::{
     BrowserContext, ContextOptions, Engine, EngineBuilder, EngineOptions, JsEngine, PageOptions,
     TrimLevel, TrimReport, default_page_threads,
 };
+#[cfg(feature = "render")]
+pub use tenta_browser::{
+    Capture, Clip, ImageFormat, RasterStats, Screenshot, ScreenshotOptions, StageTimes,
+    WorkCounters,
+};
 pub use tenta_core::{Budgets, DownloadPolicy, Error, FsPolicy, Result, Tier};
 pub use tenta_net::Profile;
 pub use tenta_net::profile::ClientProfile;
