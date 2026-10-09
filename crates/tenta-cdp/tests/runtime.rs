@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use tenta_browser::{Engine, Goto, JsEngine};
+use tenta_browser::{Completion, Engine, Goto, JsEngine, RemoteValue};
 use tenta_cdp::{CdpOptions, CdpServer};
 use tenta_core::Tier;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -152,6 +152,30 @@ impl Fixture {
             .goto(&self.site.url(path), Goto::default())
             .await
             .expect("goto");
+    }
+
+    /// Returns once an evaluation that sets `__awaiting` has entered the
+    /// engine, so the wait it registered belongs to the current document.
+    async fn wait_until_script_started(&self, page: &Page) {
+        let target = self.server.backend().target(&page.target).expect("target");
+        let engine_page = target.page();
+        tokio::time::timeout(PATIENCE, async {
+            loop {
+                let started = engine_page
+                    .evaluate("globalThis.__awaiting === true")
+                    .await
+                    .expect("probe");
+                if matches!(
+                    started.completion(),
+                    Completion::Value(RemoteValue::Bool(true))
+                ) {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the evaluation never entered the engine");
     }
 
     async fn stop(self) {
@@ -850,13 +874,20 @@ async fn await_promise_waits_for_the_settlement() {
                 "id": id,
                 "sessionId": session,
                 "method": "Runtime.evaluate",
-                "params": { "expression": "new Promise(() => {})", "awaitPromise": true },
+                "params": {
+                    "expression": "(globalThis.__awaiting = true, new Promise(() => {}))",
+                    "awaitPromise": true,
+                },
             })
             .to_string(),
         ))
         .await
         .unwrap();
     page.client.next_id += 1;
+    // The navigation is driven through the page directly and would otherwise
+    // race the command on its way through the socket: committed first, it
+    // leaves the evaluation to wait on the new document, which nothing ends.
+    fixture.wait_until_script_started(&page).await;
     fixture.goto(&page, "/").await;
     loop {
         let message = page.client.read_wire().await;
