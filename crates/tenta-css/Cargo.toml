@@ -22,11 +22,14 @@ required-features = ["stylo"]
 
 [features]
 default = []
-stylo = ["dep:cssparser", "dep:selectors", "dep:servo_arc", "dep:style_traits", "dep:style", "dep:stylo_static_prefs", "dep:url", "dep:stylo_dom", "dep:euclid"]
+# Test helpers over the cascade (`style_html`); never enabled by a product build.
+test-util = ["stylo"]
+stylo = ["dep:cssparser", "dep:selectors", "dep:servo_arc", "dep:style_traits", "dep:style", "dep:stylo_static_prefs", "dep:url", "dep:stylo_dom", "dep:euclid", "dep:tenta-html"]
 
 [dependencies]
 tenta-core = { workspace = true }
 tenta-dom = { workspace = true }
+tenta-html = { workspace = true, optional = true }
 cssparser = { workspace = true, optional = true }
 selectors = { workspace = true, optional = true }
 servo_arc = { workspace = true, optional = true }
@@ -37,5 +40,3 @@ url = { workspace = true, optional = true }
 stylo_dom = { workspace = true, optional = true }
 euclid = { workspace = true, optional = true }
 
-[dev-dependencies]
-tenta-html = { workspace = true }

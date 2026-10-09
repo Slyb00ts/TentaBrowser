@@ -15,3 +15,13 @@ tenta-css = { workspace = true }
 tenta-js = { workspace = true }
 tenta-layout = { workspace = true }
 tenta-paint = { workspace = true }
+
+[dev-dependencies]
+tenta-html = { workspace = true }
+tenta-css = { workspace = true, features = ["test-util"] }
+tenta-testutil = { workspace = true }
+png = { workspace = true }
+
+[[bench]]
+name = "render"
+harness = false

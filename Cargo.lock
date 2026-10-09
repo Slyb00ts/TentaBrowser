@@ -3397,6 +3397,7 @@ version = "0.0.1"
 dependencies = [
  "bitflags",
  "parley",
+ "png",
  "servo_arc",
  "skrifa",
  "smallvec",
@@ -3405,7 +3406,7 @@ dependencies = [
  "tenta-core",
  "tenta-css",
  "tenta-dom",
- "tenta-js",
+ "tenta-html",
 ]
 
 [[package]]
@@ -3540,12 +3541,15 @@ dependencies = [
 name = "tenta-render"
 version = "0.0.1"
 dependencies = [
+ "png",
  "tenta-core",
  "tenta-css",
  "tenta-dom",
+ "tenta-html",
  "tenta-js",
  "tenta-layout",
  "tenta-paint",
+ "tenta-testutil",
 ]
 
 [[package]]

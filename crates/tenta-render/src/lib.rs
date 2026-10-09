@@ -1,18 +1,15 @@
 //! Page-level orchestration of style, layout and paint: geometry APIs, screenshots, PDF, screencast, hit testing.
 //!
-//! Skeleton crate created in P0; the implementation lands in the phase named
-//! for it in `docs/spec/16-roadmap.md`. Dependency direction is enforced by
-//! `cargo xtask lint-deps` (`docs/spec/02-architecture.md` §2).
+//! [`RenderSession`] is the single owner of everything derived from a
+//! document. The page creates it lazily on the first geometry or capture
+//! request (Tier 3) and holds the only copy. Dependency direction is enforced
+//! by `cargo xtask lint-deps` (`docs/spec/02-architecture.md` §2).
 
-#[allow(unused_imports)]
-use tenta_core as _;
-#[allow(unused_imports)]
-use tenta_css as _;
-#[allow(unused_imports)]
-use tenta_dom as _;
-#[allow(unused_imports)]
-use tenta_js as _;
-#[allow(unused_imports)]
-use tenta_layout as _;
-#[allow(unused_imports)]
-use tenta_paint as _;
+mod geometry;
+mod screenshot;
+mod session;
+mod viewport;
+
+pub use screenshot::{Capture, ImageFormat, RenderError, Screenshot, ScreenshotOptions};
+pub use session::RenderSession;
+pub use viewport::{FontPolicy, RenderConfig, Viewport};

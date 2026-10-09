@@ -5,6 +5,8 @@
 //! the resulting sheets to the arena-backed cascade.
 
 #[cfg(feature = "stylo")]
+pub mod cascade;
+#[cfg(feature = "stylo")]
 mod cssom;
 
 #[cfg(feature = "stylo")]

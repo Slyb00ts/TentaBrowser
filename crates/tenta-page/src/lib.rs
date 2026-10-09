@@ -16,10 +16,18 @@ pub mod page;
 // Private: the runtime is page-thread-local state the page owns, not an API
 // (`crates/tenta-page/src/runtime.rs`).
 mod runtime;
+// Private: the render session is page-thread state the page owns, not an API
+// (`crates/tenta-page/src/render.rs`).
+#[cfg(feature = "render")]
+mod render;
 // Private: the page's cumulative script budget is page-thread state the page
 // owns, not an API (`crates/tenta-page/src/script_cpu.rs`).
 mod script_cpu;
 pub mod settle;
+// Private: stylesheet collection feeds the render session and is not an API
+// (`crates/tenta-page/src/styles.rs`).
+#[cfg(feature = "render")]
+mod styles;
 pub mod task;
 pub mod thread;
 // Private: the watchdog is process-wide machinery the page owns, not an API

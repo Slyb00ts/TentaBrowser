@@ -9,6 +9,7 @@ pub mod dom;
 pub mod engine;
 pub mod event_loop;
 pub mod fetch;
+pub mod geometry;
 pub mod storage;
 pub mod structured_clone;
 pub mod xhr;
