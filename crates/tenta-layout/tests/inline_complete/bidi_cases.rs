@@ -1,0 +1,377 @@
+// Expected rectangles recorded from Chrome 154: the union of the first line's getClientRects(), in document coordinates.
+
+use super::Case;
+
+pub(super) const CASES: &[Case] = &[
+    Case {
+        name: "ltr_hebrew_in_latin",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px'><span id=a>abc</span> <span id=h>אבג דהו</span> <span id=d>def</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("a", [0.0, 0.0, 28.766, 19.0]),
+            ("h", [33.859, 0.0, 55.172, 19.0]),
+            ("d", [94.125, 0.0, 25.641, 19.0]),
+        ],
+    },
+    Case {
+        name: "rtl_latin_in_hebrew",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p class=r style='width:300px'><span id=a>וזח</span> <span id=l>abc def</span> <span id=b>אבג דהו</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("a", [279.641, 0.0, 20.359, 19.0]),
+            ("l", [215.062, 0.0, 59.484, 19.0]),
+            ("b", [154.797, 0.0, 55.172, 19.0]),
+        ],
+    },
+    Case {
+        name: "rtl_numbers_in_hebrew",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p class=r style='width:300px'><span id=a>וזח</span> <span id=n>123</span> <span id=b>אבג דהו</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("a", [279.641, 0.0, 20.359, 19.0]),
+            ("n", [244.0, 0.0, 30.547, 19.0]),
+            ("b", [183.734, 0.0, 55.172, 19.0]),
+        ],
+    },
+    Case {
+        name: "ltr_numbers_in_hebrew",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px'><span id=a>וזח</span> <span id=n>123</span> <span id=b>אבג דהו</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("a", [95.906, 0.0, 20.359, 19.0]),
+            ("n", [60.266, 0.0, 30.547, 19.0]),
+            ("b", [0.0, 0.0, 55.172, 19.0]),
+        ],
+    },
+    Case {
+        name: "rtl_latin_trailing_period",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p class=r style='width:300px'><span id=a>Hello</span> <span id=b>world</span>.</div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("a", [210.281, 0.0, 40.562, 19.0]),
+            ("b", [255.938, 0.0, 44.062, 19.0]),
+        ],
+    },
+    Case {
+        name: "rtl_latin_only",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p class=r style='width:300px'><span id=a>Hello</span> <span id=b>world</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("a", [210.281, 0.0, 40.562, 19.0]),
+            ("b", [255.938, 0.0, 44.062, 19.0]),
+        ],
+    },
+    Case {
+        name: "rtl_latin_leading_paren",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p class=r style='width:300px'>(<span id=a>Hello</span>)</div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("a", [253.188, 0.0, 40.562, 19.0]),
+        ],
+    },
+    Case {
+        name: "arabic_in_ltr",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px'><span id=a>abc</span> <span id=h>مرحبا بالعالم</span> <span id=d>def</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("a", [0.0, 0.0, 28.766, 19.0]),
+            ("h", [33.859, 0.0, 84.406, 19.0]),
+            ("d", [123.359, 0.0, 25.641, 19.0]),
+        ],
+    },
+    Case {
+        name: "latin_in_arabic_rtl",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p class=r style='width:300px'><span id=a>مرحبا بالعالم</span> <span id=l>abc</span> <span id=b>مرحبا بالعالم</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("a", [215.594, 0.0, 84.406, 19.0]),
+            ("l", [181.734, 0.0, 28.766, 19.0]),
+            ("b", [92.234, 0.0, 84.406, 19.0]),
+        ],
+    },
+    Case {
+        name: "rtl_canvas_between_hebrew",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p class=r style='width:300px'><span id=a>וזח</span> <canvas id=c style='width:20px;height:10px'></canvas> <span id=b>אבג דהו</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("a", [279.641, 0.0, 20.359, 19.0]),
+            ("c", [254.547, 5.0, 20.0, 10.0]),
+            ("b", [194.281, 0.0, 55.172, 19.0]),
+        ],
+    },
+    Case {
+        name: "ltr_canvas_between_hebrew",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px'><span id=a>וזח</span><canvas id=c style='width:20px;height:10px'></canvas><span id=b>אבג דהו</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("a", [75.172, 0.0, 20.359, 19.0]),
+            ("c", [55.172, 5.0, 20.0, 10.0]),
+            ("b", [0.0, 0.0, 55.172, 19.0]),
+        ],
+    },
+    Case {
+        name: "ltr_canvas_after_hebrew",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px'><span id=a>אבג דהו</span><canvas id=c style='width:20px;height:10px'></canvas></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("a", [0.0, 0.0, 55.172, 19.0]),
+            ("c", [55.172, 5.0, 20.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "ltr_canvas_before_hebrew",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px'><canvas id=c style='width:20px;height:10px'></canvas><span id=a>אבג דהו</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("c", [0.0, 5.0, 20.0, 10.0]),
+            ("a", [20.0, 0.0, 55.172, 19.0]),
+        ],
+    },
+    Case {
+        name: "ltr_inline_block_in_mixed",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px'>abc <span id=i style='display:inline-block;width:30px;height:12px;background:#ccc'></span> <span id=h>אבג דהו</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("i", [33.844, 3.0, 30.0, 12.0]),
+            ("h", [68.938, 0.0, 55.172, 19.0]),
+        ],
+    },
+    Case {
+        name: "rtl_inline_block_in_mixed",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p class=r style='width:300px'>abc <span id=i style='display:inline-block;width:30px;height:12px;background:#ccc'></span> <span id=h>אבג דהו</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("i", [236.141, 3.0, 30.0, 12.0]),
+            ("h", [175.875, 0.0, 55.172, 19.0]),
+        ],
+    },
+    Case {
+        name: "ltr_padded_hebrew_span",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px'>abc <span id=h style='padding:0 5px;border:1px solid;margin:0 3px'>אבג דהו</span> def</div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("h", [36.844, -1.0, 67.172, 21.0]),
+        ],
+    },
+    Case {
+        name: "rtl_padded_latin_span",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p class=r style='width:300px'>וזח <span id=l style='padding:0 5px;border:1px solid;margin:0 3px'>abc</span> אבג דהו</div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("l", [230.797, -1.0, 40.766, 21.0]),
+        ],
+    },
+    Case {
+        name: "rtl_padded_mixed_span",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p class=r style='width:300px'><span id=s style='padding:0 6px;border:2px solid'>abc אבג דהו def</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("s", [164.25, -2.0, 135.75, 23.0]),
+        ],
+    },
+    Case {
+        name: "ltr_padded_mixed_span",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px'><span id=s style='padding:0 6px;border:2px solid'>abc אבג דהו def</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("s", [0.0, -2.0, 135.734, 23.0]),
+        ],
+    },
+    Case {
+        name: "ltr_hebrew_only",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px'><span id=h>אבג דהו</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("h", [0.0, 0.0, 55.172, 19.0]),
+        ],
+    },
+    Case {
+        name: "rtl_hebrew_only",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p class=r style='width:300px'><span id=h>אבג דהו</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("h", [244.828, 0.0, 55.172, 19.0]),
+        ],
+    },
+    Case {
+        name: "ltr_hebrew_trailing_period",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px'><span id=h>אבג דהו</span>.</div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("h", [0.0, 0.0, 55.172, 19.0]),
+        ],
+    },
+    Case {
+        name: "rtl_hebrew_trailing_period",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p class=r style='width:300px'><span id=h>אבג דהו</span>.</div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("h", [244.828, 0.0, 55.172, 19.0]),
+        ],
+    },
+    Case {
+        name: "ltr_hebrew_text_align_right",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px;text-align:right'>abc <span id=h>אבג דהו</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("h", [244.828, 0.0, 55.172, 19.0]),
+        ],
+    },
+    Case {
+        name: "ltr_hebrew_text_align_center",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px;text-align:center'>abc <span id=h>אבג דהו</span> def</div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("h", [123.969, 0.0, 55.172, 19.0]),
+        ],
+    },
+    Case {
+        name: "ltr_wrapping_lines",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:120px'><span id=a>abc</span> <span id=h>אבג דהו וזח אבג דהו</span> <span id=d>def ghi</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 120.0, 38.0]),
+            ("a", [0.0, 0.0, 28.766, 19.0]),
+            ("h", [33.859, 0.0, 80.609, 19.0]),
+            ("d", [60.266, 19.0, 55.469, 19.0]),
+        ],
+    },
+    Case {
+        name: "rtl_wrapping_lines",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p class=r style='width:120px'><span id=a>אבג דהו וזח</span> <span id=l>abc def ghi</span> <span id=b>אבג דהו וזח</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 120.0, 57.0]),
+            ("a", [39.391, 0.0, 80.609, 19.0]),
+            ("l", [5.531, 0.0, 28.766, 19.0]),
+            ("b", [4.266, 19.0, 55.172, 19.0]),
+        ],
+    },
+    Case {
+        name: "ltr_wrapping_hebrew_only",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:90px'><span id=h>אבג דהו וזח אבג דהו וזח</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 90.0, 38.0]),
+            ("h", [0.0, 0.0, 80.609, 19.0]),
+        ],
+    },
+    Case {
+        name: "rtl_wrapping_hebrew_only",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p class=r style='width:90px'><span id=h>אבג דהו וזח אבג דהו וזח</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 90.0, 38.0]),
+            ("h", [9.391, 0.0, 80.609, 19.0]),
+        ],
+    },
+    Case {
+        name: "ltr_two_spans_in_hebrew_run",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px'>abc <span id=a>וזח</span> <span id=b>וזח</span> def</div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("a", [59.297, 0.0, 20.359, 19.0]),
+            ("b", [33.844, 0.0, 20.359, 19.0]),
+        ],
+    },
+    Case {
+        name: "ltr_hebrew_with_digits_inside",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px'>abc <span id=h>וזח 12 וזח</span> def</div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("h", [33.844, 0.0, 71.234, 19.0]),
+        ],
+    },
+    Case {
+        name: "rtl_latin_with_digits",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p class=r style='width:300px'><span id=a>abc</span> <span id=n>12</span> <span id=b>def</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("a", [215.047, 0.0, 28.766, 19.0]),
+            ("n", [248.906, 0.0, 20.359, 19.0]),
+            ("b", [274.359, 0.0, 25.641, 19.0]),
+        ],
+    },
+    Case {
+        name: "ltr_empty_padded_span_between_hebrew",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:300px'><span id=a>וזח</span><span id=e style='padding:0 7px'></span><span id=b>וזח</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 300.0, 19.0]),
+            ("a", [34.359, 0.0, 20.359, 19.0]),
+            ("e", [20.359, 0.0, 14.0, 19.0]),
+            ("b", [0.0, 0.0, 20.359, 19.0]),
+        ],
+    },
+    Case {
+        name: "ltr_hebrew_nowrap_overflow",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'DejaVu Sans'} .r{direction:rtl}</style></head><body id=body><div id=p style='width:60px;white-space:nowrap'>abc <span id=h>אבג דהו אבג דהו</span></div></body></html>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 60.0, 19.0]),
+            ("h", [33.844, 0.0, 115.438, 19.0]),
+        ],
+    },
+];

@@ -1,7 +1,10 @@
 //! Shaping with parley and extraction of lines and glyph runs.
 
 use std::borrow::Cow;
+#[cfg(test)]
 use std::ops::Range;
+use std::rc::Rc;
+#[cfg(test)]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -12,19 +15,27 @@ use parley::style::{
     TextWrapMode,
 };
 use parley::{
-    BreakReason, CHROMIUM_LINE_BREAK_OVERRIDE, Cluster, IndentOptions, Layout, Line,
-    LineBreakContext,
+    BreakReason, CHROMIUM_LINE_BREAK_OVERRIDE, Cluster, IndentOptions, Layout, LineBreakContext,
 };
 
-use super::cache::{self, Brush};
-use super::shaped::{
-    ClusterBox, IntrinsicWidths, LineEnd, ShapedLine, ShapedLines, ShapedRun, font_ref,
-};
-use super::style::{LineBreak, OverflowWrap, Paragraph, TextSpan, TextStyle, WordBreak};
+use super::chunk::{self, Break, ChunkCluster, ChunkRun, Face, ShapedChunk};
+use super::shaped::font_ref;
+#[cfg(test)]
+use super::shaped::{ClusterBox, LineEnd, ShapedLine, ShapedLines, ShapedRun};
+#[cfg(test)]
+use super::style::TextSpan;
+use super::style::{LineBreak, OverflowWrap, Paragraph, TextStyle, WordBreak};
 use crate::font::{FontSystem, VerticalMetrics};
-use crate::types::{Direction, Glyph, GlyphRun};
+#[cfg(test)]
+use crate::types::GlyphRun;
+use crate::types::{Direction, Glyph};
+
+/// The brush parley carries per cluster. It holds the index of the span the
+/// cluster belongs to, which is how styles are found again after shaping.
+pub(super) type Brush = [u8; 4];
 
 /// How a paragraph is broken into lines.
+#[cfg(test)]
 #[derive(Copy, Clone, PartialEq, Debug, Default)]
 pub(crate) struct ShapeOptions {
     /// The width lines may fill; `None` lets only segment breaks end a line.
@@ -247,11 +258,13 @@ fn shape(
     builder.build(&text)
 }
 
+#[cfg(test)]
 fn break_lines(layout: &mut Layout<Brush>, options: ShapeOptions) {
     layout.set_text_indent(options.first_line_indent, IndentOptions::default());
     layout.break_all_lines(options.max_width.map(|width| width.max(0.0)));
 }
 
+#[cfg(test)]
 /// The index of the span containing `byte`, or the last span past the end.
 fn span_at(spans: &[TextSpan<'_>], byte: usize) -> usize {
     spans
@@ -259,6 +272,7 @@ fn span_at(spans: &[TextSpan<'_>], byte: usize) -> usize {
         .min(spans.len().saturating_sub(1))
 }
 
+#[cfg(test)]
 /// The width of the spaces that hang off the logical end of a line, given the
 /// line's clusters in any order as (byte range, advance). A segment break that
 /// ends the line is not part of the width, but the spaces before it hang. Spaces
@@ -286,30 +300,11 @@ fn hanging_width(
         .sum()
 }
 
-/// A line's content width and the width of the spaces that hang off its end,
-/// read from parley's line for measuring.
-fn line_widths(line: &Line<'_, Brush>, paragraph: &Paragraph<'_>, prefix: usize) -> (f32, f32) {
-    let mut clusters = Vec::new();
-    for run in line.runs() {
-        for cluster in run.clusters() {
-            let range = cluster.text_range();
-            if range.end > prefix {
-                clusters.push((
-                    range.start.saturating_sub(prefix)..range.end - prefix,
-                    cluster.advance(),
-                ));
-            }
-        }
-    }
-    let end = line.text_range().end.saturating_sub(prefix);
-    let hanging = hanging_width(paragraph, end, clusters);
-    (line.metrics().advance - hanging, hanging)
-}
-
 fn span_index(cluster: &Cluster<'_, Brush>) -> usize {
     u32::from_le_bytes(cluster.first_style().brush) as usize
 }
 
+#[cfg(test)]
 /// What the glyph runs cut from one parley run have in common.
 struct RunFace {
     font: crate::types::FontRef,
@@ -320,6 +315,7 @@ struct RunFace {
     metrics: VerticalMetrics,
 }
 
+#[cfg(test)]
 /// A shaped run being filled cluster by cluster.
 struct OpenRun {
     span: usize,
@@ -330,6 +326,7 @@ struct OpenRun {
     text: Range<usize>,
 }
 
+#[cfg(test)]
 impl OpenRun {
     fn new(span: usize, x: f32, first: Range<usize>) -> Self {
         Self {
@@ -379,6 +376,7 @@ impl OpenRun {
     }
 }
 
+#[cfg(test)]
 fn extract(layout: &Layout<Brush>, paragraph: &Paragraph<'_>, prefix: usize) -> ShapedLines {
     let mut lines = Vec::with_capacity(layout.len());
     for line in layout.lines() {
@@ -478,12 +476,13 @@ fn extract(layout: &Layout<Brush>, paragraph: &Paragraph<'_>, prefix: usize) -> 
     ShapedLines { lines, width }
 }
 
-/// Shapes `paragraph` and breaks it into lines.
+/// Shapes `paragraph` and breaks it into lines at `options`. Inline layout
+/// breaks lines itself over [`shape_chunk`]; this is the straightforward
+/// reference its pieces are checked against.
 ///
-/// The text must already be white-space processed: collapsing, trimming and
-/// `text-transform` happen before, and every segment break (`\n`) left in the
-/// text ends a line. Shaping is cached per paragraph, so asking again with a
-/// different width only breaks lines again.
+/// The text must already be white-space processed, and every segment break
+/// (`\n`) left in the text ends a line.
+#[cfg(test)]
 pub(crate) fn shape_and_break(
     fonts: &mut FontSystem,
     paragraph: &Paragraph<'_>,
@@ -494,61 +493,104 @@ pub(crate) fn shape_and_break(
     }
     paragraph.assert_tiled();
     let prefix = direction_mark(paragraph.direction).len();
-    cache::with_layout(
-        paragraph,
-        false,
-        || shape(fonts, paragraph, false),
-        |layout| {
-            break_lines(layout, options);
-            extract(layout, paragraph, prefix)
-        },
-    )
+    let mut layout = shape(fonts, paragraph, false);
+    break_lines(&mut layout, options);
+    extract(&layout, paragraph, prefix)
 }
 
-/// The min-content and max-content widths of `paragraph`.
+/// Shapes `paragraph` as one unbroken line and records where lines may wrap.
 ///
-/// Min-content is the widest piece when every soft wrap opportunity is taken,
-/// `overflow-wrap: break-word` excluded; max-content is the widest line when
-/// only segment breaks end lines. Spaces that would hang do not count.
-pub(crate) fn measure(fonts: &mut FontSystem, paragraph: &Paragraph<'_>) -> IntrinsicWidths {
+/// The text must not contain a segment break. `overflow-wrap: break-word` is
+/// shaped as `normal`: the line breaker splits a word at cluster boundaries
+/// itself when it overflows. Results are cached per thread.
+pub(crate) fn shape_chunk(fonts: &mut FontSystem, paragraph: &Paragraph<'_>) -> Rc<ShapedChunk> {
     if paragraph.text.is_empty() {
-        return IntrinsicWidths::default();
+        return Rc::new(ShapedChunk::default());
     }
     paragraph.assert_tiled();
     let prefix = direction_mark(paragraph.direction).len();
-    let widest = |layout: &Layout<Brush>| {
-        layout
-            .lines()
-            .map(|line| line_widths(&line, paragraph, prefix).0)
-            .fold(0.0_f32, f32::max)
-    };
-    let max = cache::with_layout(
-        paragraph,
-        false,
-        || shape(fonts, paragraph, false),
-        |layout| {
-            break_lines(layout, ShapeOptions::default());
-            widest(layout)
-        },
-    );
-    let has_break_word = paragraph
-        .spans
-        .iter()
-        .any(|span| span.style.overflow_wrap == OverflowWrap::BreakWord);
-    let min = cache::with_layout(
-        paragraph,
-        has_break_word,
-        || shape(fonts, paragraph, has_break_word),
-        |layout| {
-            break_lines(
-                layout,
-                ShapeOptions {
-                    max_width: Some(0.0),
-                    first_line_indent: 0.0,
+    chunk::cached(paragraph, || {
+        let mut layout = shape(fonts, paragraph, true);
+        extract_chunk(&mut layout, prefix)
+    })
+}
+
+fn extract_chunk(layout: &mut Layout<Brush>, prefix: usize) -> ShapedChunk {
+    let mut chunk = ShapedChunk::default();
+    layout.set_text_indent(0.0, IndentOptions::default());
+    layout.break_all_lines(None);
+    let mut cursor = 0.0_f32;
+    let mut any_ltr = false;
+    for line in layout.lines() {
+        for run in line.runs() {
+            let synthesis = run.synthesis();
+            let run_metrics = run.metrics();
+            let face = Face {
+                font: font_ref(run.font(), run.normalized_coords()),
+                size: run.font_size(),
+                synthetic_bold: synthesis.embolden(),
+                skew: if synthesis.skew().is_some() {
+                    SYNTHETIC_ITALIC_SKEW
+                } else {
+                    0.0
                 },
-            );
-            widest(layout)
-        },
-    );
-    IntrinsicWidths { min, max }
+            };
+            let metrics = VerticalMetrics {
+                ascent: run_metrics.ascent.round(),
+                descent: run_metrics.descent.round(),
+                line_gap: run_metrics.leading,
+            };
+            let rtl = run.is_rtl();
+            let mut open_span = None;
+            for cluster in run.visual_clusters() {
+                let range = cluster.text_range();
+                if range.end <= prefix {
+                    continue;
+                }
+                let span = span_index(&cluster) as u32;
+                if open_span != Some(span) {
+                    open_span = Some(span);
+                    chunk.runs.push(ChunkRun {
+                        span,
+                        rtl,
+                        face: face.clone(),
+                        metrics,
+                    });
+                    any_ltr |= !rtl;
+                }
+                let first_glyph = chunk.glyphs.len() as u32;
+                let x = cursor;
+                for glyph in cluster.glyphs() {
+                    chunk.glyphs.push(Glyph {
+                        id: glyph.id,
+                        x: cursor + glyph.x,
+                        y: glyph.y,
+                    });
+                    cursor += glyph.advance;
+                }
+                chunk.clusters.push(ChunkCluster {
+                    text: (range.start.saturating_sub(prefix)) as u32..(range.end - prefix) as u32,
+                    x,
+                    advance: cluster.advance(),
+                    glyphs: first_glyph..chunk.glyphs.len() as u32,
+                    run: chunk.runs.len() as u32 - 1,
+                });
+            }
+        }
+    }
+    chunk.width = cursor;
+    chunk.any_rtl = chunk.runs.iter().any(|r| r.rtl);
+    chunk.all_rtl = chunk.any_rtl && !any_ltr;
+    layout.break_all_lines(Some(0.0));
+    let lines = layout.len();
+    for (index, line) in layout.lines().enumerate() {
+        if index + 1 == lines {
+            break;
+        }
+        chunk.breaks.push(Break {
+            end: line.text_range().end.saturating_sub(prefix) as u32,
+            inside_word: matches!(line.break_reason(), BreakReason::Emergency),
+        });
+    }
+    chunk
 }

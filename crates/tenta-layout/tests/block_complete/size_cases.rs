@@ -1,0 +1,211 @@
+// Expected rectangles recorded from Chrome 153 (getBoundingClientRect, document coordinates).
+
+use super::Case;
+
+pub(super) const CASES: &[Case] = &[
+    Case {
+        name: "min_height_px",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="min-height:80px"><div id=b style="height:30px"></div></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("a", [0.0, 0.0, 800.0, 80.0]),
+            ("b", [0.0, 0.0, 800.0, 30.0]),
+        ],
+    },
+    Case {
+        name: "max_height_px_overflow",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="max-height:20px"><div id=b style="height:30px"></div></div><div id=n style="height:5px"></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("a", [0.0, 0.0, 800.0, 20.0]),
+            ("b", [0.0, 0.0, 800.0, 30.0]),
+            ("n", [0.0, 20.0, 800.0, 5.0]),
+        ],
+    },
+    Case {
+        name: "min_beats_max_height",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="min-height:60px;max-height:20px"></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[("a", [0.0, 0.0, 800.0, 60.0])],
+    },
+    Case {
+        name: "height_then_max_height",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="height:100px;max-height:40px"></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[("a", [0.0, 0.0, 800.0, 40.0])],
+    },
+    Case {
+        name: "height_then_min_height",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="height:10px;min-height:40px;padding:3px;border:2px solid"></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[("a", [0.0, 0.0, 800.0, 50.0])],
+    },
+    Case {
+        name: "border_box_min_height",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="box-sizing:border-box;min-height:50px;padding:10px;border:5px solid"></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[("a", [0.0, 0.0, 800.0, 50.0])],
+    },
+    Case {
+        name: "border_box_max_height",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="box-sizing:border-box;max-height:30px;padding:10px;border:5px solid"><div id=b style="height:100px"></div></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("a", [0.0, 0.0, 800.0, 30.0]),
+            ("b", [15.0, 15.0, 770.0, 100.0]),
+        ],
+    },
+    Case {
+        name: "border_box_min_below_edges",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="box-sizing:border-box;min-height:10px;padding:10px;border:5px solid"></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[("a", [0.0, 0.0, 800.0, 30.0])],
+    },
+    Case {
+        name: "min_height_percent_definite",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=p style="height:200px"><div id=a style="min-height:50%"></div></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 800.0, 200.0]),
+            ("a", [0.0, 0.0, 800.0, 100.0]),
+        ],
+    },
+    Case {
+        name: "max_height_percent_definite",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=p style="height:200px"><div id=a style="max-height:25%;height:150px"></div></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 800.0, 200.0]),
+            ("a", [0.0, 0.0, 800.0, 50.0]),
+        ],
+    },
+    Case {
+        name: "min_height_percent_indefinite",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=p><div id=a style="min-height:50%;height:10px"></div></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 800.0, 10.0]),
+            ("a", [0.0, 0.0, 800.0, 10.0]),
+        ],
+    },
+    Case {
+        name: "max_height_percent_indefinite",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=p><div id=a style="max-height:10%;height:70px"></div></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("p", [0.0, 0.0, 800.0, 70.0]),
+            ("a", [0.0, 0.0, 800.0, 70.0]),
+        ],
+    },
+    Case {
+        name: "height_percent_of_viewport_chain",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=p style="height:50%"><div id=a style="height:50%"></div></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[("p", [0.0, 0.0, 800.0, 0.0]), ("a", [0.0, 0.0, 800.0, 0.0])],
+    },
+    Case {
+        name: "min_height_calc",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="min-height:calc(20px + 10px)"></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[("a", [0.0, 0.0, 800.0, 30.0])],
+    },
+    Case {
+        name: "min_height_vh",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="min-height:10vh"></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[("a", [0.0, 0.0, 800.0, 60.0])],
+    },
+    Case {
+        name: "max_height_zero",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="max-height:0"><div id=b style="height:30px"></div></div><div id=n style="height:5px"></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("a", [0.0, 0.0, 800.0, 0.0]),
+            ("b", [0.0, 0.0, 800.0, 30.0]),
+            ("n", [0.0, 0.0, 800.0, 5.0]),
+        ],
+    },
+    Case {
+        name: "min_height_flow_root_margin",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="display:flow-root;min-height:50px"><div id=b style="height:10px;margin-bottom:20px"></div></div><div id=n style="height:5px"></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("a", [0.0, 0.0, 800.0, 50.0]),
+            ("b", [0.0, 0.0, 800.0, 10.0]),
+            ("n", [0.0, 50.0, 800.0, 5.0]),
+        ],
+    },
+    Case {
+        name: "min_height_with_margins_siblings",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="min-height:30px;margin:10px 0"></div><div id=b style="min-height:30px;margin:20px 0"></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("a", [0.0, 10.0, 800.0, 30.0]),
+            ("b", [0.0, 60.0, 800.0, 30.0]),
+        ],
+    },
+    Case {
+        name: "min_width_percent",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=p style="width:400px"><div id=a style="min-width:75%;width:100px;height:5px"></div></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[("p", [0.0, 0.0, 400.0, 5.0]), ("a", [0.0, 0.0, 300.0, 5.0])],
+    },
+    Case {
+        name: "max_width_percent",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=p style="width:400px"><div id=a style="max-width:25%;height:5px"></div></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[("p", [0.0, 0.0, 400.0, 5.0]), ("a", [0.0, 0.0, 100.0, 5.0])],
+    },
+    Case {
+        name: "min_width_border_box",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="box-sizing:border-box;min-width:300px;width:100px;padding:0 20px;border:5px solid;height:5px"></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[("a", [0.0, 0.0, 300.0, 10.0])],
+    },
+    Case {
+        name: "max_width_with_margins",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="max-width:300px;margin:0 20px 0 50px;height:5px"></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[("a", [50.0, 0.0, 300.0, 5.0])],
+    },
+    Case {
+        name: "max_width_rtl",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div style="direction:rtl"><div id=a style="max-width:300px;height:5px"></div></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[("a", [500.0, 0.0, 300.0, 5.0])],
+    },
+    Case {
+        name: "min_height_percent_indefinite_keeps_margins_apart",
+        viewport: (800.0, 600.0),
+        html: r#"<!doctype html><html id=html><head><style>html,body{margin:0;} div{display:block}</style></head><body id=body><div id=a style="height:10px"></div><div id=b style="min-height:50%;margin:20px 0"></div><div id=c style="height:10px"></div>"#,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("a", [0.0, 0.0, 800.0, 10.0]),
+            ("b", [0.0, 30.0, 800.0, 0.0]),
+            ("c", [0.0, 30.0, 800.0, 10.0]),
+        ],
+    },
+];

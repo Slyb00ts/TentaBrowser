@@ -4,8 +4,7 @@ use skrifa::instance::{LocationRef, Size};
 use skrifa::metrics::GlyphMetrics;
 use skrifa::{FontRef, MetadataProvider};
 
-use super::cache::{self, CacheStats};
-use super::shape::{ShapeOptions, measure, shape_and_break};
+use super::shape::{ShapeOptions, shape_and_break};
 use super::shaped::{LineEnd, ShapedLines};
 use super::style::{
     FontFeatureSetting, LineBreak, OverflowWrap, Paragraph, TextSpan, TextStyle, WhiteSpace,
@@ -58,21 +57,6 @@ fn shape_at(text: &str, style: &TextStyle, width: Option<f32>) -> ShapedLines {
             first_line_indent: 0.0,
         },
     )
-}
-
-fn measure_one(text: &str, style: &TextStyle) -> (f32, f32) {
-    let mut fonts = FontSystem::new_embedded();
-    let spans = [TextSpan {
-        range: 0..text.len(),
-        style,
-    }];
-    let paragraph = Paragraph {
-        text,
-        spans: &spans,
-        direction: Direction::Ltr,
-    };
-    let widths = measure(&mut fonts, &paragraph);
-    (widths.min, widths.max)
 }
 
 fn line_texts<'a>(text: &'a str, shaped: &ShapedLines) -> Vec<&'a str> {
@@ -298,9 +282,6 @@ fn line_break_anywhere_breaks_between_any_characters() {
     let shaped = shape_at(text, &sans, Some(two_letters + 1.0));
     assert!(shaped.lines.len() >= 3);
     assert_eq!(line_texts(text, &shaped).concat(), text);
-    let (min, _) = measure_one(text, &sans);
-    let (auto_min, _) = measure_one(text, &style(SANS, 16.0));
-    assert!(min < auto_min, "{min} vs {auto_min}");
 }
 
 #[test]
@@ -317,9 +298,6 @@ fn url_breaks_after_slashes_and_not_inside_words() {
             ["https://example.com/path/to/page?", "x=1&y=2"]
         );
     }
-    let (min, max) = measure_one(url, &sans);
-    let head = shape_at("https://example.com/path/to/page?", &sans, None).width;
-    assert!((min - head).abs() < 0.01 && max > min, "{min} {max}");
     let mut anywhere = sans.clone();
     anywhere.line_break = LineBreak::Anywhere;
     assert!(shape_at(url, &anywhere, Some(full / 5.0)).lines.len() >= 5);
@@ -407,7 +385,6 @@ fn empty_text_has_no_lines_and_no_width() {
     let shaped = shape_at("", &sans, Some(100.0));
     assert!(shaped.lines.is_empty());
     assert_eq!(shaped.width, 0.0);
-    assert_eq!(measure_one("", &sans), (0.0, 0.0));
 }
 
 #[test]
@@ -699,83 +676,6 @@ fn multi_byte_clusters_report_byte_ranges() {
 }
 
 #[test]
-fn min_and_max_content_widths() {
-    let sans = style(SANS, 16.0);
-    let text = "hello brave new world";
-    let (min, max) = measure_one(text, &sans);
-    let full = shape_at(text, &sans, None).width;
-    assert!((max - full).abs() < 0.01);
-    let widest_word = ["hello", "brave", "new", "world"]
-        .iter()
-        .map(|word| shape_at(word, &sans, None).width)
-        .fold(0.0_f32, f32::max);
-    assert!((min - widest_word).abs() < 0.01, "{min} vs {widest_word}");
-
-    let lines = "short\na much longer line\nmid";
-    let mut pre = sans.clone();
-    pre.white_space = WhiteSpace::Pre;
-    let (min, max) = measure_one(lines, &pre);
-    let longest = shape_at("a much longer line", &pre, None).width;
-    assert!((max - longest).abs() < 0.01);
-    assert!((min - longest).abs() < 0.01, "pre never wraps");
-
-    let mut nowrap = sans.clone();
-    nowrap.white_space = WhiteSpace::Nowrap;
-    let (min, max) = measure_one(text, &nowrap);
-    assert!((min - max).abs() < 0.01);
-}
-
-#[test]
-fn trailing_spaces_do_not_add_to_the_intrinsic_widths() {
-    let sans = style(SANS, 16.0);
-    let (min, max) = measure_one("word   ", &sans);
-    let bare = shape_at("word", &sans, None).width;
-    assert!((min - bare).abs() < 0.01);
-    assert!((max - bare).abs() < 0.01);
-}
-
-#[test]
-fn overflow_wrap_changes_min_content_only_for_anywhere() {
-    let word = "Supercalifragilistic";
-    let mut sans = style(SANS, 16.0);
-    let (normal_min, max) = measure_one(word, &sans);
-    assert!((normal_min - max).abs() < 0.01);
-    sans.overflow_wrap = OverflowWrap::BreakWord;
-    let (break_word_min, _) = measure_one(word, &sans);
-    assert!((break_word_min - max).abs() < 0.01, "break-word is ignored");
-    sans.overflow_wrap = OverflowWrap::Anywhere;
-    let (anywhere_min, _) = measure_one(word, &sans);
-    assert!(anywhere_min < 20.0, "{anywhere_min}");
-}
-
-#[test]
-fn break_word_paragraphs_break_by_the_real_width_after_measuring() {
-    let word = "Supercalifragilistic";
-    let mut sans = style(SANS, 16.0);
-    sans.overflow_wrap = OverflowWrap::BreakWord;
-    let mut fonts = FontSystem::new_embedded();
-    let spans = [TextSpan {
-        range: 0..word.len(),
-        style: &sans,
-    }];
-    let paragraph = Paragraph {
-        text: word,
-        spans: &spans,
-        direction: Direction::Ltr,
-    };
-    let widths = measure(&mut fonts, &paragraph);
-    let shaped = shape_and_break(
-        &mut fonts,
-        &paragraph,
-        ShapeOptions {
-            max_width: Some(widths.max / 2.0),
-            first_line_indent: 0.0,
-        },
-    );
-    assert!(shaped.lines.len() >= 2, "measuring must not stop the break");
-}
-
-#[test]
 fn first_line_indent_narrows_only_the_first_line() {
     let sans = style(SANS, 16.0);
     let text = "alpha beta gamma delta";
@@ -795,104 +695,6 @@ fn first_line_indent_narrows_only_the_first_line() {
     assert_eq!(line_texts(text, &plain), ["alpha beta gamma ", "delta"]);
     assert_eq!(line_texts(text, &indented)[0], "alpha beta ");
     assert_eq!(indented.lines[1].runs[0].x, 0.0);
-}
-
-#[test]
-fn shaping_the_same_paragraph_again_hits_the_cache_and_matches() {
-    let mut fonts = FontSystem::new_embedded();
-    let sans = style(SANS, 16.0);
-    let text = "A paragraph that is shaped twice and broken at two widths.";
-    let before = cache::stats();
-    let first = shape_with(
-        &mut fonts,
-        text,
-        &sans,
-        Direction::Ltr,
-        ShapeOptions {
-            max_width: Some(200.0),
-            first_line_indent: 0.0,
-        },
-    );
-    let after_first = cache::stats();
-    assert_eq!(after_first.misses, before.misses + 1);
-    assert_eq!(after_first.hits, before.hits);
-
-    let second = shape_with(
-        &mut fonts,
-        text,
-        &sans,
-        Direction::Ltr,
-        ShapeOptions {
-            max_width: Some(200.0),
-            first_line_indent: 0.0,
-        },
-    );
-    assert_eq!(
-        cache::stats(),
-        CacheStats {
-            hits: after_first.hits + 1,
-            ..after_first
-        }
-    );
-    assert_eq!(first, second);
-
-    let narrower = shape_with(
-        &mut fonts,
-        text,
-        &sans,
-        Direction::Ltr,
-        ShapeOptions {
-            max_width: Some(100.0),
-            first_line_indent: 0.0,
-        },
-    );
-    assert_eq!(
-        cache::stats().misses,
-        after_first.misses,
-        "width is not a key"
-    );
-    assert!(narrower.lines.len() > first.lines.len());
-
-    let mut other = sans.clone();
-    other.size = 17.0;
-    shape_with(
-        &mut fonts,
-        text,
-        &other,
-        Direction::Ltr,
-        ShapeOptions::default(),
-    );
-    assert_eq!(cache::stats().misses, after_first.misses + 1);
-}
-
-#[test]
-fn measuring_shares_the_shaping_with_line_breaking() {
-    let mut fonts = FontSystem::new_embedded();
-    let sans = style(SANS, 16.0);
-    let text = "Min and max content come from one shaping of this text.";
-    let spans = [TextSpan {
-        range: 0..text.len(),
-        style: &sans,
-    }];
-    let paragraph = Paragraph {
-        text,
-        spans: &spans,
-        direction: Direction::Ltr,
-    };
-    let before = cache::stats();
-    let widths = measure(&mut fonts, &paragraph);
-    let shaped = shape_and_break(
-        &mut fonts,
-        &paragraph,
-        ShapeOptions {
-            max_width: Some(widths.max),
-            first_line_indent: 0.0,
-        },
-    );
-    let after = cache::stats();
-    assert_eq!(after.misses, before.misses + 1);
-    assert!(after.hits >= before.hits + 2);
-    assert_eq!(shaped.lines.len(), 1);
 }
 
 #[test]
@@ -923,11 +725,21 @@ fn degenerate_sizes_and_widths_do_not_panic() {
 
 #[test]
 fn text_transform_maps_case() {
-    assert_eq!(apply("keep", TextTransform::None), "keep");
-    assert_eq!(apply("Straße", TextTransform::Uppercase), "STRASSE");
-    assert_eq!(apply("MiXed", TextTransform::Lowercase), "mixed");
+    assert_eq!(apply("keep", TextTransform::None, &mut false), "keep");
     assert_eq!(
-        apply("hello wORLD-wide web 3d don't", TextTransform::Capitalize),
+        apply("Straße", TextTransform::Uppercase, &mut false),
+        "STRASSE"
+    );
+    assert_eq!(
+        apply("MiXed", TextTransform::Lowercase, &mut false),
+        "mixed"
+    );
+    assert_eq!(
+        apply(
+            "hello wORLD-wide web 3d don't",
+            TextTransform::Capitalize,
+            &mut false
+        ),
         "Hello WORLD-Wide Web 3d Don't"
     );
 }
@@ -1327,14 +1139,104 @@ fn glyph_y_is_positive_down_from_the_baseline() {
     );
 }
 
+fn chunk_of(
+    fonts: &mut FontSystem,
+    text: &str,
+    style: &TextStyle,
+) -> std::rc::Rc<super::chunk::ShapedChunk> {
+    let spans = [TextSpan {
+        range: 0..text.len(),
+        style,
+    }];
+    let paragraph = Paragraph {
+        text,
+        spans: &spans,
+        direction: Direction::Ltr,
+    };
+    super::shape::shape_chunk(fonts, &paragraph)
+}
+
+#[test]
+fn chunk_pieces_match_the_reference_line_breaker() {
+    let mut fonts = FontSystem::new_embedded();
+    let sans = style(SANS, 16.0);
+    let text = "The quick brown fox jumps over the lazy dog, then rests.";
+    let chunk = chunk_of(&mut fonts, text, &sans);
+    let reference = shape_at(text, &sans, Some(0.0));
+    let mut start = 0;
+    let mut ends: Vec<u32> = chunk.breaks.iter().map(|b| b.end).collect();
+    ends.push(text.len() as u32);
+    assert_eq!(ends.len(), reference.lines.len());
+    for (end, line) in ends.iter().zip(&reference.lines) {
+        assert_eq!(line.text_range, start as usize..*end as usize);
+        let clusters = chunk.cluster_range(start, *end);
+        let width = chunk.width_of(&clusters);
+        assert!(
+            (width - (line.advance + line.hanging)).abs() < 0.01,
+            "{width}"
+        );
+        start = *end;
+    }
+    assert!((chunk.width - reference_width(text, &sans)).abs() < 0.01);
+}
+
+fn reference_width(text: &str, style: &TextStyle) -> f32 {
+    shape_at(text, style, None).width
+}
+
+#[test]
+fn shaping_a_chunk_again_hits_the_cache() {
+    let mut fonts = FontSystem::new_embedded();
+    let sans = style(SANS, 16.0);
+    let before = super::chunk::stats();
+    let first = chunk_of(&mut fonts, "cache me if you can", &sans);
+    let second = chunk_of(&mut fonts, "cache me if you can", &sans);
+    let after = super::chunk::stats();
+    assert!(std::rc::Rc::ptr_eq(&first, &second));
+    assert_eq!(after.misses, before.misses + 1);
+    assert_eq!(after.hits, before.hits + 1);
+    let mut bold = sans.clone();
+    bold.weight = 700;
+    let third = chunk_of(&mut fonts, "cache me if you can", &bold);
+    assert!(!std::rc::Rc::ptr_eq(&first, &third));
+}
+
+#[test]
+fn the_cache_evicts_the_least_recently_used_chunk() {
+    let mut fonts = FontSystem::new_embedded();
+    let sans = style(SANS, 16.0);
+    let favourite = chunk_of(&mut fonts, "always needed", &sans);
+    for i in 0..300 {
+        chunk_of(&mut fonts, &format!("filler number {i}"), &sans);
+        let again = chunk_of(&mut fonts, "always needed", &sans);
+        assert!(std::rc::Rc::ptr_eq(&favourite, &again), "evicted at {i}");
+    }
+    assert!(super::chunk::stats().entries <= 64);
+}
+
 #[test]
 fn a_nan_size_shapes_without_filling_the_cache() {
-    let nan = style(SANS, f32::NAN);
-    let before = cache::stats();
-    for _ in 0..3 {
-        shape_at("never found again", &nan, None);
-    }
-    let after = cache::stats();
-    assert_eq!(after.entries, before.entries);
-    assert_eq!(after.hits, before.hits);
+    let mut fonts = FontSystem::new_embedded();
+    let mut broken = style(SANS, 16.0);
+    broken.size = f32::NAN;
+    let before = super::chunk::stats();
+    let chunk = chunk_of(&mut fonts, "not a number", &broken);
+    assert!(chunk.glyphs.is_empty() || chunk.width == 0.0);
+    assert_eq!(super::chunk::stats().entries, before.entries);
+}
+
+#[test]
+fn capitalize_continues_a_word_across_calls() {
+    let mut in_word = false;
+    assert_eq!(
+        apply("hello f", TextTransform::Capitalize, &mut in_word),
+        "Hello F"
+    );
+    assert!(in_word);
+    assert_eq!(
+        apply("oo wor", TextTransform::Capitalize, &mut in_word),
+        "oo Wor"
+    );
+    assert_eq!(apply("ld", TextTransform::Capitalize, &mut in_word), "ld");
+    assert_eq!(apply(" x", TextTransform::Capitalize, &mut in_word), " X");
 }

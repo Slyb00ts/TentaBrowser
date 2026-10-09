@@ -1,15 +1,20 @@
 //! The result of shaping and line breaking a paragraph.
 
+#[cfg(test)]
 use std::ops::Range;
 use std::sync::{Arc, OnceLock};
 
 use parley::FontData;
 
 use crate::embedded_fonts::EMBEDDED_FONTS;
+#[cfg(test)]
 use crate::font::VerticalMetrics;
-use crate::types::{FontBlob, FontRef, GlyphRun};
+#[cfg(test)]
+use crate::types::GlyphRun;
+use crate::types::{FontBlob, FontRef};
 
 /// Why a line ended.
+#[cfg(test)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) enum LineEnd {
     /// At a soft wrap opportunity: the next line continues the same paragraph.
@@ -25,6 +30,7 @@ pub(crate) enum LineEnd {
 
 /// The extent of one cluster along the baseline, for mapping text offsets to
 /// positions (`Range.getClientRects`, caret and hit testing).
+#[cfg(test)]
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct ClusterBox {
     /// Byte range of the cluster in the paragraph text.
@@ -39,6 +45,7 @@ pub(crate) struct ClusterBox {
 }
 
 /// Glyphs of one span in one font on one line.
+#[cfg(test)]
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct ShapedRun {
     /// Index of the span in `Paragraph::spans` whose style this run uses. A
@@ -66,6 +73,7 @@ pub(crate) struct ShapedRun {
 }
 
 /// One line box worth of shaped text.
+#[cfg(test)]
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct ShapedLine {
     /// Byte range of the text on the line, including the hanging spaces and a
@@ -93,21 +101,13 @@ pub(crate) struct ShapedLine {
 }
 
 /// The lines of a paragraph.
+#[cfg(test)]
 #[derive(Clone, PartialEq, Debug, Default)]
 pub(crate) struct ShapedLines {
     /// The lines in order; empty only for empty text.
     pub(crate) lines: Vec<ShapedLine>,
     /// The widest line's `advance`.
     pub(crate) width: f32,
-}
-
-/// The widths a paragraph needs at least and wants at most, in pixels.
-#[derive(Copy, Clone, PartialEq, Debug, Default)]
-pub(crate) struct IntrinsicWidths {
-    /// Min-content: the widest unbreakable piece.
-    pub(crate) min: f32,
-    /// Max-content: the widest line when only forced breaks apply.
-    pub(crate) max: f32,
 }
 
 /// One shared blob per bundled file, so every run in a font carries the same
