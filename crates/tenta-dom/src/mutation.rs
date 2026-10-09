@@ -7,7 +7,21 @@
 //! and observer records can never drift apart.
 
 use tenta_core::{Atom, NodeId};
-use tenta_html::QualName;
+use tenta_html::{Attribute, QualName};
+
+/// A validated replacement source for an internal replace-all operation.
+///
+/// `ChildrenOf` accepts a detached fragment or the parser's private
+/// construction root inside one. It is not a general node-adoption operation.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ReplaceAllWith {
+    /// Remove the current children without adding a node.
+    Empty,
+    /// Add one freshly detached text node.
+    Text(NodeId),
+    /// Move all children from a detached fragment or parser root.
+    ChildrenOf(NodeId),
+}
 
 /// A requested change to the tree.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -29,16 +43,45 @@ pub enum Mutation {
         new_child: NodeId,
         old_child: NodeId,
     },
-    /// Sets an attribute, replacing any existing one with the same name.
+    /// Replace every child in one DOM replace-all operation. The semantic
+    /// observer record combines the complete old and new child snapshots.
+    ReplaceAll {
+        parent: NodeId,
+        replacement: ReplaceAllWith,
+    },
+    /// Sets an attribute's value, preserving the existing attribute's prefix
+    /// when namespace and local name already match.
     SetAttribute {
+        element: NodeId,
+        name: QualName,
+        value: String,
+    },
+    /// Replaces an entire attribute node, including its prefix, or appends it
+    /// when no attribute with the same namespace and local name exists.
+    ReplaceAttribute {
         element: NodeId,
         name: QualName,
         value: String,
     },
     /// Removes an attribute; missing attributes are a no-op.
     RemoveAttribute { element: NodeId, name: QualName },
+    /// Adds the parser's missing attributes in one relocation while queueing
+    /// one semantic attribute record for each attribute actually added.
+    AddMissingAttributes {
+        element: NodeId,
+        attributes: Vec<Attribute>,
+    },
     /// Replaces the data of a text, comment or CDATA node.
     SetText { node: NodeId, text: String },
+    /// Extends a parser text node without recopying its existing rope data.
+    AppendTextData { node: NodeId, text: String },
+    /// Replaces a UTF-16 span in a character-data node, adjusting live ranges.
+    ReplaceData {
+        node: NodeId,
+        offset: u32,
+        count: u32,
+        data: String,
+    },
     /// Moves every child of `from` to the end of `to`, in order. Used by the
     /// tree builder's "adopt" and `reparent_children` steps.
     ReparentChildren { from: NodeId, to: NodeId },
@@ -74,6 +117,12 @@ pub enum MutationRecord {
 /// report from.
 pub trait MutationObserverSink: Send {
     fn record(&mut self, record: MutationRecord);
+
+    /// Avoid copying an old text value solely for a diagnostic sink that
+    /// discards every record. Semantic observer capture is independent.
+    fn wants_record(&self) -> bool {
+        true
+    }
 }
 
 /// The default sink: drops every record.
@@ -82,6 +131,10 @@ pub struct NoopObserverSink;
 
 impl MutationObserverSink for NoopObserverSink {
     fn record(&mut self, _record: MutationRecord) {}
+
+    fn wants_record(&self) -> bool {
+        false
+    }
 }
 
 /// A sink that keeps every record behind a shared handle, so the caller can

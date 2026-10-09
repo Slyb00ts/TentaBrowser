@@ -126,21 +126,15 @@ impl FsPolicy {
         }
 
         // Open the file with O_NOFOLLOW and O_NONBLOCK.
-        #[allow(unused_mut)]
-        let mut file = opts.open(&checked)?;
+        let file = opts.open(&checked)?;
 
-        // For CreateTruncate mode, verify the file before truncation (N-R2-2).
-        // Check nlink to reject hard links that could bypass write-root checks.
-        if matches!(mode, OpenMode::CreateTruncate) {
-            let metadata = file.metadata()?;
-            if metadata.nlink() > 1 {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "file has hard links; refusing to truncate",
-                ));
-            }
-            // Now truncate the verified file.
-            file.set_len(0)?;
+        // Recheck the opened handle: the path may have changed since the
+        // symlink_metadata check above. Never hand a special file to a caller.
+        if !file.metadata()?.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "opened path is not a regular file",
+            ));
         }
 
         // After opening, verify that the parent directory is still inside a root.
@@ -180,6 +174,21 @@ impl FsPolicy {
                     "parent directory is outside write roots",
                 ));
             }
+        }
+
+        // Query the opened handle for either mode. Appending through an
+        // in-root hard link also changes bytes visible at an out-of-root path.
+        if file_link_count(&file)? > 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "file has hard links; refusing to write",
+            ));
+        }
+
+        // Finish every fallible policy and metadata validation before changing
+        // existing bytes (N-R2-2).
+        if matches!(mode, OpenMode::CreateTruncate) {
+            file.set_len(0)?;
         }
 
         Ok(file)
@@ -242,6 +251,27 @@ impl FsPolicy {
                 _ => DownloadPolicy::Deny,
             },
         }
+    }
+}
+
+/// The opened file's hard-link count, or an error when this platform cannot
+/// prove that writing to it would leave other paths untouched.
+fn file_link_count(file: &File) -> io::Result<u64> {
+    #[cfg(unix)]
+    {
+        Ok(file.metadata()?.nlink())
+    }
+    #[cfg(windows)]
+    {
+        Ok(winapi_util::file::information(file)?.number_of_links())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = file;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "hard-link count is unavailable on this platform",
+        ))
     }
 }
 
@@ -485,6 +515,72 @@ mod tests {
         // Verify the file was truncated
         let content = std::fs::read(&file_path).expect("read failed");
         assert_eq!(content, b"new");
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn open_write_refuses_hard_link_without_changing_either_path() {
+        let inside = temp_dir("hard-link-inside");
+        let outside = temp_dir("hard-link-outside");
+        let file_path = inside.join("file.txt");
+        let other_path = outside.join("same-file.txt");
+        let original = b"do not truncate another path";
+        std::fs::write(&file_path, original).expect("write original");
+        std::fs::hard_link(&file_path, &other_path).expect("create hard link");
+        let policy = FsPolicy::none().allow_write(&inside);
+
+        let error = policy
+            .open_write(&file_path, OpenMode::CreateTruncate)
+            .expect_err("a multiply linked file must not be truncated");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(std::fs::read(&file_path).unwrap(), original);
+        assert_eq!(std::fs::read(&other_path).unwrap(), original);
+
+        std::fs::remove_file(&other_path).expect("remove extra link");
+        drop(
+            policy
+                .open_write(&file_path, OpenMode::CreateTruncate)
+                .expect("a single-link file can be truncated"),
+        );
+        assert!(std::fs::read(&file_path).unwrap().is_empty());
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn open_write_refuses_append_through_hard_link() {
+        let inside = temp_dir("append-hard-link-inside");
+        let outside = temp_dir("append-hard-link-outside");
+        let file_path = inside.join("file.txt");
+        let other_path = outside.join("same-file.txt");
+        let original = b"append must not change another path";
+        std::fs::write(&file_path, original).expect("write original");
+        std::fs::hard_link(&file_path, &other_path).expect("create hard link");
+        let policy = FsPolicy::none().allow_write(&inside);
+
+        let error = policy
+            .open_write(&file_path, OpenMode::Append)
+            .expect_err("a multiply linked file must not be opened for append");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(std::fs::read(&file_path).unwrap(), original);
+        assert_eq!(std::fs::read(&other_path).unwrap(), original);
+    }
+
+    #[test]
+    fn denied_write_root_does_not_truncate_existing_file() {
+        let dir = temp_dir("late-write-denial");
+        let file_path = dir.join("file.txt");
+        let original = b"existing bytes must survive a denied open";
+        std::fs::write(&file_path, original).expect("write original");
+
+        // Write roots are directories. An exact-file root currently passes
+        // the initial target check but fails the parent-directory validation
+        // after the file is opened. Either way, denial must precede truncation.
+        let policy = FsPolicy::none().allow_write(&file_path);
+        let error = policy
+            .open_write(&file_path, OpenMode::CreateTruncate)
+            .expect_err("a file path is not a write directory");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(std::fs::read(&file_path).unwrap(), original);
     }
 
     #[test]

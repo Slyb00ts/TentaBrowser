@@ -1,0 +1,21 @@
+--- a/v8/src/ic/ic.cc
++++ b/v8/src/ic/ic.cc
+@@ -2023,7 +2023,17 @@
+   DirectHandle<JSReceiver> receiver = Cast<JSReceiver>(object);
+   DCHECK(!receiver->map()->is_deprecated());
+   if (IsJSObject(*receiver) &&
+-      WebIdlPropertyOrder::Applies(Cast<JSObject>(*receiver))) return false;
++      WebIdlPropertyOrder::Applies(Cast<JSObject>(*receiver))) {
++    Tagged<JSObject> js_receiver = Cast<JSObject>(*receiver);
++    // Ordinary public Symbols use V8's existing property order. Keep all
++    // original IC checks, and retain the slow path for Symbol interceptors.
++    const bool ordinary_public_symbol =
++        !it->IsElement() && IsSymbol(*it->name()) &&
++        !it->name()->IsAnyPrivate() &&
++        (!js_receiver->HasNamedInterceptor() ||
++         !js_receiver->GetNamedInterceptor()->can_intercept_symbols());
++    if (!ordinary_public_symbol) return false;
++  }
+ 
+   for (;; it->Next()) {
+     switch (it->state()) {

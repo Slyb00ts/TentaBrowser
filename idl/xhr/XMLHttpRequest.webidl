@@ -86,21 +86,11 @@
 //    and the parameter's other arm is absent. The standard's parameter is
 //    `(Document or XMLHttpRequestBodyInit)?` and `XMLHttpRequestBodyInit` is
 //    `(Blob or BufferSource or FormData or URLSearchParams or USVString)`; the
-//    typedef below is the servable subset — the same two arms `BodyInit` is
-//    (`idl/fetch/Response.webidl`) — because `FormData` has no declaration in
-//    this repository and a declared-but-unimplemented interface is the bug
-//    class slice 4a removed. `Blob` does now exist (`idl/fileapi/Blob.webidl`)
-//    and the arm is deliberately not added here: it is a widening of the send
-//    path's `BodyInit` rather than of this file, and it needs the arm order and
-//    the host-side brand check `BlobPart` wires up. `Document` is absent for two
-//    reasons, either of which is enough on its own. The one that cannot be coded
-//    around is the
-//    generator's: `union_test` (`crates/tenta-idl/src/codegen/types.rs`) gives
-//    `Type::Interface(_)` the test `value.is_object()` — the same defect that
-//    keeps the `URLSearchParams` arm out below — and a `Document` arm has to be
-//    declared ahead of the `USVString` fallback, so it would capture every
-//    object value. The other is that the serialisation the standard asks for has
-//    no entry point: `tenta-dom`'s serialiser
+//    typedef below is the served subset, matching `BodyInit` in
+//    `idl/fetch/Response.webidl`. Blob and FormData interfaces and generated
+//    interface-brand checks now exist, but this send path still needs their
+//    body extraction implementations. The Document arm also needs whole-document
+//    serialization with the standard's inferred content type. The serializer
 //    (`crates/tenta-dom/src/serialize.rs`) exposes `inner_html`, `outer_html`
 //    and `serialize_xml` over a `NodeId`, and its walk does carry a document
 //    case, but nothing is named for a whole document and nothing applies the
@@ -117,13 +107,8 @@
 //    standard's own `URLSearchParams` branch sets
 //    `application/x-www-form-urlencoded;charset=UTF-8`
 //    (<https://fetch.spec.whatwg.org/#concept-bodyinit-extract>). The bytes are
-//    right and the inferred type is not. Declaring the arm is not the fix:
-//    `union_test` (`crates/tenta-idl/src/codegen/types.rs`) gives
-//    `Type::Interface(_)` the test `value.is_object()`, which is *every object*
-//    and not a brand check, so an arm declared before `USVString` would capture
-//    `{}`, an `Array` and a `Date`. Serving it properly needs a platform-object
-//    brand-check helper in the generator's prelude beside `has_iterator`, which
-//    is a generator slice with its own goldens.
+//    right and the inferred type is not. Interface-brand selection is available;
+//    widening this body union and its host extraction remains a separate slice.
 //
 // One more deviation is a limit of the transport rather than a narrowing:
 // `statusText` reads back as the status code's canonical reason text, and an

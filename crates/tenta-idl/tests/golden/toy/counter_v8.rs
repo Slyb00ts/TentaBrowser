@@ -25,7 +25,7 @@
 /// - `v8::ReturnValue::{set, set_bool, set_int32, set_uint32, set_double,
 ///   set_null, set_undefined}`
 /// - `v8::fast_api::{CFunction, CFunctionInfo, CTypeInfo, Flags,
-///   Int64Representation, Type, FastApiOneByteString}`
+///   Int64Representation, Type, FastApiOneByteString, FastApiCallbackOptions}`
 /// - `v8::Local<v8::Object>::{get_aligned_pointer_from_internal_field,
 ///   set_aligned_pointer_in_internal_field, get, set, create_data_property,
 ///   internal_field_count}` (through the prelude helpers)
@@ -43,7 +43,8 @@ pub fn install_counter<T: CounterOps + CounterConstructor + 'static>(
     global_template: v8::Local<'_, v8::ObjectTemplate>,
     registry: &mut dyn InterfaceRegistry,
 ) -> Result<v8::Global<v8::FunctionTemplate>, JsError> {
-    let constructor = v8::FunctionTemplate::builder(construct_counter::<T>).build(scope);
+    install_native_callback_state(scope);
+    let constructor = v8::FunctionTemplate::builder(construct_counter::<T>).length(1).build(scope);
     let class_name = v8_string(scope, "Counter")?;
     constructor.set_class_name(class_name);
     let signature = v8::Signature::new(scope, constructor);
@@ -139,8 +140,22 @@ pub fn install_counter<T: CounterOps + CounterConstructor + 'static>(
     Ok(v8::Global::new(scope.as_ref(), constructor))
 }
 
-/// The `Counter` constructor.
 fn construct_counter<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        v8_begin_stored_value_lease(scope);
+        body_construct_counter::<T>(scope, args, rv);
+        v8_end_stored_value_lease(scope);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "construct_counter", (), call) };
+}
+
+/// The `Counter` constructor.
+fn body_construct_counter<'s, T: CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -176,8 +191,20 @@ fn construct_counter<'s, T: CounterOps + CounterConstructor + 'static>(
             return;
         }
     };
+    match v8_before_constructor_host(scope) {
+        Ok(()) => {},
+        Err(V8AdmissionError::Throw(error)) => {
+            throw_js_error(scope, &error);
+            return;
+        },
+        Err(V8AdmissionError::Terminated) => {
+            scope.terminate_execution();
+            return;
+        },
+    }
     match <T as CounterConstructor>::construct(&realm, options) {
         Ok(host) => {
+            v8_transfer_stored_value_lease(scope);
             let this = args.this();
             if let Err(error) = adopt_host(scope, "Counter", this, host) {
                 throw_js_error(scope, &error);
@@ -189,8 +216,20 @@ fn construct_counter<'s, T: CounterOps + CounterConstructor + 'static>(
     }
 }
 
-/// Getter for `Counter.count`.
 fn get_counter_count<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_counter_count::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_counter_count", (), call) };
+}
+
+/// Getter for `Counter.count`.
+fn body_get_counter_count<'s, T: CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -212,13 +251,16 @@ fn get_counter_count<'s, T: CounterOps + CounterConstructor + 'static>(
 /// Fast-API getter for `Counter.count`.
 extern "C" fn fast_get_counter_count<T: CounterOps + CounterConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> u32 {
+    v8_fast_callback_boundary(options, "fast_get_counter_count", 0, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.count(),
         None => 0,
     }
+    })
 }
 
 /// Fast-call table for the `Counter.count` getter.
@@ -229,7 +271,7 @@ impl<T: CounterOps + CounterConstructor + 'static> CounterCountGetter<T> {
         fast_get_counter_count::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Uint32.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
@@ -239,11 +281,14 @@ impl<T: CounterOps + CounterConstructor + 'static> CounterCountGetter<T> {
 extern "C" fn fast_set_counter_count<T: CounterOps + CounterConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
     value: u32,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) {
+    v8_fast_callback_boundary(options, "fast_set_counter_count", (), || {
     // SAFETY: as for the fast getter.
     if let Some(host) = unsafe { unwrap_receiver::<T>(receiver) } {
         host.set_count(value);
     }
+    });
 }
 
 /// Fast-call table for the `Counter.count` setter.
@@ -257,14 +302,27 @@ impl<T: CounterOps + CounterConstructor + 'static> CounterCountSetter<T> {
             &[
                 v8::fast_api::Type::V8Value.as_info(),
                 v8::fast_api::Type::Uint32.as_info(),
+                v8::fast_api::Type::CallbackOptions.as_info(),
             ],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Setter for `Counter.count`.
 fn set_counter_count<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_set_counter_count::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "set_counter_count", (), call) };
+}
+
+/// Setter for `Counter.count`.
+fn body_set_counter_count<'s, T: CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -291,8 +349,20 @@ fn set_counter_count<'s, T: CounterOps + CounterConstructor + 'static>(
     host.set_count(value);
 }
 
-/// Getter for `Counter.isActive`.
 fn get_counter_is_active<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_counter_is_active::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_counter_is_active", (), call) };
+}
+
+/// Getter for `Counter.isActive`.
+fn body_get_counter_is_active<'s, T: CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -314,13 +384,16 @@ fn get_counter_is_active<'s, T: CounterOps + CounterConstructor + 'static>(
 /// Fast-API getter for `Counter.isActive`.
 extern "C" fn fast_get_counter_is_active<T: CounterOps + CounterConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> bool {
+    v8_fast_callback_boundary(options, "fast_get_counter_is_active", false, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.is_active(),
         None => false,
     }
+    })
 }
 
 /// Fast-call table for the `Counter.isActive` getter.
@@ -331,14 +404,26 @@ impl<T: CounterOps + CounterConstructor + 'static> CounterIsActiveGetter<T> {
         fast_get_counter_is_active::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Bool.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Getter for `Counter.state`.
 fn get_counter_state<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_counter_state::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_counter_state", (), call) };
+}
+
+/// Getter for `Counter.state`.
+fn body_get_counter_state<'s, T: CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -367,8 +452,20 @@ fn get_counter_state<'s, T: CounterOps + CounterConstructor + 'static>(
     }
 }
 
-/// `Counter.reset`.
 fn call_counter_reset<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_counter_reset::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_counter_reset", (), call) };
+}
+
+/// `Counter.reset`.
+fn body_call_counter_reset<'s, T: CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -391,13 +488,16 @@ fn call_counter_reset<'s, T: CounterOps + CounterConstructor + 'static>(
 /// Fast-API callback for `Counter.reset`.
 extern "C" fn fast_call_counter_reset<T: CounterOps + CounterConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) {
+    v8_fast_callback_boundary(options, "fast_call_counter_reset", (), || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.reset(),
         None => (),
     }
+    })
 }
 
 /// Fast-call table for `Counter.reset`.
@@ -410,14 +510,27 @@ impl<T: CounterOps + CounterConstructor + 'static> CounterResetMethod<T> {
             v8::fast_api::Type::Void.as_info(),
             &[
                 v8::fast_api::Type::V8Value.as_info(),
+                v8::fast_api::Type::CallbackOptions.as_info(),
             ],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// `Counter.advance`.
 fn call_counter_advance<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_counter_advance::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_counter_advance", (), call) };
+}
+
+/// `Counter.advance`.
+fn body_call_counter_advance<'s, T: CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -456,8 +569,20 @@ fn call_counter_advance<'s, T: CounterOps + CounterConstructor + 'static>(
     rv.set_undefined();
 }
 
-/// `Counter.stop`.
 fn call_counter_stop<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_counter_stop::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_counter_stop", (), call) };
+}
+
+/// `Counter.stop`.
+fn body_call_counter_stop<'s, T: CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -480,13 +605,16 @@ fn call_counter_stop<'s, T: CounterOps + CounterConstructor + 'static>(
 /// Fast-API callback for `Counter.stop`.
 extern "C" fn fast_call_counter_stop<T: CounterOps + CounterConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) {
+    v8_fast_callback_boundary(options, "fast_call_counter_stop", (), || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.stop(),
         None => (),
     }
+    })
 }
 
 /// Fast-call table for `Counter.stop`.
@@ -499,14 +627,27 @@ impl<T: CounterOps + CounterConstructor + 'static> CounterStopMethod<T> {
             v8::fast_api::Type::Void.as_info(),
             &[
                 v8::fast_api::Type::V8Value.as_info(),
+                v8::fast_api::Type::CallbackOptions.as_info(),
             ],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Getter for `Counter.stopped`.
 fn get_counter_stopped<'s, T: CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_counter_stopped::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_counter_stopped", (), call) };
+}
+
+/// Getter for `Counter.stopped`.
+fn body_get_counter_stopped<'s, T: CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -528,13 +669,16 @@ fn get_counter_stopped<'s, T: CounterOps + CounterConstructor + 'static>(
 /// Fast-API getter for `Counter.stopped`.
 extern "C" fn fast_get_counter_stopped<T: CounterOps + CounterConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> bool {
+    v8_fast_callback_boundary(options, "fast_get_counter_stopped", false, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.stopped(),
         None => false,
     }
+    })
 }
 
 /// Fast-call table for the `Counter.stopped` getter.
@@ -545,7 +689,7 @@ impl<T: CounterOps + CounterConstructor + 'static> CounterStoppedGetter<T> {
         fast_get_counter_stopped::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Bool.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];

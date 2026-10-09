@@ -10,11 +10,23 @@
 use tenta_core::atom::atoms;
 use tenta_dom::Document;
 
+fn document_with_root() -> (Document, tenta_core::NodeId) {
+    let mut document = Document::new();
+    let root = document.create_html_element(atoms::HTML);
+    document
+        .mutate(tenta_dom::Mutation::Append {
+            parent: document.document_node(),
+            child: root,
+        })
+        .unwrap();
+    (document, root)
+}
+
 #[test]
 fn r3_4_quirks_flip_with_template_and_detached() {
     // R3-4: Flip quirks mode and verify indexes remain consistent.
     // The key issue is that set_quirks_mode should reindex everything properly.
-    let mut document = Document::new();
+    let (mut document, root) = document_with_root();
 
     let div1 = document.create_html_element(atoms::DIV);
     let div2 = document.create_html_element(atoms::DIV);
@@ -22,13 +34,13 @@ fn r3_4_quirks_flip_with_template_and_detached() {
     // Append to document
     document
         .mutate(tenta_dom::Mutation::Append {
-            parent: document.document_node(),
+            parent: root,
             child: div1,
         })
         .unwrap();
     document
         .mutate(tenta_dom::Mutation::Append {
-            parent: document.document_node(),
+            parent: root,
             child: div2,
         })
         .unwrap();
@@ -86,7 +98,7 @@ fn r3_4_quirks_flip_with_template_and_detached() {
 #[test]
 fn r3_6_get_elements_by_class_name_quirks_case_insensitive() {
     // R3-6: getElementsByClassName must be case-insensitive in quirks mode
-    let mut document = Document::new();
+    let (mut document, root) = document_with_root();
     document.set_quirks_mode(tenta_html::QuirksMode::Quirks);
 
     // Create elements with mixed-case class names
@@ -96,19 +108,19 @@ fn r3_6_get_elements_by_class_name_quirks_case_insensitive() {
 
     document
         .mutate(tenta_dom::Mutation::Append {
-            parent: document.document_node(),
+            parent: root,
             child: div1,
         })
         .unwrap();
     document
         .mutate(tenta_dom::Mutation::Append {
-            parent: document.document_node(),
+            parent: root,
             child: div2,
         })
         .unwrap();
     document
         .mutate(tenta_dom::Mutation::Append {
-            parent: document.document_node(),
+            parent: root,
             child: div3,
         })
         .unwrap();
@@ -179,13 +191,13 @@ fn r3_6_get_elements_by_class_name_quirks_case_insensitive() {
 fn r3_12_pre_leading_newline_roundtrip() {
     // R3-12: Leading newline in <pre>, <textarea>, <listing> must be preserved
     // through outer_html serialization and re-parsing.
-    let mut document = Document::new();
+    let (mut document, root) = document_with_root();
     let pre = document.create_html_element(atoms::PRE);
     let text_node = document.create_text("\n\nx");
 
     document
         .mutate(tenta_dom::Mutation::Append {
-            parent: document.document_node(),
+            parent: root,
             child: pre,
         })
         .unwrap();
@@ -211,7 +223,7 @@ fn r3_12_pre_leading_newline_roundtrip() {
     let textarea_text = document.create_text("\n\nContent");
     document
         .mutate(tenta_dom::Mutation::Append {
-            parent: document.document_node(),
+            parent: root,
             child: textarea,
         })
         .unwrap();
@@ -414,7 +426,7 @@ fn r3_5_quirks_mode_id_class_churn() {
     // R3-5: Test that id/class folded-key reference counting doesn't leak.
     // With quirks mode: set/rewrite/remove ids and classes on many elements,
     // sweep, and verify indexing still works.
-    let mut document = Document::new();
+    let (mut document, root) = document_with_root();
 
     // Set quirks mode
     document.set_quirks_mode(tenta_html::QuirksMode::Quirks);
@@ -425,7 +437,7 @@ fn r3_5_quirks_mode_id_class_churn() {
         let div = document.create_html_element(atoms::DIV);
         document
             .mutate(tenta_dom::Mutation::Append {
-                parent: document.document_node(),
+                parent: root,
                 child: div,
             })
             .unwrap();
@@ -520,7 +532,7 @@ fn r3_5_quirks_mode_id_class_churn() {
 fn n9_memory_shrinks_after_sweep() {
     // N-9: Sweep frees detached nodes and implements shrink_to_fit.
     // This is a basic test that sweep works and frees nodes.
-    let mut document = Document::new();
+    let (mut document, root) = document_with_root();
     let mut nodes = Vec::new();
 
     // Create 100 detached elements
@@ -533,7 +545,7 @@ fn n9_memory_shrinks_after_sweep() {
     for &node in &nodes {
         document
             .mutate(tenta_dom::Mutation::Append {
-                parent: document.document_node(),
+                parent: root,
                 child: node,
             })
             .unwrap();

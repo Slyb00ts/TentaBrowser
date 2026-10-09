@@ -1,9 +1,9 @@
 //! The page's JavaScript runtime: one engine bound to one parsed document
 //! (`docs/spec/02-architecture.md` §3).
 //!
-//! A runtime exists only while a page with an engine drives a parse. It is
-//! built lazily on the first `</script>` pause, runs that parse's script
-//! elements against the very tree the parser is writing into, reports the
+//! A runtime exists only while a page with an engine drives a navigation. It is
+//! built lazily on the first `</script>` pause or a requested evaluation. It
+//! runs script elements against the very tree the parser is writing into, reports the
 //! engine's task provenance to the settle machine, and is dropped when the
 //! navigation that built it ends.
 //!
@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use hashbrown::HashMap;
 use tenta_core::atom::atoms;
-use tenta_core::{Error, Origin, PageId, Result};
+use tenta_core::{Error, NativeMemoryBudget, NativeMemoryFailure, Origin, PageId, Result};
 use tenta_dom::{SharedDocument, SharedSink};
 use tenta_html::{Encoding, Parser};
 use tenta_js::engine::{
@@ -129,6 +129,11 @@ const MUTATIONS_PER_SWEEP: u64 = 4096;
 /// see `crate::script_cpu`. It reports, the page accumulates and decides.
 pub(crate) trait ScriptBudget: Send + Sync {
     fn charge(&self, elapsed: Duration);
+    fn crash_reason(&self) -> Option<String>;
+    /// Returns the page-owned native ledger, never a navigation-local copy.
+    fn native_memory(&self) -> NativeMemoryBudget;
+    /// Marks a hard native-byte failure without classifying it as a Rust panic.
+    fn crash_native_memory(&self, failure: NativeMemoryFailure);
 }
 
 /// One engine and the document it is bound to, on the page thread.
@@ -138,12 +143,11 @@ pub(crate) struct PageRuntime {
     document: SharedDocument,
     /// Whether a `tenta_html::Parser` is still writing into `document`.
     ///
-    /// The engine boundary's third rule forbids freeing nodes while a parser
-    /// holds arena handles into the tree, and
-    /// [`PageRuntime::run_pending_script`] is the one place the two
-    /// interleave — it enters the engine with the parse paused on a script.
-    /// So this is what [`PageRuntime::turn`] consults before reclaiming, and
-    /// the assertion in `run_pending_script` keeps the two from disagreeing.
+    /// Page-loop reclamation stays deferred until parsing finishes. Engine
+    /// pressure checkpoints can reclaim unrelated script-created nodes while
+    /// paused: SharedSink's native pins retain every published parser handle.
+    /// The assertion in `run_pending_script` still checks that this is a real
+    /// parser pause, rather than an ordinary deferred/async script entry.
     parse_in_flight: bool,
     /// Kept so the bridge can be detached when the settle call ends; the
     /// engine also holds it, for as long as the engine lives.
@@ -175,6 +179,8 @@ pub(crate) struct PageRuntime {
     /// The runtime reports into it but does not own it: the total is the page's
     /// and outlives this navigation (`crate::script_cpu`).
     script_budget: Arc<dyn ScriptBudget>,
+    /// One Page-owned ledger across this navigation and any Send wire.
+    native_memory: NativeMemoryBudget,
     /// The completions this navigation's fetch driver has left for the page to
     /// settle.
     ///
@@ -196,6 +202,26 @@ pub(crate) struct PageRuntime {
 }
 
 impl PageRuntime {
+    /// Native panic is dominant. A hard memory charge instead marks the page
+    /// crashed through its typed budget path after the engine frame returns.
+    pub(crate) fn check_engine_failure(&self) {
+        if let Some(callback) = self.engine.native_failure() {
+            panic!("native boundary `{callback}` failed; the engine was discarded");
+        }
+        if let Some(failure) = self.native_memory.first_failure() {
+            self.script_budget.crash_native_memory(failure);
+        }
+    }
+
+    fn native_memory_error(&self) -> Option<Error> {
+        self.native_memory
+            .first_failure()
+            .map(|failure| Error::BudgetExceeded {
+                kind: failure.kind,
+                component: Some(failure.component.name().to_owned()),
+            })
+    }
+
     /// Builds an engine over `document` and points it at `tracker`.
     fn create(
         page: PageId,
@@ -208,7 +234,8 @@ impl PageRuntime {
             .engine
             .as_ref()
             .ok_or_else(|| "the page has no JavaScript engine factory".to_owned())?;
-        let engine_config = engine_config(config);
+        let native_memory = script_budget.native_memory();
+        let engine_config = engine_config(config, native_memory.clone());
         let mut engine = factory.create(document.clone(), &engine_config)?;
         // The rule the engine tags timers with comes from the settle
         // configuration, so the two cannot disagree about what holds a settle
@@ -263,14 +290,16 @@ impl PageRuntime {
             page,
             engine,
             document,
-            // A runtime is only ever built while a parse is paused on a
-            // script, so a parser over `document` is in flight by definition.
+            // A parse-pause runtime starts with a parser in flight. A runtime
+            // created for post-settle evaluation is marked parse-finished
+            // before its first engine entry.
             parse_in_flight: true,
             bridge,
             last_gc_epoch,
             watchdog,
             script_timeout,
             script_budget,
+            native_memory,
             fetches,
             xhrs,
         })
@@ -285,15 +314,16 @@ impl PageRuntime {
     /// scheduled. Only remaining durations leave this method — the engine
     /// clock and the page clock are never compared.
     ///
-    /// **This is where detached nodes are reclaimed, and it is the only place.**
-    /// `turn` has one caller — the settle loop (`crate::page`) — so reclamation
-    /// runs while a settle is being driven and not between navigations: a page
-    /// whose settle ends, or one that never settles, keeps its detached
-    /// subtrees until something drives a turn again. Reclamation is also a
-    /// memory question rather than a correctness one (a freed node's listeners
-    /// can no longer fire), so being late is safe; being *early* is not, and
-    /// the `parse_in_flight` guard below is what keeps it from being.
+    /// This is the page-loop detached-node reclamation point. Engines also
+    /// perform pressure checkpoints during long scripts; those must preserve
+    /// native parser pins and run before host work without active borrows.
+    /// The page-loop guard remains conservative while parsing is in flight.
+    /// Once settled, engine task-end collection releases wrapper roots, but
+    /// native arena sweeping waits for this turn or a later pressure checkpoint.
     pub(crate) fn turn(&mut self, budget: usize) -> Option<Duration> {
+        if self.script_budget.crash_reason().is_some() {
+            return None;
+        }
         if !self.parse_in_flight && self.should_reclaim_detached() {
             self.reclaim_detached();
         }
@@ -318,6 +348,9 @@ impl PageRuntime {
         let completions = self.fetches.take_all();
         if !completions.is_empty() {
             self.bounded("fetch", |engine| engine.settle_fetches(completions));
+            if self.script_budget.crash_reason().is_some() {
+                return None;
+            }
         }
         // The XHR drain sits immediately after the fetch drain and before the
         // timers, for the same reason the fetch drain does: it is the task a
@@ -330,12 +363,21 @@ impl PageRuntime {
         let xhr_completions = self.xhrs.take_all();
         if !xhr_completions.is_empty() {
             self.bounded("xhr", |engine| engine.settle_xhr(xhr_completions));
+            if self.script_budget.crash_reason().is_some() {
+                return None;
+            }
         }
         // Both entries below run callback script the engine does not bound
         // itself, so each is armed around its call (`PageRuntime::bounded`).
         self.bounded("timers", |engine| engine.pump_due_timers(budget));
+        if self.script_budget.crash_reason().is_some() {
+            return None;
+        }
         if self.engine.frame_due() {
             self.bounded("animation-frame", |engine| engine.run_animation_frame());
+            if self.script_budget.crash_reason().is_some() {
+                return None;
+            }
         }
         self.engine.next_wakeup()
     }
@@ -377,6 +419,7 @@ impl PageRuntime {
             _ => None,
         };
         let outcome = run(&mut *self.engine);
+        self.check_engine_failure();
         self.script_budget.charge(started.elapsed());
         if let Some(arm) = &arm
             && arm.fired()
@@ -408,6 +451,9 @@ impl PageRuntime {
     /// as well as in the settle machine — two places to keep once-ness in step
     /// instead of one.
     pub(crate) fn dispatch_lifecycle(&mut self, event: LifecycleEvent) {
+        if self.script_budget.crash_reason().is_some() {
+            return;
+        }
         self.bounded("lifecycle", |engine| engine.dispatch_lifecycle(event));
     }
 
@@ -430,12 +476,15 @@ impl PageRuntime {
     /// The order is the boundary's, not this module's: a node the engine no
     /// longer wraps still looks reachable to the DOM until `trim_memory` clears
     /// the wrapper's flag and drains the listeners of the previous sweep, so a
-    /// sweep that ran first would keep it. `trim_memory` is also the only entry
-    /// point that reaches the things a sweep invalidates but does not own — the
-    /// freed nodes' listener entries and the stored callbacks in them live in
-    /// the engine's world.
+    /// sweep that ran first would keep it. The engine also owns the listener
+    /// entries and stored callbacks invalidated by a sweep. Explicit trim and
+    /// internal pressure checkpoints both apply that exact-generation cleanup.
     fn reclaim_detached(&mut self) {
         self.engine.trim_memory();
+        self.check_engine_failure();
+        if self.script_budget.crash_reason().is_some() {
+            return;
+        }
         let stats = self.document.borrow_mut().sweep_detached();
         if stats.nodes_freed > 0 {
             tracing::debug!(
@@ -458,7 +507,8 @@ impl PageRuntime {
     /// This is the one place the page enters an engine with its parser
     /// stopped, and the three borrow rules of the boundary apply
     /// (`tenta_js::engine`): the document borrow ends before the engine is
-    /// called, and nothing may free nodes while the parse is in flight. Every
+    /// called, and the sink's native pins retain every handle the parser may
+    /// reuse across an engine pressure checkpoint. Every
     /// skip is a real decision about the HTML, so each one is logged: a
     /// non-classic type is not this driver's to run, and an empty element has
     /// nothing to run.
@@ -572,11 +622,13 @@ impl PageRuntime {
     /// resolves later, for `defer` and `async` (`crate::page`). The second is
     /// why there is no `parse_in_flight` assertion here: after
     /// `parser.finish()` no parser is writing into the tree, and that is
-    /// exactly when a deferred script runs. That a script may be run without a
-    /// parser in flight is not a loosening of the boundary — the boundary
-    /// forbids *freeing nodes* while a parser is in flight, and the reclaim
-    /// guard is on `turn`, which this never reaches.
+    /// exactly when a deferred script runs. SharedSink pins preserve parser
+    /// handles at pressure checkpoints while the parse is paused; ordinary
+    /// page-loop reclamation remains guarded by `turn`.
     pub(crate) fn run_source(&mut self, source: &str) {
+        if self.script_budget.crash_reason().is_some() {
+            return;
+        }
         // `run_script` bounds itself, with a private per-run thread inside the
         // backend, so it is not wrapped in `bounded` — but its time is still
         // the page's script time and is charged here. Charging only the
@@ -590,10 +642,84 @@ impl PageRuntime {
                 "a script did not run to completion"
             );
         }
+        self.check_engine_failure();
         self.script_budget.charge(started.elapsed());
         // The script's own checkpoints are owed even when it threw, and the
         // checkpoint runs callback script the engine does not bound itself.
+        // A budget crash already requires discarding this engine, however;
+        // entering its queued callbacks could only obscure that first failure.
+        if self.script_budget.crash_reason().is_some() {
+            return;
+        }
         self.bounded("microtasks", |engine| engine.run_microtasks());
+    }
+
+    /// Evaluates a host expression in the navigation's live world. The
+    /// navigation deadline bounds the script and its immediate microtasks;
+    /// async tasks queued here are not awaited by this call.
+    pub(crate) fn evaluate(&mut self, source: &str, remaining: Duration) -> Result<String> {
+        // A zero page entry timeout disables that local limit, but the
+        // navigation's remaining deadline still bounds this host operation.
+        let timeout = if self.script_timeout.is_zero() {
+            remaining
+        } else {
+            self.script_timeout.min(remaining)
+        };
+
+        let started = Instant::now();
+        let result = self.engine.evaluate(source, timeout);
+        // A native callback panic is a page crash, not a catchable script
+        // exception. The backend reports it only after the V8 frame unwinds.
+        self.check_engine_failure();
+        self.script_budget.charge(started.elapsed());
+        if let Some(error) = self.native_memory_error() {
+            return Err(error);
+        }
+        if let Some(reason) = self.script_budget.crash_reason() {
+            return Err(Error::Crashed { reason });
+        }
+
+        let checkpoint_budget = remaining.saturating_sub(started.elapsed());
+        if checkpoint_budget.is_zero() {
+            return Err(Error::timeout("evaluate", remaining.as_millis() as u64));
+        }
+        let checkpoint_limit = if self.script_timeout.is_zero() {
+            checkpoint_budget
+        } else {
+            self.script_timeout.min(checkpoint_budget)
+        };
+        let checkpoint_started = Instant::now();
+        let arm = self.watchdog.as_ref().map(|handle| {
+            crate::watchdog::arm(Arc::clone(handle), checkpoint_started + checkpoint_limit)
+        });
+        self.engine.run_microtasks();
+        let checkpoint_elapsed = checkpoint_started.elapsed();
+        let checkpoint_fired = arm.as_ref().is_some_and(crate::watchdog::Arm::fired);
+        drop(arm);
+        self.check_engine_failure();
+        self.script_budget.charge(checkpoint_elapsed);
+        if let Some(error) = self.native_memory_error() {
+            return Err(error);
+        }
+        if let Some(reason) = self.script_budget.crash_reason() {
+            return Err(Error::Crashed { reason });
+        }
+        if checkpoint_fired
+            || checkpoint_elapsed >= checkpoint_limit
+            || started.elapsed() >= remaining
+        {
+            return Err(Error::timeout("evaluate", remaining.as_millis() as u64));
+        }
+
+        result.map_err(|error| match error.kind {
+            tenta_js::engine::ScriptErrorKind::Terminated if error.message.contains("deadline") => {
+                Error::timeout("evaluate", timeout.as_millis() as u64)
+            }
+            _ => Error::Script {
+                message: error.message,
+                stack: None,
+            },
+        })
     }
 }
 
@@ -659,7 +785,7 @@ pub(crate) struct ScriptMeta {
 
 /// The engine configuration a page derives from its own
 /// (`crates/tenta-js/src/engine.rs`).
-fn engine_config(config: &PageConfig) -> PageEngineConfig {
+fn engine_config(config: &PageConfig, native_memory: NativeMemoryBudget) -> PageEngineConfig {
     PageEngineConfig {
         timer_rule: config.settle.timer_rule(),
         // A live page follows wall time.
@@ -669,6 +795,8 @@ fn engine_config(config: &PageConfig) -> PageEngineConfig {
         locale: config.locale.clone(),
         timezone: None,
         cookies: config.cookies.clone(),
+        storage: config.storage.clone(),
+        native_memory,
     }
 }
 
@@ -741,14 +869,14 @@ pub(crate) fn ensure_runtime(
     config: &PageConfig,
     tracker: Rc<RefCell<SettleTracker>>,
     script_budget: Arc<dyn ScriptBudget>,
-) {
+) -> std::result::Result<(), String> {
     let existing = RUNTIMES.with(|cell| {
         cell.borrow()
             .get(&page)
             .map(|runtime| Rc::ptr_eq(&runtime.document, &document))
     });
     match existing {
-        Some(true) => return,
+        Some(true) => return Ok(()),
         Some(false) => {
             debug_assert!(
                 false,
@@ -767,16 +895,15 @@ pub(crate) fn ensure_runtime(
             RUNTIMES.with(|cell| {
                 cell.borrow_mut().insert(page, runtime);
             });
+            Ok(())
         }
-        // A failed engine is not a failed page: the parse goes on and the
-        // scripts it pauses on are skipped, which is what a Tier 1 parse does
-        // with every script.
         Err(reason) => {
             tracing::error!(
                 ?page,
                 %reason,
-                "no JavaScript engine could be created; scripts are skipped"
+                "the JavaScript engine could not be created"
             );
+            Err(reason)
         }
     }
 }
@@ -784,9 +911,9 @@ pub(crate) fn ensure_runtime(
 /// Runs the script the parse of `page` is paused on, creating the runtime on
 /// the first pause.
 ///
-/// Without a runtime there is nothing to run the script with, but the parse is
-/// still paused on it: it is taken and dropped, because resuming without
-/// taking it would abandon it silently.
+/// Runtime creation failures propagate to the navigation. A configured engine
+/// that cannot start must not turn a JavaScript page into a successful parse
+/// with its scripts silently skipped.
 ///
 /// A classic script with a `src` is fetched here, between the two visits to the
 /// runtime, because it is the fetch that awaits and the runtime is
@@ -815,15 +942,12 @@ pub(crate) async fn run_pending_script(
         config,
         Rc::clone(tracker),
         Arc::clone(&script_budget),
-    );
-    let Some(step) = with_runtime_for(page, document, |runtime| {
+    )
+    .map_err(Error::unsupported)?;
+    let step = with_runtime_for(page, document, |runtime| {
         runtime.run_pending_script(parser, &meta.base)
-    }) else {
-        if parser.take_pending_script().is_some() {
-            tracing::debug!(?page, "a script is skipped: no engine can run it");
-        }
-        return Ok(None);
-    };
+    })
+    .ok_or_else(|| Error::unsupported("the JavaScript runtime was unavailable"))?;
     let url = match step? {
         ScriptStep::Done => return Ok(None),
         ScriptStep::Deferred(timing) => return Ok(Some(timing)),
@@ -1032,6 +1156,7 @@ pub(crate) fn end_settle(page: PageId, document: Option<&SharedDocument>) {
 mod tests {
     use super::*;
     use std::cell::Cell;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use tenta_core::TimerRule;
     use tenta_dom::Document;
@@ -1065,6 +1190,16 @@ mod tests {
         /// is what makes "both events reach the engine through the bounded
         /// entry" observable rather than inferred from the engine's internals.
         lifecycle: Rc<RefCell<Vec<LifecycleEvent>>>,
+        microtask_signal: Option<Arc<AtomicBool>>,
+        frames_due: Rc<Cell<bool>>,
+    }
+
+    struct SignalWatchdog(Arc<AtomicBool>);
+
+    impl EngineWatchdog for SignalWatchdog {
+        fn terminate(&self) {
+            self.0.store(true, Ordering::Release);
+        }
     }
 
     impl PageEngine for RecordingEngine {
@@ -1074,6 +1209,10 @@ mod tests {
 
         fn run_script(&mut self, _source: &str, _kind: ScriptKind) -> Result<(), ScriptError> {
             Ok(())
+        }
+
+        fn evaluate(&mut self, source: &str, _timeout: Duration) -> Result<String, ScriptError> {
+            Ok(source.to_owned())
         }
 
         fn set_timer_rule(&mut self, _rule: TimerRule) {}
@@ -1109,12 +1248,26 @@ mod tests {
         }
 
         fn frame_due(&self) -> bool {
-            false
+            self.frames_due.get()
         }
 
-        fn run_animation_frame(&mut self) {}
+        fn run_animation_frame(&mut self) {
+            self.entries.borrow_mut().push("frame");
+        }
 
-        fn run_microtasks(&mut self) {}
+        fn run_microtasks(&mut self) {
+            self.entries.borrow_mut().push("microtasks");
+            if let Some(signal) = &self.microtask_signal {
+                let fail_at = Instant::now() + Duration::from_secs(10);
+                while !signal.load(Ordering::Acquire) {
+                    assert!(
+                        Instant::now() < fail_at,
+                        "the test watchdog did not terminate the microtask checkpoint"
+                    );
+                    std::thread::yield_now();
+                }
+            }
+        }
 
         fn trim_memory(&mut self) {
             self.trims.set(self.trims.get() + 1);
@@ -1126,7 +1279,9 @@ mod tests {
         }
 
         fn watchdog(&self) -> Option<Box<dyn EngineWatchdog>> {
-            None
+            self.microtask_signal.as_ref().map(|signal| {
+                Box::new(SignalWatchdog(Arc::clone(signal))) as Box<dyn EngineWatchdog>
+            })
         }
     }
 
@@ -1137,6 +1292,36 @@ mod tests {
 
     impl ScriptBudget for NullBudget {
         fn charge(&self, _elapsed: Duration) {}
+
+        fn crash_native_memory(&self, _failure: NativeMemoryFailure) {}
+
+        fn crash_reason(&self) -> Option<String> {
+            None
+        }
+
+        fn native_memory(&self) -> NativeMemoryBudget {
+            NativeMemoryBudget::for_page(tenta_core::Budgets::platform_default().page_memory_mb)
+        }
+    }
+
+    struct CrashingBudget(AtomicBool);
+
+    impl ScriptBudget for CrashingBudget {
+        fn charge(&self, _elapsed: Duration) {
+            self.0.store(true, Ordering::Release);
+        }
+
+        fn crash_native_memory(&self, _failure: NativeMemoryFailure) {}
+
+        fn crash_reason(&self) -> Option<String> {
+            self.0
+                .load(Ordering::Acquire)
+                .then(|| "script budget exhausted".to_owned())
+        }
+
+        fn native_memory(&self) -> NativeMemoryBudget {
+            NativeMemoryBudget::for_page(tenta_core::Budgets::platform_default().page_memory_mb)
+        }
     }
 
     /// A runtime over an empty document and a recording engine, plus the handles
@@ -1157,10 +1342,18 @@ mod tests {
         xhrs: Rc<XhrCompletions>,
         entries: Rc<RefCell<Vec<&'static str>>>,
         lifecycle: Rc<RefCell<Vec<LifecycleEvent>>>,
+        frames_due: Rc<Cell<bool>>,
     }
 
     impl Harness {
         fn new(parse_in_flight: bool) -> Harness {
+            Self::new_with_microtask_signal(parse_in_flight, None)
+        }
+
+        fn new_with_microtask_signal(
+            parse_in_flight: bool,
+            microtask_signal: Option<Arc<AtomicBool>>,
+        ) -> Harness {
             let document: SharedDocument = Rc::new(RefCell::new(Document::new()));
             let trims = Rc::new(Cell::new(0));
             let epoch = Rc::new(Cell::new(0));
@@ -1170,6 +1363,7 @@ mod tests {
             let xhrs = Rc::new(XhrCompletions::new());
             let entries = Rc::new(RefCell::new(Vec::new()));
             let lifecycle = Rc::new(RefCell::new(Vec::new()));
+            let frames_due = Rc::new(Cell::new(false));
             let engine = RecordingEngine {
                 document: Rc::clone(&document),
                 trims: Rc::clone(&trims),
@@ -1178,6 +1372,8 @@ mod tests {
                 settled_xhr: Rc::clone(&settled_xhr),
                 entries: Rc::clone(&entries),
                 lifecycle: Rc::clone(&lifecycle),
+                microtask_signal: microtask_signal.clone(),
+                frames_due: Rc::clone(&frames_due),
             };
             let runtime = PageRuntime {
                 page: PageId(1),
@@ -1186,9 +1382,11 @@ mod tests {
                 parse_in_flight,
                 bridge: Rc::new(SettleBridge::new()),
                 last_gc_epoch: 0,
-                watchdog: None,
+                watchdog: microtask_signal
+                    .map(|signal| Arc::new(SignalWatchdog(signal)) as Arc<dyn EngineWatchdog>),
                 script_timeout: Duration::from_secs(30),
                 script_budget: Arc::new(NullBudget),
+                native_memory: NativeMemoryBudget::for_page(1),
                 fetches: Rc::clone(&fetches),
                 xhrs: Rc::clone(&xhrs),
             };
@@ -1202,6 +1400,7 @@ mod tests {
                 xhrs,
                 entries,
                 lifecycle,
+                frames_due,
             }
         }
 
@@ -1251,7 +1450,75 @@ mod tests {
         }
     }
 
-    /// The engine boundary's third rule: nothing may free nodes while a parser
+    #[test]
+    fn host_evaluation_keeps_the_navigation_deadline_when_entry_limit_is_disabled() {
+        let mut harness = Harness::new(false);
+        harness.runtime.script_timeout = Duration::ZERO;
+        let value = harness
+            .runtime
+            .evaluate("answer", Duration::from_secs(1))
+            .expect("navigation deadline bounds the evaluation");
+        assert_eq!(value, "answer");
+    }
+
+    #[test]
+    fn host_evaluation_reports_a_microtask_checkpoint_deadline() {
+        let signal = Arc::new(AtomicBool::new(false));
+        let mut harness = Harness::new_with_microtask_signal(false, Some(Arc::clone(&signal)));
+        harness.runtime.script_timeout = Duration::from_millis(5);
+        let error = harness
+            .runtime
+            .evaluate("answer", Duration::from_secs(1))
+            .expect_err("the watchdog ends the stalled microtask checkpoint");
+        assert!(matches!(error, Error::Timeout { .. }), "{error}");
+        assert!(signal.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn host_evaluation_does_not_run_microtasks_after_a_page_crash() {
+        let mut harness = Harness::new(false);
+        harness.runtime.script_budget = Arc::new(CrashingBudget(AtomicBool::new(false)));
+        let error = harness
+            .runtime
+            .evaluate("answer", Duration::from_secs(1))
+            .expect_err("the page crashed during the expression");
+        assert!(matches!(error, Error::Crashed { .. }), "{error}");
+        assert!(!harness.entries.borrow().contains(&"microtasks"));
+    }
+
+    #[test]
+    fn a_script_budget_crash_skips_its_microtasks_and_later_lifecycle_entries() {
+        let mut harness = Harness::new(false);
+        harness.runtime.script_budget = Arc::new(CrashingBudget(AtomicBool::new(false)));
+        harness.runtime.run_source("script");
+        harness.runtime.dispatch_lifecycle(LifecycleEvent::Load);
+        assert!(harness.entries.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_turn_stops_at_the_entry_that_exhausted_the_page_budget() {
+        for first in ["fetch", "xhr", "timers"] {
+            let mut harness = Harness::new(false);
+            harness.runtime.script_budget = Arc::new(CrashingBudget(AtomicBool::new(false)));
+            harness.frames_due.set(true);
+            if first == "fetch" {
+                harness.complete(1, "fetch complete");
+            }
+            if first != "timers" {
+                harness.complete_xhr(1, 1, "xhr complete");
+            }
+            assert!(harness.runtime.turn(10).is_none());
+            assert_eq!(*harness.entries.borrow(), vec![first]);
+            assert!(harness.runtime.turn(10).is_none());
+            assert_eq!(
+                *harness.entries.borrow(),
+                vec![first],
+                "no post-crash entry"
+            );
+        }
+    }
+
+    /// The page-loop guard still defers sweeping while a parser
     /// holds arena handles into the tree. The epoch moving is the strongest
     /// possible trigger, and the guard must still keep the page out of the
     /// engine.

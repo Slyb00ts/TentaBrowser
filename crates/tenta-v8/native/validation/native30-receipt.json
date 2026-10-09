@@ -1,0 +1,182 @@
+{
+  "started_utc": "2026-09-24T09:17:03.945101+00:00",
+  "finished_utc": "2026-09-24T09:18:02.062665+00:00",
+  "exit_code": 0,
+  "native_archive_sha256": "f7393a5194ca5e8360b10c50b465944dad656fec071f7f82dddf01544aa6d8c3",
+  "source_manifest_sha256": "caf49be3f5b69f9c80028abe81d95512ebe81003efe367ec9243936f659ea81d",
+  "binary": "/tmp/tenta-v8-sync-termination-run/attempt1/symbol_store_control-sync-termination",
+  "binary_sha256": "5659dc35a22de0c5d03b5be3bc7ed5c2ea161a2d145debd9fd0faead69ad55cf",
+  "binary_before": {
+    "sha256": "30907008e21b847f0f1beefe75b02f029e22c34befaa654806e730ca9b94c1b6",
+    "mtime_ns": 1790240179832837748
+  },
+  "binary_after": {
+    "sha256": "5659dc35a22de0c5d03b5be3bc7ed5c2ea161a2d145debd9fd0faead69ad55cf",
+    "mtime_ns": 1790241481428986066
+  },
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "nextest",
+        "run",
+        "--release",
+        "--locked",
+        "--manifest-path",
+        "/tmp/tenta-v8-native-build/v8-152.2.0/Cargo.toml",
+        "--test",
+        "web_idl_legacy",
+        "--test",
+        "web_idl_order",
+        "--test",
+        "ordinary_object_brand",
+        "--test",
+        "termination_now",
+        "--no-fail-fast"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 55.312141999951564,
+      "log_sha256": "1347999b6cf2ecd7b31953a9e24919e1672400888bae8acd5c503672e486c0d3",
+      "passed_tests": [
+        [
+          "v8::ordinary_object_brand",
+          "native_wrappers_and_interceptors_are_rejected_without_a_callback"
+        ],
+        [
+          "v8::termination_now",
+          "synchronous_termination_supersedes_a_pending_page_exception"
+        ],
+        [
+          "v8::termination_now",
+          "synchronous_termination_skips_after_catch_and_finally"
+        ],
+        [
+          "v8::ordinary_object_brand",
+          "script_records_and_ordinary_intrinsic_prototypes_are_accepted"
+        ],
+        [
+          "v8::web_idl_order",
+          "descriptor_replacement_preserves_order_and_delete_recreation_moves_it"
+        ],
+        [
+          "v8::ordinary_object_brand",
+          "cross_realm_objects_remain_classifiable_after_real_gc"
+        ],
+        [
+          "v8::web_idl_legacy",
+          "only_marked_indexed_handlers_consult_the_definer_during_set"
+        ],
+        [
+          "v8::web_idl_order",
+          "enumerator_gc_and_exceptions_preserve_exactly_once_callback_behavior"
+        ],
+        [
+          "v8::web_idl_order",
+          "cross_realm_access_keeps_the_creation_context_order"
+        ],
+        [
+          "v8::web_idl_order",
+          "failed_definitions_do_not_publish_phantom_creation_records"
+        ],
+        [
+          "v8::web_idl_order",
+          "named_only_marked_prototype_observes_updated_supported_names"
+        ],
+        [
+          "v8::web_idl_order",
+          "marked_string_chronology_precedes_symbols_and_filters_in_the_same_order"
+        ],
+        [
+          "v8::web_idl_order",
+          "marked_global_template_uses_its_hidden_global_creation_context"
+        ],
+        [
+          "v8::web_idl_order",
+          "marked_indexed_and_named_keys_are_normalized_once_in_spec_order"
+        ],
+        [
+          "v8::web_idl_order",
+          "growing_weak_instance_table_preserves_live_order_and_releases_dead_keys"
+        ],
+        [
+          "v8::web_idl_order",
+          "hot_named_and_numeric_stores_keep_chronology_across_dictionary_transition"
+        ],
+        [
+          "v8::web_idl_order",
+          "nonenumerable_ordinary_keys_shadow_prototype_keys"
+        ],
+        [
+          "v8::ordinary_object_brand",
+          "specialized_values_and_proxy_traps_do_not_enter_the_ordinary_branch"
+        ],
+        [
+          "v8::web_idl_order",
+          "numeric_own_key_shadows_an_unmarked_named_interceptor_prototype"
+        ],
+        [
+          "v8::web_idl_order",
+          "ordinary_derived_receiver_enumerates_marked_prototype_without_cached_reordering"
+        ],
+        [
+          "v8::web_idl_order",
+          "ordinary_store_receiver_controls_where_creation_is_recorded"
+        ],
+        [
+          "v8::web_idl_order",
+          "private_keys_stay_out_of_public_symbol_exemption"
+        ],
+        [
+          "v8::web_idl_order",
+          "public_symbol_store_obeys_accessors_and_readonly"
+        ],
+        [
+          "v8::web_idl_order",
+          "public_symbol_store_obeys_extensibility_and_distinct_receiver"
+        ],
+        [
+          "v8::web_idl_order",
+          "independently_restored_contexts_keep_distinct_order_tables"
+        ],
+        [
+          "v8::web_idl_order",
+          "public_symbol_store_keeps_ordinary_descriptor_and_order"
+        ],
+        [
+          "v8::web_idl_order",
+          "weak_order_records_do_not_retain_dead_instances"
+        ],
+        [
+          "v8::web_idl_order",
+          "template_clones_have_independent_creation_records"
+        ],
+        [
+          "v8::web_idl_order",
+          "symbol_intercepting_handler_keeps_its_callbacks"
+        ],
+        [
+          "v8::web_idl_order",
+          "snapshot_round_trip_preserves_order_and_accepts_new_records"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "build",
+        "--release",
+        "--locked",
+        "--manifest-path",
+        "/tmp/tenta-v8-native-build/v8-152.2.0/Cargo.toml",
+        "--example",
+        "symbol_store_control"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 2.292870417004451,
+      "log_sha256": "35d9a146472c675e609494e40e3263c438aa30b35177d04cf168770953ea4cfc"
+    }
+  ],
+  "timings": "not run"
+}

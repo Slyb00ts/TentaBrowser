@@ -18,4 +18,13 @@ pub trait NodeListOps {
     ///
     /// V8 fast API: the getter is eligible.
     fn length(&self) -> u32;
+
+    /// The currently supported property indices, in ascending order.
+    /// The owning specification defines this set, independently of getter values.
+    fn supported_property_indices(&self) -> Result<Vec<u32>, JsError>;
+
+    /// Whether `index` is supported. Override for an allocation-free lookup.
+    fn is_supported_property_index(&self, index: u32) -> Result<bool, JsError> {
+        Ok(self.supported_property_indices()?.contains(&index))
+    }
 }

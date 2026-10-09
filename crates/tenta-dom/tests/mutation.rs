@@ -334,6 +334,58 @@ fn attributes_update_the_id_and_class_indexes() {
 }
 
 #[test]
+fn namespaced_attribute_value_write_preserves_original_prefix() {
+    let (mut document, body) = document_with_body();
+    let element = document.create_html_element(atoms::DIV);
+    document
+        .mutate(Mutation::Append {
+            parent: body,
+            child: element,
+        })
+        .expect("append element");
+    let name = |prefix| QualName {
+        ns: Atom::new("urn:example"),
+        prefix: Some(Atom::new(prefix)),
+        local: Atom::new("key"),
+    };
+    document
+        .mutate(Mutation::SetAttribute {
+            element,
+            name: name("old"),
+            value: "before".to_owned(),
+        })
+        .expect("insert namespaced attribute");
+    document
+        .mutate(Mutation::SetAttribute {
+            element,
+            name: name("new"),
+            value: "after".to_owned(),
+        })
+        .expect("change value without replacing the attribute node");
+
+    let attributes: Vec<_> = document.attributes(element).collect();
+    assert_eq!(attributes, vec![(name("old"), "after")]);
+
+    document
+        .mutate(Mutation::ReplaceAttribute {
+            element,
+            name: name("new"),
+            value: "replacement".to_owned(),
+        })
+        .expect("replace the whole attribute node");
+    let attributes: Vec<_> = document.attributes(element).collect();
+    assert_eq!(attributes, vec![(name("new"), "replacement")]);
+
+    document
+        .mutate(Mutation::RemoveAttribute {
+            element,
+            name: name("old"),
+        })
+        .expect("remove by namespace and local name regardless of prefix");
+    assert_eq!(document.attribute_count(element), 0);
+}
+
+#[test]
 fn repeated_attribute_writes_stay_bounded() {
     let (mut document, body) = document_with_body();
     let element = document.create_html_element(atoms::DIV);

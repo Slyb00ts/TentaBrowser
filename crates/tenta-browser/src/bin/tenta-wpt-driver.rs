@@ -12,9 +12,13 @@
 //! subscriber the engine's warnings and `wpt::run`'s own notices are dropped.
 
 use std::ffi::OsStr;
+use std::io::Write;
+use std::path::Path;
 use std::process::ExitCode;
 
 use tenta_browser::wpt;
+use tenta_core::FsPolicy;
+use tenta_core::fs_policy::OpenMode;
 
 // The engine's io and page threads are its own, so one current-thread runtime
 // is enough to drive the per-test waits: the pool needs concurrency — several
@@ -55,15 +59,30 @@ fn init_logging() {
 }
 
 async fn run(plan_path: &OsStr, out_path: &OsStr) -> Result<(), String> {
-    let plan_path = std::path::Path::new(plan_path);
-    let text = std::fs::read_to_string(plan_path)
+    let plan_path = Path::new(plan_path);
+    let out_path = Path::new(out_path);
+    // These two explicit CLI paths grant access to this host only. The page's
+    // engine retains its empty filesystem policy.
+    let output_parent = out_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let policy = FsPolicy::none()
+        .allow_read(plan_path)
+        .allow_write(output_parent);
+    let checked_plan = policy
+        .check_read(plan_path)
+        .map_err(|error| error.to_string())?;
+    let text = std::fs::read_to_string(checked_plan)
         .map_err(|error| format!("reading {}: {error}", plan_path.display()))?;
     let plan: wpt::Plan = serde_json::from_str(&text)
         .map_err(|error| format!("parsing {}: {error}", plan_path.display()))?;
     let results = wpt::run(plan).await.map_err(|error| error.to_string())?;
     let json = serde_json::to_string_pretty(&results).map_err(|error| error.to_string())?;
-    let out_path = std::path::Path::new(out_path);
-    std::fs::write(out_path, json + "\n")
+    let mut output = policy
+        .open_write(out_path, OpenMode::CreateTruncate)
+        .map_err(|error| format!("opening {}: {error}", out_path.display()))?;
+    writeln!(output, "{json}")
         .map_err(|error| format!("writing {}: {error}", out_path.display()))?;
     Ok(())
 }

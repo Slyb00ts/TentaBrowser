@@ -76,6 +76,17 @@ fn parse_xml(source: &str) -> Document {
     parser.finish().expect("well-formed XML")
 }
 
+#[test]
+fn empty_html_namespace_elements_use_explicit_end_tags() {
+    let document = parse_xml(
+        r#"<html xmlns="http://www.w3.org/1999/xhtml"><head/><body><div/><br/></body></html>"#,
+    );
+    assert_eq!(
+        document.to_xml(document.document_node()),
+        r#"<html xmlns="http://www.w3.org/1999/xhtml"><head></head><body><div></div><br></br></body></html>"#,
+    );
+}
+
 /// A description of the subtree that ignores prefixes but keeps every
 /// namespace URI, name, value and character.
 fn canonical(document: &Document, node: NodeId, out: &mut String) {

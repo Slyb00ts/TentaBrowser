@@ -11,10 +11,12 @@ pub mod context;
 pub mod engine;
 mod extensions;
 mod hooks;
+#[cfg(all(test, any(feature = "v8", feature = "quickjs")))]
+mod native_panic_tests;
 mod threads;
 /// The `tenta-wpt-driver` transport (`wpt/run.py --product tentabrowser`).
 /// JavaScript is what the driver runs, so it exists only where an engine does.
-#[cfg(feature = "v8")]
+#[cfg(feature = "wpt-driver")]
 pub mod wpt;
 
 pub use context::{BrowserContext, ContextOptions, GroupId, PageOptions};

@@ -5,7 +5,9 @@ use std::fmt::Write as _;
 
 use crate::codegen::convert::{self, IntegerMode};
 use crate::codegen::rust_type::{Position, default_expr, rust_type};
-use crate::model::{BufferType, Dictionary, DictionaryMember, Enum, Model, Type, Union};
+use crate::model::{
+    BufferType, Dictionary, DictionaryMember, Enum, Model, Type, Union, UnionMember,
+};
 
 /// Generates `types.rs`.
 pub fn types(model: &Model) -> String {
@@ -132,7 +134,7 @@ fn enumeration_code(enumeration: &Enum, out: &mut String) {
         "\n#[cfg(feature = \"v8\")]\nimpl {name} {{\n    \
          /// Converts a JavaScript value to this enumeration.\n    \
          pub fn from_v8(\n        scope: &mut v8::PinScope<'_, '_>,\n        value: v8::Local<v8::Value>,\n    ) -> Result<Self, JsError> {{\n        \
-         let text = string_from_v8(scope, value);\n        \
+         let text = string_from_v8(scope, value)?;\n        \
          Self::parse(&text)\n            .ok_or_else(|| JsError::type_error(\"the value is not a member of enum {name}\"))\n    }}\n\
          \n    \
          /// Converts this enumeration to a JavaScript string.\n    \
@@ -197,6 +199,7 @@ fn is_rust_default(expression: &str) -> bool {
 fn dictionary_code(model: &Model, dictionary: &Dictionary, out: &mut String) {
     let name = &dictionary.name;
     let members = model.dictionary_members(name);
+    let conversion_members = model.dictionary_conversion_members(name);
     let inherited = match &dictionary.parent {
         Some(parent) => format!(" : {parent}"),
         None => String::new(),
@@ -251,22 +254,44 @@ fn dictionary_code(model: &Model, dictionary: &Dictionary, out: &mut String) {
         out.push_str("        }\n    }\n}\n");
     }
 
-    dictionary_v8(&members, name, out);
-    dictionary_quickjs(&members, name, out);
+    dictionary_v8(&members, &conversion_members, name, out);
+    dictionary_quickjs(&members, &conversion_members, name, out);
 }
 
-fn dictionary_v8(members: &[&DictionaryMember], name: &str, out: &mut String) {
+fn dictionary_v8(
+    members: &[&DictionaryMember],
+    conversion_members: &[&DictionaryMember],
+    name: &str,
+    out: &mut String,
+) {
+    // WebIDL's *convert to a dictionary* ends at undefined or null for a
+    // dictionary the caller passed nothing for, so an empty dictionary is the
+    // value — and a `required` member then makes the conversion a `TypeError`
+    // (https://webidl.spec.whatwg.org/#es-dictionary). Returning the default
+    // here would skip those checks, which is why the early return is emitted only
+    // for a dictionary that has nothing required in it. A dictionary with a
+    // required member falls through to the object conversion, whose `try_into`
+    // raises the same `TypeError` for `undefined`, and `new StaticRange()` — the
+    // case `StaticRange-constructor.html` pins — throws instead of constructing a
+    // range over whatever the zero handle happened to name.
+    let early_return = if members.iter().any(|member| member.required) {
+        String::new()
+    } else {
+        "        if value.is_null_or_undefined() {\n            return Ok(result);\n        }\n"
+            .to_owned()
+    };
     let _ = write!(
         out,
         "\n#[cfg(feature = \"v8\")]\nimpl {name} {{\n    \
          /// Converts a JavaScript value to this dictionary.\n    \
          pub fn from_v8(\n        scope: &mut v8::PinScope<'_, '_>,\n        value: v8::Local<v8::Value>,\n    ) -> Result<Self, JsError> {{\n        \
-         let mut result = Self::default();\n        \
-         if value.is_null_or_undefined() {{\n            return Ok(result);\n        }}\n        \
+         let mut result = Self::default();\n{early_return}        \
          let object: v8::Local<v8::Object> = value\n            .try_into()\n            .map_err(|_| JsError::type_error(\"expected a dictionary for `{name}`\"))?;\n"
     );
-    for member in members {
+    for member in conversion_members {
         let conversion = convert::from_v8(&member.ty, "scope", "member", IntegerMode::Modulo);
+        let conversion =
+            convert::legacy_null_to_empty(&member.ty, &member.attrs, "member", conversion);
         let assign = if member.required || member.default.is_some() {
             format!("result.{} = ({conversion})?;", member.rust_name)
         } else {
@@ -294,37 +319,64 @@ fn dictionary_v8(members: &[&DictionaryMember], name: &str, out: &mut String) {
          pub fn to_v8<'s>(\n        &self,\n        scope: &mut v8::PinScope<'s, '_>,\n    ) -> Result<v8::Local<'s, v8::Value>, JsError> {{\n        \
          let object = v8::Object::new(scope);\n"
     );
-    for member in members {
-        let owned = if member.required || member.default.is_some() {
+    for member in conversion_members {
+        let optional = !member.required && member.default.is_none();
+        let owned = if optional {
+            if is_copy(&member.ty) {
+                "*inner".to_owned()
+            } else {
+                "inner.clone()".to_owned()
+            }
+        } else {
             field_expr(&member.ty, &format!("self.{}", member.rust_name))
-        } else {
-            format!("self.{}.clone()", member.rust_name)
         };
-        let value_type = if member.required || member.default.is_some() {
-            member.ty.clone()
+        let conversion = convert::to_v8(&member.ty, "scope", "member");
+        let open = if optional {
+            format!(
+                "        if let Some(inner) = &self.{} {{\n",
+                member.rust_name
+            )
         } else {
-            Type::Nullable(Box::new(member.ty.clone()))
+            "        {\n".to_owned()
         };
-        let conversion = convert::to_v8(&value_type, "scope", "member");
         let _ = write!(
             out,
-            "        {{\n            let member = {owned};\n            let key = v8_string(scope, \"{}\")?;\n            let value = ({conversion})?;\n            object\n                .set(scope, key.into(), value)\n                .ok_or_else(|| JsError::type_error(\"the dictionary member cannot be defined\"))?;\n        }}\n",
+            "{open}            let member = {owned};\n            let key = v8_string(scope, \"{}\")?;\n            let value = ({conversion})?;\n            let defined = object\n                .create_data_property(scope, key.into(), value)\n                .ok_or_else(JsError::pending_exception)?;\n            if !defined {{\n                return Err(JsError::type_error(\"the dictionary member cannot be defined\"));\n            }}\n        }}\n",
             member.name
         );
     }
     out.push_str("        Ok(object.into())\n    }\n}\n");
 }
 
-fn dictionary_quickjs(members: &[&DictionaryMember], name: &str, out: &mut String) {
+fn dictionary_quickjs(
+    members: &[&DictionaryMember],
+    conversion_members: &[&DictionaryMember],
+    name: &str,
+    out: &mut String,
+) {
+    // The QuickJS arm's counterpart of `dictionary_v8`'s missing-argument rule:
+    // a dictionary the caller passed no object for converts to its default, and
+    // that is only sound when nothing in it is required. QuickJS has no separate
+    // "undefined object" case to fall through to, so a dictionary with a required
+    // member reports the missing one it checks first.
+    let delegate = if members.iter().any(|member| member.required) {
+        format!(
+            "            return Err(rquickjs::Exception::throw_type(\n                ctx,\n                \"`{name}` requires an object\",\n            ));\n"
+        )
+    } else {
+        "            return Ok(result);\n".to_owned()
+    };
     let _ = write!(
         out,
         "\n#[cfg(feature = \"quickjs\")]\nimpl<'js> rquickjs::FromJs<'js> for {name} {{\n    \
          fn from_js(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {{\n        \
          let mut result = Self::default();\n        \
-         let Some(object) = value.as_object() else {{\n            return Ok(result);\n        }};\n"
+         if !value.is_object() && !value.is_null() && !value.is_undefined() {{ return Err(rquickjs::Exception::throw_type(ctx, \"dictionary requires an object\")); }}\n        let Some(object) = value.as_object() else {{\n{delegate}        }};\n"
     );
-    for member in members {
-        let ty = rust_type(&member.ty, Position::Owned);
+    for member in conversion_members {
+        let conversion = super::quickjs::from_value(&member.ty, "ctx", "member");
+        let conversion =
+            convert::legacy_null_to_empty(&member.ty, &member.attrs, "member", conversion);
         let assign = if member.required || member.default.is_some() {
             format!("result.{} = member;", member.rust_name)
         } else {
@@ -332,7 +384,7 @@ fn dictionary_quickjs(members: &[&DictionaryMember], name: &str, out: &mut Strin
         };
         let _ = write!(
             out,
-            "        if let Some(member) = object.get::<_, Option<{ty}>>(\"{}\")? {{\n            {assign}\n        }}",
+            "        let member: rquickjs::Value = object.get(\"{}\")?;\n        if !member.is_undefined() {{\n            let member = {conversion}?;\n            {assign}\n        }}",
             member.name
         );
         if member.required {
@@ -352,12 +404,21 @@ fn dictionary_quickjs(members: &[&DictionaryMember], name: &str, out: &mut Strin
          fn into_js(self, ctx: &rquickjs::Ctx<'js>) -> rquickjs::Result<rquickjs::Value<'js>> {{\n        \
          let object = rquickjs::Object::new(ctx.clone())?;\n"
     );
-    for member in members {
-        let _ = writeln!(
-            out,
-            "        object.set(\"{}\", self.{})?;",
-            member.name, member.rust_name
-        );
+    for member in conversion_members {
+        let conversion = super::quickjs::to_value(&member.ty, "ctx", "member");
+        if !member.required && member.default.is_none() {
+            let _ = writeln!(
+                out,
+                "        if let Some(member) = self.{} {{\n            let value = ({conversion})?;\n            object.prop(\"{}\", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;\n        }}",
+                member.rust_name, member.name
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "        {{\n            let member = self.{};\n            let value = ({conversion})?;\n            object.prop(\"{}\", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;\n        }}",
+                member.rust_name, member.name
+            );
+        }
     }
     out.push_str("        Ok(object.into_value())\n    }\n}\n");
 }
@@ -416,14 +477,28 @@ fn union_code(union: &Union, out: &mut String) {
         "\n#[cfg(feature = \"v8\")]\nimpl {name} {{\n    \
          /// Converts a JavaScript value to this union.\n    \
          ///\n    \
-         /// Arms are tried in declaration order, each one behind the WebIDL test\n    \
-         /// that selects it — a sequence by its `@@iterator`, a record by being an\n    \
-         /// object that is not an array. The first arm that has no test of its own\n    \
+         /// Tested arms keep declaration order except callback interfaces follow\n    \
+         /// callable, platform, buffer and iterable arms. A sequence uses\n    \
+         /// `@@iterator`; the first arm without a test\n    \
          /// is the fallback.\n    \
          pub fn from_v8<'s>(\n        scope: &mut v8::PinScope<'s, '_>,\n        value: v8::Local<'s, v8::Value>,\n    ) -> Result<Self, JsError> {{\n"
     );
     let mut fallback: Option<String> = None;
-    for member in &union.members {
+    for member in union_conversion_members(union) {
+        // Interface selection is one operation: it validates the native V8
+        // template brand and obtains the wrapper's handle. A separate boolean
+        // test would either repeat that lookup during conversion or accept a
+        // prototype-chain holder that is not itself a platform wrapper.
+        if let Type::Interface(interface) = &member.ty {
+            let _ = write!(
+                out,
+                "        if let Some(inner) = interface_handle_from_v8::<{interface}>(scope, value)? {{\n            return Ok({name}::{}(inner));\n        }}\n",
+                member.rust_name
+            );
+            continue;
+        }
+        // A string fallback still runs after every distinguishing test. Its
+        // fallible `ToString` leaves the page's original exception pending.
         let conversion = convert::from_v8(&member.ty, "scope", "value", IntegerMode::Modulo);
         let test = union_test(&member.ty);
         match test {
@@ -473,22 +548,19 @@ fn union_code(union: &Union, out: &mut String) {
          fn from_js(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {{\n"
     );
     let mut qjs_fallback: Option<String> = None;
-    for member in &union.members {
-        let ty = rust_type(&member.ty, Position::Owned);
+    for member in union_conversion_members(union) {
+        let conversion = super::quickjs::from_value(&member.ty, "ctx", "value");
         match union_test_quickjs(&member.ty) {
             Some(test) => {
                 let _ = write!(
                     out,
-                    "        if {test} {{\n            return <{ty} as rquickjs::FromJs>::from_js(ctx, value).map({name}::{});\n        }}\n",
+                    "        if {test} {{\n            return {conversion}.map({name}::{});\n        }}\n",
                     member.rust_name
                 );
             }
             None => {
                 qjs_fallback.get_or_insert_with(|| {
-                    format!(
-                        "        <{ty} as rquickjs::FromJs>::from_js(ctx, value).map({name}::{})\n",
-                        member.rust_name
-                    )
+                    format!("        {conversion}.map({name}::{})\n", member.rust_name)
                 });
             }
         }
@@ -507,13 +579,31 @@ fn union_code(union: &Union, out: &mut String) {
          fn into_js(self, ctx: &rquickjs::Ctx<'js>) -> rquickjs::Result<rquickjs::Value<'js>> {{\n        match self {{\n"
     );
     for member in &union.members {
+        let conversion = super::quickjs::to_value(&member.ty, "ctx", "inner");
         let _ = writeln!(
             out,
-            "            {name}::{}(inner) => rquickjs::IntoJs::into_js(inner, ctx),",
+            "            {name}::{}(inner) => {conversion},",
             member.rust_name
         );
     }
     out.push_str("        }\n    }\n}\n");
+}
+
+/// A callback interface accepts any object, so it must not claim a callable,
+/// platform object, buffer or iterable before WebIDL's earlier union steps.
+/// Preserve declaration order among the other arms and keep the callback
+/// interface as the last tested object arm. String fallbacks remain last.
+fn union_conversion_members(union: &Union) -> impl Iterator<Item = &UnionMember> {
+    union
+        .members
+        .iter()
+        .filter(|member| !matches!(&member.ty, Type::CallbackInterface(_)))
+        .chain(
+            union
+                .members
+                .iter()
+                .filter(|member| matches!(&member.ty, Type::CallbackInterface(_))),
+        )
 }
 
 /// The V8 predicate that selects a union arm, or `None` for the fallback arm.
@@ -526,19 +616,21 @@ fn union_code(union: &Union, out: &mut String) {
 /// the class the runtime conversion brand-checks; see `buffer_union_test`.
 fn union_test(ty: &Type) -> Option<&'static str> {
     match ty {
-        Type::Interface(_) | Type::Object | Type::Dictionary(_) => Some("value.is_object()"),
+        Type::Interface(_) => unreachable!("interface arms have their own handle test"),
+        Type::Object | Type::Dictionary(_) => Some("value.is_object()"),
         // WebIDL gates its sequence and record arms on `V` being an *object*:
         // a string primitive has a `@@iterator` of its own, and probing for it
         // without the gate would turn `new URLSearchParams('a=1')` into the
         // sequence arm's `[['a'], ['='], ['1']]` instead of three minus one
         // form-encoded pairs.
         Type::Sequence(_) | Type::FrozenArray(_) | Type::ObservableArray(_) => {
-            Some("value.is_object() && has_iterator(scope, value)")
+            Some("value.is_object() && has_iterator(scope, value)?")
         }
         Type::Record(_, _) => Some("value.is_object() && !value.is_array()"),
         Type::Buffer(kind) => Some(buffer_union_test(*kind)),
         Type::Boolean => Some("value.is_boolean()"),
-        Type::Callback(_) | Type::CallbackInterface(_) => Some("value.is_function()"),
+        Type::Callback(_) => Some("value.is_function()"),
+        Type::CallbackInterface(_) => Some("value.is_object()"),
         Type::Symbol => Some("value.is_symbol()"),
         ty if ty.is_integer() => Some("value.is_number()"),
         Type::Float { .. } | Type::Double { .. } => Some("value.is_number()"),
@@ -590,33 +682,26 @@ fn buffer_union_test(kind: BufferType) -> &'static str {
 
 /// The QuickJS predicate that selects a union arm, or `None` for the fallback.
 ///
-/// The sequence arm stays an array check: `rquickjs`'s `Vec<T>: FromJs` reads an
-/// array and has no `@@iterator` step, so probing for an iterator here would
-/// select the arm only to fail the conversion. The record arm matches the V8
-/// one. Recorded as a deviation in `docs/dev/idl.md`.
-fn union_test_quickjs(ty: &Type) -> Option<&'static str> {
-    match ty {
-        Type::Interface(_) | Type::Object | Type::Dictionary(_) => Some("value.is_object()"),
+/// Interface and buffer arms inspect native brands. Sequence arms probe the
+/// iterator protocol consumed by `quickjs_sequence`; ordinary objects remain
+/// eligible for the record arm.
+fn union_test_quickjs(ty: &Type) -> Option<String> {
+    Some(match ty {
+        Type::Interface(name) => format!("quickjs_is_interface(ctx, &value, {name:?})"),
+        Type::Object | Type::Dictionary(_) => "value.is_object()".into(),
         Type::Sequence(_) | Type::FrozenArray(_) | Type::ObservableArray(_) => {
-            Some("value.is_array()")
+            "quickjs_has_iterator(ctx, &value)?".into()
         }
-        Type::Record(_, _) => Some("value.is_object() && !value.is_array()"),
-        // Every buffer source is an object, so this test cannot send one to the
-        // fallback, which is a `DOMString`-like primitive. It is deliberately
-        // broad — an object that is not a buffer source is selected here and
-        // then fails in the conversion — rather than read off `rquickjs`, whose
-        // predicate for a buffer is unverifiable in this repository: the
-        // `quickjs` feature has no `rquickjs` dependency to compile against, so
-        // an invented name would be a guess pinned only by the golden file
-        // (`docs/dev/idl.md`).
-        Type::Buffer(_) => Some("value.is_object()"),
-        Type::Boolean => Some("value.is_bool()"),
-        Type::Callback(_) | Type::CallbackInterface(_) => Some("value.is_function()"),
-        Type::Symbol => Some("value.is_symbol()"),
-        ty if ty.is_integer() => Some("value.is_number()"),
-        Type::Float { .. } | Type::Double { .. } => Some("value.is_number()"),
-        _ => None,
-    }
+        Type::Record(_, _) => "value.is_object()".into(),
+        Type::Buffer(kind) => format!("quickjs_is_buffer(&value, {:?})", kind.idl_name()),
+        Type::Boolean => "value.is_bool()".into(),
+        Type::Callback(_) => "value.is_function()".into(),
+        Type::CallbackInterface(_) => "value.is_object()".into(),
+        Type::Symbol => "value.is_symbol()".into(),
+        ty if ty.is_integer() => "value.is_number()".into(),
+        Type::Float { .. } | Type::Double { .. } => "value.is_number()".into(),
+        _ => return None,
+    })
 }
 
 fn callbacks(model: &Model, out: &mut String) {

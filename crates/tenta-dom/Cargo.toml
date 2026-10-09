@@ -14,6 +14,7 @@ tenta-html = { workspace = true }
 
 cssparser = { workspace = true }
 hashbrown = { workspace = true }
+parking_lot = { workspace = true }
 precomputed-hash = { workspace = true }
 selectors = { workspace = true }
 serde = { workspace = true }

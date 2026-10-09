@@ -25,7 +25,7 @@
 /// - `v8::ReturnValue::{set, set_bool, set_int32, set_uint32, set_double,
 ///   set_null, set_undefined}`
 /// - `v8::fast_api::{CFunction, CFunctionInfo, CTypeInfo, Flags,
-///   Int64Representation, Type, FastApiOneByteString}`
+///   Int64Representation, Type, FastApiOneByteString, FastApiCallbackOptions}`
 /// - `v8::Local<v8::Object>::{get_aligned_pointer_from_internal_field,
 ///   set_aligned_pointer_in_internal_field, get, set, create_data_property,
 ///   internal_field_count}` (through the prelude helpers)
@@ -43,7 +43,8 @@ pub fn install_event<T: EventOps + EventConstructor + 'static>(
     global_template: v8::Local<'_, v8::ObjectTemplate>,
     registry: &mut dyn InterfaceRegistry,
 ) -> Result<v8::Global<v8::FunctionTemplate>, JsError> {
-    let constructor = v8::FunctionTemplate::builder(construct_event::<T>).build(scope);
+    install_native_callback_state(scope);
+    let constructor = v8::FunctionTemplate::builder(construct_event::<T>).length(1).build(scope);
     let class_name = v8_string(scope, "Event")?;
     constructor.set_class_name(class_name);
     let signature = v8::Signature::new(scope, constructor);
@@ -245,8 +246,22 @@ pub fn install_event<T: EventOps + EventConstructor + 'static>(
     Ok(v8::Global::new(scope.as_ref(), constructor))
 }
 
-/// The `Event` constructor.
 fn construct_event<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        v8_begin_stored_value_lease(scope);
+        body_construct_event::<T>(scope, args, rv);
+        v8_end_stored_value_lease(scope);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "construct_event", (), call) };
+}
+
+/// The `Event` constructor.
+fn body_construct_event<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -260,7 +275,7 @@ fn construct_event<'s, T: EventOps + EventConstructor + 'static>(
     }
         let r#type = {
             let raw = args.get(0);
-            match Ok::<String, JsError>(string_from_v8(scope, raw)) {
+            match string_from_v8(scope, raw) {
                 Ok(value) => value,
                 Err(error) => {
                     throw_js_error(scope, &error);
@@ -294,8 +309,20 @@ fn construct_event<'s, T: EventOps + EventConstructor + 'static>(
             return;
         }
     };
+    match v8_before_constructor_host(scope) {
+        Ok(()) => {},
+        Err(V8AdmissionError::Throw(error)) => {
+            throw_js_error(scope, &error);
+            return;
+        },
+        Err(V8AdmissionError::Terminated) => {
+            scope.terminate_execution();
+            return;
+        },
+    }
     match <T as EventConstructor>::construct(&realm, &r#type, event_init_dict) {
         Ok(host) => {
+            v8_transfer_stored_value_lease(scope);
             let this = args.this();
             if let Err(error) = adopt_host(scope, "Event", this, host) {
                 throw_js_error(scope, &error);
@@ -307,8 +334,20 @@ fn construct_event<'s, T: EventOps + EventConstructor + 'static>(
     }
 }
 
-/// Getter for `Event.type`.
 fn get_event_type<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_event_type::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_event_type", (), call) };
+}
+
+/// Getter for `Event.type`.
+fn body_get_event_type<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -337,8 +376,20 @@ fn get_event_type<'s, T: EventOps + EventConstructor + 'static>(
     }
 }
 
-/// Getter for `Event.target`.
 fn get_event_target<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_event_target::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_event_target", (), call) };
+}
+
+/// Getter for `Event.target`.
+fn body_get_event_target<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -367,8 +418,20 @@ fn get_event_target<'s, T: EventOps + EventConstructor + 'static>(
     }
 }
 
-/// Getter for `Event.srcElement`.
 fn get_event_src_element<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_event_src_element::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_event_src_element", (), call) };
+}
+
+/// Getter for `Event.srcElement`.
+fn body_get_event_src_element<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -397,8 +460,20 @@ fn get_event_src_element<'s, T: EventOps + EventConstructor + 'static>(
     }
 }
 
-/// Getter for `Event.currentTarget`.
 fn get_event_current_target<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_event_current_target::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_event_current_target", (), call) };
+}
+
+/// Getter for `Event.currentTarget`.
+fn body_get_event_current_target<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -427,8 +502,20 @@ fn get_event_current_target<'s, T: EventOps + EventConstructor + 'static>(
     }
 }
 
-/// `Event.composedPath`.
 fn call_event_composed_path<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_event_composed_path::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_event_composed_path", (), call) };
+}
+
+/// `Event.composedPath`.
+fn body_call_event_composed_path<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -457,8 +544,20 @@ fn call_event_composed_path<'s, T: EventOps + EventConstructor + 'static>(
     }
 }
 
-/// Getter for `Event.eventPhase`.
 fn get_event_event_phase<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_event_event_phase::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_event_event_phase", (), call) };
+}
+
+/// Getter for `Event.eventPhase`.
+fn body_get_event_event_phase<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -480,13 +579,16 @@ fn get_event_event_phase<'s, T: EventOps + EventConstructor + 'static>(
 /// Fast-API getter for `Event.eventPhase`.
 extern "C" fn fast_get_event_event_phase<T: EventOps + EventConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> u32 {
+    v8_fast_callback_boundary(options, "fast_get_event_event_phase", 0, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.event_phase() as u32,
         None => 0,
     }
+    })
 }
 
 /// Fast-call table for the `Event.eventPhase` getter.
@@ -497,14 +599,26 @@ impl<T: EventOps + EventConstructor + 'static> EventEventPhaseGetter<T> {
         fast_get_event_event_phase::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Uint32.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// `Event.stopPropagation`.
 fn call_event_stop_propagation<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_event_stop_propagation::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_event_stop_propagation", (), call) };
+}
+
+/// `Event.stopPropagation`.
+fn body_call_event_stop_propagation<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -527,13 +641,16 @@ fn call_event_stop_propagation<'s, T: EventOps + EventConstructor + 'static>(
 /// Fast-API callback for `Event.stopPropagation`.
 extern "C" fn fast_call_event_stop_propagation<T: EventOps + EventConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) {
+    v8_fast_callback_boundary(options, "fast_call_event_stop_propagation", (), || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.stop_propagation(),
         None => (),
     }
+    })
 }
 
 /// Fast-call table for `Event.stopPropagation`.
@@ -546,14 +663,27 @@ impl<T: EventOps + EventConstructor + 'static> EventStopPropagationMethod<T> {
             v8::fast_api::Type::Void.as_info(),
             &[
                 v8::fast_api::Type::V8Value.as_info(),
+                v8::fast_api::Type::CallbackOptions.as_info(),
             ],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Getter for `Event.cancelBubble`.
 fn get_event_cancel_bubble<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_event_cancel_bubble::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_event_cancel_bubble", (), call) };
+}
+
+/// Getter for `Event.cancelBubble`.
+fn body_get_event_cancel_bubble<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -575,13 +705,16 @@ fn get_event_cancel_bubble<'s, T: EventOps + EventConstructor + 'static>(
 /// Fast-API getter for `Event.cancelBubble`.
 extern "C" fn fast_get_event_cancel_bubble<T: EventOps + EventConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> bool {
+    v8_fast_callback_boundary(options, "fast_get_event_cancel_bubble", false, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.cancel_bubble(),
         None => false,
     }
+    })
 }
 
 /// Fast-call table for the `Event.cancelBubble` getter.
@@ -592,7 +725,7 @@ impl<T: EventOps + EventConstructor + 'static> EventCancelBubbleGetter<T> {
         fast_get_event_cancel_bubble::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Bool.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
@@ -602,11 +735,14 @@ impl<T: EventOps + EventConstructor + 'static> EventCancelBubbleGetter<T> {
 extern "C" fn fast_set_event_cancel_bubble<T: EventOps + EventConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
     value: bool,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) {
+    v8_fast_callback_boundary(options, "fast_set_event_cancel_bubble", (), || {
     // SAFETY: as for the fast getter.
     if let Some(host) = unsafe { unwrap_receiver::<T>(receiver) } {
         host.set_cancel_bubble(value);
     }
+    });
 }
 
 /// Fast-call table for the `Event.cancelBubble` setter.
@@ -620,14 +756,27 @@ impl<T: EventOps + EventConstructor + 'static> EventCancelBubbleSetter<T> {
             &[
                 v8::fast_api::Type::V8Value.as_info(),
                 v8::fast_api::Type::Bool.as_info(),
+                v8::fast_api::Type::CallbackOptions.as_info(),
             ],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Setter for `Event.cancelBubble`.
 fn set_event_cancel_bubble<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_set_event_cancel_bubble::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "set_event_cancel_bubble", (), call) };
+}
+
+/// Setter for `Event.cancelBubble`.
+fn body_set_event_cancel_bubble<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -654,8 +803,20 @@ fn set_event_cancel_bubble<'s, T: EventOps + EventConstructor + 'static>(
     host.set_cancel_bubble(value);
 }
 
-/// `Event.stopImmediatePropagation`.
 fn call_event_stop_immediate_propagation<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_event_stop_immediate_propagation::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_event_stop_immediate_propagation", (), call) };
+}
+
+/// `Event.stopImmediatePropagation`.
+fn body_call_event_stop_immediate_propagation<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -678,13 +839,16 @@ fn call_event_stop_immediate_propagation<'s, T: EventOps + EventConstructor + 's
 /// Fast-API callback for `Event.stopImmediatePropagation`.
 extern "C" fn fast_call_event_stop_immediate_propagation<T: EventOps + EventConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) {
+    v8_fast_callback_boundary(options, "fast_call_event_stop_immediate_propagation", (), || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.stop_immediate_propagation(),
         None => (),
     }
+    })
 }
 
 /// Fast-call table for `Event.stopImmediatePropagation`.
@@ -697,14 +861,27 @@ impl<T: EventOps + EventConstructor + 'static> EventStopImmediatePropagationMeth
             v8::fast_api::Type::Void.as_info(),
             &[
                 v8::fast_api::Type::V8Value.as_info(),
+                v8::fast_api::Type::CallbackOptions.as_info(),
             ],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Getter for `Event.bubbles`.
 fn get_event_bubbles<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_event_bubbles::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_event_bubbles", (), call) };
+}
+
+/// Getter for `Event.bubbles`.
+fn body_get_event_bubbles<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -726,13 +903,16 @@ fn get_event_bubbles<'s, T: EventOps + EventConstructor + 'static>(
 /// Fast-API getter for `Event.bubbles`.
 extern "C" fn fast_get_event_bubbles<T: EventOps + EventConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> bool {
+    v8_fast_callback_boundary(options, "fast_get_event_bubbles", false, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.bubbles(),
         None => false,
     }
+    })
 }
 
 /// Fast-call table for the `Event.bubbles` getter.
@@ -743,14 +923,26 @@ impl<T: EventOps + EventConstructor + 'static> EventBubblesGetter<T> {
         fast_get_event_bubbles::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Bool.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Getter for `Event.cancelable`.
 fn get_event_cancelable<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_event_cancelable::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_event_cancelable", (), call) };
+}
+
+/// Getter for `Event.cancelable`.
+fn body_get_event_cancelable<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -772,13 +964,16 @@ fn get_event_cancelable<'s, T: EventOps + EventConstructor + 'static>(
 /// Fast-API getter for `Event.cancelable`.
 extern "C" fn fast_get_event_cancelable<T: EventOps + EventConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> bool {
+    v8_fast_callback_boundary(options, "fast_get_event_cancelable", false, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.cancelable(),
         None => false,
     }
+    })
 }
 
 /// Fast-call table for the `Event.cancelable` getter.
@@ -789,14 +984,26 @@ impl<T: EventOps + EventConstructor + 'static> EventCancelableGetter<T> {
         fast_get_event_cancelable::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Bool.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Getter for `Event.returnValue`.
 fn get_event_return_value<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_event_return_value::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_event_return_value", (), call) };
+}
+
+/// Getter for `Event.returnValue`.
+fn body_get_event_return_value<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -818,13 +1025,16 @@ fn get_event_return_value<'s, T: EventOps + EventConstructor + 'static>(
 /// Fast-API getter for `Event.returnValue`.
 extern "C" fn fast_get_event_return_value<T: EventOps + EventConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> bool {
+    v8_fast_callback_boundary(options, "fast_get_event_return_value", false, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.return_value(),
         None => false,
     }
+    })
 }
 
 /// Fast-call table for the `Event.returnValue` getter.
@@ -835,7 +1045,7 @@ impl<T: EventOps + EventConstructor + 'static> EventReturnValueGetter<T> {
         fast_get_event_return_value::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Bool.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
@@ -845,11 +1055,14 @@ impl<T: EventOps + EventConstructor + 'static> EventReturnValueGetter<T> {
 extern "C" fn fast_set_event_return_value<T: EventOps + EventConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
     value: bool,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) {
+    v8_fast_callback_boundary(options, "fast_set_event_return_value", (), || {
     // SAFETY: as for the fast getter.
     if let Some(host) = unsafe { unwrap_receiver::<T>(receiver) } {
         host.set_return_value(value);
     }
+    });
 }
 
 /// Fast-call table for the `Event.returnValue` setter.
@@ -863,14 +1076,27 @@ impl<T: EventOps + EventConstructor + 'static> EventReturnValueSetter<T> {
             &[
                 v8::fast_api::Type::V8Value.as_info(),
                 v8::fast_api::Type::Bool.as_info(),
+                v8::fast_api::Type::CallbackOptions.as_info(),
             ],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Setter for `Event.returnValue`.
 fn set_event_return_value<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_set_event_return_value::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "set_event_return_value", (), call) };
+}
+
+/// Setter for `Event.returnValue`.
+fn body_set_event_return_value<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -897,8 +1123,20 @@ fn set_event_return_value<'s, T: EventOps + EventConstructor + 'static>(
     host.set_return_value(value);
 }
 
-/// `Event.preventDefault`.
 fn call_event_prevent_default<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_event_prevent_default::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_event_prevent_default", (), call) };
+}
+
+/// `Event.preventDefault`.
+fn body_call_event_prevent_default<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -921,13 +1159,16 @@ fn call_event_prevent_default<'s, T: EventOps + EventConstructor + 'static>(
 /// Fast-API callback for `Event.preventDefault`.
 extern "C" fn fast_call_event_prevent_default<T: EventOps + EventConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) {
+    v8_fast_callback_boundary(options, "fast_call_event_prevent_default", (), || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.prevent_default(),
         None => (),
     }
+    })
 }
 
 /// Fast-call table for `Event.preventDefault`.
@@ -940,14 +1181,27 @@ impl<T: EventOps + EventConstructor + 'static> EventPreventDefaultMethod<T> {
             v8::fast_api::Type::Void.as_info(),
             &[
                 v8::fast_api::Type::V8Value.as_info(),
+                v8::fast_api::Type::CallbackOptions.as_info(),
             ],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Getter for `Event.defaultPrevented`.
 fn get_event_default_prevented<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_event_default_prevented::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_event_default_prevented", (), call) };
+}
+
+/// Getter for `Event.defaultPrevented`.
+fn body_get_event_default_prevented<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -969,13 +1223,16 @@ fn get_event_default_prevented<'s, T: EventOps + EventConstructor + 'static>(
 /// Fast-API getter for `Event.defaultPrevented`.
 extern "C" fn fast_get_event_default_prevented<T: EventOps + EventConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> bool {
+    v8_fast_callback_boundary(options, "fast_get_event_default_prevented", false, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.default_prevented(),
         None => false,
     }
+    })
 }
 
 /// Fast-call table for the `Event.defaultPrevented` getter.
@@ -986,14 +1243,26 @@ impl<T: EventOps + EventConstructor + 'static> EventDefaultPreventedGetter<T> {
         fast_get_event_default_prevented::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Bool.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Getter for `Event.composed`.
 fn get_event_composed<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_event_composed::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_event_composed", (), call) };
+}
+
+/// Getter for `Event.composed`.
+fn body_get_event_composed<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1015,13 +1284,16 @@ fn get_event_composed<'s, T: EventOps + EventConstructor + 'static>(
 /// Fast-API getter for `Event.composed`.
 extern "C" fn fast_get_event_composed<T: EventOps + EventConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> bool {
+    v8_fast_callback_boundary(options, "fast_get_event_composed", false, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.composed(),
         None => false,
     }
+    })
 }
 
 /// Fast-call table for the `Event.composed` getter.
@@ -1032,14 +1304,26 @@ impl<T: EventOps + EventConstructor + 'static> EventComposedGetter<T> {
         fast_get_event_composed::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Bool.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Getter for `Event.isTrusted`.
 fn get_event_is_trusted<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_event_is_trusted::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_event_is_trusted", (), call) };
+}
+
+/// Getter for `Event.isTrusted`.
+fn body_get_event_is_trusted<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1061,13 +1345,16 @@ fn get_event_is_trusted<'s, T: EventOps + EventConstructor + 'static>(
 /// Fast-API getter for `Event.isTrusted`.
 extern "C" fn fast_get_event_is_trusted<T: EventOps + EventConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> bool {
+    v8_fast_callback_boundary(options, "fast_get_event_is_trusted", false, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.is_trusted(),
         None => false,
     }
+    })
 }
 
 /// Fast-call table for the `Event.isTrusted` getter.
@@ -1078,14 +1365,26 @@ impl<T: EventOps + EventConstructor + 'static> EventIsTrustedGetter<T> {
         fast_get_event_is_trusted::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Bool.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Getter for `Event.timeStamp`.
 fn get_event_time_stamp<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_event_time_stamp::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_event_time_stamp", (), call) };
+}
+
+/// Getter for `Event.timeStamp`.
+fn body_get_event_time_stamp<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1107,13 +1406,16 @@ fn get_event_time_stamp<'s, T: EventOps + EventConstructor + 'static>(
 /// Fast-API getter for `Event.timeStamp`.
 extern "C" fn fast_get_event_time_stamp<T: EventOps + EventConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> f64 {
+    v8_fast_callback_boundary(options, "fast_get_event_time_stamp", 0.0, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.time_stamp(),
         None => 0.0,
     }
+    })
 }
 
 /// Fast-call table for the `Event.timeStamp` getter.
@@ -1124,14 +1426,26 @@ impl<T: EventOps + EventConstructor + 'static> EventTimeStampGetter<T> {
         fast_get_event_time_stamp::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Float64.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// `Event.initEvent`.
 fn call_event_init_event<'s, T: EventOps + EventConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_event_init_event::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_event_init_event", (), call) };
+}
+
+/// `Event.initEvent`.
+fn body_call_event_init_event<'s, T: EventOps + EventConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1156,7 +1470,7 @@ fn call_event_init_event<'s, T: EventOps + EventConstructor + 'static>(
     };
     let r#type = {
         let raw = args.get(0);
-        match Ok::<String, JsError>(string_from_v8(scope, raw)) {
+        match string_from_v8(scope, raw) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);

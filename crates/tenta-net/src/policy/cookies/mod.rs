@@ -22,7 +22,7 @@ pub use parse::{
     is_public_suffix, is_secure_request, parse_cookie_date, parse_set_cookie_in, path_matches,
     registrable_domain,
 };
-pub use storage_state::{StorageCookie, StorageState};
+pub use storage_state::{StorageCookie, StorageItem, StorageOrigin, StorageState};
 
 /// `SameSite` enforcement (RFC 6265bis §5.4.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
@@ -322,6 +322,14 @@ pub struct CookieJar {
     inner: Arc<Inner>,
 }
 
+/// Cookies validated and timestamped for one storageState import.
+///
+/// The fields stay private so callers cannot bypass the validation that makes
+/// a later import infallible. The batch is consumed exactly once.
+pub struct PreparedStorageCookies {
+    cookies: Vec<Cookie>,
+}
+
 impl Default for CookieJar {
     fn default() -> Self {
         Self::new()
@@ -596,24 +604,41 @@ impl CookieJar {
         Ok(jar)
     }
 
-    /// Merges a `storageState` into this jar.
+    /// Validates the cookie part of a `storageState` before changing any store.
+    pub fn prepare_storage_state(
+        state: &StorageState,
+        now: SystemTime,
+    ) -> tenta_core::Result<PreparedStorageCookies> {
+        let mut cookies = Vec::with_capacity(state.cookies.len());
+        for stored in &state.cookies {
+            let cookie = stored.to_cookie(now)?;
+            if !cookie.is_expired(now) {
+                cookies.push(cookie);
+            }
+        }
+        Ok(PreparedStorageCookies { cookies })
+    }
+
+    /// Applies one validated batch without another fallible parse step.
+    pub fn load_prepared_storage_state(&self, prepared: PreparedStorageCookies) -> usize {
+        let loaded = prepared.cookies.len();
+        let mut cookies = self.inner.cookies.write();
+        for cookie in prepared.cookies {
+            cookies.insert(cookie.key(), cookie);
+        }
+        evict_total(&mut cookies, self.inner.limits.max_total);
+        loaded
+    }
+
+    /// Merges a `storageState` into this jar. Invalid later cookies leave the
+    /// jar unchanged rather than applying earlier entries.
     pub fn load_storage_state(
         &self,
         state: &StorageState,
         now: SystemTime,
     ) -> tenta_core::Result<usize> {
-        let mut loaded = 0;
-        let mut cookies = self.inner.cookies.write();
-        for stored in &state.cookies {
-            let cookie = stored.to_cookie(now)?;
-            if cookie.is_expired(now) {
-                continue;
-            }
-            cookies.insert(cookie.key(), cookie);
-            loaded += 1;
-        }
-        evict_total(&mut cookies, self.inner.limits.max_total);
-        Ok(loaded)
+        let prepared = Self::prepare_storage_state(state, now)?;
+        Ok(self.load_prepared_storage_state(prepared))
     }
 }
 

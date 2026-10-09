@@ -17,7 +17,8 @@ accepted = [
     "OpenSSL",
 ]
 
-# Workspace crates are first-party and carry the project license; they are not third-party notices.
+# Private workspace packages are omitted from the generated crate inventory.
+# Attributed local forks and their native components have manual notices in about.hbs.
 ignore-build-dependencies = false
 ignore-dev-dependencies = false
 private = { ignore = true }

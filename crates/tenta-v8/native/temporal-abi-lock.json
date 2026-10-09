@@ -1,0 +1,48 @@
+{
+  "scope": "Temporal C ABI producer plus the exact tested implementation and Diplomat code-generation/runtime versions; verifies lock state, not a claim that every transitive Rust dependency defines native ABI",
+  "upstream_lock_sha256": "4303ad4b560fcc024f800f31f306ca4401ae8636002733e3407c91df386bda9e",
+  "packages": [
+    {
+      "name": "diplomat",
+      "version": "0.15.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "7935649d00000f5c5d735448ad3dc07b9738160727017914cf42138b8e8e6611"
+    },
+    {
+      "name": "diplomat-runtime",
+      "version": "0.15.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "970ac38ad677632efcee6d517e783958da9bc78ec206d8d5e35b459ffc5e4864"
+    },
+    {
+      "name": "diplomat_core",
+      "version": "0.15.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "9cf41b94101a4bce993febaf0098092b0bb31deaf0ecaf6e0a2562465f61b383"
+    },
+    {
+      "name": "temporal_capi",
+      "version": "0.2.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "8a2a1f001e756a9f5f2d175a9965c4c0b3a054f09f30de3a75ab49765f2deb36"
+    },
+    {
+      "name": "temporal_rs",
+      "version": "0.2.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "9a902a45282e5175186b21d355efc92564601efe6e2d92818dc9e333d50bd4de"
+    },
+    {
+      "name": "timezone_provider",
+      "version": "0.2.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "c48f9b04628a2b813051e4dfe97c65281e49625eabd09ec343190e31e399a8c2"
+    },
+    {
+      "name": "zoneinfo64",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "ed6eb2607e906160c457fd573e9297e65029669906b9ac8fb1b5cd5e055f0705"
+    }
+  ]
+}

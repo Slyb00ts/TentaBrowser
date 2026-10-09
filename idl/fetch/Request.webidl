@@ -61,8 +61,8 @@
 // the inferred `Content-Type` is the string arm's
 // `text/plain;charset=UTF-8` rather than the standard's
 // `application/x-www-form-urlencoded;charset=UTF-8`, which the standard's own
-// `URLSearchParams` branch sets. Serving it properly needs a platform-object
-// brand-check arm in the generator's `union_test`, which is a separate slice.
+// `URLSearchParams` branch sets. Interface-brand selection is available in the
+// generator; widening this body union and its host extraction remains separate.
 //
 // `Blob`, `FormData` and `URLSearchParams` are **not** declared as stand-in
 // interfaces to complete the union: a declared-but-unimplemented interface is

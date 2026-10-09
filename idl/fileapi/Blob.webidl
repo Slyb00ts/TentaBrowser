@@ -90,27 +90,7 @@
 //    host and deviation 1 unimplementable. The host applies the standard's
 //    default itself when the member is absent, so the only observable
 //    difference is the one deviation 1 records. `type` keeps its `= ""`.
-// 3. **A non-`Blob` object in `blobParts` throws here and stringifies in a
-//    browser.** `BlobPart` is `(BufferSource or Blob or USVString)` and its
-//    `Blob` arm is a brand check the host performs on the record: resolving a
-//    `Handle<Blob>` argument requires the record to be a `Blob` or a `File`,
-//    and anything else is a `TypeError` naming the argument. So
-//    `new Blob([{}])` and `new Blob([new Date()])` throw here where a browser
-//    takes the `USVString` arm and produces `"[object Object]"` and the date
-//    string. The arm order is the only reason the alternative is not worse:
-//    the generator's union test for an interface arm is `value.is_object()`
-//    (`crates/tenta-idl/src/codegen/types.rs`'s `union_test`) — *every* object,
-//    not a brand check — and the V8 `WrapperWorld::handle` ignores the
-//    interface name it is passed, so a `Blob` arm declared without a host-side
-//    brand check would accept `{}`, an `Array`, a `Date` and even the window
-//    and hand back a `Handle<Blob>` whose bits point at a different record.
-//    This is the deliberately chosen error direction: a wrong acceptance
-//    produces a silently different object, a wrong refusal says so.
-//    One consequence of the order: the `BufferSource` arm comes **first**,
-//    because its test is the narrow one
-//    (`is_array_buffer() || is_shared_array_buffer() || is_array_buffer_view()`)
-//    and the `Blob` arm would swallow every typed array if it came before.
-// 4. **`new Blob(null)` throws here and produces an empty `Blob` in a browser.**
+// 3. **`new Blob(null)` throws here and produces an empty `Blob` in a browser.**
 //    This one is the *generator's* rather than these declarations': the
 //    optional-argument test is `args.length() > 0 && !args.get(0).is_undefined()`,
 //    so an explicit `null` reaches `sequence_from_v8`, whose `iteration_method`

@@ -7,6 +7,7 @@ use crate::codegen::rust_type::{
     Position, default_expr, fast_api_rust_type, fast_api_type, fast_argument_convert,
     fast_return_convert, float_literal, rust_type,
 };
+use crate::codegen::v8_legacy;
 use crate::model::{
     Argument, Attribute, ConstValue, Constant, DefaultValue, FastApi, Interface, Member, Model,
     Namespace, Operation, OperationGroup, Type,
@@ -30,7 +31,7 @@ const API_NOTE: &str = "\
 /// - `v8::ReturnValue::{set, set_bool, set_int32, set_uint32, set_double,
 ///   set_null, set_undefined}`
 /// - `v8::fast_api::{CFunction, CFunctionInfo, CTypeInfo, Flags,
-///   Int64Representation, Type, FastApiOneByteString}`
+///   Int64Representation, Type, FastApiOneByteString, FastApiCallbackOptions}`
 /// - `v8::Local<v8::Object>::{get_aligned_pointer_from_internal_field,
 ///   set_aligned_pointer_in_internal_field, get, set, create_data_property,
 ///   internal_field_count}` (through the prelude helpers)
@@ -114,18 +115,7 @@ pub fn interface_v8(model: &Model, interface: &Interface) -> String {
             }
         }
     }
-    if let Some(operation) = interface.indexed_getter.as_ref().and_then(|getter| {
-        interface
-            .members
-            .iter()
-            .find_map(|m| match m {
-                Member::Operation(group) if &group.name == getter => group.overloads.first(),
-                _ => None,
-            })
-            .or_else(|| interface.special_operations.first())
-    }) {
-        indexed_getter_callback(&interface.name, operation, &bound, &mut out);
-    }
+    v8_legacy::callbacks(model, interface, &bound, &mut out);
     if let Some(iterable) = &interface.iterable
         && let Some(key) = &iterable.key
         && !iterable.is_async
@@ -171,6 +161,7 @@ pub fn namespace_v8(model: &Model, namespace: &Namespace) -> String {
          global_template: v8::Local<'_, v8::ObjectTemplate>,\n    \
          registry: &mut dyn InterfaceRegistry,\n\
          ) -> Result<(), JsError> {{\n    \
+         install_native_callback_state(scope);\n    \
          let namespace = v8::ObjectTemplate::new(scope);\n"
     );
     for constant in &namespace.constants {
@@ -242,6 +233,7 @@ fn install_function(model: &Model, interface: &Interface, bound: &str, out: &mut
     let name = &interface.name;
     let snake = naming::snake_stem(name);
     let chain = model.prototype_chain(name).join(" -> ");
+    let length = interface.constructor_length().unwrap_or(0);
     let _ = write!(
         out,
         "\n/// Installs `{name}` on `global_template` and registers it with `registry`.\n\
@@ -257,7 +249,8 @@ fn install_function(model: &Model, interface: &Interface, bound: &str, out: &mut
          global_template: v8::Local<'_, v8::ObjectTemplate>,\n    \
          registry: &mut dyn InterfaceRegistry,\n\
          ) -> Result<v8::Global<v8::FunctionTemplate>, JsError> {{\n    \
-         let constructor = v8::FunctionTemplate::builder(construct_{snake}::<T>).build(scope);\n    \
+         install_native_callback_state(scope);\n    \
+         let constructor = v8::FunctionTemplate::builder(construct_{snake}::<T>).length({length}).build(scope);\n    \
          let class_name = v8_string(scope, \"{name}\")?;\n    \
          constructor.set_class_name(class_name);\n"
     );
@@ -355,13 +348,7 @@ fn install_function(model: &Model, interface: &Interface, bound: &str, out: &mut
         );
     }
 
-    if interface.indexed_getter.is_some() {
-        let _ = write!(
-            out,
-            "    instance.set_indexed_property_handler(\n        \
-             v8::IndexedPropertyHandlerConfiguration::new().getter(indexed_get_{snake}::<T>),\n    );\n"
-        );
-    }
+    v8_legacy::install(model, interface, out);
 
     if let Some(iterable) = &interface.iterable
         && !iterable.is_async
@@ -554,15 +541,74 @@ fn fast_struct(interface: &str, member: &str) -> String {
     format!("{interface}{}", naming::pascal_case(member))
 }
 
+/// A named wrapper keeps the scope and argument lifetimes tied together for rusty_v8's higher-ranked callback ABI. The implementation is a
+/// normal Rust function, wholly inside the unwind boundary.
+fn function_callback_boundary(function: &str, bound: &str, out: &mut String) {
+    function_callback_boundary_with_lease(function, bound, false, false, out);
+}
+
+fn function_callback_boundary_with_lease(
+    function: &str,
+    bound: &str,
+    stored_value_lease: bool,
+    checked_lease: bool,
+    out: &mut String,
+) {
+    let begin = if checked_lease {
+        "if let Err(error) = v8_checked_begin_stored_value_lease(scope) { throw_js_error(scope, &error); return; }\n        "
+    } else if stored_value_lease {
+        "v8_begin_stored_value_lease(scope);\n        "
+    } else {
+        ""
+    };
+    let end = if stored_value_lease {
+        "\n        v8_end_stored_value_lease(scope);"
+    } else {
+        ""
+    };
+    let _ = write!(
+        out,
+        "\nfn {function}<'s, T: {bound} + 'static>(\n    \
+         scope: &mut v8::PinScope<'s, '_>,\n    \
+         args: v8::FunctionCallbackArguments<'s>,\n    \
+         rv: v8::ReturnValue<v8::Value>,\n\
+         ) {{\n    \
+         let call = |scope: &mut v8::PinScope<'s, '_>| {{\n        \
+         {begin}body_{function}::<T>(scope, args, rv);{end}\n    \
+         }};\n    \
+         // SAFETY: V8 invokes this registered slow FunctionTemplate callback.\n    \
+         unsafe {{ v8_registered_slow_callback_boundary(scope, \"{function}\", (), call) }};\n}}\n"
+    );
+}
+
 fn constructor_callback(interface: &Interface, bound: &str, out: &mut String) {
     let name = &interface.name;
     let snake = naming::snake_stem(name);
+    let callback = format!("construct_{snake}");
+    // The generated wrapper always closes conversion ownership, including
+    // early returns from a dictionary or sequence member. A native panic is
+    // sticky; its remaining values stay rooted until world teardown.
+    let _ = write!(
+        out,
+        "\nfn {callback}<'s, T: {bound} + 'static>(\n    \
+         scope: &mut v8::PinScope<'s, '_>,\n    \
+         args: v8::FunctionCallbackArguments<'s>,\n    \
+         rv: v8::ReturnValue<v8::Value>,\n\
+         ) {{\n    \
+         let call = |scope: &mut v8::PinScope<'s, '_>| {{\n        \
+         v8_begin_stored_value_lease(scope);\n        \
+         body_{callback}::<T>(scope, args, rv);\n        \
+         v8_end_stored_value_lease(scope);\n    \
+         }};\n    \
+         // SAFETY: V8 invokes this registered slow FunctionTemplate callback.\n    \
+         unsafe {{ v8_registered_slow_callback_boundary(scope, \"{callback}\", (), call) }};\n}}\n"
+    );
     if interface.constructors.is_empty() {
         let _ = write!(
             out,
             "\n/// `{name}` declares no `constructor`, so calling it throws, as WebIDL\n\
              /// requires for an interface without a constructor operation.\n\
-             fn construct_{snake}<'s, T: {bound} + 'static>(\n    \
+             fn body_construct_{snake}<'s, T: {bound} + 'static>(\n    \
              scope: &mut v8::PinScope<'s, '_>,\n    \
              _args: v8::FunctionCallbackArguments<'s>,\n    \
              _rv: v8::ReturnValue<v8::Value>,\n\
@@ -573,7 +619,7 @@ fn constructor_callback(interface: &Interface, bound: &str, out: &mut String) {
     let _ = write!(
         out,
         "\n/// The `{name}` constructor.\n\
-         fn construct_{snake}<'s, T: {bound} + 'static>(\n    \
+         fn body_construct_{snake}<'s, T: {bound} + 'static>(\n    \
          scope: &mut v8::PinScope<'s, '_>,\n    \
          args: v8::FunctionCallbackArguments<'s>,\n    \
          mut rv: v8::ReturnValue<v8::Value>,\n\
@@ -613,8 +659,17 @@ fn constructor_callback(interface: &Interface, bound: &str, out: &mut String) {
         "    let realm = match world_realm(scope) {{\n        \
          Ok(realm) => realm,\n        \
          Err(error) => {{\n            throw_js_error(scope, &error);\n            return;\n        }}\n    }};\n    \
+         match v8_before_constructor_host(scope) {{\n        \
+         Ok(()) => {{}},\n        \
+         Err(V8AdmissionError::Throw(error)) => {{\n            \
+         throw_js_error(scope, &error);\n            \
+         return;\n        }},\n        \
+         Err(V8AdmissionError::Terminated) => {{\n            \
+         scope.terminate_execution();\n            \
+         return;\n        }},\n    }}\n    \
          match <T as {}Constructor>::{}({}) {{\n        \
          Ok(host) => {{\n            \
+         v8_transfer_stored_value_lease(scope);\n            \
          let this = args.this();\n            \
          if let Err(error) = adopt_host(scope, \"{}\", this, host) {{\n                throw_js_error(scope, &error);\n                return;\n            }}\n            \
          rv.set(this.into());\n        \
@@ -641,10 +696,11 @@ fn attribute_callbacks(
     let owned = rust_type(&attribute.ty, Position::Owned);
 
     // Getter.
+    function_callback_boundary(&format!("get_{snake}_{member}"), bound, out);
     let _ = write!(
         out,
         "\n/// Getter for `{name}.{}`.\n\
-         fn get_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+         fn body_get_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
          scope: &mut v8::PinScope<'s, '_>,\n    \
          args: v8::FunctionCallbackArguments<'s>,\n    \
          mut rv: v8::ReturnValue<v8::Value>,\n\
@@ -680,12 +736,15 @@ fn attribute_callbacks(
     fast_accessor_tables(interface, attribute, bound, out);
 
     // Setter.
+    if !attribute.readonly || attribute.replaceable() || attribute.put_forwards().is_some() {
+        function_callback_boundary(&format!("set_{snake}_{member}"), bound, out);
+    }
     if attribute.replaceable() {
         let _ = write!(
             out,
             "\n/// `[Replaceable]` setter for `{name}.{}`: defines an own data property\n\
              /// on the receiver, shadowing the accessor.\n\
-             fn set_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+             fn body_set_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
              scope: &mut v8::PinScope<'s, '_>,\n    \
              args: v8::FunctionCallbackArguments<'s>,\n    \
              _rv: v8::ReturnValue<v8::Value>,\n\
@@ -704,7 +763,7 @@ fn attribute_callbacks(
             out,
             "\n/// `[PutForwards={forward}]` setter for `{name}.{}`: forwards the assignment\n\
              /// to the `{forward}` property of the object the getter returns.\n\
-             fn set_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+             fn body_set_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
              scope: &mut v8::PinScope<'s, '_>,\n    \
              args: v8::FunctionCallbackArguments<'s>,\n    \
              _rv: v8::ReturnValue<v8::Value>,\n\
@@ -712,14 +771,13 @@ fn attribute_callbacks(
              let this = args.this();\n    \
              let key = match v8_string(scope, \"{}\") {{\n        Ok(key) => key,\n        Err(error) => {{\n            throw_js_error(scope, &error);\n            return;\n        }}\n    }};\n    \
              let Some(target) = this.get(scope, key.into()) else {{\n        \
-             throw_type_error(scope, \"`{}` cannot be read\");\n        return;\n    }};\n    \
+             return;\n    }};\n    \
              let Ok(target) = TryInto::<v8::Local<v8::Object>>::try_into(target) else {{\n        \
              throw_type_error(scope, \"`{}` is not an object\");\n        return;\n    }};\n    \
              let forward = match v8_string(scope, \"{forward}\") {{\n        Ok(key) => key,\n        Err(error) => {{\n            throw_js_error(scope, &error);\n            return;\n        }}\n    }};\n    \
              let value = args.get(0);\n    \
-             if target.set(scope, forward.into(), value).is_none() {{\n        \
-             throw_type_error(scope, \"cannot forward the assignment to `{forward}`\");\n    }}\n}}\n",
-            attribute.name, attribute.name, attribute.name, attribute.name
+             let _ = target.set(scope, forward.into(), value);\n}}\n",
+            attribute.name, attribute.name, attribute.name
         );
         return;
     }
@@ -730,7 +788,7 @@ fn attribute_callbacks(
     let _ = write!(
         out,
         "\n/// Setter for `{name}.{}`.\n\
-         fn set_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+         fn body_set_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
          scope: &mut v8::PinScope<'s, '_>,\n    \
          args: v8::FunctionCallbackArguments<'s>,\n    \
          _rv: v8::ReturnValue<v8::Value>,\n\
@@ -745,6 +803,8 @@ fn attribute_callbacks(
         "raw",
         IntegerMode::Modulo,
     );
+    let conversion =
+        convert::legacy_null_to_empty(&attribute.ty, &attribute.attrs, "raw", conversion);
     let _ = write!(
         out,
         "    let raw = args.get(0);\n    \
@@ -774,10 +834,11 @@ fn attribute_callbacks_static(
     let snake = naming::snake_stem(interface);
     let member = naming::snake_stem(&attribute.name);
     let owned = rust_type(&attribute.ty, Position::Owned);
+    function_callback_boundary(&format!("get_{snake}_{member}"), bound, out);
     let _ = write!(
         out,
         "\n/// Static getter for `{interface}.{}`.\n\
-         fn get_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+         fn body_get_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
          scope: &mut v8::PinScope<'s, '_>,\n    \
          _args: v8::FunctionCallbackArguments<'s>,\n    \
          mut rv: v8::ReturnValue<v8::Value>,\n\
@@ -791,6 +852,7 @@ fn attribute_callbacks_static(
         "    match {conversion} {{\n        Ok(value) => rv.set(value),\n        Err(error) => throw_js_error(scope, &error),\n    }}\n}}\n"
     );
     if let Some(setter_name) = &attribute.setter_name {
+        function_callback_boundary(&format!("set_{snake}_{member}"), bound, out);
         let conversion = convert::from_v8_for_attribute_setter(
             model,
             &attribute.ty,
@@ -798,11 +860,13 @@ fn attribute_callbacks_static(
             "raw",
             IntegerMode::Modulo,
         );
+        let conversion =
+            convert::legacy_null_to_empty(&attribute.ty, &attribute.attrs, "raw", conversion);
         let pass = borrow_expr(&attribute.ty, "value");
         let _ = write!(
             out,
             "\n/// Static setter for `{interface}.{}`.\n\
-             fn set_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+             fn body_set_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
              scope: &mut v8::PinScope<'s, '_>,\n    \
              args: v8::FunctionCallbackArguments<'s>,\n    \
              _rv: v8::ReturnValue<v8::Value>,\n\
@@ -819,18 +883,19 @@ fn operation_callbacks(interface: &str, group: &OperationGroup, bound: &str, out
     let snake = naming::snake_stem(interface);
     let member = naming::snake_stem(&group.name);
     if group.overloads.len() > 1 {
+        function_callback_boundary(&format!("call_{snake}_{member}"), bound, out);
         let _ = write!(
             out,
             "\n/// Overload dispatcher for `{interface}.{}`; WebIDL selects an overload by\n\
              /// argument count first.\n\
-             fn call_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
+             fn body_call_{snake}_{member}<'s, T: {bound} + 'static>(\n    \
              scope: &mut v8::PinScope<'s, '_>,\n    \
              args: v8::FunctionCallbackArguments<'s>,\n    \
              rv: v8::ReturnValue<v8::Value>,\n\
              ) {{\n    match args.length() {{\n",
             group.name
         );
-        for (arity, index) in overload_dispatch(group) {
+        for (arity, index) in super::overload_dispatch(group) {
             let overload = &group.overloads[index];
             let _ = writeln!(
                 out,
@@ -863,6 +928,19 @@ fn operation_callback(
 ) {
     let snake = naming::snake_stem(interface);
     let function = format!("call_{snake}_{}", naming::ident_stem(&operation.rust_name));
+    let stored_value_lease = interface == "EventTarget"
+        && matches!(
+            group.name.as_str(),
+            "addEventListener" | "removeEventListener"
+        );
+    let buffer_references = operation.buffer_references();
+    function_callback_boundary_with_lease(
+        &function,
+        bound,
+        stored_value_lease || buffer_references,
+        buffer_references,
+        out,
+    );
     // A static operation with no arguments never reads the argument list.
     let args = if group.is_static && operation.arguments.is_empty() {
         "_args"
@@ -872,7 +950,7 @@ fn operation_callback(
     let _ = write!(
         out,
         "\n/// `{interface}.{}`.\n\
-         fn {function}<'s, T: {bound} + 'static>(\n    \
+         fn body_{function}<'s, T: {bound} + 'static>(\n    \
          scope: &mut v8::PinScope<'s, '_>,\n    \
          {args}: v8::FunctionCallbackArguments<'s>,\n    \
          mut rv: v8::ReturnValue<v8::Value>,\n\
@@ -892,7 +970,7 @@ fn operation_callback(
     }
     let mut passes = Vec::new();
     for (index, argument) in operation.arguments.iter().enumerate() {
-        argument_binding(argument, index, "    ", out);
+        operation_argument_binding(argument, index, "    ", buffer_references, out);
         passes.push(pass_expr(argument));
     }
     let receiver = if group.is_static { "T::" } else { "host." };
@@ -907,71 +985,29 @@ fn operation_callback(
             let _ = write!(out, "    rv.{setter}({call}{cast});\n}}\n");
         }
         FastApi::Ineligible(_) => {
-            let owned = rust_type(&operation.return_type, Position::Owned);
+            let owned = super::rust_type::operation_buffer_type(
+                &operation.return_type,
+                buffer_references,
+                Position::Owned,
+            );
             let _ = write!(
                 out,
                 "    let value: {owned} = match {call} {{\n        Ok(value) => value,\n        Err(error) => {{\n            throw_js_error(scope, &error);\n            return;\n        }}\n    }};\n"
             );
             if operation.return_type == Type::Undefined {
+                if stored_value_lease {
+                    out.push_str("    if native_callback_failure(scope).is_some() { return; }\n    v8_transfer_stored_value_lease(scope);\n");
+                }
                 out.push_str("    let () = value;\n    rv.set_undefined();\n}\n");
             } else {
-                let conversion = convert::to_v8(&operation.return_type, "scope", "value");
+                let conversion = operation_buffer_to_v8(&operation.return_type, buffer_references)
+                    .unwrap_or_else(|| convert::to_v8(&operation.return_type, "scope", "value"));
                 let _ = write!(
                     out,
                     "    match {conversion} {{\n        Ok(value) => rv.set(value),\n        Err(error) => throw_js_error(scope, &error),\n    }}\n}}\n"
                 );
             }
         }
-    }
-}
-
-fn indexed_getter_callback(interface: &str, operation: &Operation, bound: &str, out: &mut String) {
-    let snake = naming::snake_stem(interface);
-    let owned = rust_type(&operation.return_type, Position::Owned);
-    let call = format!("host.{}(index)", operation.rust_name);
-    let _ = write!(
-        out,
-        "\n/// Indexed property getter for `{interface}`, installed with\n\
-         /// `ObjectTemplate::set_indexed_property_handler`.\n\
-         fn indexed_get_{snake}<'s, T: {bound} + 'static>(\n    \
-         scope: &mut v8::PinScope<'s, '_>,\n    \
-         index: u32,\n    \
-         args: v8::PropertyCallbackArguments<'s>,\n    \
-         mut rv: v8::ReturnValue<v8::Value>,\n\
-         ) -> v8::Intercepted {{\n    \
-         let this = args.holder();\n    \
-         // SAFETY: the indexed handler is installed on the interface's own\n    \
-         // instance template, so the holder is an instance of it.\n    \
-         let Some(host) = (unsafe {{ unwrap_receiver::<T>(this) }}) else {{\n        \
-         return v8::Intercepted::kNo;\n    }};\n"
-    );
-    if operation.fast.is_eligible() {
-        let setter = convert::return_value_setter(&operation.return_type).unwrap_or("set");
-        let cast = convert::return_value_cast(&operation.return_type);
-        let _ = write!(
-            out,
-            "    rv.{setter}({call}{cast});\n    v8::Intercepted::kYes\n}}\n"
-        );
-    } else {
-        let _ = write!(
-            out,
-            "    let value: {owned} = match {call} {{\n        Ok(value) => value,\n        Err(error) => {{\n            throw_js_error(scope, &error);\n            return v8::Intercepted::kYes;\n        }}\n    }};\n"
-        );
-        // An index the object does not support is not a property that holds
-        // `null`: WebIDL leaves it absent, so the handler declines and the
-        // ordinary lookup produces `undefined` (`list[99] === undefined`).
-        let conversion = if let Type::Nullable(inner) = &operation.return_type {
-            out.push_str(
-                "    let Some(value) = value else {\n        return v8::Intercepted::kNo;\n    };\n",
-            );
-            convert::to_v8(inner, "scope", "value")
-        } else {
-            convert::to_v8(&operation.return_type, "scope", "value")
-        };
-        let _ = write!(
-            out,
-            "    match {conversion} {{\n        Ok(value) => rv.set(value),\n        Err(error) => throw_js_error(scope, &error),\n    }}\n    v8::Intercepted::kYes\n}}\n"
-        );
     }
 }
 
@@ -1035,6 +1071,7 @@ fn pair_iterator_callback(
     let value_ty = rust_type(value, Position::Owned);
     let key_value = convert::to_v8(key, "scope", "key");
     let value_value = convert::to_v8(value, "scope", "value");
+    function_callback_boundary(&format!("call_{snake}_{stem}"), bound, out);
     let conversion = |binding: &str, expression: &str| {
         format!(
             "        let {binding} = match {expression} {{\n            \
@@ -1066,7 +1103,7 @@ fn pair_iterator_callback(
          /// The host hands over a snapshot, so one call sees one consistent\n\
          /// collection; the returned object is an Array Iterator, not an\n\
          /// interface-branded one.\n\
-         fn call_{snake}_{stem}<'s, T: {bound} + 'static>(\n    \
+         fn body_call_{snake}_{stem}<'s, T: {bound} + 'static>(\n    \
          scope: &mut v8::PinScope<'s, '_>,\n    \
          args: v8::FunctionCallbackArguments<'s>,\n    \
          mut rv: v8::ReturnValue<v8::Value>,\n\
@@ -1102,6 +1139,7 @@ fn pair_iterator_for_each_callback(
     let snake = naming::snake_stem(interface);
     let key_ty = rust_type(key, Position::Owned);
     let value_ty = rust_type(value, Position::Owned);
+    function_callback_boundary(&format!("call_{snake}_for_each"), bound, out);
     let conversion = |binding: &str, expression: &str| {
         format!(
             "        let {binding} = match {expression} {{\n            \
@@ -1118,7 +1156,7 @@ fn pair_iterator_for_each_callback(
          /// The callback is called once per entry of one host snapshot, with the\n\
          /// value first and the key second, as WebIDL's pair-iterator `forEach`\n\
          /// prescribes.\n\
-         fn call_{snake}_for_each<'s, T: {bound} + 'static>(\n    \
+         fn body_call_{snake}_for_each<'s, T: {bound} + 'static>(\n    \
          scope: &mut v8::PinScope<'s, '_>,\n    \
          args: v8::FunctionCallbackArguments<'s>,\n    \
          mut rv: v8::ReturnValue<v8::Value>,\n\
@@ -1167,12 +1205,60 @@ fn unwrap_this_block(indent: &str) -> String {
     )
 }
 
+fn operation_buffer_to_v8(ty: &Type, references: bool) -> Option<String> {
+    if !references {
+        return None;
+    }
+    Some(match ty {
+        Type::Buffer(crate::model::BufferType::BufferSource) => {
+            "buffer_source_ref_to_v8(scope, value)".into()
+        }
+        Type::Buffer(crate::model::BufferType::ArrayBufferView) => {
+            "array_buffer_view_ref_to_v8(scope, value)".into()
+        }
+        _ => return None,
+    })
+}
+
+fn operation_argument_binding(
+    argument: &Argument,
+    index: usize,
+    indent: &str,
+    references: bool,
+    out: &mut String,
+) {
+    let conversion = if references {
+        match argument.ty {
+            Type::Buffer(crate::model::BufferType::BufferSource) => {
+                Some("buffer_source_ref_from_v8(scope, raw)")
+            }
+            Type::Buffer(crate::model::BufferType::ArrayBufferView) => {
+                Some("array_buffer_view_ref_from_v8(scope, raw)")
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    if let Some(conversion) = conversion {
+        let name = &argument.rust_name;
+        let _ = write!(
+            out,
+            "{indent}let raw = args.get({index});\n{indent}let {name} = match {conversion} {{\n{indent}    Ok(value) => value,\n{indent}    Err(error) => {{ throw_js_error(scope, &error); return; }}\n{indent}}};\n"
+        );
+    } else {
+        argument_binding(argument, index, indent, out);
+    }
+}
+
 /// Emits the `let` bindings that convert one argument, and nothing else.
 fn argument_binding(argument: &Argument, index: usize, indent: &str, out: &mut String) {
     let name = &argument.rust_name;
     let mode = IntegerMode::of(argument);
     if argument.variadic {
         let conversion = convert::from_v8(&argument.ty, "scope", "raw", mode);
+        let conversion =
+            convert::legacy_null_to_empty(&argument.ty, &argument.attrs, "raw", conversion);
         let _ = write!(
             out,
             "{indent}let mut {name} = Vec::new();\n\
@@ -1190,6 +1276,8 @@ fn argument_binding(argument: &Argument, index: usize, indent: &str, out: &mut S
         return;
     }
     let conversion = convert::from_v8(&argument.ty, "scope", "raw", mode);
+    let conversion =
+        convert::legacy_null_to_empty(&argument.ty, &argument.attrs, "raw", conversion);
     if argument.optional {
         let default = optional_default(argument);
         let _ = write!(
@@ -1276,39 +1364,6 @@ fn is_string(ty: &Type) -> bool {
     matches!(ty, Type::DomString | Type::UsvString | Type::ByteString)
 }
 
-/// Maps each accepted argument count of an overload set to the overload that
-/// handles it. The first declared overload wins a tie.
-fn overload_dispatch(group: &OperationGroup) -> Vec<(String, usize)> {
-    let mut assignment: Vec<(usize, usize)> = Vec::new();
-    let mut catch_all: Option<usize> = None;
-    for (index, overload) in group.overloads.iter().enumerate() {
-        let classes = overload.arity_classes();
-        if classes.contains(&usize::MAX) {
-            catch_all.get_or_insert(index);
-            continue;
-        }
-        for arity in classes {
-            if !assignment.iter().any(|(existing, _)| *existing == arity) {
-                assignment.push((arity, index));
-            }
-        }
-    }
-    assignment.sort_unstable();
-    let mut arms: Vec<(String, usize)> = Vec::new();
-    for (arity, index) in assignment {
-        match arms.last_mut() {
-            Some((pattern, existing)) if *existing == index => {
-                let _ = write!(pattern, " | {arity}");
-            }
-            _ => arms.push((arity.to_string(), index)),
-        }
-    }
-    if let Some(index) = catch_all {
-        arms.push(("_".to_string(), index));
-    }
-    arms
-}
-
 // -- fast API tables --------------------------------------------------------
 
 /// The `let` binding a fast-API one-byte string argument needs, and the
@@ -1353,13 +1408,15 @@ fn fast_accessor_tables(
             out,
             "\n/// Fast-API getter for `{name}.{}`.\n\
              extern \"C\" fn fast_get_{snake}_{member}<T: {bound} + 'static>(\n    \
-             receiver: v8::Local<v8::Object>,\n\
+             receiver: v8::Local<v8::Object>,\n    \
+             options: &v8::fast_api::FastApiCallbackOptions<'_>,\n\
              ) -> {return_type} {{\n    \
+             v8_fast_callback_boundary(options, \"fast_get_{snake}_{member}\", {fallback}, || {{\n    \
              // SAFETY: the fast callback is only reachable through a template that\n    \
              // carries the interface signature, so the receiver is an instance.\n    \
              match unsafe {{ unwrap_receiver::<T>(receiver) }} {{\n        \
              Some(host) => {call},\n        \
-             None => {fallback},\n    }}\n}}\n",
+             None => {fallback},\n    }}\n    }})\n}}\n",
             attribute.name
         );
         let _ = write!(
@@ -1372,7 +1429,7 @@ fn fast_accessor_tables(
              fast_get_{snake}_{member}::<T> as *const std::ffi::c_void,\n        \
              &v8::fast_api::CFunctionInfo::new(\n            \
              v8::fast_api::Type::{}.as_info(),\n            \
-             &[v8::fast_api::Type::V8Value.as_info()],\n            \
+             &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],\n            \
              v8::fast_api::Int64Representation::Number,\n        ),\n    )];\n}}\n",
             attribute.name,
             fast_api_type(&attribute.ty)
@@ -1395,11 +1452,13 @@ fn fast_accessor_tables(
             "\n/// Fast-API setter for `{name}.{}`.\n\
              extern \"C\" fn fast_set_{snake}_{member}<T: {bound} + 'static>(\n    \
              receiver: v8::Local<v8::Object>,\n    \
-             value: {value_type},\n\
-             ) {{\n{binding}    \
+             value: {value_type},\n    \
+             options: &v8::fast_api::FastApiCallbackOptions<'_>,\n\
+             ) {{\n    \
+             v8_fast_callback_boundary(options, \"fast_set_{snake}_{member}\", (), || {{\n{binding}    \
              // SAFETY: as for the fast getter.\n    \
              if let Some(host) = unsafe {{ unwrap_receiver::<T>(receiver) }} {{\n        \
-             host.{setter_name}({pass});\n    }}\n}}\n",
+             host.{setter_name}({pass});\n    }}\n    }});\n}}\n",
             attribute.name
         );
         let _ = write!(
@@ -1412,7 +1471,7 @@ fn fast_accessor_tables(
              fast_set_{snake}_{member}::<T> as *const std::ffi::c_void,\n        \
              &v8::fast_api::CFunctionInfo::new(\n            \
              v8::fast_api::Type::Void.as_info(),\n            \
-             &[\n                v8::fast_api::Type::V8Value.as_info(),\n                {},\n            ],\n            \
+             &[\n                v8::fast_api::Type::V8Value.as_info(),\n                {},\n                v8::fast_api::Type::CallbackOptions.as_info(),\n            ],\n            \
              v8::fast_api::Int64Representation::Number,\n        ),\n    )];\n}}\n",
             attribute.name,
             ctype_info(&attribute.ty, IntegerMode::Modulo)
@@ -1448,6 +1507,8 @@ fn fast_method_table(interface: &str, group: &OperationGroup, bound: &str, out: 
             ctype_info(&argument.ty, IntegerMode::of(argument))
         ));
     }
+    parameters.push("    options: &v8::fast_api::FastApiCallbackOptions<'_>,".to_string());
+    infos.push("                v8::fast_api::Type::CallbackOptions.as_info(),".to_string());
     let return_clause = if operation.return_type == Type::Undefined {
         String::new()
     } else {
@@ -1461,12 +1522,13 @@ fn fast_method_table(interface: &str, group: &OperationGroup, bound: &str, out: 
     let _ = write!(
         out,
         "\n/// Fast-API callback for `{interface}.{}`.\n\
-         extern \"C\" fn fast_call_{snake}_{member}<T: {bound} + 'static>(\n{}\n){return_clause} {{\n{bindings}    \
+         extern \"C\" fn fast_call_{snake}_{member}<T: {bound} + 'static>(\n{}\n){return_clause} {{\n    \
+         v8_fast_callback_boundary(options, \"fast_call_{snake}_{member}\", {fallback}, || {{\n{bindings}    \
          // SAFETY: the fast callback is only reachable through a template that\n    \
          // carries the interface signature, so the receiver is an instance.\n    \
          match unsafe {{ unwrap_receiver::<T>(receiver) }} {{\n        \
          Some(host) => {call},\n        \
-         None => {fallback},\n    }}\n}}\n",
+         None => {fallback},\n    }}\n    }})\n}}\n",
         group.name,
         parameters.join("\n"),
     );

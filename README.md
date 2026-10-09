@@ -1,20 +1,40 @@
 # TentaBrowser
 
 Headless browser engine written from scratch in Rust for the TentaFlow
-agent platform: real JavaScript (V8 and QuickJS-ng), own DOM, CSS (Stylo),
-layout and paint, audio, video and WebRTC, a lightning-fast `search` mode,
+agent platform. Target capabilities include JavaScript (V8 and QuickJS-ng),
+its own DOM, CSS (Stylo), layout and paint, audio, video and WebRTC, a fast `search` mode,
 Chrome DevTools Protocol for Puppeteer and Playwright, an MCP server, and a
 library API for macOS, Linux, Windows, Android and iOS.
 
 ## Status
 
-P1 (network, DOM, search) is implemented: HTTP/1.1 and HTTP/2 with a Chrome
-fingerprint, cookies, cache and session cache, a streaming HTML parser into
-an arena DOM, extraction, the search fast path over DuckDuckGo, Bing and
-Brave, and the `tentabrowser` CLI. JavaScript (P2), layout and paint (P3),
-the protocol hosts (P4) and media (P5–P7) are not implemented yet: a page
-declares its tier and nothing above it is initialised, so `fetch --dump text`
-pays for none of them.
+Status (2026-09-23): P0 foundation and the P1 network, HTML, DOM and search
+implementation are present. The roadmap recorded the P0 exit locally; P1
+exit-gate revalidation is not included in this status line. Tier 0/1 paths
+include HTTP/1.1 and HTTP/2 with a Chrome fingerprint, cookies, cache and
+session cache, a streaming HTML parser into an arena DOM, extraction, the
+search fast path over DuckDuckGo, Bing and Brave, and the `tentabrowser` CLI.
+
+P2 is in active development. Both V8 and QuickJS now execute pages with the
+shared event loop, timers, watchdogs and generated DOM bindings. Fetch,
+XHR, forms, Blob/File and XML parsing have partial implementations. Stylo
+backs inline styles, CSS.supports and a native stylesheet model; live
+stylesheet bindings and style/link loading remain unfinished. Focused local
+Range and React 18/Vue 3 mount/render/click probes do not establish hydration
+or the P2 exit gates. The in-process `S-js-xhr` probe has an initial measured
+baseline, with complete budget validation still open.
+
+Remaining P2 work includes QuickJS parity (including timezone, Intl and
+Wasm), workers/SAB, storage, streams/WebSocket, Web Crypto, full CSSOM,
+history/location, iframes/CSP/observers, Google Full search and the required
+WPT, conformance and budget gates. See the
+[implementation ledger](docs/dev/implementation-status.md) for package
+status and the scope of validation evidence.
+
+P3 and later work is still outstanding: layout, paint and render (P3), CDP,
+MCP and FFI hosts (P4), audio/video (P5–P6), WebRTC (P7), and mobile,
+hardening and 1.0 work (P8). A Tier 1 page still pays for none of the higher
+tiers, so `fetch --dump text` remains independent of JavaScript and rendering.
 
 `docs/spec/00-index.md` is the specification, `docs/spec/16-roadmap.md` the
 plan. Agents and contributors start with `AGENTS.md`.
@@ -39,9 +59,30 @@ tentabrowser fetch https://example.com/ -o page.txt --allow-write .
 
 `--dump` takes `html`, `text`, `markdown`, `links`, `json`, `metadata`,
 `forms` and `snapshot`; `--wait` takes `load` (default), `domcontent` or
-`networkidle`. Exit codes: `0` ok, `1` the request never reached a server
-(the `net::ERR_*` name is on stderr), `2` usage or filesystem policy, `3` the
+`networkidle`. Exit codes: `0` ok, `1` transport or script execution failed
+(`net::ERR_*` identifies transport errors on stderr), `2` usage or filesystem policy, `3` the
 server answered 4xx or 5xx (`--allow-http-errors` accepts it).
+
+### `fetch --eval`: JavaScript after navigation
+
+```bash
+cargo build --release -p tentabrowser-cli --features v8
+tentabrowser fetch https://example.com/ --eval 'document.title'
+tentabrowser fetch https://example.com/ --wait networkidle --eval '({title: document.title})'
+```
+
+`--eval` runs one expression in the loaded page's world after the chosen
+`--wait` condition. Strings are printed directly; other JSON-serializable
+values are printed as JSON. Cycles, BigInt and values without a JSON
+representation produce a script error. It cannot be combined with `--dump`,
+`--json` or `--main-content`. A build without `v8` refuses it with exit code
+`5` before making a request. Fetches without `--eval` retain the Tier 1 path.
+
+The expression shares the navigation timeout and the page's script budget.
+Promise results are rejected by the CLI rather than awaited, and asynchronous
+work started by the expression is not settled again. The library exposes this operation as
+`Page::goto_with_eval`; the current runtime is released when navigation
+returns, so this is not a persistent evaluation session.
 
 ### `search`: the providers' public pages, no API keys
 
@@ -102,3 +143,23 @@ engine.close();
 
 `docs/spec/11-library-api.md` is the full API; `crates/tentabrowser` is the
 crate that implements it.
+
+## DOM call benchmark
+
+`bench/dom_calls.py` measures the real V8 backend's `S-dom-calls` scenario.
+Build and preserve the baseline executable before changing the engine, then
+build the candidate and compare them:
+
+```bash
+cargo build --release -p tenta-js-v8 --example dom_calls
+cp target/release/examples/dom_calls /tmp/dom-calls-before
+# Apply the change, then rebuild the example with the same command.
+python3 bench/dom_calls.py --baseline /tmp/dom-calls-before \
+  --candidate target/release/examples/dom_calls --runs 25
+```
+
+Each process warms both methods for 10,000 calls and measures one million
+`hasAttribute` and `getAttribute` calls. Interleaved runs report p50/p95 of
+the per-process mean call time, wall time and peak RSS, with raw samples and
+binary hashes in the result artifact. This does not independently establish
+which V8 dispatch path was selected; differences below 10% are noise.

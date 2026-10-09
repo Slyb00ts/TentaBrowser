@@ -1,0 +1,2172 @@
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -282,3 +282,15 @@
+ 
+ [profile.dev]
+ opt-level = 1
++
++[[test]]
++name = "web_idl_legacy"
++path = "tests/web_idl_legacy.rs"
++
++[[test]]
++name = "web_idl_order"
++path = "tests/web_idl_order.rs"
++
++[[test]]
++name = "ordinary_object_brand"
++path = "tests/ordinary_object_brand.rs"
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -166,3 +166,11 @@
+ 
+ [workspace]
+ members = ["examples/android"]
++
++[[test]]
++name = "web_idl_legacy"
++path = "tests/web_idl_legacy.rs"
++
++[[test]]
++name = "web_idl_order"
++path = "tests/web_idl_order.rs"
+diff --git a/src/binding.cc b/src/binding.cc
+--- a/src/binding.cc
++++ b/src/binding.cc
+@@ -29,6 +29,7 @@
+ #include "v8.h"
+ #include "v8/src/flags/flags.h"
+ #include "v8/src/libplatform/default-platform.h"
++#include "v8/src/objects/instance-type.h"
+ 
+ using namespace support;
+ 
+@@ -796,6 +797,31 @@
+ 
+ bool v8__Value__IsObject(const v8::Value& self) { return self.IsObject(); }
+ 
++// Match the ordinary, non-host object cases of the pinned V8 serializer.
++// API wrappers and every specialized builtin require a separate host decision.
++// This is a native tag read, with no allocation or page-owned property access.
++bool v8__Value__IsStructuredCloneOrdinaryObject(const v8::Value& self) {
++  if (!self.IsObject() || self.IsFunction()) return false;
++  namespace i = v8::internal;
++  const i::Address value = i::ValueHelper::ValueAsAddress(&self);
++  switch (i::Internals::GetInstanceType(value)) {
++    case i::JS_ARRAY_ITERATOR_PROTOTYPE_TYPE:
++    case i::JS_ITERATOR_PROTOTYPE_TYPE:
++    case i::JS_MAP_ITERATOR_PROTOTYPE_TYPE:
++    case i::JS_OBJECT_PROTOTYPE_TYPE:
++    case i::JS_OBJECT_TYPE:
++    case i::JS_PROMISE_PROTOTYPE_TYPE:
++    case i::JS_REG_EXP_PROTOTYPE_TYPE:
++    case i::JS_SET_ITERATOR_PROTOTYPE_TYPE:
++    case i::JS_SET_PROTOTYPE_TYPE:
++    case i::JS_STRING_ITERATOR_PROTOTYPE_TYPE:
++    case i::JS_TYPED_ARRAY_PROTOTYPE_TYPE:
++      return true;
++    default:
++      return false;
++  }
++}
++
+ bool v8__Value__IsBigInt(const v8::Value& self) { return self.IsBigInt(); }
+ 
+ bool v8__Value__IsBoolean(const v8::Value& self) { return self.IsBoolean(); }
+diff --git a/src/property_handler_flags.rs b/src/property_handler_flags.rs
+--- a/src/property_handler_flags.rs
++++ b/src/property_handler_flags.rs
+@@ -19,6 +19,10 @@
+ 
+   /// The getter, query, enumerator callbacks do not produce side effects.
+   pub const HAS_NO_SIDE_EFFECT: Self = Self(1 << 2);
++
++  /// Preserve Web IDL definer results and legacy own-property key ordering.
++  /// Callbacks still supply name visibility and descriptor semantics.
++  pub const WEB_IDL_LEGACY: Self = Self(1 << 4);
+ 
+   /// Test if no property handler flags are set.
+   #[inline(always)]
+@@ -96,6 +100,10 @@
+   );
+   assert!(PropertyHandlerFlags::HAS_NO_SIDE_EFFECT.is_has_no_side_effect());
+ 
++  assert!(!PropertyHandlerFlags::WEB_IDL_LEGACY.is_none());
++  assert!(PropertyHandlerFlags::WEB_IDL_LEGACY.has(PropertyHandlerFlags::WEB_IDL_LEGACY));
++  assert!(!PropertyHandlerFlags::NONE.has(PropertyHandlerFlags::WEB_IDL_LEGACY));
++
+   assert_eq!(PropertyHandlerFlags::NONE, Default::default());
+ 
+   let attr = PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS
+diff --git a/src/value.rs b/src/value.rs
+--- a/src/value.rs
++++ b/src/value.rs
+@@ -26,6 +26,7 @@
+   fn v8__Value__IsFunction(this: *const Value) -> bool;
+   fn v8__Value__IsArray(this: *const Value) -> bool;
+   fn v8__Value__IsObject(this: *const Value) -> bool;
++  fn v8__Value__IsStructuredCloneOrdinaryObject(this: *const Value) -> bool;
+   fn v8__Value__IsBigInt(this: *const Value) -> bool;
+   fn v8__Value__IsBoolean(this: *const Value) -> bool;
+   fn v8__Value__IsNumber(this: *const Value) -> bool;
+@@ -227,6 +228,17 @@
+   #[inline(always)]
+   pub fn is_object(&self) -> bool {
+     unsafe { v8__Value__IsObject(self) }
++  }
++
++  /// Returns whether this is an ordinary record object for structured cloning.
++  ///
++  /// This includes ordinary intrinsic prototype objects, but excludes API
++  /// wrappers, arrays and specialized builtins that require separate handling.
++  /// It reads only the native instance type: no page-owned property, constructor,
++  /// prototype lookup or callback runs. Property values still need serialization.
++  #[inline(always)]
++  pub fn is_structured_clone_ordinary_object(&self) -> bool {
++    unsafe { v8__Value__IsStructuredCloneOrdinaryObject(self) }
+   }
+ 
+   /// Returns true if this value is a bigint.
+diff --git a/tests/ordinary_object_brand.rs b/tests/ordinary_object_brand.rs
+--- /dev/null
++++ b/tests/ordinary_object_brand.rs
+@@ -0,0 +1,195 @@
++//! The native ordinary-record classifier must not execute page-owned behavior.
++
++use std::panic::{AssertUnwindSafe, catch_unwind};
++use std::sync::Once;
++use std::sync::atomic::{AtomicUsize, Ordering};
++
++fn initialize() {
++  static INIT: Once = Once::new();
++  INIT.call_once(|| {
++    v8::V8::initialize_platform(
++      v8::new_default_platform(0, false).make_shared(),
++    );
++    v8::V8::initialize();
++  });
++}
++
++fn evaluate<'s>(
++  scope: &mut v8::PinScope<'s, '_>,
++  source: &str,
++) -> v8::Local<'s, v8::Value> {
++  let text = v8::String::new(scope, source).unwrap();
++  v8::Script::compile(scope, text, None)
++    .unwrap()
++    .run(scope)
++    .unwrap()
++}
++
++#[test]
++fn script_records_and_ordinary_intrinsic_prototypes_are_accepted() {
++  initialize();
++  let isolate = &mut v8::Isolate::new(Default::default());
++  v8::scope!(let scope, isolate);
++  let context = v8::Context::new(scope, Default::default());
++  let scope = &mut v8::ContextScope::new(scope, context);
++  for source in [
++    "({})",
++    "Object.create(null)",
++    "new (class UserClass {})()",
++    "Object.create(Date.prototype)",
++    "Object.create(Intl.DateTimeFormat.prototype)",
++    "Object.freeze({answer: 42})",
++    "(() => { const o={}; for(let i=0;i<100;i++)o['p'+i]=i; delete o.p1; return o })()",
++    "Object.prototype",
++    "Promise.prototype",
++    "RegExp.prototype",
++    "Set.prototype",
++    "Object.getPrototypeOf([][Symbol.iterator]())",
++    "Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]()))",
++    "Object.getPrototypeOf(new Map()[Symbol.iterator]())",
++    "Object.getPrototypeOf(new Set()[Symbol.iterator]())",
++    "Object.getPrototypeOf(''[Symbol.iterator]())",
++    "Object.getPrototypeOf(Uint8Array.prototype)",
++  ] {
++    let value = evaluate(scope, source);
++    assert!(value.is_structured_clone_ordinary_object(), "{source}");
++  }
++}
++
++#[test]
++fn specialized_values_and_proxy_traps_do_not_enter_the_ordinary_branch() {
++  initialize();
++  let isolate = &mut v8::Isolate::new(Default::default());
++  v8::scope!(let scope, isolate);
++  let context = v8::Context::new(scope, Default::default());
++  let scope = &mut v8::ContextScope::new(scope, context);
++  evaluate(scope, "globalThis.traps=0");
++  for source in [
++    "undefined",
++    "null",
++    "42",
++    "true",
++    "'text'",
++    "1n",
++    "Symbol('x')",
++    "[]",
++    "(function f(){})",
++    "(class C{})",
++    "new Date()",
++    "Object.setPrototypeOf(new Date(), Object.prototype)",
++    "Object.setPrototypeOf(new Date(), null)",
++    "/x/g",
++    "new Map()",
++    "new Set()",
++    "new WeakMap()",
++    "new WeakSet()",
++    "new Error('x')",
++    "Promise.resolve(1)",
++    "new ArrayBuffer(8)",
++    "new SharedArrayBuffer(8)",
++    "new DataView(new ArrayBuffer(8))",
++    "new Uint8Array(8)",
++    "new Number(1)",
++    "new Boolean(true)",
++    "new String('x')",
++    "Object(Symbol('x'))",
++    "Object(1n)",
++    "new WeakRef({})",
++    "[][Symbol.iterator]()",
++    "new Map()[Symbol.iterator]()",
++    "globalThis",
++    "new Intl.DateTimeFormat('en')",
++    "Object.setPrototypeOf(new Intl.DateTimeFormat('en'), Object.prototype)",
++    "Object.setPrototypeOf(new Intl.DateTimeFormat('en'), null)",
++    "Temporal.PlainDate.from('2026-09-24')",
++    "new Proxy({}, {get(){traps++;throw 1},getPrototypeOf(){traps++;throw 2},ownKeys(){traps++;throw 3}})",
++    "(() => {const p=Proxy.revocable({},{});p.revoke();return p.proxy})()",
++  ] {
++    let value = evaluate(scope, source);
++    assert!(!value.is_structured_clone_ordinary_object(), "{source}");
++  }
++  let plain = evaluate(
++    scope,
++    "Object.defineProperties({}, {constructor:{get(){traps++;throw 4}},[Symbol.toStringTag]:{get(){traps++;throw 5}}})",
++  );
++  assert!(plain.is_structured_clone_ordinary_object());
++  assert_eq!(evaluate(scope, "traps").integer_value(scope), Some(0));
++}
++
++static INTERCEPTOR_CALLS: AtomicUsize = AtomicUsize::new(0);
++static FUNCTION_CALLS: AtomicUsize = AtomicUsize::new(0);
++
++fn callable_object(
++  scope: &mut v8::PinScope,
++  _args: v8::FunctionCallbackArguments,
++  _return_value: v8::ReturnValue<v8::Value>,
++) {
++  if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
++    FUNCTION_CALLS.fetch_add(1, Ordering::Relaxed);
++  })) {
++    std::mem::forget(payload);
++    scope.terminate_execution();
++  }
++}
++
++fn named_getter<'s>(
++  scope: &mut v8::PinScope<'s, '_>,
++  _name: v8::Local<'s, v8::Name>,
++  _args: v8::PropertyCallbackArguments<'s>,
++  _return_value: v8::ReturnValue<v8::Value>,
++) -> v8::Intercepted {
++  match catch_unwind(AssertUnwindSafe(|| {
++    INTERCEPTOR_CALLS.fetch_add(1, Ordering::Relaxed);
++    v8::Intercepted::kNo
++  })) {
++    Ok(result) => result,
++    Err(payload) => {
++      std::mem::forget(payload);
++      scope.terminate_execution();
++      v8::Intercepted::kYes
++    }
++  }
++}
++
++#[test]
++fn native_wrappers_and_interceptors_are_rejected_without_a_callback() {
++  initialize();
++  let isolate = &mut v8::Isolate::new(Default::default());
++  v8::scope!(let scope, isolate);
++  let context = v8::Context::new(scope, Default::default());
++  let scope = &mut v8::ContextScope::new(scope, context);
++  let template = v8::ObjectTemplate::new(scope);
++  template.set_internal_field_count(1);
++  let host = template.new_instance(scope).unwrap();
++  assert!(!host.is_structured_clone_ordinary_object());
++  let callable = v8::ObjectTemplate::new(scope);
++  callable.set_call_as_function_handler(callable_object, None);
++  let callable = callable.new_instance(scope).unwrap();
++  assert!(callable.is_callable());
++  assert!(!callable.is_structured_clone_ordinary_object());
++  assert_eq!(FUNCTION_CALLS.load(Ordering::Relaxed), 0);
++  let intercepted = v8::ObjectTemplate::new(scope);
++  intercepted.set_named_property_handler(
++    v8::NamedPropertyHandlerConfiguration::new().getter(named_getter),
++  );
++  let intercepted = intercepted.new_instance(scope).unwrap();
++  assert!(!intercepted.is_structured_clone_ordinary_object());
++  assert_eq!(INTERCEPTOR_CALLS.load(Ordering::Relaxed), 0);
++}
++
++#[test]
++fn cross_realm_objects_remain_classifiable_after_real_gc() {
++  initialize();
++  let isolate = &mut v8::Isolate::new(Default::default());
++  v8::scope!(let scope, isolate);
++  let first = v8::Context::new(scope, Default::default());
++  let value = {
++    let first_scope = &mut v8::ContextScope::new(scope, first);
++    evaluate(first_scope, "new (class FromFirstRealm {})()")
++  };
++  let second = v8::Context::new(scope, Default::default());
++  let second_scope = &mut v8::ContextScope::new(scope, second);
++  assert!(value.is_structured_clone_ordinary_object());
++  second_scope.low_memory_notification();
++  assert!(value.is_structured_clone_ordinary_object());
++}
+diff --git a/tests/web_idl_legacy.rs b/tests/web_idl_legacy.rs
+--- /dev/null
++++ b/tests/web_idl_legacy.rs
+@@ -0,0 +1,174 @@
++//! Controls for the opt-in Web IDL legacy interceptor path.
++//!
++//! This test belongs to the pinned rusty_v8 fork. It must run against a
++//! source-built V8 archive containing the corresponding native patch.
++
++use std::panic::{AssertUnwindSafe, catch_unwind};
++use std::sync::Once;
++
++fn initialize_v8() {
++    static INIT: Once = Once::new();
++    INIT.call_once(|| {
++        let platform = v8::new_default_platform(0, false).make_shared();
++        v8::V8::initialize_platform(platform);
++        v8::V8::initialize();
++    });
++}
++
++fn decline_indexed_set<'s>(
++    scope: &mut v8::PinScope<'s, '_>,
++    _index: u32,
++    _value: v8::Local<'s, v8::Value>,
++    _args: v8::PropertyCallbackArguments<'s>,
++    _rv: v8::ReturnValue<v8::Boolean>,
++) -> v8::Intercepted {
++    match catch_unwind(AssertUnwindSafe(|| v8::Intercepted::kNo)) {
++        Ok(result) => result,
++        Err(payload) => {
++            std::mem::forget(payload);
++            scope.terminate_execution();
++            v8::Intercepted::kYes
++        }
++    }
++}
++
++fn reject_indexed_define<'s>(
++    scope: &mut v8::PinScope<'s, '_>,
++    _index: u32,
++    _descriptor: &v8::PropertyDescriptor,
++    _args: v8::PropertyCallbackArguments<'s>,
++    mut rv: v8::ReturnValue<v8::Boolean>,
++) -> v8::Intercepted {
++    match catch_unwind(AssertUnwindSafe(|| {
++        rv.set_bool(false);
++        v8::Intercepted::kYes
++    })) {
++        Ok(result) => result,
++        Err(payload) => {
++            std::mem::forget(payload);
++            scope.terminate_execution();
++            v8::Intercepted::kYes
++        }
++    }
++}
++
++fn decline_named_set<'s>(
++    scope: &mut v8::PinScope<'s, '_>,
++    _name: v8::Local<'s, v8::Name>,
++    _value: v8::Local<'s, v8::Value>,
++    _args: v8::PropertyCallbackArguments<'s>,
++    _rv: v8::ReturnValue<v8::Boolean>,
++) -> v8::Intercepted {
++    match catch_unwind(AssertUnwindSafe(|| v8::Intercepted::kNo)) {
++        Ok(result) => result,
++        Err(payload) => {
++            std::mem::forget(payload);
++            scope.terminate_execution();
++            v8::Intercepted::kYes
++        }
++    }
++}
++
++fn reject_named_define<'s>(
++    scope: &mut v8::PinScope<'s, '_>,
++    _name: v8::Local<'s, v8::Name>,
++    _descriptor: &v8::PropertyDescriptor,
++    _args: v8::PropertyCallbackArguments<'s>,
++    mut rv: v8::ReturnValue<v8::Boolean>,
++) -> v8::Intercepted {
++    match catch_unwind(AssertUnwindSafe(|| {
++        rv.set_bool(false);
++        v8::Intercepted::kYes
++    })) {
++        Ok(result) => result,
++        Err(payload) => {
++            std::mem::forget(payload);
++            scope.terminate_execution();
++            v8::Intercepted::kYes
++        }
++    }
++}
++
++#[test]
++fn only_marked_indexed_handlers_consult_the_definer_during_set() {
++    initialize_v8();
++    let isolate = &mut v8::Isolate::new(Default::default());
++    v8::scope!(let scope, isolate);
++    let context = v8::Context::new(scope, Default::default());
++    let mut context_scope = v8::ContextScope::new(scope, context);
++    v8::scope!(let scope, &mut context_scope);
++
++    for (name, flags) in [
++        ("ordinary", v8::PropertyHandlerFlags::NONE),
++        ("legacy", v8::PropertyHandlerFlags::WEB_IDL_LEGACY),
++    ] {
++        let template = v8::ObjectTemplate::new(scope);
++        template.set_indexed_property_handler(
++            v8::IndexedPropertyHandlerConfiguration::new()
++                .setter(decline_indexed_set)
++                .definer(reject_indexed_define)
++                .flags(flags),
++        );
++        let object = template.new_instance(scope).expect("interceptor instance");
++        let property = v8::String::new(scope, name).expect("global name");
++        assert_eq!(
++            context
++                .global(scope)
++                .set(scope, property.into(), object.into()),
++            Some(true)
++        );
++    }
++
++    for (name, flags) in [
++        (
++            "ordinary_named",
++            v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS,
++        ),
++        (
++            "legacy_named",
++            v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS
++                | v8::PropertyHandlerFlags::WEB_IDL_LEGACY,
++        ),
++    ] {
++        let template = v8::ObjectTemplate::new(scope);
++        template.set_named_property_handler(
++            v8::NamedPropertyHandlerConfiguration::new()
++                .setter(decline_named_set)
++                .definer(reject_named_define)
++                .flags(flags),
++        );
++        let object = template
++            .new_instance(scope)
++            .expect("named interceptor instance");
++        let property = v8::String::new(scope, name).expect("global name");
++        assert_eq!(
++            context
++                .global(scope)
++                .set(scope, property.into(), object.into()),
++            Some(true)
++        );
++    }
++
++    let source = v8::String::new(
++        scope,
++        "const symbol = Symbol('ordinary'); \
++         const derived = {}; \
++         [Reflect.set(ordinary, '2', 8), Object.hasOwn(ordinary, '2'), \
++          Reflect.set(legacy, '2', 8), Object.hasOwn(legacy, '2'), \
++          Reflect.set(legacy, '3', 9, derived), \
++          Object.hasOwn(derived, '3') && !Object.hasOwn(legacy, '3'), \
++          Reflect.set(legacy, symbol, 10), legacy[symbol] === 10, \
++          Reflect.set(ordinary_named, 'plain', 1), Object.hasOwn(ordinary_named, 'plain'), \
++          Reflect.set(legacy_named, 'plain', 1), Object.hasOwn(legacy_named, 'plain'), \
++          Reflect.set(legacy_named, '4294967295', 2), \
++          Object.hasOwn(legacy_named, '4294967295'), \
++          Reflect.set(legacy_named, symbol, 3), legacy_named[symbol] === 3].join('|')",
++    )
++    .expect("script source");
++    let script = v8::Script::compile(scope, source, None).expect("compiled script");
++    let result = script.run(scope).expect("script result");
++    assert_eq!(
++        result.to_rust_string_lossy(scope),
++        "true|true|false|false|true|true|true|true|true|true|false|false|false|false|true|true"
++    );
++}
+diff --git a/tests/web_idl_order.rs b/tests/web_idl_order.rs
+--- /dev/null
++++ b/tests/web_idl_order.rs
+@@ -0,0 +1,840 @@
++//! Native marked-object property order and lifetime controls.
++
++use std::panic::{AssertUnwindSafe, catch_unwind};
++use std::sync::Once;
++use std::sync::atomic::{AtomicUsize, Ordering};
++use v8::MapFnTo;
++
++fn initialize() {
++    static INIT: Once = Once::new();
++    INIT.call_once(|| {
++        v8::V8::initialize_platform(v8::new_default_platform(0, false).make_shared());
++        v8::V8::initialize();
++    });
++}
++
++macro_rules! boundary {
++    ($scope:ident, $fallback:expr, $body:block) => {
++        match catch_unwind(AssertUnwindSafe(|| $body)) {
++            Ok(value) => value,
++            Err(payload) => {
++                // Test callback assertions may panic. Never unwind through V8,
++                // or run a second arbitrary payload destructor on that boundary.
++                std::mem::forget(payload);
++                $scope.terminate_execution();
++                $fallback
++            }
++        }
++    };
++}
++
++fn named_names<'s>(
++    scope: &mut v8::PinScope<'s, '_>,
++    args: v8::PropertyCallbackArguments<'s>,
++    mut rv: v8::ReturnValue<v8::Array>,
++) {
++    boundary!(scope, (), {
++        let names = v8::Local::<v8::Array>::try_from(args.data()).expect("native name array");
++        rv.set(names);
++    });
++}
++
++fn named_query<'s>(
++    scope: &mut v8::PinScope<'s, '_>,
++    name: v8::Local<'s, v8::Name>,
++    args: v8::PropertyCallbackArguments<'s>,
++    mut rv: v8::ReturnValue<v8::Integer>,
++) -> v8::Intercepted {
++    boundary!(scope, v8::Intercepted::kYes, {
++        let names = v8::Local::<v8::Array>::try_from(args.data()).expect("native name array");
++        for index in 0..names.length() {
++            let candidate = names.get_index(scope, index).expect("native array entry");
++            if candidate.strict_equals(name.into()) {
++                let hidden = name.to_rust_string_lossy(scope) == "hidden";
++                rv.set(v8::Integer::new(scope, if hidden { 2 } else { 0 }));
++                return v8::Intercepted::kYes;
++            }
++        }
++        v8::Intercepted::kNo
++    })
++}
++
++fn indexed_names<'s>(
++    scope: &mut v8::PinScope<'s, '_>,
++    _args: v8::PropertyCallbackArguments<'s>,
++    mut rv: v8::ReturnValue<v8::Array>,
++) {
++    boundary!(scope, (), {
++        // Intentionally unsorted: the marked path establishes numeric order.
++        let two = v8::Integer::new_from_unsigned(scope, 2);
++        let zero = v8::Integer::new_from_unsigned(scope, 0);
++        rv.set(v8::Array::new_with_elements(
++            scope,
++            &[two.into(), zero.into()],
++        ));
++    });
++}
++
++fn indexed_query<'s>(
++    scope: &mut v8::PinScope<'s, '_>,
++    index: u32,
++    _args: v8::PropertyCallbackArguments<'s>,
++    mut rv: v8::ReturnValue<v8::Integer>,
++) -> v8::Intercepted {
++    boundary!(scope, v8::Intercepted::kYes, {
++        if index == 0 || index == 2 {
++            rv.set(v8::Integer::new(scope, 0));
++            v8::Intercepted::kYes
++        } else {
++            v8::Intercepted::kNo
++        }
++    })
++}
++
++fn template<'s>(
++    scope: &mut v8::PinScope<'s, '_>,
++    marked: bool,
++    names: &[&str],
++    indexed: bool,
++) -> v8::Local<'s, v8::ObjectTemplate> {
++    let template = v8::ObjectTemplate::new(scope);
++    let values: Vec<v8::Local<v8::Value>> = names
++        .iter()
++        .map(|name| v8::String::new(scope, name).expect("native name").into())
++        .collect();
++    let data = v8::Array::new_with_elements(scope, &values);
++    let flags = || {
++        if marked {
++            v8::PropertyHandlerFlags::WEB_IDL_LEGACY
++        } else {
++            v8::PropertyHandlerFlags::NONE
++        }
++    };
++    template.set_named_property_handler(
++        v8::NamedPropertyHandlerConfiguration::new()
++            .enumerator(named_names)
++            .query(named_query)
++            .data(data.into())
++            .flags(flags() | v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS),
++    );
++    if indexed {
++        template.set_indexed_property_handler(
++            v8::IndexedPropertyHandlerConfiguration::new()
++                .enumerator(indexed_names)
++                .query(indexed_query)
++                .flags(flags()),
++        );
++    }
++    template
++}
++
++fn publish(scope: &mut v8::PinScope<'_, '_>, name: &str, object: v8::Local<v8::Object>) {
++    let key = v8::String::new(scope, name).expect("global key");
++    let global = scope.get_current_context().global(scope);
++    assert_eq!(global.set(scope, key.into(), object.into()), Some(true));
++}
++
++fn evaluate(scope: &mut v8::PinScope<'_, '_>, source: &str) -> String {
++    let source = v8::String::new(scope, source).expect("source");
++    let script = v8::Script::compile(scope, source, None).expect("compile");
++    script.run(scope).expect("run").to_rust_string_lossy(scope)
++}
++
++fn with_objects(test: impl FnOnce(&mut v8::PinScope<'_, '_>)) {
++    initialize();
++    let isolate = &mut v8::Isolate::new(Default::default());
++    v8::scope!(let scope, isolate);
++    let context = v8::Context::new(scope, Default::default());
++    let mut entered = v8::ContextScope::new(scope, context);
++    v8::scope!(let scope, &mut entered);
++    let marked = template(scope, true, &["virtual", "hidden"], false);
++    let ordinary = template(scope, false, &["virtual", "hidden"], false);
++    let object = marked.new_instance(scope).expect("marked instance");
++    publish(scope, "marked", object);
++    let object = ordinary.new_instance(scope).expect("ordinary instance");
++    publish(scope, "ordinary", object);
++    test(scope);
++}
++
++#[test]
++fn marked_string_chronology_precedes_symbols_and_filters_in_the_same_order() {
++    with_objects(|scope| {
++        assert_eq!(
++            evaluate(
++                scope,
++                r#"
++            const s = Symbol('s');
++            for (const object of [marked, ordinary]) {
++                object[s] = 1;
++                object['10'] = 10;
++                object.middle = 1;
++                object['2'] = 2;
++                object['4294967295'] = 3;
++            }
++            [Reflect.ownKeys(marked).map(String).join(','), Object.keys(marked).join(','),
++             Reflect.ownKeys(ordinary).map(String).join(',')].join('|')
++        "#
++            ),
++            "virtual,hidden,10,middle,2,4294967295,Symbol(s)|virtual,10,middle,2,4294967295|2,10,middle,4294967295,Symbol(s),virtual,hidden"
++        );
++    });
++}
++
++#[test]
++fn descriptor_replacement_preserves_order_and_delete_recreation_moves_it() {
++    with_objects(|scope| {
++        assert_eq!(
++            evaluate(
++                scope,
++                r#"
++            Object.defineProperty(marked, '10', {value: 1, configurable: true, enumerable: true, writable: true});
++            Object.defineProperty(marked, 'middle', {get() {return this === marked ? 7 : 0}, configurable: true, enumerable: true});
++            Object.defineProperty(marked, '2', {get() {return 2}, configurable: true, enumerable: true});
++            Object.defineProperty(marked, '10', {get() {return 10}});
++            Object.defineProperty(marked, '2', {value: 2, writable: true});
++            const before = Object.keys(marked).join(',');
++            delete marked['10'];
++            marked['10'] = 8;
++            const after = Object.keys(marked).join(',');
++            Object.defineProperty(marked, '2', {configurable: false});
++            const refused = !Reflect.deleteProperty(marked, '2') &&
++                !Reflect.defineProperty(marked, '2', {get() {return 9}});
++            [before, after, refused, marked.middle, marked['2']].join('|')
++        "#
++            ),
++            "virtual,10,middle,2|virtual,middle,2,10|true|7|2"
++        );
++    });
++}
++
++#[test]
++fn marked_indexed_and_named_keys_are_normalized_once_in_spec_order() {
++    initialize();
++    let isolate = &mut v8::Isolate::new(Default::default());
++    v8::scope!(let scope, isolate);
++    let context = v8::Context::new(scope, Default::default());
++    let mut entered = v8::ContextScope::new(scope, context);
++    v8::scope!(let scope, &mut entered);
++    let template = template(scope, true, &["2", "10", "alpha", "0"], true);
++    let object = template.new_instance(scope).expect("instance");
++    publish(scope, "object", object);
++    assert_eq!(
++        evaluate(
++            scope,
++            "object[Symbol('s')]=1; object.tail=4; Reflect.ownKeys(object).map(String).join(',')"
++        ),
++        "0,2,10,alpha,tail,Symbol(s)"
++    );
++}
++
++#[test]
++fn template_clones_have_independent_creation_records() {
++    initialize();
++    let isolate = &mut v8::Isolate::new(Default::default());
++    v8::scope!(let scope, isolate);
++    let context = v8::Context::new(scope, Default::default());
++    let mut entered = v8::ContextScope::new(scope, context);
++    v8::scope!(let scope, &mut entered);
++    let template = template(scope, true, &[], false);
++    for name in ["10", "middle", "2"] {
++        let key = v8::String::new(scope, name).expect("template key");
++        let value = v8::Integer::new(scope, 1);
++        template.set(key.into(), value.into());
++    }
++    for name in ["first", "second", "third"] {
++        let object = template.new_instance(scope).expect("cached instance");
++        publish(scope, name, object);
++    }
++    assert_eq!(
++        evaluate(
++            scope,
++            r#"
++        delete first['10']; first['10']=2; second.other=3;
++        [Object.keys(first).join(','), Object.keys(second).join(','), Object.keys(third).join(',')].join('|')
++    "#
++        ),
++        "middle,2,10|10,middle,2,other|10,middle,2"
++    );
++}
++
++#[test]
++fn hot_named_and_numeric_stores_keep_chronology_across_dictionary_transition() {
++    with_objects(|scope| {
++        assert_eq!(
++            evaluate(
++                scope,
++                r#"
++            function write(object, key, value) { object[key] = value; }
++            for (let i=0;i<512;i++) {
++                write(marked, String(4096-i), i);
++                write(marked, 'p'+i, i);
++            }
++            const expected = ['virtual'];
++            for (let i=0;i<512;i++) expected.push(String(4096-i), 'p'+i);
++            const equal = JSON.stringify(Object.keys(marked)) === JSON.stringify(expected);
++            for (let i=0;i<512;i++) { delete marked[String(4096-i)]; delete marked['p'+i]; }
++            for (let i=0;i<512;i++) { write(marked, 'q'+i, i); write(marked, String(8192-i), i); }
++            const again = ['virtual'];
++            for (let i=0;i<512;i++) again.push('q'+i, String(8192-i));
++            equal && JSON.stringify(Object.keys(marked)) === JSON.stringify(again)
++        "#
++            ),
++            "true"
++        );
++    });
++}
++
++#[test]
++fn ordinary_store_receiver_controls_where_creation_is_recorded() {
++    with_objects(|scope| {
++        assert_eq!(
++            evaluate(
++                scope,
++                r#"
++            const derived = Object.create(marked);
++            Reflect.set(marked, '10', 1, derived);
++            Reflect.set(marked, 'middle', 2, derived);
++            Reflect.set(marked, '2', 3, derived);
++            Reflect.set({}, '10', 1, marked);
++            Reflect.set({}, 'middle', 2, marked);
++            Reflect.set({}, '2', 3, marked);
++            [Object.keys(derived).join(','), Object.keys(marked).join(',')].join('|')
++        "#
++            ),
++            "2,10,middle|virtual,10,middle,2"
++        );
++    });
++}
++
++#[test]
++fn nonenumerable_ordinary_keys_shadow_prototype_keys() {
++    with_objects(|scope| {
++        assert_eq!(
++            evaluate(
++                scope,
++                r#"
++            const proto = {'10': 1, tail: 2, hidden: 3};
++            Object.setPrototypeOf(marked, proto);
++            Object.defineProperty(marked, '10', {value: 4, enumerable: false});
++            marked.middle = 5;
++            const keys=[]; for (const key in marked) keys.push(key);
++            [Object.keys(marked).join(','), keys.join(','), Reflect.ownKeys(marked).join(',')].join('|')
++        "#
++            ),
++            "virtual,middle|virtual,middle,tail|virtual,hidden,10,middle"
++        );
++    });
++}
++
++#[test]
++fn weak_order_records_do_not_retain_dead_instances() {
++    initialize();
++    let isolate = &mut v8::Isolate::new(Default::default());
++    let (weak, template_root, context_root) = {
++        v8::scope!(let scope, isolate);
++        let context = v8::Context::new(scope, Default::default());
++        let mut entered = v8::ContextScope::new(scope, context);
++        v8::scope!(let scope, &mut entered);
++        let template = template(scope, true, &[], false);
++        let object = template.new_instance(scope).expect("instance");
++        let key = v8::String::new(scope, "10").expect("key");
++        assert_eq!(object.set(scope, key.into(), object.into()), Some(true));
++        (
++            v8::Weak::new(scope, object),
++            v8::Global::new(scope, template),
++            v8::Global::new(scope, context),
++        )
++    };
++    isolate.perform_microtask_checkpoint();
++    isolate.low_memory_notification();
++    isolate.low_memory_notification();
++    assert!(
++        weak.is_empty(),
++        "template-owned metadata retained its weak instance"
++    );
++    drop(context_root);
++    drop(template_root);
++}
++
++static ENUMERATOR_CALLS: AtomicUsize = AtomicUsize::new(0);
++
++fn names_with_gc<'s>(
++    scope: &mut v8::PinScope<'s, '_>,
++    args: v8::PropertyCallbackArguments<'s>,
++    mut rv: v8::ReturnValue<v8::Array>,
++) {
++    boundary!(scope, (), {
++        ENUMERATOR_CALLS.fetch_add(1, Ordering::SeqCst);
++        scope.low_memory_notification();
++        let names = v8::Local::<v8::Array>::try_from(args.data()).expect("native names");
++        rv.set(names);
++    });
++}
++
++fn throwing_names<'s>(
++    scope: &mut v8::PinScope<'s, '_>,
++    _args: v8::PropertyCallbackArguments<'s>,
++    _rv: v8::ReturnValue<v8::Array>,
++) {
++    boundary!(scope, (), {
++        ENUMERATOR_CALLS.fetch_add(1, Ordering::SeqCst);
++        let message = v8::String::new(scope, "native enumerator failure").expect("message");
++        let error = v8::Exception::range_error(scope, message);
++        scope.throw_exception(error);
++    });
++}
++
++#[test]
++fn enumerator_gc_and_exceptions_preserve_exactly_once_callback_behavior() {
++    initialize();
++    let isolate = &mut v8::Isolate::new(Default::default());
++    v8::scope!(let scope, isolate);
++    let context = v8::Context::new(scope, Default::default());
++    let mut entered = v8::ContextScope::new(scope, context);
++    v8::scope!(let scope, &mut entered);
++    for (name, throws) in [("withGc", false), ("throwing", true)] {
++        let object_template = v8::ObjectTemplate::new(scope);
++        let key = v8::String::new(scope, "virtual").expect("key");
++        let data = v8::Array::new_with_elements(scope, &[key.into()]);
++        let configuration = v8::NamedPropertyHandlerConfiguration::new()
++            .data(data.into())
++            .query(named_query)
++            .flags(
++                v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS
++                    | v8::PropertyHandlerFlags::WEB_IDL_LEGACY,
++            );
++        let configuration = if throws {
++            configuration.enumerator(throwing_names)
++        } else {
++            configuration.enumerator(names_with_gc)
++        };
++        object_template.set_named_property_handler(configuration);
++        let object = object_template.new_instance(scope).expect("instance");
++        publish(scope, name, object);
++    }
++    ENUMERATOR_CALLS.store(0, Ordering::SeqCst);
++    assert_eq!(
++        evaluate(
++            scope,
++            r#"
++        withGc[Symbol('s')]=1; withGc['10']=2; withGc.middle=3; withGc['2']=4;
++        const results = [Reflect.ownKeys(withGc).map(String).join(','), Object.keys(withGc).join(',')];
++        try { Reflect.ownKeys(throwing); } catch (error) { results.push(error.name); }
++        try { Object.keys(throwing); } catch (error) { results.push(error.name); }
++        results.join('|')
++    "#
++        ),
++        "virtual,10,middle,2,Symbol(s)|virtual,10,middle,2|RangeError|RangeError"
++    );
++    assert_eq!(ENUMERATOR_CALLS.load(Ordering::SeqCst), 4);
++}
++
++#[test]
++fn snapshot_round_trip_preserves_order_and_accepts_new_records() {
++    initialize();
++    let references = [
++        v8::ExternalReference {
++            enumerator: named_names.map_fn_to(),
++        },
++        v8::ExternalReference {
++            named_query: named_query.map_fn_to(),
++        },
++    ];
++    let data = {
++        let mut creator = v8::Isolate::snapshot_creator(Some(references.to_vec().into()), None);
++        {
++            v8::scope!(let scope, &mut creator);
++            let context = v8::Context::new(scope, Default::default());
++            let mut entered = v8::ContextScope::new(scope, context);
++            v8::scope!(let scope, &mut entered);
++            let template = template(scope, true, &["virtual"], false);
++            let object = template.new_instance(scope).expect("instance");
++            publish(scope, "object", object);
++            assert_eq!(
++                evaluate(
++                    scope,
++                    "object['10']=1; object.middle=2; object['2']=3; Object.keys(object).join(',')"
++                ),
++                "virtual,10,middle,2"
++            );
++            scope.set_default_context(context);
++        }
++        creator
++            .create_blob(v8::FunctionCodeHandling::Clear)
++            .expect("snapshot")
++    };
++    let params = v8::Isolate::create_params()
++        .snapshot_blob(data)
++        .external_references(references.to_vec().into());
++    let isolate = &mut v8::Isolate::new(params);
++    v8::scope!(let scope, isolate);
++    let context = v8::Context::new(scope, Default::default());
++    let mut entered = v8::ContextScope::new(scope, context);
++    v8::scope!(let scope, &mut entered);
++    let original_state = "[Object.getOwnPropertyDescriptor(object,'middle').value, Object.getOwnPropertyDescriptor(object,'2').value, Reflect.ownKeys(object).join(',')].join('|')";
++    assert_eq!(
++        evaluate(scope, original_state),
++        "2|3|virtual,10,middle,2",
++        "immediately after restore"
++    );
++    scope.low_memory_notification();
++    assert_eq!(
++        evaluate(scope, original_state),
++        "2|3|virtual,10,middle,2",
++        "after restored-isolate GC"
++    );
++    assert_eq!(
++        evaluate(
++            scope,
++            "delete object['10']; object['10']=4; object.after=5; Object.keys(object).join(',')"
++        ),
++        "virtual,middle,2,10,after"
++    );
++}
++
++#[test]
++fn ordinary_derived_receiver_enumerates_marked_prototype_without_cached_reordering() {
++    with_objects(|scope| {
++        assert_eq!(
++            evaluate(
++                scope,
++                r#"
++            marked['10']=1; marked.middle=2; marked['2']=3;
++            const derived = Object.create(marked);
++            derived.own=1;
++            const first=[]; for (const key in derived) first.push(key);
++            delete marked['10']; marked['10']=4;
++            const second=[]; for (const key in derived) second.push(key);
++            first.join(',')+'|'+second.join(',')
++        "#
++            ),
++            "own,virtual,10,middle,2|own,virtual,middle,2,10"
++        );
++    });
++}
++
++#[test]
++fn failed_definitions_do_not_publish_phantom_creation_records() {
++    with_objects(|scope| {
++        assert_eq!(
++            evaluate(
++                scope,
++                r#"
++            marked['10']=1; marked.middle=2; marked['2']=3;
++            let threw = false;
++            try {
++                Object.defineProperty(marked, 'failed', {get value(){throw new RangeError('descriptor')}});
++            } catch (error) { threw = error instanceof RangeError; }
++            Object.defineProperty(marked, 'middle', {writable:false, configurable:false});
++            const refused = !Reflect.defineProperty(marked, 'middle', {value:9}) &&
++                !Reflect.set(marked, 'middle', 4) && !Reflect.preventExtensions(marked);
++            [threw, refused, Object.keys(marked).join(','), Object.hasOwn(marked,'failed'), marked.middle].join('|')
++        "#
++            ),
++            "true|true|virtual,10,middle,2|false|2"
++        );
++    });
++}
++
++#[test]
++fn growing_weak_instance_table_preserves_live_order_and_releases_dead_keys() {
++    initialize();
++    let isolate = &mut v8::Isolate::new(Default::default());
++    let (weak, survivors, template_root, context_root) = {
++        v8::scope!(let scope, isolate);
++        let context = v8::Context::new(scope, Default::default());
++        let mut entered = v8::ContextScope::new(scope, context);
++        v8::scope!(let scope, &mut entered);
++        let template = template(scope, true, &[], false);
++        let mut weak = Vec::new();
++        let mut survivors = Vec::new();
++        for index in 0..1024 {
++            let object = template.new_instance(scope).expect("instance");
++            for name in ["10", "middle", "2"] {
++                let key = v8::String::new(scope, name).expect("key");
++                assert_eq!(
++                    object.create_data_property(scope, key.into(), object.into()),
++                    Some(true)
++                );
++            }
++            if index % 128 == 0 {
++                survivors.push(v8::Global::new(scope, object));
++            } else {
++                weak.push(v8::Weak::new(scope, object));
++            }
++        }
++        (
++            weak,
++            survivors,
++            v8::Global::new(scope, template),
++            v8::Global::new(scope, context),
++        )
++    };
++    isolate.low_memory_notification();
++    isolate.low_memory_notification();
++    assert!(
++        weak.iter().all(v8::Weak::is_empty),
++        "weak metadata retained instances after growth"
++    );
++    {
++        v8::scope!(let scope, isolate);
++        let context = v8::Local::new(scope, &context_root);
++        let mut entered = v8::ContextScope::new(scope, context);
++        v8::scope!(let scope, &mut entered);
++        for object in &survivors {
++            let object = v8::Local::new(scope, object);
++            publish(scope, "live", object);
++            assert_eq!(
++                evaluate(scope, "Object.keys(live).join(',')"),
++                "10,middle,2"
++            );
++        }
++    }
++    drop(survivors);
++    drop(template_root);
++    drop(context_root);
++}
++
++#[test]
++fn numeric_own_key_shadows_an_unmarked_named_interceptor_prototype() {
++    initialize();
++    let isolate = &mut v8::Isolate::new(Default::default());
++    v8::scope!(let scope, isolate);
++    let context = v8::Context::new(scope, Default::default());
++    let mut entered = v8::ContextScope::new(scope, context);
++    v8::scope!(let scope, &mut entered);
++    let marked_template = template(scope, true, &[], false);
++    let plain_template = template(scope, false, &["10", "tail"], false);
++    let marked = marked_template.new_instance(scope).expect("marked");
++    let plain = plain_template.new_instance(scope).expect("plain");
++    publish(scope, "marked", marked);
++    publish(scope, "plain", plain);
++    assert_eq!(
++        evaluate(
++            scope,
++            r#"
++        Object.setPrototypeOf(marked, plain);
++        Object.defineProperty(marked, '10', {value:1, enumerable:false});
++        marked.middle=2;
++        const keys=[]; for (const key in marked) keys.push(key);
++        keys.join(',')
++    "#
++        ),
++        "middle,tail"
++    );
++    // Unlike JavaScript for-in, this native enumeration has no later
++    // ForInFilter step that could hide an incorrect accumulator result.
++    for key_conversion in [
++        v8::KeyConversionMode::KeepNumbers,
++        v8::KeyConversionMode::ConvertToString,
++    ] {
++        let keys = marked
++            .get_property_names(
++                scope,
++                v8::GetPropertyNamesArgs {
++                    mode: v8::KeyCollectionMode::IncludePrototypes,
++                    property_filter: v8::PropertyFilter::ONLY_ENUMERABLE
++                        | v8::PropertyFilter::SKIP_SYMBOLS,
++                    index_filter: v8::IndexFilter::IncludeIndices,
++                    key_conversion,
++                },
++            )
++            .expect("native filtered enumeration");
++        let names: Vec<String> = (0..keys.length())
++            .map(|index| {
++                keys.get_index(scope, index)
++                    .expect("enumerated key")
++                    .to_rust_string_lossy(scope)
++            })
++            .collect();
++        assert_eq!(names, ["middle", "tail"]);
++    }
++}
++
++#[test]
++fn named_only_marked_prototype_observes_updated_supported_names() {
++    initialize();
++    let isolate = &mut v8::Isolate::new(Default::default());
++    v8::scope!(let scope, isolate);
++    let context = v8::Context::new(scope, Default::default());
++    let mut entered = v8::ContextScope::new(scope, context);
++    v8::scope!(let scope, &mut entered);
++    let template = v8::ObjectTemplate::new(scope);
++    let first = v8::String::new(scope, "first").expect("first supported name");
++    let names = v8::Array::new_with_elements(scope, &[first.into()]);
++    template.set_named_property_handler(
++        v8::NamedPropertyHandlerConfiguration::new()
++            .enumerator(named_names)
++            .query(named_query)
++            .data(names.into())
++            .flags(
++                v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS
++                    | v8::PropertyHandlerFlags::WEB_IDL_LEGACY,
++            ),
++    );
++    let marked = template.new_instance(scope).expect("marked instance");
++    publish(scope, "marked", marked);
++    publish(scope, "supportedNames", names.into());
++    assert_eq!(
++        evaluate(
++            scope,
++            r#"
++        const derived=Object.create(marked);
++        derived.own=1;
++        const before=[]; for (const key in derived) before.push(key);
++        supportedNames[0]='replacement';
++        const after=[]; for (const key in derived) after.push(key);
++        before.join(',')+'|'+after.join(',')
++    "#
++        ),
++        "own,first|own,replacement"
++    );
++}
++
++#[test]
++fn cross_realm_access_keeps_the_creation_context_order() {
++    initialize();
++    let isolate = &mut v8::Isolate::new(Default::default());
++    v8::scope!(let scope, isolate);
++    let first = v8::Context::new(scope, Default::default());
++    let second = v8::Context::new(scope, Default::default());
++    let shared = {
++        let mut entered = v8::ContextScope::new(scope, first);
++        v8::scope!(let scope, &mut entered);
++        let template = template(scope, true, &["virtual"], false);
++        let object = template.new_instance(scope).expect("first-realm object");
++        publish(scope, "object", object);
++        assert_eq!(
++            evaluate(
++                scope,
++                "object['10']=1; object.middle=2; object['2']=3; Object.keys(object).join(',')"
++            ),
++            "virtual,10,middle,2"
++        );
++        v8::Global::new(scope, object)
++    };
++    {
++        let mut entered = v8::ContextScope::new(scope, second);
++        v8::scope!(let scope, &mut entered);
++        let object = v8::Local::new(scope, &shared);
++        publish(scope, "foreign", object);
++        scope.low_memory_notification();
++        assert_eq!(
++            evaluate(
++                scope,
++                "delete foreign['10']; foreign['10']=4; foreign.after=5; Object.keys(foreign).join(',')"
++            ),
++            "virtual,middle,2,10,after"
++        );
++    }
++    let mut entered = v8::ContextScope::new(scope, first);
++    v8::scope!(let scope, &mut entered);
++    assert_eq!(
++        evaluate(scope, "Object.keys(object).join(',')"),
++        "virtual,middle,2,10,after"
++    );
++}
++
++#[test]
++fn marked_global_template_uses_its_hidden_global_creation_context() {
++    initialize();
++    let isolate = &mut v8::Isolate::new(Default::default());
++    v8::scope!(let scope, isolate);
++    let setup = v8::Context::new(scope, Default::default());
++    let mut setup_entered = v8::ContextScope::new(scope, setup);
++    v8::scope!(let scope, &mut setup_entered);
++    let global_template = template(scope, true, &["virtual"], false);
++    let context = v8::Context::new(
++        scope,
++        v8::ContextOptions {
++            global_template: Some(global_template),
++            ..Default::default()
++        },
++    );
++    let mut entered = v8::ContextScope::new(scope, context);
++    v8::scope!(let scope, &mut entered);
++    assert_eq!(
++        evaluate(
++            scope,
++            "globalThis['10']=1; globalThis.middle=2; globalThis['2']=3; Reflect.ownKeys(globalThis).filter(k=>['virtual','10','middle','2'].includes(k)).join(',')"
++        ),
++        "virtual,10,middle,2"
++    );
++    scope.low_memory_notification();
++    assert_eq!(
++        evaluate(
++            scope,
++            "delete globalThis['10']; globalThis['10']=4; Reflect.ownKeys(globalThis).filter(k=>['virtual','10','middle','2'].includes(k)).join(',')"
++        ),
++        "virtual,middle,2,10"
++    );
++}
++
++#[test]
++fn independently_restored_contexts_keep_distinct_order_tables() {
++    initialize();
++    let references = [
++        v8::ExternalReference {
++            enumerator: named_names.map_fn_to(),
++        },
++        v8::ExternalReference {
++            named_query: named_query.map_fn_to(),
++        },
++    ];
++    let data = {
++        let mut creator = v8::Isolate::snapshot_creator(Some(references.to_vec().into()), None);
++        {
++            v8::scope!(let scope, &mut creator);
++            let context = v8::Context::new(scope, Default::default());
++            let mut entered = v8::ContextScope::new(scope, context);
++            v8::scope!(let scope, &mut entered);
++            let template = template(scope, true, &["virtual"], false);
++            let object = template.new_instance(scope).expect("snapshot instance");
++            publish(scope, "object", object);
++            assert_eq!(
++                evaluate(
++                    scope,
++                    "object['10']=1; object.middle=2; object['2']=3; Object.keys(object).join(',')"
++                ),
++                "virtual,10,middle,2"
++            );
++            scope.set_default_context(context);
++        }
++        creator
++            .create_blob(v8::FunctionCodeHandling::Clear)
++            .expect("snapshot")
++    };
++    let params = v8::Isolate::create_params()
++        .snapshot_blob(data)
++        .external_references(references.to_vec().into());
++    let isolate = &mut v8::Isolate::new(params);
++    v8::scope!(let scope, isolate);
++    let first = v8::Context::new(scope, Default::default());
++    let second = v8::Context::new(scope, Default::default());
++    {
++        let mut entered = v8::ContextScope::new(scope, first);
++        v8::scope!(let scope, &mut entered);
++        assert_eq!(
++            evaluate(
++                scope,
++                "delete object['10']; object['10']=4; object.first=5; Object.keys(object).join(',')"
++            ),
++            "virtual,middle,2,10,first"
++        );
++    }
++    {
++        let mut entered = v8::ContextScope::new(scope, second);
++        v8::scope!(let scope, &mut entered);
++        scope.low_memory_notification();
++        assert_eq!(
++            evaluate(scope, "object.second=6; Object.keys(object).join(',')"),
++            "virtual,10,middle,2,second"
++        );
++    }
++    let mut entered = v8::ContextScope::new(scope, first);
++    v8::scope!(let scope, &mut entered);
++    assert_eq!(
++        evaluate(scope, "Object.keys(object).join(',')"),
++        "virtual,middle,2,10,first"
++    );
++}
+diff --git a/v8/include/v8-template.h b/v8/include/v8-template.h
+--- a/v8/include/v8-template.h
++++ b/v8/include/v8-template.h
+@@ -741,6 +741,16 @@
+    * during HasRestrictedGlobalProperty checks for lexical declarations.
+    */
+   kHasDontDeleteProperty = 1 << 3,
++
++  /**
++   * Opt in to native support for Web IDL legacy platform object callbacks.
++   * CreateDataProperty consults the matching definer and preserves false.
++   * Own keys are collected as indexed keys, named keys, ordinary Strings in
++   * creation order, then Symbols. The callbacks remain responsible for name
++   * visibility and descriptor semantics. Only Web IDL bindings should set this
++   * flag; ordinary API objects keep the standard V8 behavior.
++   */
++  kWebIdlLegacy = 1 << 4,
+ 
+   /**
+    * This flag is used to distinguish which callbacks were provided -
+diff --git a/v8/src/api/api.cc b/v8/src/api/api.cc
+--- a/v8/src/api/api.cc
++++ b/v8/src/api/api.cc
+@@ -1628,6 +1628,7 @@
+   obj->set_has_no_side_effect(flags & PropertyHandlerFlags::kHasNoSideEffect);
+   obj->set_has_dont_delete_property(
+       flags & PropertyHandlerFlags::kHasDontDeleteProperty);
++  obj->set_web_idl_legacy(flags & PropertyHandlerFlags::kWebIdlLegacy);
+ 
+   if (data.IsEmpty()) {
+     data = v8::Undefined(reinterpret_cast<v8::Isolate*>(i_isolate));
+diff --git a/v8/src/diagnostics/objects-debug.cc b/v8/src/diagnostics/objects-debug.cc
+--- a/v8/src/diagnostics/objects-debug.cc
++++ b/v8/src/diagnostics/objects-debug.cc
+@@ -1217,6 +1217,8 @@
+ 
+ void NativeContext::NativeContextVerify(Isolate* isolate) {
+   ContextVerify(isolate);
++  CHECK(IsUndefined(web_idl_property_order()) ||
++        IsEphemeronHashTable(web_idl_property_order()));
+   CHECK(retained_maps() == Smi::zero() || IsWeakArrayList(retained_maps()));
+   CHECK_EQ(length(), NativeContext::NATIVE_CONTEXT_SLOTS);
+   CHECK_EQ(kVariableSizeSentinel, map()->instance_size());
+diff --git a/v8/src/heap/factory.cc b/v8/src/heap/factory.cc
+--- a/v8/src/heap/factory.cc
++++ b/v8/src/heap/factory.cc
+@@ -1693,6 +1693,7 @@
+   context->set_math_random_index(Smi::zero());
+   context->set_serialized_objects(*empty_fixed_array());
+   context->init_microtask_queue(isolate(), nullptr);
++  context->set_web_idl_property_order(*undefined_value());
+   context->set_retained_maps(*empty_weak_array_list());
+   return handle(context, isolate());
+ }
+@@ -3041,6 +3042,9 @@
+         UncheckedCast<JSReceiver::PropertiesOrHash>(*copied_properties),
+         kRelaxedStore);
+   }
++  if (WebIdlPropertyOrder::Applies(*source)) {
++    WebIdlPropertyOrder::Clone(isolate(), source, clone);
++  }
+   return clone;
+ }
+ 
+diff --git a/v8/src/ic/ic.cc b/v8/src/ic/ic.cc
+--- a/v8/src/ic/ic.cc
++++ b/v8/src/ic/ic.cc
+@@ -2022,6 +2022,8 @@
+   if (!IsJSObject(*object) && !IsWasmObject(*object)) return false;
+   DirectHandle<JSReceiver> receiver = Cast<JSReceiver>(object);
+   DCHECK(!receiver->map()->is_deprecated());
++  if (IsJSObject(*receiver) &&
++      WebIdlPropertyOrder::Applies(Cast<JSObject>(*receiver))) return false;
+ 
+   for (;; it->Next()) {
+     switch (it->state()) {
+diff --git a/v8/src/objects/api-callbacks-inl.h b/v8/src/objects/api-callbacks-inl.h
+--- a/v8/src/objects/api-callbacks-inl.h
++++ b/v8/src/objects/api-callbacks-inl.h
+@@ -248,6 +248,8 @@
+                HasNewCallbacksSignatureBit::kShift)
+ BOOL_ACCESSORS(InterceptorInfo, flags, has_dont_delete_property,
+                HasDontDeletePropertyBit::kShift)
++BOOL_ACCESSORS(InterceptorInfo, flags, web_idl_legacy,
++               WebIdlLegacyBit::kShift)
+ 
+ void InterceptorInfo::RemoveCallbackRedirectionForSerialization(
+     IsolateForSandbox isolate) {
+diff --git a/v8/src/objects/api-callbacks.h b/v8/src/objects/api-callbacks.h
+--- a/v8/src/objects/api-callbacks.h
++++ b/v8/src/objects/api-callbacks.h
+@@ -249,6 +249,7 @@
+   // Api deprecation process.
+   DECL_BOOLEAN_ACCESSORS(has_new_callbacks_signature)
+   DECL_BOOLEAN_ACCESSORS(has_dont_delete_property)
++  DECL_BOOLEAN_ACCESSORS(web_idl_legacy)
+ 
+   using CanInterceptSymbolsBit = base::BitField<bool, 0, 1, uint32_t>;
+   using NonMaskingBit = CanInterceptSymbolsBit::Next<bool, 1>;
+@@ -256,6 +257,7 @@
+   using HasNoSideEffectBit = NamedBit::Next<bool, 1>;
+   using HasNewCallbacksSignatureBit = HasNoSideEffectBit::Next<bool, 1>;
+   using HasDontDeletePropertyBit = HasNewCallbacksSignatureBit::Next<bool, 1>;
++  using WebIdlLegacyBit = HasDontDeletePropertyBit::Next<bool, 1>;
+   enum Flag : uint32_t {
+     kNone = 0,
+     kCanInterceptSymbols = CanInterceptSymbolsBit::kMask,
+@@ -264,9 +266,10 @@
+     kHasNoSideEffect = HasNoSideEffectBit::kMask,
+     kHasNewCallbacksSignature = HasNewCallbacksSignatureBit::kMask,
+     kHasDontDeleteProperty = HasDontDeletePropertyBit::kMask,
++    kWebIdlLegacy = WebIdlLegacyBit::kMask,
+   };
+   using Flags = base::Flags<Flag>;
+-  static constexpr int kFlagCount = 6;
++  static constexpr int kFlagCount = 7;
+ 
+   DECL_PRINTER(InterceptorInfo)
+   DECL_VERIFIER(InterceptorInfo)
+diff --git a/v8/src/objects/api-callbacks.tq b/v8/src/objects/api-callbacks.tq
+--- a/v8/src/objects/api-callbacks.tq
++++ b/v8/src/objects/api-callbacks.tq
+@@ -10,6 +10,7 @@
+   has_no_side_effect: bool: 1 bit;
+   has_new_callbacks_signature: bool: 1 bit;
+   has_dont_delete_property: bool: 1 bit;
++  web_idl_legacy: bool: 1 bit;
+ }
+ 
+ @cppObjectLayoutDefinition
+diff --git a/v8/src/objects/contexts.h b/v8/src/objects/contexts.h
+--- a/v8/src/objects/contexts.h
++++ b/v8/src/objects/contexts.h
+@@ -445,6 +445,7 @@
+   V(WEAKMAP_DELETE_INDEX, JSFunction, weakmap_delete)                          \
+   V(WEAKSET_ADD_INDEX, JSFunction, weakset_add)                                \
+   V(WRAPPED_FUNCTION_MAP_INDEX, Map, wrapped_function_map)                     \
++  V(WEB_IDL_PROPERTY_ORDER_INDEX, Object, web_idl_property_order)             \
+   V(RETAINED_MAPS, Object, retained_maps)                                      \
+   V(SHARED_SPACE_JS_OBJECT_HAS_INSTANCE_INDEX, JSFunction,                     \
+     shared_space_js_object_has_instance)                                       \
+diff --git a/v8/src/objects/js-objects-inl.h b/v8/src/objects/js-objects-inl.h
+--- a/v8/src/objects/js-objects-inl.h
++++ b/v8/src/objects/js-objects-inl.h
+@@ -45,6 +45,13 @@
+ #include "src/objects/object-macros.h"
+ 
+ namespace v8::internal {
++
++bool WebIdlPropertyOrder::Applies(Tagged<JSObject> object) {
++  return (object->HasNamedInterceptor() &&
++          object->GetNamedInterceptor()->web_idl_legacy()) ||
++         (object->HasIndexedInterceptor() &&
++          object->GetIndexedInterceptor()->web_idl_legacy());
++}
+ 
+ Tagged<FixedArrayBase> JSObject::elements() const { return elements_.load(); }
+ 
+diff --git a/v8/src/objects/js-objects.cc b/v8/src/objects/js-objects.cc
+--- a/v8/src/objects/js-objects.cc
++++ b/v8/src/objects/js-objects.cc
+@@ -55,6 +55,7 @@
+ #include "src/objects/js-shadow-realm.h"
+ #include "src/objects/js-shared-array.h"
+ #include "src/objects/js-struct.h"
++#include "src/objects/ordered-hash-table-inl.h"
+ #include "src/objects/property-details.h"
+ #ifdef V8_TEMPORAL_SUPPORT
+ #include "src/objects/js-temporal-objects-inl.h"
+@@ -1844,8 +1845,34 @@
+                                            DirectHandle<Object> value,
+                                            Maybe<ShouldThrow> should_throw) {
+   if (IsJSObject(*object)) {
+-    return JSObject::CreateDataProperty(isolate, Cast<JSObject>(object), key,
+-                                        value, should_throw);  // Shortcut.
++    DirectHandle<JSObject> js_object = Cast<JSObject>(object);
++    // A Web IDL legacy platform object can reject a data-property creation
++    // through its indexed or named definer. The ordinary JSObject shortcut
++    // checks for an existing configurable property, then advances past an
++    // absent interceptor before defining the field and loses the definer's
++    // Boolean result. Use the generic descriptor path below for marked
++    // handlers; leave every ordinary API interceptor on the old shortcut.
++    // LookupIterator dispatches integer indices above the maximum array
++    // element index to the named interceptor. An integer PropertyKey need
++    // not have a materialized name, so do not inspect key.name() in either
++    // integer branch.
++    bool web_idl_legacy = false;
++    if (key.is_element()) {
++      if (key.index() <= JSObject::kMaxElementIndex) {
++        web_idl_legacy = js_object->HasIndexedInterceptor() &&
++                         js_object->GetIndexedInterceptor()->web_idl_legacy();
++      } else {
++        web_idl_legacy = js_object->HasNamedInterceptor() &&
++                         js_object->GetNamedInterceptor()->web_idl_legacy();
++      }
++    } else if (IsString(*key.name())) {
++      web_idl_legacy = js_object->HasNamedInterceptor() &&
++                       js_object->GetNamedInterceptor()->web_idl_legacy();
++    }
++    if (!web_idl_legacy) {
++      return JSObject::CreateDataProperty(isolate, js_object, key, value,
++                                          should_throw);
++    }
+   }
+ 
+   PropertyDescriptor new_desc;
+@@ -3705,6 +3732,7 @@
+                             DirectHandle<Name> name, DirectHandle<Object> value,
+                             PropertyAttributes attributes) {
+   DCHECK(IsUniqueName(*name));
++  if (WebIdlPropertyOrder::Applies(*object)) return false;
+   Tagged<Map> map =
+       TransitionsAccessor(isolate, object->map())
+           .SearchTransition(*name, PropertyKind::kData, attributes);
+@@ -5582,12 +5610,142 @@
+   return kind;
+ }
+ 
++DirectHandle<NativeContext> WebIdlPropertyOrder::Owner(
++    Isolate* isolate, DirectHandle<JSObject> object) {
++  if (!Applies(*object)) return {};
++  // API instances are contextful even when accessed from another realm. In
++  // particular, use the object's creation context, not isolate->native_context.
++  // CreateEnvironment puts supplied global interceptors on the hidden global
++  // object, not its fresh public proxy. DetachGlobal makes only that unmarked
++  // proxy contextless; the marked hidden global keeps its creation context.
++  DirectHandle<NativeContext> context;
++  CHECK(object->GetCreationContext(isolate).ToHandle(&context));
++  return context;
++}
++
++DirectHandle<OrderedHashSet> WebIdlPropertyOrder::Get(
++    Isolate* isolate, DirectHandle<JSObject> object) {
++  DirectHandle<NativeContext> owner = Owner(isolate, object);
++  if (owner.is_null() || IsUndefined(owner->web_idl_property_order())) return {};
++  auto table = Cast<EphemeronHashTable>(owner->web_idl_property_order());
++  Tagged<Object> value = table->Lookup(object);
++  if (IsTheHole(value)) return {};
++  return direct_handle(Cast<OrderedHashSet>(value), isolate);
++}
++
++Maybe<bool> WebIdlPropertyOrder::Prepare(
++    Isolate* isolate, DirectHandle<JSObject> object, DirectHandle<Name> name,
++    DirectHandle<OrderedHashSet>* prepared) {
++  *prepared = {};
++  if (!IsString(*name)) return Just(true);
++  DirectHandle<NativeContext> owner = Owner(isolate, object);
++  if (owner.is_null()) return Just(true);
++
++  Handle<EphemeronHashTable> table;
++  if (IsUndefined(owner->web_idl_property_order())) {
++    table = EphemeronHashTable::New(isolate, 4);
++  } else {
++    table = handle(Cast<EphemeronHashTable>(owner->web_idl_property_order()),
++                   isolate);
++  }
++  DirectHandle<OrderedHashSet> order;
++  Tagged<Object> existing = table->Lookup(object);
++  if (IsTheHole(existing)) {
++    ASSIGN_RETURN_ON_EXCEPTION_VALUE(
++        isolate, order,
++        OrderedHashSet::Allocate(isolate, OrderedHashSet::kInitialCapacity),
++        Nothing<bool>());
++  } else {
++    order = direct_handle(Cast<OrderedHashSet>(existing), isolate);
++    if (OrderedHashSet::HasKey(isolate, *order, *name)) return Just(true);
++  }
++
++  ASSIGN_RETURN_ON_EXCEPTION_VALUE(
++      isolate, order, OrderedHashSet::EnsureCapacityForAdding(isolate, order),
++      Nothing<bool>());
++  // Identity hash, table growth, and tombstone compaction are all completed
++  // before the ordinary property changes. None of these operations runs JS.
++  DirectHandle<EphemeronHashTable> new_table =
++      EphemeronHashTable::Put(isolate, table, object, order);
++  owner->set_web_idl_property_order(*new_table);
++  if (*table != *new_table) {
++    // Match JSWeakCollection::Set: old ephemeron slots were not recorded.
++    EphemeronHashTable::FillEntriesWithHoles(table);
++  }
++  *prepared = order;
++  return Just(true);
++}
++
++void WebIdlPropertyOrder::Commit(Isolate* isolate,
++                                DirectHandle<OrderedHashSet> prepared,
++                                DirectHandle<Name> name) {
++  if (prepared.is_null()) return;
++  DisallowGarbageCollection no_gc;
++  // An enclosing accessor conversion can prepare the same key as its
++  // normalized-storage helper. The inner commit already establishes its order.
++  if (OrderedHashSet::HasKey(isolate, *prepared, *name)) return;
++  CHECK_LT(prepared->UsedCapacity(), prepared->Capacity());
++  DirectHandle<OrderedHashSet> result =
++      OrderedHashSet::Add(isolate, prepared, name).ToHandleChecked();
++  CHECK_EQ(*result, *prepared);
++}
++
++void WebIdlPropertyOrder::Delete(Isolate* isolate,
++                                DirectHandle<JSObject> object,
++                                DirectHandle<Name> name) {
++  if (!IsString(*name)) return;
++  DirectHandle<OrderedHashSet> order = Get(isolate, object);
++  if (order.is_null()) return;
++  DisallowGarbageCollection no_gc;
++  OrderedHashSet::Delete(isolate, *order, *name);
++}
++
++void WebIdlPropertyOrder::Clone(Isolate* isolate,
++                               DirectHandle<JSObject> source,
++                               DirectHandle<JSObject> clone) {
++  DirectHandle<OrderedHashSet> source_order = Get(isolate, source);
++  if (source_order.is_null() || source_order->NumberOfElements() == 0) return;
++  // Allocate before exposing the cloned instance. Source capacity is already
++  // valid and sufficient, including any deleted entries we do not copy.
++  DirectHandle<OrderedHashSet> order =
++      OrderedHashSet::Allocate(isolate, source_order->Capacity()).ToHandleChecked();
++  for (InternalIndex entry : source_order->IterateEntries()) {
++    Tagged<Object> key = source_order->KeyAt(entry);
++    if (IsHashTableHole(key)) continue;
++    Commit(isolate, order, direct_handle(Cast<Name>(key), isolate));
++  }
++  DirectHandle<NativeContext> owner = Owner(isolate, clone);
++  CHECK(!owner.is_null());
++  Handle<EphemeronHashTable> table;
++  if (IsUndefined(owner->web_idl_property_order())) {
++    table = EphemeronHashTable::New(isolate, 4);
++  } else {
++    table = handle(Cast<EphemeronHashTable>(owner->web_idl_property_order()),
++                   isolate);
++  }
++  DirectHandle<EphemeronHashTable> new_table =
++      EphemeronHashTable::Put(isolate, table, clone, order);
++  owner->set_web_idl_property_order(*new_table);
++  if (*table != *new_table) {
++    // Match JSWeakCollection::Set: old ephemeron slots were not recorded.
++    EphemeronHashTable::FillEntriesWithHoles(table);
++  }
++}
++
+ // static
+ Maybe<bool> JSObject::AddDataElement(Isolate* isolate,
+                                      DirectHandle<JSObject> object,
+                                      uint32_t index, DirectHandle<Object> value,
+                                      PropertyAttributes attributes) {
+   DCHECK(object->map()->is_extensible());
++
++  DirectHandle<OrderedHashSet> order;
++  DirectHandle<Name> ordered_name;
++  if (WebIdlPropertyOrder::Applies(*object)) {
++    ordered_name = isolate->factory()->Uint32ToString(index);
++    MAYBE_RETURN(WebIdlPropertyOrder::Prepare(isolate, object, ordered_name,
++                                               &order), Nothing<bool>());
++  }
+ 
+   uint32_t old_length = 0;
+   uint32_t new_capacity = 0;
+@@ -5634,6 +5792,7 @@
+         isolate->factory()->NewNumberFromUint(index + 1);
+     Cast<JSArray>(*object)->set_length(*new_length);
+   }
++  WebIdlPropertyOrder::Commit(isolate, order, ordered_name);
+   return Just(true);
+ }
+ 
+diff --git a/v8/src/objects/js-objects.h b/v8/src/objects/js-objects.h
+--- a/v8/src/objects/js-objects.h
++++ b/v8/src/objects/js-objects.h
+@@ -38,6 +38,34 @@
+ class ElementsAccessor;
+ class Undefined;
+ class Null;
++class OrderedHashSet;
++class InterceptorInfo;
++class NativeContext;
++
++// Ordinary String creation chronology for opt-in Web IDL API objects. The
++// record is held by the creation context through weak instance keys. Context
++// ownership keeps each instance and its chronology in the same snapshot.
++class WebIdlPropertyOrder final {
++ public:
++  static inline bool Applies(Tagged<JSObject> object);
++  static DirectHandle<OrderedHashSet> Get(Isolate* isolate,
++                                         DirectHandle<JSObject> object);
++  // Reserve all metadata storage before committing the physical property.
++  // A null result means this key is already recorded or does not need a record.
++  static Maybe<bool> Prepare(Isolate* isolate, DirectHandle<JSObject> object,
++                             DirectHandle<Name> name,
++                             DirectHandle<OrderedHashSet>* prepared);
++  static void Commit(Isolate* isolate, DirectHandle<OrderedHashSet> prepared,
++                     DirectHandle<Name> name);
++  static void Delete(Isolate* isolate, DirectHandle<JSObject> object,
++                     DirectHandle<Name> name);
++  static void Clone(Isolate* isolate, DirectHandle<JSObject> source,
++                    DirectHandle<JSObject> clone);
++
++ private:
++  static DirectHandle<NativeContext> Owner(Isolate* isolate,
++                                           DirectHandle<JSObject> object);
++};
+ 
+ // JSReceiver includes types on which properties can be defined, i.e.,
+ // JSObject and JSProxy.
+diff --git a/v8/src/objects/keys.cc b/v8/src/objects/keys.cc
+--- a/v8/src/objects/keys.cc
++++ b/v8/src/objects/keys.cc
+@@ -148,7 +148,24 @@
+     return ExceptionStatus::kSuccess;
+   }
+ 
++  if (has_web_idl_legacy_) {
++    uint32_t index;
++    if (IsString(*key) && Cast<String>(*key)->AsArrayIndex(&index)) {
++      key = isolate_->factory()->NewNumberFromUint(index);
++    }
++  }
+   if (IsShadowed(key)) return ExceptionStatus::kSuccess;
++  if (has_web_idl_legacy_ && !keys_.is_null()) {
++    // A proxy can reveal a marked prototype only after earlier keys have been
++    // collected. Match an earlier String key even when this key is an index.
++    uint32_t index;
++    if (Object::ToArrayIndex(*key, &index)) {
++      DirectHandle<String> name = isolate_->factory()->Uint32ToString(index);
++      if (OrderedHashSet::HasKey(isolate_, *keys(), *name)) {
++        return ExceptionStatus::kSuccess;
++      }
++    }
++  }
+   if (keys_.is_null()) {
+     keys_ = OrderedHashSet::Allocate(isolate_, 16).ToHandleChecked();
+   }
+@@ -306,7 +323,17 @@
+ 
+ bool KeyAccumulator::IsShadowed(DirectHandle<Object> key) {
+   if (!HasShadowingKeys() || skip_shadow_check_) return false;
+-  return shadowing_keys_->Has(isolate_, key);
++  if (shadowing_keys_->Has(isolate_, key)) return true;
++  if (has_web_idl_legacy_) {
++    uint32_t index;
++    if (Object::ToArrayIndex(*key, &index)) {
++      DirectHandle<Object> equivalent = IsString(*key)
++          ? DirectHandle<Object>(isolate_->factory()->NewNumberFromUint(index))
++          : DirectHandle<Object>(isolate_->factory()->Uint32ToString(index));
++      return shadowing_keys_->Has(isolate_, equivalent);
++    }
++  }
++  return false;
+ }
+ 
+ void KeyAccumulator::AddShadowingKey(Tagged<Object> key,
+@@ -346,6 +373,8 @@
+ 
+ void FastKeyAccumulator::Prepare() {
+   DisallowGarbageCollection no_gc;
++  has_web_idl_legacy_ = IsJSObject(*receiver_) &&
++      WebIdlPropertyOrder::Applies(Cast<JSObject>(*receiver_));
+   // Directly go for the fast path for OWN_ONLY keys.
+   if (mode_ == KeyCollectionMode::kOwnOnly) return;
+   // Fully walk the prototype chain and find the last prototype with keys.
+@@ -358,6 +387,10 @@
+   for (PrototypeIterator iter(isolate_, *receiver_); !iter.IsAtEnd();
+        iter.Advance()) {
+     Tagged<JSReceiver> current = iter.GetCurrent<JSReceiver>();
++    if (IsJSObject(current) &&
++        WebIdlPropertyOrder::Applies(Cast<JSObject>(current))) {
++      has_web_idl_legacy_ = true;
++    }
+     if (!may_have_elements_ || only_own_has_simple_elements_) {
+       if (MayHaveElements(current)) {
+         may_have_elements_ = true;
+@@ -370,7 +403,8 @@
+     has_empty_prototype_ = false;
+   }
+   // Check if we should try to create/use prototype info cache.
+-  try_prototype_info_cache_ = TryPrototypeInfoCache(receiver_);
++  try_prototype_info_cache_ =
++      !has_web_idl_legacy_ && TryPrototypeInfoCache(receiver_);
+   if (has_prototype_info_cache_) return;
+   if (has_empty_prototype_) {
+     is_receiver_simple_enum_ =
+@@ -464,6 +498,12 @@
+ 
+ MaybeHandle<FixedArray> FastKeyAccumulator::GetKeys(
+     GetKeysConversion keys_conversion) {
++  if (has_web_idl_legacy_) {
++    // Physical element ordering and the ordinary enum cache do not describe
++    // marked objects, including their dynamic supported names on prototypes.
++    try_prototype_info_cache_ = false;
++    return GetKeysSlow(keys_conversion);
++  }
+   // TODO(v8:9401): We should extend the fast path of KeyAccumulator::GetKeys to
+   // also use fast path even when filter = SKIP_SYMBOLS. We used to pass wrong
+   // filter to use fast path in cases where we tried to verify all properties
+@@ -642,6 +682,7 @@
+     GetKeysConversion keys_conversion) {
+   KeyAccumulator accumulator(isolate_, mode_, filter_);
+   accumulator.set_is_for_in(is_for_in_);
++  accumulator.has_web_idl_legacy_ = has_web_idl_legacy_;
+   accumulator.set_skip_indices(skip_indices_);
+   accumulator.set_last_non_empty_prototype(last_non_empty_prototype_);
+   accumulator.set_may_have_elements(may_have_elements_);
+@@ -834,6 +875,145 @@
+                        : object->GetNamedInterceptor(),
+       isolate_);
+   return CollectInterceptorKeysInternal(object, interceptor, type);
++}
++
++ExceptionStatus KeyAccumulator::AddWebIdlKey(DirectHandle<Object> key,
++                                            bool shadowing) {
++  // Normalize before both shadow checks and hash-set insertion: an indexed
++  // uint32 and a supported named String "0" denote the same property key.
++  uint32_t index;
++  if (IsString(*key) && Cast<String>(*key)->AsArrayIndex(&index)) {
++    key = isolate_->factory()->NewNumberFromUint(index);
++  }
++  if (skip_indices_ && IsNumber(*key)) return ExceptionStatus::kSuccess;
++  if (shadowing) {
++    AddShadowingKey(key);
++    return ExceptionStatus::kSuccess;
++  }
++  return AddKey(key, DO_NOT_CONVERT);
++}
++
++Maybe<bool> KeyAccumulator::CollectWebIdlInterceptorKeys(
++    DirectHandle<JSObject> object, IndexedOrNamed type) {
++  if (type == kIndexed ? !object->HasIndexedInterceptor()
++                       : !object->HasNamedInterceptor()) return Just(true);
++  DirectHandle<InterceptorInfo> interceptor(
++      type == kIndexed ? object->GetIndexedInterceptor()
++                       : object->GetNamedInterceptor(), isolate_);
++  if (!interceptor->has_enumerator()) return Just(true);
++  PropertyCallbackArguments args(isolate_, GetHolderForApi(*object));
++  DirectHandle<JSObject> result;
++  {
++    DirectHandle<JSObjectOrUndefined> maybe_result =
++        type == kIndexed ? args.CallIndexedEnumerator(isolate_, interceptor)
++                         : args.CallNamedEnumerator(isolate_, interceptor);
++    RETURN_VALUE_IF_EXCEPTION_DETECTOR(isolate_, args, Nothing<bool>());
++    if (IsUndefined(*maybe_result)) return Just(true);
++    result = direct_handle(Cast<JSObject>(*maybe_result), isolate_);
++  }
++  args.AcceptSideEffects();
++
++  // Copy the callback's array before query callbacks can mutate it. Retain
++  // handles, never raw element/descriptor pointers, across native callbacks.
++  ElementsAccessor* accessor = result->GetElementsAccessor();
++  size_t capacity = accessor->GetCapacity(*result, result->elements());
++  if (capacity > FixedArray::kMaxLength) {
++    THROW_NEW_ERROR_RETURN_VALUE(
++        isolate_, NewRangeError(MessageTemplate::kTooManyProperties),
++        Nothing<bool>());
++  }
++  DirectHandle<FixedArray> names =
++      isolate_->factory()->NewFixedArray(static_cast<int>(capacity));
++  uint32_t count = 0;
++  for (InternalIndex entry : InternalIndex::Range(capacity)) {
++    if (!accessor->HasEntry(isolate_, *result, entry)) continue;
++    DirectHandle<Object> key = accessor->Get(isolate_, result, entry);
++    if (type == kIndexed) {
++      uint32_t index;
++      CHECK(Object::ToUint32(*key, &index));
++      key = isolate_->factory()->NewNumberFromUint(index);
++    } else {
++      CHECK(IsName(*key));
++    }
++    names->set(count++, *key);
++  }
++  if (type == kIndexed && count > 1) {
++    // Supported property indices precede names and are numerically sorted.
++    // The same AtomicSlot pattern is used by elements.cc::SortIndices.
++    DisallowGarbageCollection no_gc;
++    AtomicSlot start(names->RawFieldOfFirstElement());
++    AtomicSlot end(start + count);
++    std::sort(start, end, [](Tagged_t a, Tagged_t b) {
++#ifdef V8_COMPRESS_POINTERS
++      Tagged<Object> left(V8HeapCompressionScheme::DecompressTagged(a));
++      Tagged<Object> right(V8HeapCompressionScheme::DecompressTagged(b));
++#else
++      Tagged<Object> left(a);
++      Tagged<Object> right(b);
++#endif
++      return Object::NumberValue(Cast<Number>(left)) <
++             Object::NumberValue(Cast<Number>(right));
++    });
++    WriteBarrier::ForRange(isolate_->heap(), *names, ObjectSlot(start),
++                           ObjectSlot(end));
++  }
++  for (uint32_t i = 0; i < count; ++i) {
++    DirectHandle<Object> key(names->get(i), isolate_);
++    if ((filter_ & ALL_ATTRIBUTES_MASK) && interceptor->has_query()) {
++      DirectHandle<Object> attributes;
++      if (type == kIndexed) {
++        uint32_t index;
++        CHECK(Object::ToUint32(*key, &index));
++        attributes = args.CallIndexedQuery(isolate_, interceptor, index);
++      } else {
++        attributes = args.CallNamedQuery(isolate_, interceptor, Cast<Name>(key));
++      }
++      RETURN_VALUE_IF_EXCEPTION(isolate_, Nothing<bool>());
++      if (attributes.is_null()) continue;
++      int32_t value;
++      CHECK(Object::ToInt32(*attributes, &value));
++      if ((value & filter_) != 0) {
++        RETURN_NOTHING_IF_NOT_SUCCESSFUL(AddWebIdlKey(key, true));
++        continue;
++      }
++    }
++    RETURN_NOTHING_IF_NOT_SUCCESSFUL(AddWebIdlKey(key));
++  }
++  return Just(true);
++}
++
++Maybe<bool> KeyAccumulator::CollectWebIdlOwnKeys(
++    DirectHandle<JSObject> object) {
++  has_web_idl_legacy_ = true;
++  // These are captured native API callbacks, not property reads on the object.
++  // Keep their order and exception behavior even for symbol-only requests.
++  MAYBE_RETURN(CollectWebIdlInterceptorKeys(object, kIndexed), Nothing<bool>());
++  MAYBE_RETURN(CollectWebIdlInterceptorKeys(object, kNamed), Nothing<bool>());
++
++  DirectHandle<OrderedHashSet> order = WebIdlPropertyOrder::Get(isolate_, object);
++  if (!order.is_null()) {
++    for (InternalIndex entry : order->IterateEntries()) {
++      Tagged<Object> raw_key = order->KeyAt(entry);
++      if (IsHashTableHole(raw_key)) continue;
++      DirectHandle<Name> key(Cast<Name>(raw_key), isolate_);
++      LookupIterator lookup(isolate_, object, PropertyKey(isolate_, key),
++                            LookupIterator::OWN_SKIP_INTERCEPTOR);
++      Maybe<PropertyAttributes> maybe_attributes =
++          JSObject::GetPropertyAttributes(&lookup);
++      MAYBE_RETURN(maybe_attributes, Nothing<bool>());
++      PropertyAttributes attributes = maybe_attributes.FromJust();
++      if (attributes == ABSENT) continue;
++      RETURN_NOTHING_IF_NOT_SUCCESSFUL(
++          AddWebIdlKey(key, (attributes & filter_) != 0));
++    }
++  }
++  // Physical Symbols keep their existing creation order. Suppress the named
++  // callback here; it has already run exactly once before ordinary Strings.
++  PropertyFilter saved_filter = filter_;
++  filter_ = static_cast<PropertyFilter>(filter_ | SKIP_STRINGS);
++  Maybe<bool> result = CollectOwnPropertyNames(object, false);
++  filter_ = saved_filter;
++  return result;
+ }
+ 
+ Maybe<bool> KeyAccumulator::CollectOwnElementIndices(
+@@ -1060,7 +1240,7 @@
+ }  // namespace
+ 
+ Maybe<bool> KeyAccumulator::CollectOwnPropertyNames(
+-    DirectHandle<JSObject> object) {
++    DirectHandle<JSObject> object, bool include_interceptor) {
+   if (filter_ == ENUMERABLE_STRINGS) {
+     DirectHandle<FixedArray> enum_keys;
+     if (object->HasFastProperties()) {
+@@ -1136,7 +1316,8 @@
+     }
+   }
+   // Add the property keys from the interceptor.
+-  return CollectInterceptorKeys(object, kNamed);
++  return include_interceptor ? CollectInterceptorKeys(object, kNamed)
++                             : Just(true);
+ }
+ 
+ ExceptionStatus KeyAccumulator::CollectPrivateNames(
+@@ -1229,6 +1410,9 @@
+     return Just(true);
+   }
+ 
++  if (WebIdlPropertyOrder::Applies(*object)) {
++    return CollectWebIdlOwnKeys(object);
++  }
+   if (may_have_elements_) {
+     MAYBE_RETURN(CollectOwnElementIndices(object), Nothing<bool>());
+   }
+diff --git a/v8/src/objects/keys.h b/v8/src/objects/keys.h
+--- a/v8/src/objects/keys.h
++++ b/v8/src/objects/keys.h
+@@ -110,7 +110,13 @@
+                                      IndexedOrNamed type);
+ 
+   Maybe<bool> CollectOwnElementIndices(DirectHandle<JSObject> object);
+-  Maybe<bool> CollectOwnPropertyNames(DirectHandle<JSObject> object);
++  Maybe<bool> CollectOwnPropertyNames(DirectHandle<JSObject> object,
++                                      bool include_interceptor = true);
++  Maybe<bool> CollectWebIdlOwnKeys(DirectHandle<JSObject> object);
++  Maybe<bool> CollectWebIdlInterceptorKeys(DirectHandle<JSObject> object,
++                                          IndexedOrNamed type);
++  V8_WARN_UNUSED_RESULT ExceptionStatus
++  AddWebIdlKey(DirectHandle<Object> key, bool shadowing = false);
+   Maybe<bool> CollectOwnKeys(DirectHandle<JSObject> object);
+   Maybe<bool> CollectOwnJSProxyKeys(DirectHandle<JSReceiver> receiver,
+                                     DirectHandle<JSProxy> proxy);
+@@ -167,6 +173,7 @@
+   bool skip_shadow_check_ = true;
+   bool may_have_elements_ = true;
+   bool try_prototype_info_cache_ = false;
++  bool has_web_idl_legacy_ = false;
+ 
+   friend FastKeyAccumulator;
+ };
+@@ -238,6 +245,7 @@
+   bool may_have_elements_ = true;
+   bool has_prototype_info_cache_ = false;
+   bool try_prototype_info_cache_ = false;
++  bool has_web_idl_legacy_ = false;
+   bool only_own_has_simple_elements_ = false;
+ };
+ 
+diff --git a/v8/src/objects/lookup.cc b/v8/src/objects/lookup.cc
+--- a/v8/src/objects/lookup.cc
++++ b/v8/src/objects/lookup.cc
+@@ -824,6 +824,10 @@
+ 
+ void LookupIterator::Delete() {
+   DirectHandle<JSReceiver> holder = Cast<JSReceiver>(holder_);
++  DirectHandle<Name> ordered_name;
++  if (IsJSObject(*holder) && WebIdlPropertyOrder::Applies(Cast<JSObject>(*holder))) {
++    ordered_name = GetName();
++  }
+   if (IsElement(*holder)) {
+     DirectHandle<JSObject> object = Cast<JSObject>(holder);
+     ElementsAccessor* accessor = object->GetElementsAccessor();
+@@ -849,6 +853,9 @@
+       JSObject::ReoptimizeIfPrototype(Cast<JSObject>(holder));
+     }
+   }
++  if (!ordered_name.is_null()) {
++    WebIdlPropertyOrder::Delete(isolate_, Cast<JSObject>(holder), ordered_name);
++  }
+   state_ = NOT_FOUND;
+ }
+ 
+@@ -860,6 +867,11 @@
+   // handled via a trap. Adding properties to primitive values is not
+   // observable.
+   DirectHandle<JSObject> receiver = GetStoreTarget<JSObject>();
++  DirectHandle<OrderedHashSet> order;
++  if (WebIdlPropertyOrder::Applies(*receiver)) {
++    MAYBE_RETURN(WebIdlPropertyOrder::Prepare(isolate_, receiver, GetName(), &order),
++                 Nothing<bool>());
++  }
+   if (!IsElement() && name()->IsAnyPrivate()) {
+     attributes = static_cast<PropertyAttributes>(attributes | DONT_ENUM);
+   }
+@@ -886,11 +898,15 @@
+       number_ = new_map->LastAdded();
+       property_details_ = new_map->GetLastDescriptorDetails();
+       state_ = ACCESSOR;
++      if (!order.is_null()) WebIdlPropertyOrder::Commit(isolate_, order, GetName());
+       return Just(true);
+     }
+ 
+     ReloadPropertyInformation<false>();
+-    if (!new_map->is_dictionary_map()) return Just(true);
++    if (!new_map->is_dictionary_map()) {
++      if (!order.is_null()) WebIdlPropertyOrder::Commit(isolate_, order, GetName());
++      return Just(true);
++    }
+   }
+ 
+   DirectHandle<AccessorPair> pair;
+@@ -924,6 +940,11 @@
+ Maybe<bool> LookupIterator::TransitionToAccessorPair(
+     DirectHandle<Object> pair, PropertyAttributes attributes) {
+   DirectHandle<JSObject> receiver = GetStoreTarget<JSObject>();
++  DirectHandle<OrderedHashSet> order;
++  if (WebIdlPropertyOrder::Applies(*receiver)) {
++    MAYBE_RETURN(WebIdlPropertyOrder::Prepare(isolate_, receiver, GetName(), &order),
++                 Nothing<bool>());
++  }
+   holder_ = receiver;
+ 
+   PropertyDetails details(PropertyKind::kAccessor, attributes,
+@@ -971,6 +992,7 @@
+ 
+     ReloadPropertyInformation<false>();
+   }
++  if (!order.is_null()) WebIdlPropertyOrder::Commit(isolate_, order, GetName());
+   return Just(true);
+ }
+ 
+diff --git a/v8/src/objects/objects-body-descriptors-inl.h b/v8/src/objects/objects-body-descriptors-inl.h
+--- a/v8/src/objects/objects-body-descriptors-inl.h
++++ b/v8/src/objects/objects-body-descriptors-inl.h
+@@ -1965,6 +1965,8 @@
+ 
+ class InterceptorInfo::BodyDescriptor final : public BodyDescriptorBase {
+  public:
++  static_assert(offsetof(InterceptorInfo, data_) <
++                InterceptorInfo::kEndOfStrongFieldsOffset);
+   static_assert(InterceptorInfo::kEndOfStrongFieldsOffset ==
+                 offsetof(InterceptorInfo, flags_));
+   static_assert(offsetof(InterceptorInfo, flags_) <
+diff --git a/v8/src/objects/objects.cc b/v8/src/objects/objects.cc
+--- a/v8/src/objects/objects.cc
++++ b/v8/src/objects/objects.cc
+@@ -2924,6 +2924,13 @@
+     StoreOrigin store_origin) {
+   DirectHandle<JSTransitionableReceiver> receiver =
+       it->GetStoreTarget<JSTransitionableReceiver>();
++  DirectHandle<OrderedHashSet> order;
++  if (IsJSObject(*receiver)) {
++    MAYBE_RETURN(WebIdlPropertyOrder::Prepare(it->isolate(),
++                                               Cast<JSObject>(receiver),
++                                               it->GetName(), &order),
++                 Nothing<bool>());
++  }
+   it->UpdateProtector();
+   // Migrate to the most up-to-date map that will be able to store |value|
+   // under it->name() with |attributes|.
+@@ -2938,6 +2945,7 @@
+ 
+   // Write the property value.
+   it->WriteDataValue(value, true);
++  WebIdlPropertyOrder::Commit(it->isolate(), order, it->GetName());
+ 
+ #if VERIFY_HEAP
+   if (v8_flags.verify_heap) {

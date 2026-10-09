@@ -20,9 +20,7 @@ import json
 import os
 import platform
 import re
-import resource
 import shutil
-import signal
 import statistics
 import subprocess
 import sys
@@ -333,7 +331,7 @@ def fmt_ms(summary: dict | None, key: str = "p50") -> str:
     return f"{summary[key]:.1f}"
 
 
-def fmt_mb(summary: dict | None, key: str = "p50") -> str:
+def fmt_mib(summary: dict | None, key: str = "p50") -> str:
     if not summary:
         return "–"
     return f"{summary[key] / (1024 * 1024):.1f}"
@@ -351,7 +349,7 @@ def markdown_table(rows: list[dict]) -> str:
     if has_engine_overhead and has_adjusted_ttfr:
         # Both metrics: engine overhead for search and adjusted TTFR for cold-fetch
         head = ("| Scenario | Subject | Status | n | Wall p50 (ms) | Wall p95 | Wall max | CPU p50 (ms) "
-                "| Peak RSS p50 (MB) | Tree RSS p50 (MB) | TTFR/Engine p50 (ms) |")
+                "| Peak RSS p50 (MiB) | Tree RSS p50 (MiB) | TTFR/Engine p50 (ms) |")
         lines = [head, "|" + "---|" * 11]
         for r in rows:
             s = r.get("summary") or {}
@@ -360,44 +358,44 @@ def markdown_table(rows: list[dict]) -> str:
             lines.append(
                 f"| {r['scenario']} | {r['subject']} | {r['status']} | {r.get('runs_ok', 0)} "
                 f"| {fmt_ms(s.get('wall_ms'))} | {fmt_ms(s.get('wall_ms'), 'p95')} | {fmt_ms(s.get('wall_ms'), 'max')} "
-                f"| {fmt_ms(s.get('cpu_ms'))} | {fmt_mb(s.get('peak_rss_bytes'))} "
-                f"| {fmt_mb(s.get('peak_rss_tree_bytes'))} | {metric} |"
+                f"| {fmt_ms(s.get('cpu_ms'))} | {fmt_mib(s.get('peak_rss_bytes'))} "
+                f"| {fmt_mib(s.get('peak_rss_tree_bytes'))} | {metric} |"
             )
     elif has_engine_overhead:
         head = ("| Scenario | Subject | Status | n | Wall p50 (ms) | Wall p95 | Wall max | CPU p50 (ms) "
-                "| Peak RSS p50 (MB) | Tree RSS p50 (MB) | Engine Overhead p50 (ms) |")
+                "| Peak RSS p50 (MiB) | Tree RSS p50 (MiB) | Engine Overhead p50 (ms) |")
         lines = [head, "|" + "---|" * 11]
         for r in rows:
             s = r.get("summary") or {}
             lines.append(
                 f"| {r['scenario']} | {r['subject']} | {r['status']} | {r.get('runs_ok', 0)} "
                 f"| {fmt_ms(s.get('wall_ms'))} | {fmt_ms(s.get('wall_ms'), 'p95')} | {fmt_ms(s.get('wall_ms'), 'max')} "
-                f"| {fmt_ms(s.get('cpu_ms'))} | {fmt_mb(s.get('peak_rss_bytes'))} "
-                f"| {fmt_mb(s.get('peak_rss_tree_bytes'))} | {fmt_ms(s.get('engine_overhead_ms'))} |"
+                f"| {fmt_ms(s.get('cpu_ms'))} | {fmt_mib(s.get('peak_rss_bytes'))} "
+                f"| {fmt_mib(s.get('peak_rss_tree_bytes'))} | {fmt_ms(s.get('engine_overhead_ms'))} |"
             )
     elif has_adjusted_ttfr:
         head = ("| Scenario | Subject | Status | n | Wall p50 (ms) | Wall p95 | Wall max | CPU p50 (ms) "
-                "| Peak RSS p50 (MB) | Tree RSS p50 (MB) | TTFR p50 (ms) | TTFR adj p50 (ms) |")
+                "| Peak RSS p50 (MiB) | Tree RSS p50 (MiB) | TTFR p50 (ms) | TTFR adj p50 (ms) |")
         lines = [head, "|" + "---|" * 12]
         for r in rows:
             s = r.get("summary") or {}
             lines.append(
                 f"| {r['scenario']} | {r['subject']} | {r['status']} | {r.get('runs_ok', 0)} "
                 f"| {fmt_ms(s.get('wall_ms'))} | {fmt_ms(s.get('wall_ms'), 'p95')} | {fmt_ms(s.get('wall_ms'), 'max')} "
-                f"| {fmt_ms(s.get('cpu_ms'))} | {fmt_mb(s.get('peak_rss_bytes'))} "
-                f"| {fmt_mb(s.get('peak_rss_tree_bytes'))} | {fmt_ms(s.get('ttfr_ms'))} | {fmt_ms(s.get('ttfr_ms_adjusted'))} |"
+                f"| {fmt_ms(s.get('cpu_ms'))} | {fmt_mib(s.get('peak_rss_bytes'))} "
+                f"| {fmt_mib(s.get('peak_rss_tree_bytes'))} | {fmt_ms(s.get('ttfr_ms'))} | {fmt_ms(s.get('ttfr_ms_adjusted'))} |"
             )
     else:
         head = ("| Scenario | Subject | Status | n | Wall p50 (ms) | Wall p95 | Wall max | CPU p50 (ms) "
-                "| Peak RSS p50 (MB) | Tree RSS p50 (MB) | TTFR p50 (ms) |")
+                "| Peak RSS p50 (MiB) | Tree RSS p50 (MiB) | TTFR p50 (ms) |")
         lines = [head, "|" + "---|" * 11]
         for r in rows:
             s = r.get("summary") or {}
             lines.append(
                 f"| {r['scenario']} | {r['subject']} | {r['status']} | {r.get('runs_ok', 0)} "
                 f"| {fmt_ms(s.get('wall_ms'))} | {fmt_ms(s.get('wall_ms'), 'p95')} | {fmt_ms(s.get('wall_ms'), 'max')} "
-                f"| {fmt_ms(s.get('cpu_ms'))} | {fmt_mb(s.get('peak_rss_bytes'))} "
-                f"| {fmt_mb(s.get('peak_rss_tree_bytes'))} | {fmt_ms(s.get('ttfr_ms'))} |"
+                f"| {fmt_ms(s.get('cpu_ms'))} | {fmt_mib(s.get('peak_rss_bytes'))} "
+                f"| {fmt_mib(s.get('peak_rss_tree_bytes'))} | {fmt_ms(s.get('ttfr_ms'))} |"
             )
     return "\n".join(lines)
 

@@ -12,8 +12,8 @@ publish = false
 # Enabling `v8` (resp. `quickjs`) pulls the engine crate and compiles the
 # generated `*_v8.rs` (resp. `*_qjs.rs`) DOM glue in `src/bindings`. The
 # engine-independent bindings compile without either feature.
-v8 = ["dep:v8"]
-quickjs = []
+v8 = ["dep:v8", "tenta-css/stylo"]
+quickjs = ["dep:rquickjs", "tenta-css/stylo"]
 
 [dependencies]
 tenta-core = { workspace = true }
@@ -21,6 +21,7 @@ tenta-net = { workspace = true }
 tenta-dom = { workspace = true }
 tenta-html = { workspace = true }
 tenta-css = { workspace = true }
+parking_lot = { workspace = true }
 # The `Headers` host validates a header name with the `http` crate's field-name
 # `token` production rather than restating the character table. `tenta-net`
 # already depends on it, so this adds no node to the dependency graph.
@@ -38,7 +39,9 @@ url = { workspace = true }
 # dependency graph; `cargo xtask lint-deps` only checks internal
 # dependencies, the same basis as the `http` and `url` entries above.
 encoding_rs = { workspace = true }
+getrandom = { workspace = true }
 v8 = { workspace = true, optional = true }
+rquickjs = { workspace = true, optional = true }
 
 [build-dependencies]
 tenta-idl = { workspace = true }

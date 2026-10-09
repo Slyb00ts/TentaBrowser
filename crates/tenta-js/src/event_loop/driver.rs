@@ -656,6 +656,7 @@ impl EventLoop {
                 })
                 .collect();
             shared.timer_callbacks.clear();
+            shared.timers.clear();
             shared.frame_callbacks.clear();
             // Whatever the backend still holds from an earlier firing is going
             // away with it; nothing may claim the right to run afterwards. A

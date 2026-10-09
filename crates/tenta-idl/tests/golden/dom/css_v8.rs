@@ -21,7 +21,7 @@
 /// - `v8::ReturnValue::{set, set_bool, set_int32, set_uint32, set_double,
 ///   set_null, set_undefined}`
 /// - `v8::fast_api::{CFunction, CFunctionInfo, CTypeInfo, Flags,
-///   Int64Representation, Type, FastApiOneByteString}`
+///   Int64Representation, Type, FastApiOneByteString, FastApiCallbackOptions}`
 /// - `v8::Local<v8::Object>::{get_aligned_pointer_from_internal_field,
 ///   set_aligned_pointer_in_internal_field, get, set, create_data_property,
 ///   internal_field_count}` (through the prelude helpers)
@@ -39,6 +39,7 @@ pub fn install_css<T: CSSOps + 'static>(
     global_template: v8::Local<'_, v8::ObjectTemplate>,
     registry: &mut dyn InterfaceRegistry,
 ) -> Result<(), JsError> {
+    install_native_callback_state(scope);
     let namespace = v8::ObjectTemplate::new(scope);
     {
         let key = v8_string(scope, "supports")?;
@@ -73,16 +74,28 @@ pub fn install_css<T: CSSOps + 'static>(
     Ok(())
 }
 
+fn call_css_supports<'s, T: CSSOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_css_supports::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_css_supports", (), call) };
+}
+
 /// Overload dispatcher for `CSS.supports`; WebIDL selects an overload by
 /// argument count first.
-fn call_css_supports<'s, T: CSSOps + 'static>(
+fn body_call_css_supports<'s, T: CSSOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<v8::Value>,
 ) {
     match args.length() {
         1 => call_css_supports_1::<T>(scope, args, rv),
-        2 => call_css_supports_2::<T>(scope, args, rv),
+        2.. => call_css_supports_2::<T>(scope, args, rv),
         _ => throw_type_error(
             scope,
             "Failed to execute 'supports' on 'CSS': no overload matches the argument count",
@@ -90,8 +103,20 @@ fn call_css_supports<'s, T: CSSOps + 'static>(
     }
 }
 
-/// `CSS.supports`.
 fn call_css_supports_2<'s, T: CSSOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_css_supports_2::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_css_supports_2", (), call) };
+}
+
+/// `CSS.supports`.
+fn body_call_css_supports_2<'s, T: CSSOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -105,7 +130,7 @@ fn call_css_supports_2<'s, T: CSSOps + 'static>(
     }
     let property = {
         let raw = args.get(0);
-        match Ok::<String, JsError>(string_from_v8(scope, raw)) {
+        match string_from_v8(scope, raw) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -115,7 +140,7 @@ fn call_css_supports_2<'s, T: CSSOps + 'static>(
     };
     let value = {
         let raw = args.get(1);
-        match Ok::<String, JsError>(string_from_v8(scope, raw)) {
+        match string_from_v8(scope, raw) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -136,8 +161,20 @@ fn call_css_supports_2<'s, T: CSSOps + 'static>(
     }
 }
 
-/// `CSS.supports`.
 fn call_css_supports_1<'s, T: CSSOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_css_supports_1::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_css_supports_1", (), call) };
+}
+
+/// `CSS.supports`.
+fn body_call_css_supports_1<'s, T: CSSOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -151,7 +188,7 @@ fn call_css_supports_1<'s, T: CSSOps + 'static>(
     }
     let condition_text = {
         let raw = args.get(0);
-        match Ok::<String, JsError>(string_from_v8(scope, raw)) {
+        match string_from_v8(scope, raw) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -172,8 +209,20 @@ fn call_css_supports_1<'s, T: CSSOps + 'static>(
     }
 }
 
-/// `CSS.escape`.
 fn call_css_escape<'s, T: CSSOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_css_escape::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_css_escape", (), call) };
+}
+
+/// `CSS.escape`.
+fn body_call_css_escape<'s, T: CSSOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -187,7 +236,7 @@ fn call_css_escape<'s, T: CSSOps + 'static>(
     }
     let ident = {
         let raw = args.get(0);
-        match Ok::<String, JsError>(string_from_v8(scope, raw)) {
+        match string_from_v8(scope, raw) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);

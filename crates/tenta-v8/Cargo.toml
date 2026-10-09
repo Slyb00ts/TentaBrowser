@@ -1,0 +1,73 @@
+[package]
+name = "tenta-v8"
+version = "152.2.0"
+edition = "2024"
+rust-version = "1.98"
+authors = ["the Deno authors", "TentaBrowser contributors"]
+license = "MIT AND Apache-2.0"
+repository = "https://github.com/Slyb00ts/TentaBrowser"
+description = "Local rusty_v8 bindings requiring the matching Tenta WebIDL native artifact"
+publish = false
+build = "build.rs"
+links = "rusty_v8"
+autotests = false
+autoexamples = false
+autobenches = false
+
+[lib]
+name = "v8"
+path = "src/lib.rs"
+
+[features]
+default = ["use_custom_libcxx"]
+simdutf = []
+use_custom_libcxx = []
+v8_enable_pointer_compression = []
+v8_enable_sandbox = ["v8_enable_pointer_compression"]
+v8_enable_v8_checks = []
+
+[dependencies]
+bitflags = "2.5"
+paste = "1.0"
+# The native artifact was compiled against these exact Temporal C API headers.
+temporal_capi = { version = "=0.2.3", features = ["zoneinfo64"] }
+
+# Kept at the exact upstream constraints because build.rs remains upstream with
+# one mandatory local-artifact guard. Source builds use the separate full tree.
+[build-dependencies]
+bindgen = "0.72"
+fslock = "0.2"
+gzip-header = "1.0.0"
+home = "0"
+miniz_oxide = "0.8.8"
+which = "6"
+
+[[test]]
+name = "web_idl_legacy"
+path = "tests/web_idl_legacy.rs"
+
+[[test]]
+name = "ordinary_object_brand"
+path = "tests/ordinary_object_brand.rs"
+
+[[test]]
+name = "termination_now"
+path = "tests/termination_now.rs"
+
+[[test]]
+name = "web_idl_order"
+path = "tests/web_idl_order.rs"
+
+# Preserve upstream pure build-script tests and exercise the local artifact
+# guard through the exact hash/copy helpers used by the real build script.
+[[test]]
+name = "build"
+path = "build.rs"
+
+[dev-dependencies]
+bindgen = "0.72"
+fslock = "0.2"
+gzip-header = "1.0.0"
+home = "0"
+miniz_oxide = "0.8.8"
+which = "6"

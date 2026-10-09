@@ -5,7 +5,22 @@
 //! the callback bodies have one shape.
 
 use crate::codegen::rust_type::{Position, integer_suffix, rust_type};
-use crate::model::{Argument, Model, Type};
+use crate::model::{Argument, ExtendedAttributes, Model, Type};
+
+/// Applies the DOMString/USVString annotation without changing ordinary
+/// undefined or object coercion. Nullable strings cannot carry this annotation.
+pub(super) fn legacy_null_to_empty(
+    ty: &Type,
+    attrs: &ExtendedAttributes,
+    value: &str,
+    conversion: String,
+) -> String {
+    if matches!(ty, Type::DomString | Type::UsvString) && attrs.has("LegacyNullToEmptyString") {
+        format!("if {value}.is_null() {{ Ok(String::new()) }} else {{ {conversion} }}")
+    } else {
+        conversion
+    }
+}
 
 /// The extended attribute WebIDL gives its loose callback conversion to; see
 /// [`from_v8_for_attribute_setter`].
@@ -62,10 +77,18 @@ pub fn from_v8(ty: &Type, scope: &str, value: &str, mode: IntegerMode) -> String
                 }
             }
         }
-        Type::Float { .. } => format!("number_from_v8({scope}, {value}).map(|n| n as f32)"),
-        Type::Double { .. } => format!("number_from_v8({scope}, {value})"),
+        Type::Float { unrestricted: true } => {
+            format!("number_from_v8({scope}, {value}).map(|number| number as f32)")
+        }
+        Type::Float {
+            unrestricted: false,
+        } => format!("number_from_v8({scope}, {value}).and_then(restricted_f32)"),
+        Type::Double { unrestricted: true } => format!("number_from_v8({scope}, {value})"),
+        Type::Double {
+            unrestricted: false,
+        } => format!("number_from_v8({scope}, {value}).and_then(restricted_f64)"),
         Type::DomString | Type::UsvString => {
-            format!("Ok::<String, JsError>(string_from_v8({scope}, {value}))")
+            format!("string_from_v8({scope}, {value})")
         }
         Type::ByteString => {
             format!("byte_string_from_v8({scope}, {value})")
@@ -105,13 +128,13 @@ pub fn from_v8(ty: &Type, scope: &str, value: &str, mode: IntegerMode) -> String
         ),
         Type::Promise(_) => format!("value_from_v8({scope}, {value}).map(Promise::from_bits)"),
         Type::Sequence(inner) | Type::FrozenArray(inner) | Type::ObservableArray(inner) => {
-            let element = from_v8(inner, "scope", "item", IntegerMode::Modulo);
-            format!("sequence_from_v8({scope}, {value}, |scope, item| {element})")
+            let element = from_v8_converter(inner);
+            format!("sequence_from_v8({scope}, {value}, {element})")
         }
         Type::Record(key, inner) => {
             let key = record_key_from_v8(key);
-            let element = from_v8(inner, "scope", "item", IntegerMode::Modulo);
-            format!("record_from_v8({scope}, {value}, {key}, |scope, item| {element})")
+            let element = from_v8_converter(inner);
+            format!("record_from_v8({scope}, {value}, {key}, {element})")
         }
         Type::Nullable(inner) => {
             let inner_expr = from_v8(inner, scope, value, mode);
@@ -120,6 +143,21 @@ pub fn from_v8(ty: &Type, scope: &str, value: &str, mode: IntegerMode) -> String
             )
         }
         other => unreachable!("integer type {other:?} is handled by the guarded arm above"),
+    }
+}
+
+/// The converter passed to sequence and record helpers.
+///
+/// String conversions are function items now that every V8 `ToString` path is
+/// fallible. Other types still need an expression generated for each element.
+fn from_v8_converter(ty: &Type) -> String {
+    match ty {
+        Type::DomString | Type::UsvString => "string_from_v8".to_owned(),
+        Type::ByteString => "byte_string_from_v8".to_owned(),
+        other => format!(
+            "|scope, item| {}",
+            from_v8(other, "scope", "item", IntegerMode::Modulo)
+        ),
     }
 }
 
@@ -227,8 +265,8 @@ const RECORD_KEY_TYPE_ERROR: &str = "a record key must be a string type";
 /// `byte_string_from_v8` for `ByteString`, which reads one code unit per byte
 /// and rejects a code unit above `0xFF` instead of truncating it.
 ///
-/// `ByteString` names that helper directly rather than wrapping it in a
-/// closure, so the emitted call site does not read as a `redundant_closure`.
+/// All three string key types name their fallible helper directly, avoiding
+/// redundant closures in generated call sites.
 ///
 /// Any other key type is not valid WebIDL and has no key conversion to apply,
 /// so the emitted converter fails with a `TypeError` rather than quietly
@@ -237,12 +275,7 @@ const RECORD_KEY_TYPE_ERROR: &str = "a record key must be a string type";
 /// corpus; this arm is what keeps one from passing silently if it appears.
 fn record_key_from_v8(ty: &Type) -> String {
     match ty {
-        Type::DomString | Type::UsvString => {
-            format!(
-                "|scope, key| {}",
-                from_v8(ty, "scope", "key", IntegerMode::Modulo)
-            )
-        }
+        Type::DomString | Type::UsvString => "string_from_v8".to_owned(),
         Type::ByteString => "byte_string_from_v8".to_string(),
         other => format!(
             "|_scope, _key| Err::<{}, JsError>(JsError::type_error(\"{RECORD_KEY_TYPE_ERROR}\"))",
@@ -491,7 +524,7 @@ mod tests {
                 "value",
                 IntegerMode::Modulo
             ),
-            "record_from_v8(scope, value, byte_string_from_v8, |scope, item| Ok::<String, JsError>(string_from_v8(scope, item)))"
+            "record_from_v8(scope, value, byte_string_from_v8, string_from_v8)"
         );
         assert_eq!(
             to_v8(&record(Type::ByteString), "scope", "value"),
@@ -506,7 +539,7 @@ mod tests {
         for key in [Type::DomString, Type::UsvString] {
             assert_eq!(
                 from_v8(&record(key), "scope", "value", IntegerMode::Modulo),
-                "record_from_v8(scope, value, |scope, key| Ok::<String, JsError>(string_from_v8(scope, key)), |scope, item| Ok::<String, JsError>(string_from_v8(scope, item)))"
+                "record_from_v8(scope, value, string_from_v8, string_from_v8)"
             );
         }
         assert_eq!(
@@ -522,7 +555,7 @@ mod tests {
     fn a_non_string_record_key_has_no_conversion() {
         assert_eq!(
             from_v8(&record(Type::Long), "scope", "value", IntegerMode::Modulo),
-            "record_from_v8(scope, value, |_scope, _key| Err::<i32, JsError>(JsError::type_error(\"a record key must be a string type\")), |scope, item| Ok::<String, JsError>(string_from_v8(scope, item)))"
+            "record_from_v8(scope, value, |_scope, _key| Err::<i32, JsError>(JsError::type_error(\"a record key must be a string type\")), string_from_v8)"
         );
         assert_eq!(
             to_v8(&record(Type::Long), "scope", "value"),

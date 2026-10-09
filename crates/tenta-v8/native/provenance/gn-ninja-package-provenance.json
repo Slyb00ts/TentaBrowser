@@ -1,0 +1,14 @@
+[
+  {
+    "tool": "gn",
+    "archive_sha256": "90e262e1af390fd8fd2e76780ae96a919f50ea8ffb182d3645459ae5f5a0328d",
+    "archive_bytes": 993894,
+    "binary_matches_verified_package": true
+  },
+  {
+    "tool": "ninja",
+    "archive_sha256": "c5e9b4ffab3b2edefbc41849fc81f116c8d047b258906becc061be9ecaf04afd",
+    "archive_bytes": 145520,
+    "binary_matches_verified_package": true
+  }
+]

@@ -12,6 +12,7 @@ enum CounterState {
 dictionary CounterOptions {
   required long initialValue;
   DOMString label;
+  DOMString? nullableLabel;
   boolean autoStart = false;
 };
 

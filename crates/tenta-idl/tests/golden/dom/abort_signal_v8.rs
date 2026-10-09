@@ -25,7 +25,7 @@
 /// - `v8::ReturnValue::{set, set_bool, set_int32, set_uint32, set_double,
 ///   set_null, set_undefined}`
 /// - `v8::fast_api::{CFunction, CFunctionInfo, CTypeInfo, Flags,
-///   Int64Representation, Type, FastApiOneByteString}`
+///   Int64Representation, Type, FastApiOneByteString, FastApiCallbackOptions}`
 /// - `v8::Local<v8::Object>::{get_aligned_pointer_from_internal_field,
 ///   set_aligned_pointer_in_internal_field, get, set, create_data_property,
 ///   internal_field_count}` (through the prelude helpers)
@@ -43,7 +43,8 @@ pub fn install_abort_signal<T: AbortSignalOps + EventTargetOps + EventTargetCons
     global_template: v8::Local<'_, v8::ObjectTemplate>,
     registry: &mut dyn InterfaceRegistry,
 ) -> Result<v8::Global<v8::FunctionTemplate>, JsError> {
-    let constructor = v8::FunctionTemplate::builder(construct_abort_signal::<T>).build(scope);
+    install_native_callback_state(scope);
+    let constructor = v8::FunctionTemplate::builder(construct_abort_signal::<T>).length(0).build(scope);
     let class_name = v8_string(scope, "AbortSignal")?;
     constructor.set_class_name(class_name);
     let parent = cached_template(scope, "EventTarget").ok_or_else(|| {
@@ -129,9 +130,23 @@ pub fn install_abort_signal<T: AbortSignalOps + EventTargetOps + EventTargetCons
     Ok(v8::Global::new(scope.as_ref(), constructor))
 }
 
+fn construct_abort_signal<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        v8_begin_stored_value_lease(scope);
+        body_construct_abort_signal::<T>(scope, args, rv);
+        v8_end_stored_value_lease(scope);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "construct_abort_signal", (), call) };
+}
+
 /// `AbortSignal` declares no `constructor`, so calling it throws, as WebIDL
 /// requires for an interface without a constructor operation.
-fn construct_abort_signal<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
+fn body_construct_abort_signal<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -139,8 +154,20 @@ fn construct_abort_signal<'s, T: AbortSignalOps + EventTargetOps + EventTargetCo
     throw_type_error(scope, "Illegal constructor");
 }
 
-/// `AbortSignal.abort`.
 fn call_abort_signal_abort<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_abort_signal_abort::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_abort_signal_abort", (), call) };
+}
+
+/// `AbortSignal.abort`.
+fn body_call_abort_signal_abort<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -170,8 +197,20 @@ fn call_abort_signal_abort<'s, T: AbortSignalOps + EventTargetOps + EventTargetC
     }
 }
 
-/// `AbortSignal.timeout`.
 fn call_abort_signal_timeout<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_abort_signal_timeout::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_abort_signal_timeout", (), call) };
+}
+
+/// `AbortSignal.timeout`.
+fn body_call_abort_signal_timeout<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -206,8 +245,20 @@ fn call_abort_signal_timeout<'s, T: AbortSignalOps + EventTargetOps + EventTarge
     }
 }
 
-/// `AbortSignal.any`.
 fn call_abort_signal_any<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_abort_signal_any::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_abort_signal_any", (), call) };
+}
+
+/// `AbortSignal.any`.
+fn body_call_abort_signal_any<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -242,8 +293,20 @@ fn call_abort_signal_any<'s, T: AbortSignalOps + EventTargetOps + EventTargetCon
     }
 }
 
-/// Getter for `AbortSignal.aborted`.
 fn get_abort_signal_aborted<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_abort_signal_aborted::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_abort_signal_aborted", (), call) };
+}
+
+/// Getter for `AbortSignal.aborted`.
+fn body_get_abort_signal_aborted<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -265,13 +328,16 @@ fn get_abort_signal_aborted<'s, T: AbortSignalOps + EventTargetOps + EventTarget
 /// Fast-API getter for `AbortSignal.aborted`.
 extern "C" fn fast_get_abort_signal_aborted<T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> bool {
+    v8_fast_callback_boundary(options, "fast_get_abort_signal_aborted", false, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.aborted(),
         None => false,
     }
+    })
 }
 
 /// Fast-call table for the `AbortSignal.aborted` getter.
@@ -282,14 +348,26 @@ impl<T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static> Abor
         fast_get_abort_signal_aborted::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Bool.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Getter for `AbortSignal.reason`.
 fn get_abort_signal_reason<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_abort_signal_reason::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_abort_signal_reason", (), call) };
+}
+
+/// Getter for `AbortSignal.reason`.
+fn body_get_abort_signal_reason<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -318,8 +396,20 @@ fn get_abort_signal_reason<'s, T: AbortSignalOps + EventTargetOps + EventTargetC
     }
 }
 
-/// `AbortSignal.throwIfAborted`.
 fn call_abort_signal_throw_if_aborted<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_abort_signal_throw_if_aborted::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_abort_signal_throw_if_aborted", (), call) };
+}
+
+/// `AbortSignal.throwIfAborted`.
+fn body_call_abort_signal_throw_if_aborted<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -342,13 +432,16 @@ fn call_abort_signal_throw_if_aborted<'s, T: AbortSignalOps + EventTargetOps + E
 /// Fast-API callback for `AbortSignal.throwIfAborted`.
 extern "C" fn fast_call_abort_signal_throw_if_aborted<T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) {
+    v8_fast_callback_boundary(options, "fast_call_abort_signal_throw_if_aborted", (), || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.throw_if_aborted(),
         None => (),
     }
+    })
 }
 
 /// Fast-call table for `AbortSignal.throwIfAborted`.
@@ -361,14 +454,27 @@ impl<T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static> Abor
             v8::fast_api::Type::Void.as_info(),
             &[
                 v8::fast_api::Type::V8Value.as_info(),
+                v8::fast_api::Type::CallbackOptions.as_info(),
             ],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Getter for `AbortSignal.onabort`.
 fn get_abort_signal_onabort<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_abort_signal_onabort::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_abort_signal_onabort", (), call) };
+}
+
+/// Getter for `AbortSignal.onabort`.
+fn body_get_abort_signal_onabort<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -397,8 +503,20 @@ fn get_abort_signal_onabort<'s, T: AbortSignalOps + EventTargetOps + EventTarget
     }
 }
 
-/// Setter for `AbortSignal.onabort`.
 fn set_abort_signal_onabort<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_set_abort_signal_onabort::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "set_abort_signal_onabort", (), call) };
+}
+
+/// Setter for `AbortSignal.onabort`.
+fn body_set_abort_signal_onabort<'s, T: AbortSignalOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,

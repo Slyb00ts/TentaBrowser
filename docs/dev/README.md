@@ -3,6 +3,9 @@
 Short, executable recipes. The specification in `docs/spec/` says what and
 why; this directory says how on a workstation.
 
+The [implementation ledger](implementation-status.md) tracks completed work,
+remaining roadmap packages and the evidence still needed for phase exit.
+
 ## Build and check
 
 ```bash
@@ -83,6 +86,57 @@ the engine's spans. Both go to stderr, so stdout stays exactly the output.
 `bench/run.py` drives TentaBrowser, the reference implementation and headless
 Chromium through the scenarios of `bench/scenarios.toml`; results land in
 `bench/results/` (gitignored) and reference baselines in `bench/baselines/`.
+
+The V8 `S-js-xhr` in-process sample is a separate library example:
+
+```bash
+cargo build --release -p tenta-browser --features v8 --example js_xhr
+python3 bench/js_xhr.py --candidate target/release/examples/js_xhr --runs 25
+```
+
+Use `--baseline /path/to/preserved/js_xhr` to interleave two builds. The timer
+includes `goto` and its runtime setup/teardown, while browser/context/page
+construction is outside it. Both network response bodies are checked after
+timing. Reported process RSS includes the fixture server; it is not a page
+RSS delta. This probe does not measure the last-mutation-to-settle gap.
+
+The standalone listener GC probe uses real engine examples and a shared
+JavaScript workload. Build a release example, preserve its binary before a
+collector change, and collect 25 baseline samples:
+
+```bash
+cargo build --release -p tenta-js-v8 --example listener_gc
+cp target/release/examples/listener_gc /tmp/listener_gc_v8_before
+python3 bench/listener_gc.py --baseline /tmp/listener_gc_v8_before --runs 25
+```
+
+For QuickJS use `-p tenta-js-qjs --example listener_gc_qjs` and preserve
+`target/release/examples/listener_gc_qjs`. After a collector change, pass the
+preserved binary as `--baseline` and the new release example as `--candidate`
+for 25 interleaved A/B pairs. The script reports baseline cycle retention
+explicitly and requires the candidate to reclaim both cycle shapes. Timed
+GC costs cover `trim_memory`, native detached-node sweep, and a second trim
+to drain listeners; setup and dispatch checks are outside the timer. RSS is
+whole-process peak memory, not a per-phase live-heap measurement.
+
+The focused Storage probe measures `getItem`, named reads, `setItem` and named
+writes over 128 keys. Writes change each stored value on every sweep; both
+access paths verify final values outside the timed region. For an initial
+engine comparison:
+
+```bash
+cargo build --release -p tenta-js-v8 --example storage_calls
+cargo build --release -p tenta-js-qjs --example storage_calls_qjs
+python3 bench/storage_calls.py --comparison-kind backend \
+    --baseline target/release/examples/storage_calls \
+    --candidate target/release/examples/storage_calls_qjs --runs 25
+```
+
+For a before/after comparison, preserve the old executable before rebuilding
+and use `--comparison-kind revision` with two builds of the same backend.
+The driver alternates A/B and B/A pairs and records binary hashes, p50/p95,
+CPU time and whole-process peak RSS. These focused measurements do not establish
+Storage conformance or the complete context-memory budget.
 
 ## Conformance
 

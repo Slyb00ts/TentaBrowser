@@ -25,7 +25,7 @@
 /// - `v8::ReturnValue::{set, set_bool, set_int32, set_uint32, set_double,
 ///   set_null, set_undefined}`
 /// - `v8::fast_api::{CFunction, CFunctionInfo, CTypeInfo, Flags,
-///   Int64Representation, Type, FastApiOneByteString}`
+///   Int64Representation, Type, FastApiOneByteString, FastApiCallbackOptions}`
 /// - `v8::Local<v8::Object>::{get_aligned_pointer_from_internal_field,
 ///   set_aligned_pointer_in_internal_field, get, set, create_data_property,
 ///   internal_field_count}` (through the prelude helpers)
@@ -43,7 +43,8 @@ pub fn install_node_list<T: NodeListOps + 'static>(
     global_template: v8::Local<'_, v8::ObjectTemplate>,
     registry: &mut dyn InterfaceRegistry,
 ) -> Result<v8::Global<v8::FunctionTemplate>, JsError> {
-    let constructor = v8::FunctionTemplate::builder(construct_node_list::<T>).build(scope);
+    install_native_callback_state(scope);
+    let constructor = v8::FunctionTemplate::builder(construct_node_list::<T>).length(0).build(scope);
     let class_name = v8_string(scope, "NodeList")?;
     constructor.set_class_name(class_name);
     let signature = v8::Signature::new(scope, constructor);
@@ -68,7 +69,15 @@ pub fn install_node_list<T: NodeListOps + 'static>(
         prototype.set_accessor_property(key.into(), Some(getter), None, v8::PropertyAttribute::NONE);
     }
     instance.set_indexed_property_handler(
-        v8::IndexedPropertyHandlerConfiguration::new().getter(indexed_get_node_list::<T>),
+        v8::IndexedPropertyHandlerConfiguration::new()
+            .getter(indexed_get_node_list::<T>)
+            .setter(indexed_set_node_list::<T>)
+            .query(indexed_query_node_list::<T>)
+            .deleter(indexed_delete_node_list::<T>)
+            .enumerator(indexed_enumerate_node_list::<T>)
+            .definer(indexed_define_node_list::<T>)
+            .descriptor(indexed_descriptor_node_list::<T>)
+            .flags(v8::PropertyHandlerFlags::WEB_IDL_LEGACY),
     );
     {
         // A WebIDL value iterator exposes `%Array.prototype.entries%`.
@@ -129,9 +138,23 @@ pub fn install_node_list<T: NodeListOps + 'static>(
     Ok(v8::Global::new(scope.as_ref(), constructor))
 }
 
+fn construct_node_list<'s, T: NodeListOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        v8_begin_stored_value_lease(scope);
+        body_construct_node_list::<T>(scope, args, rv);
+        v8_end_stored_value_lease(scope);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "construct_node_list", (), call) };
+}
+
 /// `NodeList` declares no `constructor`, so calling it throws, as WebIDL
 /// requires for an interface without a constructor operation.
-fn construct_node_list<'s, T: NodeListOps + 'static>(
+fn body_construct_node_list<'s, T: NodeListOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -139,8 +162,20 @@ fn construct_node_list<'s, T: NodeListOps + 'static>(
     throw_type_error(scope, "Illegal constructor");
 }
 
-/// `NodeList.item`.
 fn call_node_list_item<'s, T: NodeListOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_list_item::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_list_item", (), call) };
+}
+
+/// `NodeList.item`.
+fn body_call_node_list_item<'s, T: NodeListOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -186,8 +221,20 @@ fn call_node_list_item<'s, T: NodeListOps + 'static>(
     }
 }
 
-/// Getter for `NodeList.length`.
 fn get_node_list_length<'s, T: NodeListOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_list_length::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_list_length", (), call) };
+}
+
+/// Getter for `NodeList.length`.
+fn body_get_node_list_length<'s, T: NodeListOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -209,13 +256,16 @@ fn get_node_list_length<'s, T: NodeListOps + 'static>(
 /// Fast-API getter for `NodeList.length`.
 extern "C" fn fast_get_node_list_length<T: NodeListOps + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> u32 {
+    v8_fast_callback_boundary(options, "fast_get_node_list_length", 0, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.length(),
         None => 0,
     }
+    })
 }
 
 /// Fast-call table for the `NodeList.length` getter.
@@ -226,39 +276,285 @@ impl<T: NodeListOps + 'static> NodeListLengthGetter<T> {
         fast_get_node_list_length::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Uint32.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Indexed property getter for `NodeList`, installed with
-/// `ObjectTemplate::set_indexed_property_handler`.
+fn legacy_error_node_list(scope: &mut v8::PinScope<'_, '_>, error: &JsError) {
+    if native_callback_failure(scope).is_some() {
+        scope.terminate_execution();
+    } else {
+        throw_js_error(scope, error);
+    }
+}
+
+fn legacy_descriptor_node_list<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    writable: bool,
+    enumerable: bool,
+) -> Result<v8::Local<'s, v8::Object>, JsError> {
+    let descriptor = v8::Object::new(scope);
+    let fields = [
+        ("value", value),
+        ("writable", v8::Boolean::new(scope, writable).into()),
+        ("enumerable", v8::Boolean::new(scope, enumerable).into()),
+        ("configurable", v8::Boolean::new(scope, true).into()),
+    ];
+    for (name, value) in fields {
+        let key = v8_string(scope, name)?;
+        if descriptor.create_data_property(scope, key.into(), value) != Some(true) {
+            return Err(JsError::type_error("could not create a WebIDL property descriptor"));
+        }
+    }
+    Ok(descriptor)
+}
+
+fn legacy_index_value_node_list<'s, T: NodeListOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host: &T,
+    index: u32,
+) -> Result<v8::Local<'s, v8::Value>, JsError> {
+    let value: Option<Handle<Node>> = <T as NodeListOps>::item(host, index)?;
+    match value { Some(inner) => handle_to_v8::<Node>(scope, inner), None => Ok(v8::null(scope).into()) }
+}
+
+fn legacy_index_supported_node_list<T: NodeListOps + 'static>(host: &T, index: u32) -> Result<bool, JsError> {
+    <T as NodeListOps>::is_supported_property_index(host, index)
+}
+
 fn indexed_get_node_list<'s, T: NodeListOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     index: u32,
     args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) -> v8::Intercepted {
-    let this = args.holder();
-    // SAFETY: the indexed handler is installed on the interface's own
-    // instance template, so the holder is an instance of it.
-    let Some(host) = (unsafe { unwrap_receiver::<T>(this) }) else {
-        return v8::Intercepted::kNo;
+    let call = |scope: &mut v8::PinScope<'s, '_>| -> v8::Intercepted {
+        let Some(host) = (unsafe { unwrap_receiver::<T>(args.holder()) }) else {
+            return v8::Intercepted::kNo;
+        };
+        let supported = match legacy_index_supported_node_list(host, index) {
+            Ok(supported) => supported,
+            Err(error) => {
+                legacy_error_node_list(scope, &error);
+                return v8::Intercepted::kYes;
+            }
+        };
+        if !supported {
+            return v8::Intercepted::kNo;
+        }
+        let value = match legacy_index_value_node_list(scope, host, index) {
+            Ok(value) => value,
+            Err(error) => {
+                legacy_error_node_list(scope, &error);
+                return v8::Intercepted::kYes;
+            }
+        };
+        rv.set(value);
+        v8::Intercepted::kYes
     };
-    let value: Option<Handle<Node>> = match host.item(index) {
-        Ok(value) => value,
-        Err(error) => {
-            throw_js_error(scope, &error);
+    // SAFETY: V8 invokes this registered slow property callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "indexed_get_node_list", v8::Intercepted::kYes, call) }
+}
+
+fn indexed_query_node_list<'s, T: NodeListOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<v8::Integer>,
+) -> v8::Intercepted {
+    let call = |scope: &mut v8::PinScope<'s, '_>| -> v8::Intercepted {
+        let Some(host) = (unsafe { unwrap_receiver::<T>(args.holder()) }) else {
+            return v8::Intercepted::kNo;
+        };
+        let supported = match legacy_index_supported_node_list(host, index) {
+            Ok(supported) => supported,
+            Err(error) => {
+                legacy_error_node_list(scope, &error);
+                return v8::Intercepted::kYes;
+            }
+        };
+        if !supported {
+            return v8::Intercepted::kNo;
+        }
+        rv.set_int32(v8::PropertyAttribute::READ_ONLY.as_u32() as i32);
+        v8::Intercepted::kYes
+    };
+    // SAFETY: V8 invokes this registered slow property callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "indexed_query_node_list", v8::Intercepted::kYes, call) }
+}
+
+fn indexed_descriptor_node_list<'s, T: NodeListOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<v8::Value>,
+) -> v8::Intercepted {
+    let call = |scope: &mut v8::PinScope<'s, '_>| -> v8::Intercepted {
+        let Some(host) = (unsafe { unwrap_receiver::<T>(args.holder()) }) else {
+            return v8::Intercepted::kNo;
+        };
+        let supported = match legacy_index_supported_node_list(host, index) {
+            Ok(supported) => supported,
+            Err(error) => {
+                legacy_error_node_list(scope, &error);
+                return v8::Intercepted::kYes;
+            }
+        };
+        if !supported {
+            return v8::Intercepted::kNo;
+        }
+        let value = match legacy_index_value_node_list(scope, host, index) {
+            Ok(value) => value,
+            Err(error) => {
+                legacy_error_node_list(scope, &error);
+                return v8::Intercepted::kYes;
+            }
+        };
+        let descriptor = match legacy_descriptor_node_list(scope, value, false, true) {
+            Ok(descriptor) => descriptor,
+            Err(error) => {
+                legacy_error_node_list(scope, &error);
+                return v8::Intercepted::kYes;
+            }
+        };
+        rv.set(descriptor.into());
+        v8::Intercepted::kYes
+    };
+    // SAFETY: V8 invokes this registered slow property callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "indexed_descriptor_node_list", v8::Intercepted::kYes, call) }
+}
+
+fn legacy_index_prototype_set_node_list(
+    scope: &mut v8::PinScope<'_, '_>,
+    holder: v8::Local<v8::Object>,
+    index: u32,
+    value: v8::Local<v8::Value>,
+) -> Result<bool, Option<JsError>> {
+    let property = v8_string(scope, &index.to_string()).map_err(Some)?;
+    if native_callback_failure(scope).is_some() {
+        scope.terminate_execution();
+        return Err(None);
+    }
+    let prototype = holder.get_prototype(scope).ok_or(None)?;
+    if native_callback_failure(scope).is_some() {
+        scope.terminate_execution();
+        return Err(None);
+    }
+    let Ok(prototype) = v8::Local::<v8::Object>::try_from(prototype) else {
+        return Ok(false);
+    };
+    let result = legacy_reflect_set(scope, prototype, property.into(), value, holder).ok_or(None)?;
+    if native_callback_failure(scope).is_some() {
+        scope.terminate_execution();
+        return Err(None);
+    }
+    Ok(result)
+}
+
+fn indexed_set_node_list<'s, T: NodeListOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    value: v8::Local<'s, v8::Value>,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<v8::Boolean>,
+) -> v8::Intercepted {
+    let call = |scope: &mut v8::PinScope<'s, '_>| -> v8::Intercepted {
+        let Some(host) = (unsafe { unwrap_receiver::<T>(args.holder()) }) else {
+            return v8::Intercepted::kNo;
+        };
+        let supported = match legacy_index_supported_node_list(host, index) {
+            Ok(supported) => supported,
+            Err(error) => {
+                legacy_error_node_list(scope, &error);
+                return v8::Intercepted::kYes;
+            }
+        };
+        if supported {
+            rv.set_bool(false);
             return v8::Intercepted::kYes;
         }
+        let succeeded = match legacy_index_prototype_set_node_list(scope, args.holder(), index, value) {
+            Ok(succeeded) => succeeded,
+            Err(Some(error)) => {
+                legacy_error_node_list(scope, &error);
+                return v8::Intercepted::kYes;
+            }
+            Err(None) => return v8::Intercepted::kYes,
+        };
+        rv.set_bool(succeeded);
+        v8::Intercepted::kYes
     };
-    let Some(value) = value else {
-        return v8::Intercepted::kNo;
+    // SAFETY: V8 invokes this registered slow property callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "indexed_set_node_list", v8::Intercepted::kYes, call) }
+}
+
+fn indexed_define_node_list<'s, T: NodeListOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    descriptor: &v8::PropertyDescriptor,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<v8::Boolean>,
+) -> v8::Intercepted {
+    let call = |scope: &mut v8::PinScope<'s, '_>| -> v8::Intercepted {
+        let _ = (scope, index, descriptor, args);
+        rv.set_bool(false);
+        v8::Intercepted::kYes
     };
-    match handle_to_v8::<Node>(scope, value) {
-        Ok(value) => rv.set(value),
-        Err(error) => throw_js_error(scope, &error),
-    }
-    v8::Intercepted::kYes
+    // SAFETY: V8 invokes this registered slow property callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "indexed_define_node_list", v8::Intercepted::kYes, call) }
+}
+
+fn indexed_delete_node_list<'s, T: NodeListOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<v8::Boolean>,
+) -> v8::Intercepted {
+    let call = |scope: &mut v8::PinScope<'s, '_>| -> v8::Intercepted {
+        let Some(host) = (unsafe { unwrap_receiver::<T>(args.holder()) }) else {
+            return v8::Intercepted::kNo;
+        };
+        let supported = match legacy_index_supported_node_list(host, index) {
+            Ok(supported) => supported,
+            Err(error) => {
+                legacy_error_node_list(scope, &error);
+                return v8::Intercepted::kYes;
+            }
+        };
+        rv.set_bool(!supported);
+        v8::Intercepted::kYes
+    };
+    // SAFETY: V8 invokes this registered slow property callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "indexed_delete_node_list", v8::Intercepted::kYes, call) }
+}
+
+fn indexed_enumerate_node_list<'s, T: NodeListOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<v8::Array>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        let Some(host) = (unsafe { unwrap_receiver::<T>(args.holder()) }) else {
+            return;
+        };
+        let mut indices = match <T as NodeListOps>::supported_property_indices(host) {
+            Ok(indices) => indices,
+            Err(error) => {
+                legacy_error_node_list(scope, &error);
+                return;
+            }
+        };
+        indices.sort_unstable();
+        indices.dedup();
+        let keys: Vec<v8::Local<v8::Value>> = indices
+            .into_iter()
+            .map(|index| v8::Integer::new_from_unsigned(scope, index).into())
+            .collect();
+        rv.set(v8::Array::new_with_elements(scope, &keys));
+    };
+    // SAFETY: V8 invokes this registered slow property callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "indexed_enumerate_node_list", (), call) };
 }

@@ -173,7 +173,9 @@ fn css_text_setter_replaces_the_whole_block() {
             ].join('|');
         "#
         ),
-        "2|0||margin: 0; padding: 2px;"
+        // CSSOM exposes four longhands per shorthand and reserializes zero
+        // lengths as 0px, matching Chromium and Stylo's declaration block.
+        "8|0px||margin: 0px; padding: 2px;"
     );
 }
 
@@ -203,6 +205,56 @@ fn a_duplicated_property_keeps_the_last_declaration() {
         "#
         ),
         "green|1"
+    );
+}
+
+#[test]
+fn stylo_parses_css_values_that_contain_declaration_punctuation() {
+    assert_eq!(
+        eval(
+            r#"
+            const s = document.querySelector('#target').style;
+            s.cssText = 'content: "a;b:c"; color: blue !important';
+            [s.getPropertyValue('content'), s.getPropertyValue('color'),
+             s.getPropertyPriority('color')].join('|');
+        "#
+        ),
+        "\"a;b:c\"|blue|important"
+    );
+}
+
+#[test]
+fn stylo_rejects_invalid_mutations_and_handles_custom_and_shorthand_properties() {
+    assert_eq!(
+        eval(
+            r#"
+            const s = document.querySelector('#target').style;
+            s.setProperty('color', 'not-a-color');
+            const unchanged = s.getPropertyValue('color');
+            s.setProperty('--Tone', 'teal');
+            s.setProperty('margin', '1px 2px');
+            const shorthand = s.getPropertyValue('margin');
+            const removed = s.removeProperty('margin');
+            [unchanged, s.getPropertyValue('--Tone'), s.getPropertyValue('--tone'),
+             shorthand, removed, s.getPropertyValue('margin-top')].join('|');
+        "#
+        ),
+        "red|teal||1px 2px|1px 2px|"
+    );
+}
+
+#[test]
+fn css_supports_uses_stylo_for_both_overloads() {
+    assert_eq!(
+        eval(
+            r#"
+            [CSS.supports('display', 'grid'),
+             CSS.supports('color', 'not-a-color'),
+             CSS.supports('(display: grid) and (color: red)'),
+             CSS.supports('(display: not-a-display)')].join('|');
+        "#
+        ),
+        "true|false|true|false"
     );
 }
 

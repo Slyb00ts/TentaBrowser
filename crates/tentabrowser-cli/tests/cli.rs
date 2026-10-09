@@ -87,6 +87,109 @@ fn files_in(dir: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+#[test]
+fn eval_rejects_conflicting_output_flags_before_network_access() {
+    let cli = Cli::new("cli-eval-flags");
+    let output = cli.run(&[
+        "fetch",
+        "http://127.0.0.1:1/",
+        "--eval",
+        "document.title",
+        "--dump",
+        "text",
+    ]);
+    assert_eq!(code(&output), 2);
+    assert!(
+        stderr(&output).contains("omit --dump"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(stdout(&output).is_empty());
+}
+
+#[cfg(not(feature = "v8"))]
+#[test]
+fn eval_without_v8_exits_unsupported_before_network_access() {
+    let cli = Cli::new("cli-eval-disabled");
+    let output = cli.run(&["fetch", "http://127.0.0.1:1/", "--eval", "1 + 2"]);
+    assert_eq!(code(&output), 5);
+    assert!(
+        stderr(&output).contains("--features v8"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(stdout(&output).is_empty());
+}
+
+#[cfg(feature = "v8")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn eval_runs_in_the_settled_page_and_serializes_json_values() {
+    let server = server().await;
+    let cli = Cli::new("cli-eval-v8");
+    let url = server.url("/js-xhr/index.html");
+    let output = cli.run(&[
+        "fetch",
+        &url,
+        "--wait",
+        "networkidle",
+        "--eval",
+        "({ title: document.title, settled: window.__settled, status: document.getElementById('status').textContent })",
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value: Value = serde_json::from_str(stdout(&output).trim()).expect("JSON value");
+    assert_eq!(value["settled"], true);
+    assert_eq!(value["status"], "js-xhr: done (2 requests)");
+    assert_eq!(value["title"], "JS + XHR + fetch: done");
+}
+
+#[cfg(feature = "v8")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn eval_returns_string_text_and_reports_script_errors() {
+    let server = server().await;
+    let cli = Cli::new("cli-eval-result");
+    let url = server.url("/tiny/index.html");
+    let title = cli.run(&[
+        "fetch",
+        &url,
+        "--eval",
+        "document.title",
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&title), 0, "{}", stderr(&title));
+    assert_eq!(stdout(&title), "Tiny\n");
+
+    let thrown = cli.run(&[
+        "fetch",
+        &url,
+        "--eval",
+        "(() => { throw new Error('eval failed'); })()",
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&thrown), 1, "{}", stderr(&thrown));
+    assert!(
+        stderr(&thrown).contains("eval failed"),
+        "{}",
+        stderr(&thrown)
+    );
+    assert!(stdout(&thrown).is_empty());
+
+    let promise = cli.run(&[
+        "fetch",
+        &url,
+        "--eval",
+        "Promise.resolve(7)",
+        "--allow-private-network",
+        "--ephemeral",
+    ]);
+    assert_eq!(code(&promise), 1, "{}", stderr(&promise));
+    assert!(stderr(&promise).contains("not awaited"));
+    assert!(stdout(&promise).is_empty());
+}
+
 // --------------------------------------------------------------------- fetch
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

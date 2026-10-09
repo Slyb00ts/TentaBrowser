@@ -25,7 +25,7 @@
 /// - `v8::ReturnValue::{set, set_bool, set_int32, set_uint32, set_double,
 ///   set_null, set_undefined}`
 /// - `v8::fast_api::{CFunction, CFunctionInfo, CTypeInfo, Flags,
-///   Int64Representation, Type, FastApiOneByteString}`
+///   Int64Representation, Type, FastApiOneByteString, FastApiCallbackOptions}`
 /// - `v8::Local<v8::Object>::{get_aligned_pointer_from_internal_field,
 ///   set_aligned_pointer_in_internal_field, get, set, create_data_property,
 ///   internal_field_count}` (through the prelude helpers)
@@ -43,7 +43,8 @@ pub fn install_node<T: NodeOps + EventTargetOps + EventTargetConstructor + 'stat
     global_template: v8::Local<'_, v8::ObjectTemplate>,
     registry: &mut dyn InterfaceRegistry,
 ) -> Result<v8::Global<v8::FunctionTemplate>, JsError> {
-    let constructor = v8::FunctionTemplate::builder(construct_node::<T>).build(scope);
+    install_native_callback_state(scope);
+    let constructor = v8::FunctionTemplate::builder(construct_node::<T>).length(0).build(scope);
     let class_name = v8_string(scope, "Node")?;
     constructor.set_class_name(class_name);
     let parent = cached_template(scope, "EventTarget").ok_or_else(|| {
@@ -610,9 +611,23 @@ pub fn install_node<T: NodeOps + EventTargetOps + EventTargetConstructor + 'stat
     Ok(v8::Global::new(scope.as_ref(), constructor))
 }
 
+fn construct_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        v8_begin_stored_value_lease(scope);
+        body_construct_node::<T>(scope, args, rv);
+        v8_end_stored_value_lease(scope);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "construct_node", (), call) };
+}
+
 /// `Node` declares no `constructor`, so calling it throws, as WebIDL
 /// requires for an interface without a constructor operation.
-fn construct_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+fn body_construct_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -620,8 +635,20 @@ fn construct_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'st
     throw_type_error(scope, "Illegal constructor");
 }
 
-/// Getter for `Node.nodeType`.
 fn get_node_node_type<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_node_type::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_node_type", (), call) };
+}
+
+/// Getter for `Node.nodeType`.
+fn body_get_node_node_type<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -643,13 +670,16 @@ fn get_node_node_type<'s, T: NodeOps + EventTargetOps + EventTargetConstructor +
 /// Fast-API getter for `Node.nodeType`.
 extern "C" fn fast_get_node_node_type<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> u32 {
+    v8_fast_callback_boundary(options, "fast_get_node_node_type", 0, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.node_type() as u32,
         None => 0,
     }
+    })
 }
 
 /// Fast-call table for the `Node.nodeType` getter.
@@ -660,14 +690,26 @@ impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeNodeTyp
         fast_get_node_node_type::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Uint32.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Getter for `Node.nodeName`.
 fn get_node_node_name<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_node_name::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_node_name", (), call) };
+}
+
+/// Getter for `Node.nodeName`.
+fn body_get_node_node_name<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -696,8 +738,20 @@ fn get_node_node_name<'s, T: NodeOps + EventTargetOps + EventTargetConstructor +
     }
 }
 
-/// Getter for `Node.baseURI`.
 fn get_node_base_uri<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_base_uri::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_base_uri", (), call) };
+}
+
+/// Getter for `Node.baseURI`.
+fn body_get_node_base_uri<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -726,8 +780,20 @@ fn get_node_base_uri<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 
     }
 }
 
-/// Getter for `Node.isConnected`.
 fn get_node_is_connected<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_is_connected::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_is_connected", (), call) };
+}
+
+/// Getter for `Node.isConnected`.
+fn body_get_node_is_connected<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -749,13 +815,16 @@ fn get_node_is_connected<'s, T: NodeOps + EventTargetOps + EventTargetConstructo
 /// Fast-API getter for `Node.isConnected`.
 extern "C" fn fast_get_node_is_connected<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> bool {
+    v8_fast_callback_boundary(options, "fast_get_node_is_connected", false, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.is_connected(),
         None => false,
     }
+    })
 }
 
 /// Fast-call table for the `Node.isConnected` getter.
@@ -766,14 +835,26 @@ impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeIsConne
         fast_get_node_is_connected::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Bool.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Getter for `Node.ownerDocument`.
 fn get_node_owner_document<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_owner_document::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_owner_document", (), call) };
+}
+
+/// Getter for `Node.ownerDocument`.
+fn body_get_node_owner_document<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -802,8 +883,20 @@ fn get_node_owner_document<'s, T: NodeOps + EventTargetOps + EventTargetConstruc
     }
 }
 
-/// `Node.getRootNode`.
 fn call_node_get_root_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_get_root_node::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_get_root_node", (), call) };
+}
+
+/// `Node.getRootNode`.
+fn body_call_node_get_root_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -844,8 +937,20 @@ fn call_node_get_root_node<'s, T: NodeOps + EventTargetOps + EventTargetConstruc
     }
 }
 
-/// Getter for `Node.parentNode`.
 fn get_node_parent_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_parent_node::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_parent_node", (), call) };
+}
+
+/// Getter for `Node.parentNode`.
+fn body_get_node_parent_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -874,8 +979,20 @@ fn get_node_parent_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor
     }
 }
 
-/// Getter for `Node.parentElement`.
 fn get_node_parent_element<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_parent_element::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_parent_element", (), call) };
+}
+
+/// Getter for `Node.parentElement`.
+fn body_get_node_parent_element<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -904,8 +1021,20 @@ fn get_node_parent_element<'s, T: NodeOps + EventTargetOps + EventTargetConstruc
     }
 }
 
-/// `Node.hasChildNodes`.
 fn call_node_has_child_nodes<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_has_child_nodes::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_has_child_nodes", (), call) };
+}
+
+/// `Node.hasChildNodes`.
+fn body_call_node_has_child_nodes<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -927,13 +1056,16 @@ fn call_node_has_child_nodes<'s, T: NodeOps + EventTargetOps + EventTargetConstr
 /// Fast-API callback for `Node.hasChildNodes`.
 extern "C" fn fast_call_node_has_child_nodes<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> bool {
+    v8_fast_callback_boundary(options, "fast_call_node_has_child_nodes", false, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.has_child_nodes(),
         None => false,
     }
+    })
 }
 
 /// Fast-call table for `Node.hasChildNodes`.
@@ -946,14 +1078,27 @@ impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeHasChil
             v8::fast_api::Type::Bool.as_info(),
             &[
                 v8::fast_api::Type::V8Value.as_info(),
+                v8::fast_api::Type::CallbackOptions.as_info(),
             ],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Getter for `Node.childNodes`.
 fn get_node_child_nodes<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_child_nodes::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_child_nodes", (), call) };
+}
+
+/// Getter for `Node.childNodes`.
+fn body_get_node_child_nodes<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -982,8 +1127,20 @@ fn get_node_child_nodes<'s, T: NodeOps + EventTargetOps + EventTargetConstructor
     }
 }
 
-/// Getter for `Node.firstChild`.
 fn get_node_first_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_first_child::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_first_child", (), call) };
+}
+
+/// Getter for `Node.firstChild`.
+fn body_get_node_first_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1012,8 +1169,20 @@ fn get_node_first_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor
     }
 }
 
-/// Getter for `Node.lastChild`.
 fn get_node_last_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_last_child::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_last_child", (), call) };
+}
+
+/// Getter for `Node.lastChild`.
+fn body_get_node_last_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1042,8 +1211,20 @@ fn get_node_last_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor 
     }
 }
 
-/// Getter for `Node.previousSibling`.
 fn get_node_previous_sibling<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_previous_sibling::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_previous_sibling", (), call) };
+}
+
+/// Getter for `Node.previousSibling`.
+fn body_get_node_previous_sibling<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1072,8 +1253,20 @@ fn get_node_previous_sibling<'s, T: NodeOps + EventTargetOps + EventTargetConstr
     }
 }
 
-/// Getter for `Node.nextSibling`.
 fn get_node_next_sibling<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_next_sibling::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_next_sibling", (), call) };
+}
+
+/// Getter for `Node.nextSibling`.
+fn body_get_node_next_sibling<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1102,8 +1295,20 @@ fn get_node_next_sibling<'s, T: NodeOps + EventTargetOps + EventTargetConstructo
     }
 }
 
-/// Getter for `Node.nodeValue`.
 fn get_node_node_value<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_node_value::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_node_value", (), call) };
+}
+
+/// Getter for `Node.nodeValue`.
+fn body_get_node_node_value<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1132,8 +1337,20 @@ fn get_node_node_value<'s, T: NodeOps + EventTargetOps + EventTargetConstructor 
     }
 }
 
-/// Setter for `Node.nodeValue`.
 fn set_node_node_value<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_set_node_node_value::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "set_node_node_value", (), call) };
+}
+
+/// Setter for `Node.nodeValue`.
+fn body_set_node_node_value<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -1150,7 +1367,7 @@ fn set_node_node_value<'s, T: NodeOps + EventTargetOps + EventTargetConstructor 
         }
     };
     let raw = args.get(0);
-    let value = match if raw.is_null_or_undefined() { Ok(None) } else { (Ok::<String, JsError>(string_from_v8(scope, raw))).map(Some) } {
+    let value = match if raw.is_null_or_undefined() { Ok(None) } else { (string_from_v8(scope, raw)).map(Some) } {
         Ok(value) => value,
         Err(error) => {
             throw_js_error(scope, &error);
@@ -1162,8 +1379,20 @@ fn set_node_node_value<'s, T: NodeOps + EventTargetOps + EventTargetConstructor 
     }
 }
 
-/// Getter for `Node.textContent`.
 fn get_node_text_content<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_text_content::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_text_content", (), call) };
+}
+
+/// Getter for `Node.textContent`.
+fn body_get_node_text_content<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1192,8 +1421,20 @@ fn get_node_text_content<'s, T: NodeOps + EventTargetOps + EventTargetConstructo
     }
 }
 
-/// Setter for `Node.textContent`.
 fn set_node_text_content<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_set_node_text_content::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "set_node_text_content", (), call) };
+}
+
+/// Setter for `Node.textContent`.
+fn body_set_node_text_content<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -1210,7 +1451,7 @@ fn set_node_text_content<'s, T: NodeOps + EventTargetOps + EventTargetConstructo
         }
     };
     let raw = args.get(0);
-    let value = match if raw.is_null_or_undefined() { Ok(None) } else { (Ok::<String, JsError>(string_from_v8(scope, raw))).map(Some) } {
+    let value = match if raw.is_null_or_undefined() { Ok(None) } else { (string_from_v8(scope, raw)).map(Some) } {
         Ok(value) => value,
         Err(error) => {
             throw_js_error(scope, &error);
@@ -1222,8 +1463,20 @@ fn set_node_text_content<'s, T: NodeOps + EventTargetOps + EventTargetConstructo
     }
 }
 
-/// `Node.normalize`.
 fn call_node_normalize<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_normalize::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_normalize", (), call) };
+}
+
+/// `Node.normalize`.
+fn body_call_node_normalize<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1246,13 +1499,16 @@ fn call_node_normalize<'s, T: NodeOps + EventTargetOps + EventTargetConstructor 
 /// Fast-API callback for `Node.normalize`.
 extern "C" fn fast_call_node_normalize<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) {
+    v8_fast_callback_boundary(options, "fast_call_node_normalize", (), || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.normalize(),
         None => (),
     }
+    })
 }
 
 /// Fast-call table for `Node.normalize`.
@@ -1265,14 +1521,27 @@ impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeNormali
             v8::fast_api::Type::Void.as_info(),
             &[
                 v8::fast_api::Type::V8Value.as_info(),
+                v8::fast_api::Type::CallbackOptions.as_info(),
             ],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// `Node.cloneNode`.
 fn call_node_clone_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_clone_node::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_clone_node", (), call) };
+}
+
+/// `Node.cloneNode`.
+fn body_call_node_clone_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1313,8 +1582,20 @@ fn call_node_clone_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor
     }
 }
 
-/// `Node.isEqualNode`.
 fn call_node_is_equal_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_is_equal_node::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_is_equal_node", (), call) };
+}
+
+/// `Node.isEqualNode`.
+fn body_call_node_is_equal_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1360,8 +1641,20 @@ fn call_node_is_equal_node<'s, T: NodeOps + EventTargetOps + EventTargetConstruc
     }
 }
 
-/// `Node.isSameNode`.
 fn call_node_is_same_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_is_same_node::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_is_same_node", (), call) };
+}
+
+/// `Node.isSameNode`.
+fn body_call_node_is_same_node<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1407,8 +1700,20 @@ fn call_node_is_same_node<'s, T: NodeOps + EventTargetOps + EventTargetConstruct
     }
 }
 
-/// `Node.compareDocumentPosition`.
 fn call_node_compare_document_position<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_compare_document_position::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_compare_document_position", (), call) };
+}
+
+/// `Node.compareDocumentPosition`.
+fn body_call_node_compare_document_position<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1454,8 +1759,20 @@ fn call_node_compare_document_position<'s, T: NodeOps + EventTargetOps + EventTa
     }
 }
 
-/// `Node.contains`.
 fn call_node_contains<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_contains::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_contains", (), call) };
+}
+
+/// `Node.contains`.
+fn body_call_node_contains<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1501,8 +1818,20 @@ fn call_node_contains<'s, T: NodeOps + EventTargetOps + EventTargetConstructor +
     }
 }
 
-/// `Node.lookupPrefix`.
 fn call_node_lookup_prefix<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_lookup_prefix::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_lookup_prefix", (), call) };
+}
+
+/// `Node.lookupPrefix`.
+fn body_call_node_lookup_prefix<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1527,7 +1856,7 @@ fn call_node_lookup_prefix<'s, T: NodeOps + EventTargetOps + EventTargetConstruc
     };
     let namespace = {
         let raw = args.get(0);
-        match if raw.is_null_or_undefined() { Ok(None) } else { (Ok::<String, JsError>(string_from_v8(scope, raw))).map(Some) } {
+        match if raw.is_null_or_undefined() { Ok(None) } else { (string_from_v8(scope, raw)).map(Some) } {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -1548,8 +1877,20 @@ fn call_node_lookup_prefix<'s, T: NodeOps + EventTargetOps + EventTargetConstruc
     }
 }
 
-/// `Node.lookupNamespaceURI`.
 fn call_node_lookup_namespace_uri<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_lookup_namespace_uri::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_lookup_namespace_uri", (), call) };
+}
+
+/// `Node.lookupNamespaceURI`.
+fn body_call_node_lookup_namespace_uri<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1574,7 +1915,7 @@ fn call_node_lookup_namespace_uri<'s, T: NodeOps + EventTargetOps + EventTargetC
     };
     let prefix = {
         let raw = args.get(0);
-        match if raw.is_null_or_undefined() { Ok(None) } else { (Ok::<String, JsError>(string_from_v8(scope, raw))).map(Some) } {
+        match if raw.is_null_or_undefined() { Ok(None) } else { (string_from_v8(scope, raw)).map(Some) } {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -1595,8 +1936,20 @@ fn call_node_lookup_namespace_uri<'s, T: NodeOps + EventTargetOps + EventTargetC
     }
 }
 
-/// `Node.isDefaultNamespace`.
 fn call_node_is_default_namespace<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_is_default_namespace::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_is_default_namespace", (), call) };
+}
+
+/// `Node.isDefaultNamespace`.
+fn body_call_node_is_default_namespace<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1621,7 +1974,7 @@ fn call_node_is_default_namespace<'s, T: NodeOps + EventTargetOps + EventTargetC
     };
     let namespace = {
         let raw = args.get(0);
-        match if raw.is_null_or_undefined() { Ok(None) } else { (Ok::<String, JsError>(string_from_v8(scope, raw))).map(Some) } {
+        match if raw.is_null_or_undefined() { Ok(None) } else { (string_from_v8(scope, raw)).map(Some) } {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -1642,8 +1995,20 @@ fn call_node_is_default_namespace<'s, T: NodeOps + EventTargetOps + EventTargetC
     }
 }
 
-/// `Node.insertBefore`.
 fn call_node_insert_before<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_insert_before::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_insert_before", (), call) };
+}
+
+/// `Node.insertBefore`.
+fn body_call_node_insert_before<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1699,8 +2064,20 @@ fn call_node_insert_before<'s, T: NodeOps + EventTargetOps + EventTargetConstruc
     }
 }
 
-/// `Node.appendChild`.
 fn call_node_append_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_append_child::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_append_child", (), call) };
+}
+
+/// `Node.appendChild`.
+fn body_call_node_append_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1746,8 +2123,20 @@ fn call_node_append_child<'s, T: NodeOps + EventTargetOps + EventTargetConstruct
     }
 }
 
-/// `Node.replaceChild`.
 fn call_node_replace_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_replace_child::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_replace_child", (), call) };
+}
+
+/// `Node.replaceChild`.
+fn body_call_node_replace_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1803,8 +2192,20 @@ fn call_node_replace_child<'s, T: NodeOps + EventTargetOps + EventTargetConstruc
     }
 }
 
-/// `Node.removeChild`.
 fn call_node_remove_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_remove_child::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_remove_child", (), call) };
+}
+
+/// `Node.removeChild`.
+fn body_call_node_remove_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1850,16 +2251,28 @@ fn call_node_remove_child<'s, T: NodeOps + EventTargetOps + EventTargetConstruct
     }
 }
 
+fn call_node_scroll<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_scroll::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_scroll", (), call) };
+}
+
 /// Overload dispatcher for `Node.scroll`; WebIDL selects an overload by
 /// argument count first.
-fn call_node_scroll<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+fn body_call_node_scroll<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<v8::Value>,
 ) {
     match args.length() {
         0 | 1 => call_node_scroll_1::<T>(scope, args, rv),
-        2 => call_node_scroll_2::<T>(scope, args, rv),
+        2.. => call_node_scroll_2::<T>(scope, args, rv),
         _ => throw_type_error(
             scope,
             "Failed to execute 'scroll' on 'Node': no overload matches the argument count",
@@ -1867,8 +2280,20 @@ fn call_node_scroll<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + '
     }
 }
 
-/// `Node.scroll`.
 fn call_node_scroll_1<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_scroll_1::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_scroll_1", (), call) };
+}
+
+/// `Node.scroll`.
+fn body_call_node_scroll_1<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1907,8 +2332,20 @@ fn call_node_scroll_1<'s, T: NodeOps + EventTargetOps + EventTargetConstructor +
     rv.set_undefined();
 }
 
-/// `Node.scroll`.
 fn call_node_scroll_2<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_scroll_2::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_scroll_2", (), call) };
+}
+
+/// `Node.scroll`.
+fn body_call_node_scroll_2<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1955,8 +2392,20 @@ fn call_node_scroll_2<'s, T: NodeOps + EventTargetOps + EventTargetConstructor +
     rv.set_undefined();
 }
 
-/// Getter for `Node.scrollTop`.
 fn get_node_scroll_top<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_scroll_top::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_scroll_top", (), call) };
+}
+
+/// Getter for `Node.scrollTop`.
+fn body_get_node_scroll_top<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -1978,13 +2427,16 @@ fn get_node_scroll_top<'s, T: NodeOps + EventTargetOps + EventTargetConstructor 
 /// Fast-API getter for `Node.scrollTop`.
 extern "C" fn fast_get_node_scroll_top<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> f64 {
+    v8_fast_callback_boundary(options, "fast_get_node_scroll_top", 0.0, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.scroll_top(),
         None => 0.0,
     }
+    })
 }
 
 /// Fast-call table for the `Node.scrollTop` getter.
@@ -1995,7 +2447,7 @@ impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeScrollT
         fast_get_node_scroll_top::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Float64.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
@@ -2005,11 +2457,14 @@ impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeScrollT
 extern "C" fn fast_set_node_scroll_top<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
     value: f64,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) {
+    v8_fast_callback_boundary(options, "fast_set_node_scroll_top", (), || {
     // SAFETY: as for the fast getter.
     if let Some(host) = unsafe { unwrap_receiver::<T>(receiver) } {
         host.set_scroll_top(value);
     }
+    });
 }
 
 /// Fast-call table for the `Node.scrollTop` setter.
@@ -2023,14 +2478,27 @@ impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeScrollT
             &[
                 v8::fast_api::Type::V8Value.as_info(),
                 v8::fast_api::Type::Float64.as_info(),
+                v8::fast_api::Type::CallbackOptions.as_info(),
             ],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Setter for `Node.scrollTop`.
 fn set_node_scroll_top<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_set_node_scroll_top::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "set_node_scroll_top", (), call) };
+}
+
+/// Setter for `Node.scrollTop`.
+fn body_set_node_scroll_top<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -2057,8 +2525,20 @@ fn set_node_scroll_top<'s, T: NodeOps + EventTargetOps + EventTargetConstructor 
     host.set_scroll_top(value);
 }
 
-/// Getter for `Node.classList`.
 fn get_node_class_list<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_class_list::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_class_list", (), call) };
+}
+
+/// Getter for `Node.classList`.
+fn body_get_node_class_list<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2087,9 +2567,21 @@ fn get_node_class_list<'s, T: NodeOps + EventTargetOps + EventTargetConstructor 
     }
 }
 
+fn set_node_class_list<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_set_node_class_list::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "set_node_class_list", (), call) };
+}
+
 /// `[PutForwards=value]` setter for `Node.classList`: forwards the assignment
 /// to the `value` property of the object the getter returns.
-fn set_node_class_list<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+fn body_set_node_class_list<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -2103,7 +2595,6 @@ fn set_node_class_list<'s, T: NodeOps + EventTargetOps + EventTargetConstructor 
         }
     };
     let Some(target) = this.get(scope, key.into()) else {
-        throw_type_error(scope, "`classList` cannot be read");
         return;
     };
     let Ok(target) = TryInto::<v8::Local<v8::Object>>::try_into(target) else {
@@ -2118,13 +2609,23 @@ fn set_node_class_list<'s, T: NodeOps + EventTargetOps + EventTargetConstructor 
         }
     };
     let value = args.get(0);
-    if target.set(scope, forward.into(), value).is_none() {
-        throw_type_error(scope, "cannot forward the assignment to `value`");
-    }
+    let _ = target.set(scope, forward.into(), value);
+}
+
+fn get_node_depth<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_depth::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_depth", (), call) };
 }
 
 /// Getter for `Node.depth`.
-fn get_node_depth<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+fn body_get_node_depth<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2146,13 +2647,16 @@ fn get_node_depth<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'st
 /// Fast-API getter for `Node.depth`.
 extern "C" fn fast_get_node_depth<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> u32 {
+    v8_fast_callback_boundary(options, "fast_get_node_depth", 0, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.depth(),
         None => 0,
     }
+    })
 }
 
 /// Fast-call table for the `Node.depth` getter.
@@ -2163,15 +2667,27 @@ impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeDepthGe
         fast_get_node_depth::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Uint32.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
+fn set_node_depth<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_set_node_depth::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "set_node_depth", (), call) };
+}
+
 /// `[Replaceable]` setter for `Node.depth`: defines an own data property
 /// on the receiver, shadowing the accessor.
-fn set_node_depth<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+fn body_set_node_depth<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -2190,8 +2706,20 @@ fn set_node_depth<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'st
     }
 }
 
-/// `Node.toString`.
 fn call_node_to_string<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_to_string::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_to_string", (), call) };
+}
+
+/// `Node.toString`.
+fn body_call_node_to_string<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2220,8 +2748,20 @@ fn call_node_to_string<'s, T: NodeOps + EventTargetOps + EventTargetConstructor 
     }
 }
 
-/// `Node.setOpacity`.
 fn call_node_set_opacity<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_set_opacity::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_set_opacity", (), call) };
+}
+
+/// `Node.setOpacity`.
+fn body_call_node_set_opacity<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2262,13 +2802,16 @@ fn call_node_set_opacity<'s, T: NodeOps + EventTargetOps + EventTargetConstructo
 extern "C" fn fast_call_node_set_opacity<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
     alpha: u32,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) {
+    v8_fast_callback_boundary(options, "fast_call_node_set_opacity", (), || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.set_opacity(clamp_octet(alpha as f64)),
         None => (),
     }
+    })
 }
 
 /// Fast-call table for `Node.setOpacity`.
@@ -2282,14 +2825,27 @@ impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeSetOpac
             &[
                 v8::fast_api::Type::V8Value.as_info(),
                 v8::fast_api::CTypeInfo::new(v8::fast_api::Type::Uint32, v8::fast_api::Flags::Clamp),
+                v8::fast_api::Type::CallbackOptions.as_info(),
             ],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// `Node.attributeMap`.
 fn call_node_attribute_map<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_attribute_map::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_attribute_map", (), call) };
+}
+
+/// `Node.attributeMap`.
+fn body_call_node_attribute_map<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2318,8 +2874,20 @@ fn call_node_attribute_map<'s, T: NodeOps + EventTargetOps + EventTargetConstruc
     }
 }
 
-/// `Node.requestFullscreen`.
 fn call_node_request_fullscreen<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_request_fullscreen::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_request_fullscreen", (), call) };
+}
+
+/// `Node.requestFullscreen`.
+fn body_call_node_request_fullscreen<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2348,8 +2916,20 @@ fn call_node_request_fullscreen<'s, T: NodeOps + EventTargetOps + EventTargetCon
     }
 }
 
-/// Getter for `Node.children`.
 fn get_node_children<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_children::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_children", (), call) };
+}
+
+/// Getter for `Node.children`.
+fn body_get_node_children<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2378,8 +2958,20 @@ fn get_node_children<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 
     }
 }
 
-/// Getter for `Node.firstElementChild`.
 fn get_node_first_element_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_first_element_child::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_first_element_child", (), call) };
+}
+
+/// Getter for `Node.firstElementChild`.
+fn body_get_node_first_element_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2408,8 +3000,20 @@ fn get_node_first_element_child<'s, T: NodeOps + EventTargetOps + EventTargetCon
     }
 }
 
-/// Getter for `Node.lastElementChild`.
 fn get_node_last_element_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_last_element_child::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_last_element_child", (), call) };
+}
+
+/// Getter for `Node.lastElementChild`.
+fn body_get_node_last_element_child<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2438,8 +3042,20 @@ fn get_node_last_element_child<'s, T: NodeOps + EventTargetOps + EventTargetCons
     }
 }
 
-/// Getter for `Node.childElementCount`.
 fn get_node_child_element_count<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_node_child_element_count::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_node_child_element_count", (), call) };
+}
+
+/// Getter for `Node.childElementCount`.
+fn body_get_node_child_element_count<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2461,13 +3077,16 @@ fn get_node_child_element_count<'s, T: NodeOps + EventTargetOps + EventTargetCon
 /// Fast-API getter for `Node.childElementCount`.
 extern "C" fn fast_get_node_child_element_count<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> u32 {
+    v8_fast_callback_boundary(options, "fast_get_node_child_element_count", 0, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.child_element_count(),
         None => 0,
     }
+    })
 }
 
 /// Fast-call table for the `Node.childElementCount` getter.
@@ -2478,14 +3097,26 @@ impl<T: NodeOps + EventTargetOps + EventTargetConstructor + 'static> NodeChildEl
         fast_get_node_child_element_count::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Uint32.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// `Node.prepend`.
 fn call_node_prepend<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_prepend::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_prepend", (), call) };
+}
+
+/// `Node.prepend`.
+fn body_call_node_prepend<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2523,8 +3154,20 @@ fn call_node_prepend<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 
     rv.set_undefined();
 }
 
-/// `Node.append`.
 fn call_node_append<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_append::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_append", (), call) };
+}
+
+/// `Node.append`.
+fn body_call_node_append<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2562,8 +3205,20 @@ fn call_node_append<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + '
     rv.set_undefined();
 }
 
-/// `Node.replaceChildren`.
 fn call_node_replace_children<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_replace_children::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_replace_children", (), call) };
+}
+
+/// `Node.replaceChildren`.
+fn body_call_node_replace_children<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2601,8 +3256,20 @@ fn call_node_replace_children<'s, T: NodeOps + EventTargetOps + EventTargetConst
     rv.set_undefined();
 }
 
-/// `Node.querySelector`.
 fn call_node_query_selector<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_query_selector::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_query_selector", (), call) };
+}
+
+/// `Node.querySelector`.
+fn body_call_node_query_selector<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2627,7 +3294,7 @@ fn call_node_query_selector<'s, T: NodeOps + EventTargetOps + EventTargetConstru
     };
     let selectors = {
         let raw = args.get(0);
-        match Ok::<String, JsError>(string_from_v8(scope, raw)) {
+        match string_from_v8(scope, raw) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -2648,8 +3315,20 @@ fn call_node_query_selector<'s, T: NodeOps + EventTargetOps + EventTargetConstru
     }
 }
 
-/// `Node.querySelectorAll`.
 fn call_node_query_selector_all<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_node_query_selector_all::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_node_query_selector_all", (), call) };
+}
+
+/// `Node.querySelectorAll`.
+fn body_call_node_query_selector_all<'s, T: NodeOps + EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -2674,7 +3353,7 @@ fn call_node_query_selector_all<'s, T: NodeOps + EventTargetOps + EventTargetCon
     };
     let selectors = {
         let raw = args.get(0);
-        match Ok::<String, JsError>(string_from_v8(scope, raw)) {
+        match string_from_v8(scope, raw) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);

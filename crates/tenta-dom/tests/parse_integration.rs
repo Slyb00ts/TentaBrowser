@@ -154,11 +154,8 @@ fn scripting_off_parses_noscript_content_as_markup() {
 
 #[test]
 fn fragment_parsing_into_nonempty_document_preserves_existing_content() {
-    // Step 0 safety test for innerHTML: verify that parsing a fragment into
-    // an existing, non-empty Document arena does not corrupt pre-existing nodes.
-    // This test builds a document with known content, records node IDs and
-    // text, then parses a fragment into it with a context element, and
-    // verifies the original content is unchanged.
+    // Replacing markup must preserve the existing arena nodes, including
+    // the original children that become detached by the replacement.
 
     use tenta_core::atom::atoms;
     use tenta_dom::Mutation;
@@ -203,39 +200,129 @@ fn fragment_parsing_into_nonempty_document_preserves_existing_content() {
         })
         .expect("set id");
 
-    // Now parse a fragment into this document (not into a fresh one).
-    // This simulates what set_inner_html will do: we'll parse "<p>new</p>"
-    // with the div as context.
-    let div_qname = document
-        .element_name(target_div)
-        .expect("target_div is an element");
-    let opts = ParserOptions {
-        fragment_context: Some(div_qname),
-        scripting_enabled: false,
-        ..ParserOptions::default()
-    };
+    document
+        .set_inner_html(target_div, "<p>new</p>")
+        .expect("parse and install fragment");
+    assert_eq!(document.inner_html(target_div), "<p>new</p>");
+    assert_eq!(
+        document.inner_html(body),
+        "<div id=\"target\"><p>new</p></div>"
+    );
+    assert_eq!(document.text_content(old_text), "old");
+    assert!(!document.parent(old_text).is_some());
+    assert_eq!(
+        document
+            .children(document.document_node())
+            .collect::<Vec<_>>(),
+        [html]
+    );
+}
 
-    // Move the document to the parser and back
-    let mut parser = Parser::new(document, opts);
-    parser.feed_str("<p>new</p>");
-    let document = parser.finish();
+#[test]
+fn markup_setters_parse_in_the_existing_arena_without_a_second_document_element() {
+    let mut document = parse(
+        "<!doctype html><html><body><div id=target>old</div><aside>keep</aside></body></html>",
+    );
+    let root = document.document_element().expect("document element");
+    let root_children: Vec<_> = document.children(document.document_node()).collect();
+    let target = document
+        .query_selector(root, "#target")
+        .expect("selector")
+        .expect("target");
+    let aside = document
+        .query_selector(root, "aside")
+        .expect("selector")
+        .expect("aside");
 
-    // Verify existing nodes are still valid and accessible.
-    // The body should still be reachable (verifying the arena wasn't corrupted).
-    let body_inner = document.inner_html(body);
+    document
+        .set_inner_html(target, "<p>new</p>tail")
+        .expect("set innerHTML in a populated document");
+    assert_eq!(document.inner_html(target), "<p>new</p>tail");
+    assert_eq!(document.text_content(aside), "keep");
+
+    document
+        .set_outer_html(target, "<i>replacement</i>tail")
+        .expect("set outerHTML in a populated document");
+    document
+        .insert_adjacent_html(aside, "beforebegin", "<b>before</b>")
+        .expect("insert before element");
+    document
+        .insert_adjacent_html(aside, "afterbegin", "<em>first</em>")
+        .expect("insert into element");
+    document
+        .insert_adjacent_html(aside, "beforeend", "last")
+        .expect("append text into element");
+    document
+        .insert_adjacent_html(aside, "afterend", "<!--after-->")
+        .expect("insert after element");
+    assert_eq!(
+        document.inner_html(document.body().expect("body")),
+        "<i>replacement</i>tail<b>before</b><aside><em>first</em>keeplast</aside><!--after-->"
+    );
+    assert_eq!(document.document_element(), Some(root));
+    assert_eq!(
+        document
+            .children(document.document_node())
+            .collect::<Vec<_>>(),
+        root_children
+    );
     assert!(
-        !body_inner.is_empty(),
-        "body is still accessible after fragment parse; got: {body_inner}"
+        document.parse_errors().is_empty(),
+        "{:?}",
+        document.parse_errors()
     );
 
-    // Verify the target div is still accessible
-    let target_inner = document.inner_html(target_div);
-    assert!(
-        !target_inner.is_empty(),
-        "target div is still accessible after fragment parse; got: {target_inner}"
+    document.set_inner_html(aside, "").expect("empty fragment");
+    assert!(document.inner_html(aside).is_empty());
+    assert_eq!(document.document_element(), Some(root));
+}
+
+#[test]
+fn detached_fragment_parsing_preserves_table_and_textarea_contexts() {
+    use tenta_core::atom::atoms;
+
+    let mut document = parse("<!doctype html><html><body>keep</body></html>");
+    let table = document.create_html_element(atoms::TABLE);
+    document
+        .set_inner_html(table, "<tr><td>cell</td></tr>")
+        .expect("table fragment");
+    assert_eq!(
+        document.inner_html(table),
+        "<tbody><tr><td>cell</td></tr></tbody>"
     );
+
+    let textarea = document.create_html_element(atoms::TEXTAREA);
+    document
+        .set_inner_html(textarea, "<b>&amp;</b>")
+        .expect("RCDATA fragment");
+    assert_eq!(document.text_content(textarea), "<b>&</b>");
+    assert_eq!(
+        document.text_content(document.body().expect("body")),
+        "keep"
+    );
+    assert_eq!(document.quirks_mode(), QuirksMode::NoQuirks);
     assert!(
-        target_inner.contains("old"),
-        "target div still contains original 'old' content; got: {target_inner}"
+        document.parse_errors().is_empty(),
+        "{:?}",
+        document.parse_errors()
+    );
+}
+
+#[test]
+fn parsing_into_a_detached_element_does_not_populate_an_empty_document() {
+    use tenta_core::atom::atoms;
+
+    let mut document = Document::new();
+    let target = document.create_html_element(atoms::DIV);
+    document
+        .set_inner_html(target, "text<span>child</span>")
+        .expect("detached element innerHTML");
+    assert_eq!(document.inner_html(target), "text<span>child</span>");
+    assert_eq!(document.document_element(), None);
+    assert_eq!(document.children(document.document_node()).count(), 0);
+    assert!(
+        document.parse_errors().is_empty(),
+        "{:?}",
+        document.parse_errors()
     );
 }

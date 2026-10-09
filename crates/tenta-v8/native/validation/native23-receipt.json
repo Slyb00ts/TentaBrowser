@@ -1,0 +1,205 @@
+{
+  "status": "validated completed native run; no build or test was rerun",
+  "native_exit_code": 0,
+  "native_started_at": "2026-09-24T05:59:52.662229+00:00",
+  "native_finished_at": "2026-09-24T06:00:16.707173+00:00",
+  "nextest_run_id": "7fbbce90-73a3-4d89-abb8-6e9c827b8f11",
+  "test_count": 23,
+  "tests": [
+    {
+      "binary": "v8::web_idl_legacy",
+      "test": "only_marked_indexed_handlers_consult_the_definer_during_set",
+      "seconds": 0.033,
+      "counter": 1,
+      "total": 23
+    },
+    {
+      "binary": "v8::ordinary_object_brand",
+      "test": "script_records_and_ordinary_intrinsic_prototypes_are_accepted",
+      "seconds": 0.037,
+      "counter": 2,
+      "total": 23
+    },
+    {
+      "binary": "v8::ordinary_object_brand",
+      "test": "native_wrappers_and_interceptors_are_rejected_without_a_callback",
+      "seconds": 0.037,
+      "counter": 3,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "enumerator_gc_and_exceptions_preserve_exactly_once_callback_behavior",
+      "seconds": 0.039,
+      "counter": 4,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "failed_definitions_do_not_publish_phantom_creation_records",
+      "seconds": 0.039,
+      "counter": 5,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "growing_weak_instance_table_preserves_live_order_and_releases_dead_keys",
+      "seconds": 0.039,
+      "counter": 6,
+      "total": 23
+    },
+    {
+      "binary": "v8::ordinary_object_brand",
+      "test": "cross_realm_objects_remain_classifiable_after_real_gc",
+      "seconds": 0.039,
+      "counter": 7,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "descriptor_replacement_preserves_order_and_delete_recreation_moves_it",
+      "seconds": 0.039,
+      "counter": 8,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "cross_realm_access_keeps_the_creation_context_order",
+      "seconds": 0.045,
+      "counter": 9,
+      "total": 23
+    },
+    {
+      "binary": "v8::ordinary_object_brand",
+      "test": "specialized_values_and_proxy_traps_do_not_enter_the_ordinary_branch",
+      "seconds": 0.061,
+      "counter": 10,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "hot_named_and_numeric_stores_keep_chronology_across_dictionary_transition",
+      "seconds": 0.028,
+      "counter": 11,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "marked_global_template_uses_its_hidden_global_creation_context",
+      "seconds": 0.025,
+      "counter": 12,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "marked_string_chronology_precedes_symbols_and_filters_in_the_same_order",
+      "seconds": 0.023,
+      "counter": 13,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "marked_indexed_and_named_keys_are_normalized_once_in_spec_order",
+      "seconds": 0.024,
+      "counter": 14,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "nonenumerable_ordinary_keys_shadow_prototype_keys",
+      "seconds": 0.023,
+      "counter": 15,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "ordinary_derived_receiver_enumerates_marked_prototype_without_cached_reordering",
+      "seconds": 0.02,
+      "counter": 16,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "named_only_marked_prototype_observes_updated_supported_names",
+      "seconds": 0.026,
+      "counter": 17,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "numeric_own_key_shadows_an_unmarked_named_interceptor_prototype",
+      "seconds": 0.026,
+      "counter": 18,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "independently_restored_contexts_keep_distinct_order_tables",
+      "seconds": 0.034,
+      "counter": 19,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "template_clones_have_independent_creation_records",
+      "seconds": 0.013,
+      "counter": 20,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "ordinary_store_receiver_controls_where_creation_is_recorded",
+      "seconds": 0.015,
+      "counter": 21,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "weak_order_records_do_not_retain_dead_instances",
+      "seconds": 0.013,
+      "counter": 22,
+      "total": 23
+    },
+    {
+      "binary": "v8::web_idl_order",
+      "test": "snapshot_round_trip_preserves_order_and_accepts_new_records",
+      "seconds": 0.024,
+      "counter": 23,
+      "total": 23
+    }
+  ],
+  "originals": {
+    "result.json": "11a5ae150a4695d1acbc355bcd77d7031b03fc26691c475cbb6765e6cbd42489",
+    "nextest.log": "fe67e7d3010189e3fe1d1e0027c567158478b9d076588a6e4a5a119fed30424a",
+    "ninja-plan.json": "83869137900ddfe1e0b862c24821775ed6915b73b0442096f871280ab13fe1a4",
+    "after/source-manifest.json": "9a124b747505d6a5e9a67a73333b8f0a6887662aeee0a3c1f7b0d40c7e0b0cf2",
+    "before/source-manifest.json": "96cdc984b3cf21ed2121d2a72eaed37e174719eaf837747cd29d4b1c8abb0b3d",
+    "run-request.json": "7f87ac1b9e7ebb9401adb8f3e9e8122cd1688d6b08a234d380cd7003aee73ac0",
+    "manifest.json": "1cd5d82f7ba5da8b3bc7481bd27ad0672a11f0560b5d911271ff622a9ea1ca7f",
+    "ordinary-object-brand.patch": "b72ddc9ec0110c9a10eeb8c63edaa1091d878206ae018c58731b4bffd1df24ad",
+    "run_incremental.py": "9e67428c05424f8fde6d243b6a84c91a34d0f24f6ccd405fb172143e1e775813",
+    "ninja_guard.py": "5880eecae8f4d891af47a3c111149e620afda8b41e3f9fb496e885c1313fb440"
+  },
+  "accepted_native_manifest_sha256": "54178d78095ff2f8db748f5ffd32ee5ddfa041863a0cda403c8b05fb58c21967",
+  "accepted_package_manifest_sha256": "609979f54f904ea4369263cf9733cf220f1306f0c35fb2c384e2bff2f4cdf9ae",
+  "helper_patch_sha256": "b72ddc9ec0110c9a10eeb8c63edaa1091d878206ae018c58731b4bffd1df24ad",
+  "temporal_contract_sha256": "f9a5949931b95ace69d3226949f4017d10ddd1c29160ea1f561f913e633f29e6",
+  "postprocessor_sha256": "6fccdd7c46d124d3ac2fcfab5485d1f18f04522a8e8456e2f35b9550fbb2706b",
+  "limitations": [
+    "aarch64-apple-darwin/default only",
+    "new binding-package route and real browser gates remain pending"
+  ],
+  "artifacts": {
+    "librusty_v8.a": {
+      "sha256": "744252be94bd7a095a64db86ca10d8349493447860bdbc8a2ede5bb028bd985f",
+      "bytes": 115756712,
+      "mtime_ns": 1790229603419291670
+    },
+    "src_binding.rs": {
+      "sha256": "d6594abe610e3364c13c0b78a901c2eaa3a6422afaebcafdee9c8af6950315b1",
+      "bytes": 39814,
+      "mtime_ns": 1790229608358855235
+    }
+  },
+  "preserved_at": "2026-09-24T06:07:44.253805+00:00"
+}

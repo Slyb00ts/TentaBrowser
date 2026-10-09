@@ -184,6 +184,10 @@ fn clear_pending_callbacks_releases_a_deferred_firing() {
     let (loop_, scheduler, log) = loop_with_log();
     let deferred = Rc::new(RefCell::new(Vec::new()));
     let id = schedule_deferred_tracked_one_shot(&scheduler, deferred.clone());
+    // This timer has not fired yet when teardown begins. It used to remain
+    // live in the heap even after its callback had been discarded, keeping the
+    // loop awake at its old deadline.
+    scheduler.set_timeout(100, Box::new(|| {}));
 
     loop_.fire_due_timers();
     assert_eq!(*deferred.borrow(), vec![id], "the backend took the firing");
@@ -210,6 +214,16 @@ fn clear_pending_callbacks_releases_a_deferred_firing() {
         log.events.borrow()
     );
     assert!(scheduler.claim_fired(id).is_none());
+    assert!(
+        !loop_.has_pending_timers(),
+        "teardown drops unfired timers too"
+    );
+    assert_eq!(loop_.next_timer_deadline(), None);
+    assert_eq!(loop_.next_wakeup(), None);
+    assert!(
+        !loop_.advance_to_next_timer(),
+        "a discarded deadline must not advance virtual time"
+    );
 }
 
 #[test]

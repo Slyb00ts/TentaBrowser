@@ -81,6 +81,14 @@ xtask/             repository tooling
 
 ## Build and test
 
+V8-enabled commands require a reviewed local native bundle. Follow
+[`docs/dev/v8-artifacts.md`](docs/dev/v8-artifacts.md), install the verified bundle
+in a durable cache, and prefix the Cargo commands below with
+`TENTA_V8_ARTIFACT_DIR="$artifact_cache"` when they build V8. The local binding
+refuses missing/mismatched artifacts and unsupported configurations; do not use
+an upstream prebuilt archive as a substitute. Run the documented Temporal lock
+validator after resolving dependencies.
+
 ```bash
 cargo build --release -p tentabrowser-cli   # target/release/tentabrowser
 cargo nextest run --workspace               # never `cargo test`
@@ -89,9 +97,27 @@ cargo xtask lint-deps && cargo xtask idl-manifest && cargo deny check
 python3 bench/run.py --scenario S-static-text-cli --compare reference --runs 25
 ```
 
-Status (2026-09-06): P0 complete; P1 (network, DOM, search) complete. Tier 0
-and Tier 1 work end to end: `tenta-net`, `tenta-html`, `tenta-dom`,
+Status (2026-09-23): P0 foundation and the P1 network, HTML, DOM and search
+implementation are present in `tenta-net`, `tenta-html`, `tenta-dom`,
 `tenta-page`, `tenta-browser`, `tenta-search` and the `tentabrowser` CLI
-(`fetch`, `search`, `scrape`). Nothing above Tier 1 is implemented: no
-JavaScript, no style, no layout, no paint, no media. P2 (JavaScript) is
-next.
+(`fetch`, `search`, `scrape`). The roadmap recorded the P0 exit locally;
+revalidation of every P1 exit gate is separate from this inventory.
+
+P2 is active. The current tree has V8 and QuickJS page paths, the shared
+event loop and timer/provenance machinery, watchdogs, generated WebIDL
+bindings, and partial fetch, XHR, forms, Blob/File and XML support. Stylo
+backs inline styles, CSS.supports and the native stylesheet model. QuickJS
+parity, workers/SAB, storage, streams/WebSocket, Web Crypto, full CSSOM,
+history/location, iframes/CSP/observers, Google Full search and the P2
+WPT/conformance/budget gates remain outstanding. See
+`docs/dev/implementation-status.md` for precise package evidence and gaps.
+P3–P8 work (layout, paint, hosts, media, WebRTC, mobile and hardening) has
+not started beyond crate skeletons. Do not describe focused Range or
+React/Vue smoke probes as full P2 or hydration conformance.
+
+The CLI has opt-in `fetch --eval` through its `v8` feature, implemented by
+atomic `Page::goto_with_eval` before navigation releases the runtime. It does
+not provide a persistent evaluation session or await returned Promises.
+`bench/dom_calls.py` measures real-engine `S-dom-calls` with interleaved
+baseline/candidate executables; the general runner still does not implement
+every in-process scenario.

@@ -21,7 +21,7 @@ use url::Url;
 
 use crate::body::{Body, BodyStream, ContentEncoding, Decoder, OutgoingBody};
 use crate::dns::Resolver;
-use crate::error::{ErrorName, NetError};
+use crate::error::{ErrorName, NetError, ReplayHint};
 use crate::h1::{self, H1Handle};
 use crate::h2::{self, H2Handle};
 use crate::headers::{self, WireProtocol};
@@ -1038,39 +1038,20 @@ async fn execute(state: Rc<ClientRuntime>, mut request: Request) -> Result<Respo
         )
         .await;
 
-        // A pooled connection the server closed while it was idle is the
-        // usual cause of a failure before the response head, and it is the
-        // only case that may be replayed, for any method: the server never
-        // acted on a request its closed socket could not carry. On a
-        // connection this request opened itself the server may well have
-        // acted before the failure, which is what Chrome's "retry only a
-        // reused socket" rule protects.
-        let stale = attempt.as_ref().err().is_some_and(NetError::retryable) && reused.get();
-        if stale && let Some(retry_body) = replay.take() {
+        // A remote HTTP/2 REFUSED_STREAM or GOAWAY guarantees that a stream
+        // was not processed, even for a POST. A failed ready() call never
+        // opened a stream. Other transport failures can happen after a server
+        // applied a request, so only idempotent methods may be replayed then.
+        // A replayable body is required in every case and only one retry is
+        // attempted on this hop.
+        let safe_to_replay = reused.get()
+            && attempt.as_ref().err().is_some_and(|err| {
+                err.replay_hint() != ReplayHint::None
+                    || (err.retryable() && is_idempotent_method(&request.method))
+            });
+        if safe_to_replay && let Some(retry_body) = replay.take() {
             let (body, again) = split_body(retry_body);
             replay = again;
-            attempt = send_once(
-                &state,
-                &request,
-                body,
-                deadline,
-                coalesce_key.clone(),
-                &reused,
-            )
-            .await;
-        }
-
-        // HTTP/2 GOAWAY on a reused connection is retryable for any method
-        // because the stream was never accepted on the wire.
-        let h2_goaway = attempt.as_ref().err().is_some_and(|e| {
-            e.name == ErrorName::Http2ProtocolError
-                && e.message.contains("connection error received")
-        }) && reused.get();
-        if h2_goaway && let Some(retry_body) = replay.take() {
-            let (body, again) = split_body(retry_body);
-            replay = again;
-            // Reset reused flag for the retry attempt.
-            reused.set(false);
             attempt = send_once(
                 &state,
                 &request,
@@ -1468,29 +1449,12 @@ async fn send_once(
         )
         .await;
         if let Err(err) = &attempt {
-            // BLOCKING-1: Evict and retry on any error from a pooled handle
-            // where the stream never opened (ready/send_request failed).
-            // Stream-level errors (e.g., "stream reset") keep the connection.
-            if !err.message.contains("stream reset") {
-                if err.name == ErrorName::Http2ProtocolError
-                    && err.message.contains("connection error received")
-                {
-                    // GOAWAY: the pooled connection was closed by the server.
-                    state.pool.borrow_mut().drop_h2(&key);
-                } else if err.retryable() {
-                    // Connection error on a pooled handle; the connection is dead.
-                    state.pool.borrow_mut().drop_h2(&key);
-                } else if err.name == ErrorName::TimedOut {
-                    // The head never arrived on a reused connection: the peer
-                    // has gone silent (NAT/firewall drop, wedged origin). The
-                    // TCP socket is still open, so nothing else evicts it and
-                    // every later request would park on it and time out too.
-                    // Drop it so the next request opens a fresh connection
-                    // (BLOCKING-2). `drop_h2` only removes the pool's handle;
-                    // any other stream already multiplexed on this connection
-                    // keeps its own clone and finishes.
-                    state.pool.borrow_mut().drop_h2(&key);
-                }
+            // GOAWAY and failure before a stream opens make this pooled
+            // sender unusable. A transport error or head timeout likewise
+            // evicts it; an ordinary stream reset does not affect the other
+            // streams on a healthy connection.
+            if should_evict_h2(err) {
+                state.pool.borrow_mut().drop_h2(&key);
             }
         }
         // Stream-level errors (reset) do not drop the connection;
@@ -1582,6 +1546,12 @@ async fn send_once(
         coalesce_key,
     )
     .await
+}
+
+fn should_evict_h2(err: &NetError) -> bool {
+    matches!(err.replay_hint(), ReplayHint::H2GoAway | ReplayHint::Unsent)
+        || err.retryable()
+        || err.name == ErrorName::TimedOut
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2550,6 +2520,15 @@ fn split_body(body: Body) -> (Body, Option<Body>) {
     }
 }
 
+fn is_idempotent_method(method: &Method) -> bool {
+    method == Method::GET
+        || method == Method::HEAD
+        || method == Method::PUT
+        || method == Method::DELETE
+        || method == Method::OPTIONS
+        || method == Method::TRACE
+}
+
 /// The redirect a policy allows this response to be followed to, or
 /// `ERR_INVALID_REDIRECT` when the `Location` cannot be resolved.
 fn redirect_target(
@@ -2761,6 +2740,22 @@ async fn with_deadline<F: std::future::Future>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn goaway_readiness_failure_evicts_the_pool_but_refused_stream_does_not() {
+        let goaway = NetError::new(ErrorName::Http2ProtocolError, "GOAWAY")
+            .with_replay_hint(ReplayHint::H2GoAway)
+            .mark_unsent_if_unknown();
+        assert!(should_evict_h2(&goaway));
+
+        let unsent = NetError::new(ErrorName::Http2ProtocolError, "readiness failure")
+            .mark_unsent_if_unknown();
+        assert!(should_evict_h2(&unsent));
+
+        let refused = NetError::new(ErrorName::Http2ProtocolError, "REFUSED_STREAM")
+            .with_replay_hint(ReplayHint::H2RefusedStream);
+        assert!(!should_evict_h2(&refused));
+    }
 
     fn url(text: &str) -> Url {
         Url::parse(text).expect("url")

@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/tmp/tenta-v8-native-build/tools/ninja/ninja",
+    "-C",
+    "/tmp/tenta-v8-native-build/target/release/gn_out",
+    "-j",
+    "1",
+    "rusty_v8"
+  ],
+  "dry_run_exit": 0,
+  "actions": [
+    "CXX obj/rusty_v8/binding.o",
+    "AR obj/librusty_v8.a"
+  ],
+  "unexpected": [],
+  "unknown_lines": [],
+  "stdout": "ninja: Entering directory `/tmp/tenta-v8-native-build/target/release/gn_out'\n[1/2] CXX obj/rusty_v8/binding.o\n[2/2] AR obj/librusty_v8.a\n",
+  "stderr": ""
+}

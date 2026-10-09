@@ -1,0 +1,21 @@
+{
+  "scope": "Native23 notice applicability from the unchanged native19 host component graph; not a new full component inventory",
+  "base_component_map_sha256": "38f56ee3b04dc8a2b38039031aef43bf9dcd45eda36332bc4c9905a2840fe31a",
+  "base_native_archive_sha256": "21f4d98158b2ac8695ad791bf8275e91dd1841b0423f946155c6ab19845c6f70",
+  "native_archive_sha256": "744252be94bd7a095a64db86ca10d8349493447860bdbc8a2ede5bb028bd985f",
+  "native23_receipt_sha256": "655c8ec3ec7647d0e72fa887a540f32aae72a72dac157d5ccf5738a0101b40e0",
+  "native_incremental_actions": [
+    "CXX obj/rusty_v8/binding.o",
+    "AR obj/librusty_v8.a"
+  ],
+  "source_delta": "The existing Rust binding C++ translation unit adds a native instance-type predicate and includes v8/src/objects/instance-type.h from the already attributed V8 source. Rust tests and the Rust API declaration do not add a native third-party component.",
+  "unchanged_inputs": [
+    "GN arguments",
+    "feature configuration",
+    "generated startup snapshot",
+    "embedded builtins",
+    "native dependency revisions",
+    "Temporal and Diplomat ABI package versions"
+  ],
+  "notice_policy": "Retain the unchanged 91 notice texts and original headers. The base map explicitly names the earlier archive; this record relates it to the two-action native23 increment. Other configurations require a fresh component review."
+}

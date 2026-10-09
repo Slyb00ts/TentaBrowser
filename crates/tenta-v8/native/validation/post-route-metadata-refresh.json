@@ -1,0 +1,12 @@
+{
+  "tested_manifest_sha256": "549d4f29083c5528adf43a6400286d6de3b1fa11c17d445152e150e444bf4855",
+  "changed_files": [
+    {
+      "source": "package/SOURCE-FILES.json",
+      "before_sha256": "ef2e767e51c3e219eb2eee53c46914ffde5f055706c388b699bd7c804df88cb9",
+      "after_sha256": "0a4c262f31203e5a3607a28be90c20d37f53f041887518a02cfc9ce0cf007741",
+      "reason": "Descriptive source manifest updated to match native23 patch and current Rust value.rs; no compiled input changed"
+    }
+  ],
+  "runtime_retest": "Not rerun for this descriptive metadata-only delta; root authorized after 51/51 and Clippy"
+}

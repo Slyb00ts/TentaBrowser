@@ -144,6 +144,13 @@ and the machine description.
 
 ## Not measured, and why
 
+The limitations below describe the original P0 baseline, not the current
+implementation inventory. As of 2026-09-23, `bench/dom_calls.py` measures
+`S-dom-calls` using baseline and candidate builds of the real V8 example
+(`cargo build --release -p tenta-js-v8 --example dom_calls`). The driver writes
+comparison artifacts to `bench/results/`; the general `bench/run.py` still does
+not run in-process scenarios. See the root README for the comparison command.
+
 - `tentabrowser`: no CLI exists before P1; rows are `not-implemented`.
 - `S-static-text`, `S-spa`, `S-spa-t2`, `S-search-*`, `S-dom-calls`,
   `S-isolate`, `S-concurrency-*`, `S-audio-quantum`, `S-media-mse`,

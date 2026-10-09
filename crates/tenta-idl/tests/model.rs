@@ -40,7 +40,7 @@ fn operation<'a>(
 fn toy_model_has_the_expected_shape() {
     let model = common::toy();
 
-    assert_eq!(model.interfaces.len(), 5);
+    assert_eq!(model.interfaces.len(), 6);
     assert_eq!(model.dictionaries.len(), 1);
     assert_eq!(model.enums.len(), 1);
     assert!(model.namespaces.is_empty());
@@ -684,6 +684,32 @@ fn dictionaries_flatten_inherited_members_parent_first() {
             .collect::<Vec<_>>(),
         ["capture", "passive", "once", "signal"]
     );
+    assert_eq!(
+        model
+            .dictionary_conversion_members("AddEventListenerOptions")
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect::<Vec<_>>(),
+        ["capture", "once", "passive", "signal"],
+        "Web IDL reads inherited members first, then each dictionary's own members lexicographically"
+    );
+    let mut inherited_first = model.clone();
+    inherited_first
+        .dictionaries
+        .iter_mut()
+        .find(|dictionary| dictionary.name == "EventListenerOptions")
+        .expect("inherited options")
+        .members[0]
+        .name = "zCapture".to_owned();
+    assert_eq!(
+        inherited_first
+            .dictionary_conversion_members("AddEventListenerOptions")
+            .iter()
+            .map(|member| member.name.as_str())
+            .collect::<Vec<_>>(),
+        ["zCapture", "once", "passive", "signal"],
+        "the inheritance level wins over a child's earlier lexical name"
+    );
 
     let toy = common::toy();
     let counter_options = toy.dictionary("CounterOptions").expect("CounterOptions");
@@ -691,8 +717,10 @@ fn dictionaries_flatten_inherited_members_parent_first() {
     assert!(counter_options.members[0].required);
     assert_eq!(counter_options.members[0].default, None);
     assert!(!counter_options.members[1].required);
+    assert_eq!(counter_options.members[2].name, "nullableLabel");
+    assert!(!counter_options.members[2].required);
     assert_eq!(
-        counter_options.members[2].default,
+        counter_options.members[3].default,
         Some(DefaultValue::Boolean(false))
     );
 }

@@ -25,7 +25,7 @@
 /// - `v8::ReturnValue::{set, set_bool, set_int32, set_uint32, set_double,
 ///   set_null, set_undefined}`
 /// - `v8::fast_api::{CFunction, CFunctionInfo, CTypeInfo, Flags,
-///   Int64Representation, Type, FastApiOneByteString}`
+///   Int64Representation, Type, FastApiOneByteString, FastApiCallbackOptions}`
 /// - `v8::Local<v8::Object>::{get_aligned_pointer_from_internal_field,
 ///   set_aligned_pointer_in_internal_field, get, set, create_data_property,
 ///   internal_field_count}` (through the prelude helpers)
@@ -43,7 +43,8 @@ pub fn install_payload_box<T: PayloadBoxOps + 'static>(
     global_template: v8::Local<'_, v8::ObjectTemplate>,
     registry: &mut dyn InterfaceRegistry,
 ) -> Result<v8::Global<v8::FunctionTemplate>, JsError> {
-    let constructor = v8::FunctionTemplate::builder(construct_payload_box::<T>).build(scope);
+    install_native_callback_state(scope);
+    let constructor = v8::FunctionTemplate::builder(construct_payload_box::<T>).length(0).build(scope);
     let class_name = v8_string(scope, "PayloadBox")?;
     constructor.set_class_name(class_name);
     let signature = v8::Signature::new(scope, constructor);
@@ -82,9 +83,23 @@ pub fn install_payload_box<T: PayloadBoxOps + 'static>(
     Ok(v8::Global::new(scope.as_ref(), constructor))
 }
 
+fn construct_payload_box<'s, T: PayloadBoxOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        v8_begin_stored_value_lease(scope);
+        body_construct_payload_box::<T>(scope, args, rv);
+        v8_end_stored_value_lease(scope);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "construct_payload_box", (), call) };
+}
+
 /// `PayloadBox` declares no `constructor`, so calling it throws, as WebIDL
 /// requires for an interface without a constructor operation.
-fn construct_payload_box<'s, T: PayloadBoxOps + 'static>(
+fn body_construct_payload_box<'s, T: PayloadBoxOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -92,8 +107,20 @@ fn construct_payload_box<'s, T: PayloadBoxOps + 'static>(
     throw_type_error(scope, "Illegal constructor");
 }
 
-/// `PayloadBox.send`.
 fn call_payload_box_send<'s, T: PayloadBoxOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_payload_box_send::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_payload_box_send", (), call) };
+}
+
+/// `PayloadBox.send`.
+fn body_call_payload_box_send<'s, T: PayloadBoxOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -137,8 +164,20 @@ fn call_payload_box_send<'s, T: PayloadBoxOps + 'static>(
     rv.set_undefined();
 }
 
-/// `PayloadBox.bytes`.
 fn call_payload_box_bytes<'s, T: PayloadBoxOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_payload_box_bytes::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_payload_box_bytes", (), call) };
+}
+
+/// `PayloadBox.bytes`.
+fn body_call_payload_box_bytes<'s, T: PayloadBoxOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,

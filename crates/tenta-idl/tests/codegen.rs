@@ -1,6 +1,6 @@
 // Golden tests for the generated output of both fixtures.
 //
-// Refresh the golden files with `UPDATE_GOLDEN=1 cargo test -p tenta-idl`.
+// Refresh the golden files with `UPDATE_GOLDEN=1 cargo nextest run -p tenta-idl --test codegen`.
 
 mod common;
 
@@ -79,6 +79,55 @@ fn every_file(model: &Model, mut check: impl FnMut(&GeneratedFile)) {
 }
 
 #[test]
+fn constructor_length_is_the_shortest_required_arity_in_both_backends() {
+    let model = tenta_idl::parse_webidl(
+        "interface RequiredSample { constructor(DOMString type, optional long flags = 0); }; \
+         interface OverloadedSample { constructor(DOMString type); constructor(); }; \
+         interface AbstractSample {};",
+    )
+    .expect("constructor fixture parses");
+    assert_eq!(
+        model
+            .interface("RequiredSample")
+            .unwrap()
+            .constructor_length(),
+        Some(1)
+    );
+    assert_eq!(
+        model
+            .interface("OverloadedSample")
+            .unwrap()
+            .constructor_length(),
+        Some(0)
+    );
+    assert_eq!(
+        model
+            .interface("AbstractSample")
+            .unwrap()
+            .constructor_length(),
+        None
+    );
+    for (name, length) in [("required_sample", 1), ("overloaded_sample", 0)] {
+        let v8 = generated_file(&model, &format!("{name}_v8.rs"));
+        assert!(
+            v8.contents
+                .contains(&format!(".length({length}).build(scope)"))
+        );
+        let qjs = generated_file(&model, &format!("{name}_qjs.rs"));
+        assert!(
+            qjs.contents
+                .contains(&format!("constructor.set_length({length})?;"))
+        );
+        let register = generated_file(&model, &format!("{name}_register.rs"));
+        assert!(
+            register
+                .contents
+                .contains(&format!("constructor_length: Some({length})"))
+        );
+    }
+}
+
+#[test]
 fn toy_output_matches_the_golden_files() {
     check_fixture("toy", &common::toy());
 }
@@ -89,8 +138,20 @@ fn dom_output_matches_the_golden_files() {
 }
 
 #[test]
+fn callback_union_output_matches_the_golden_files() {
+    let model = tenta_idl::parse_webidl(include_str!("fixtures/callback_union/union.webidl"))
+        .expect("the callback union fixture parses");
+    check_fixture("callback_union", &model);
+}
+
+#[test]
 fn every_generated_file_is_valid_rust() {
-    for model in [common::toy(), common::dom()] {
+    for model in [
+        common::toy(),
+        common::dom(),
+        tenta_idl::parse_webidl(include_str!("fixtures/callback_union/union.webidl"))
+            .expect("the callback union fixture parses"),
+    ] {
         every_file(&model, |file| {
             if let Err(error) = syn::parse_file(&file.contents) {
                 panic!("{} does not parse as Rust: {error}", file.name);
@@ -113,6 +174,42 @@ fn generated_output_contains_no_placeholders() {
             }
         });
     }
+}
+
+#[test]
+fn event_listener_methods_lease_converted_callbacks_without_widening_other_operations() {
+    let model = common::dom();
+    let v8 = generated_file(&model, "event_target_v8.rs").contents;
+    let quickjs = generated_file(&model, "event_target_qjs.rs").contents;
+
+    // Each file has the constructor lease and exactly the two listener-method
+    // leases. dispatchEvent and unrelated methods retain their ordinary path.
+    assert_eq!(v8.matches("v8_begin_stored_value_lease(scope);").count(), 3);
+    assert_eq!(
+        quickjs
+            .matches("quickjs_begin_stored_value_lease(&ctx)?;")
+            .count(),
+        3
+    );
+    for method in ["add_event_listener", "remove_event_listener"] {
+        assert!(v8.contains(&format!(
+            "v8_begin_stored_value_lease(scope);\n        body_call_event_target_{method}"
+        )));
+        assert!(v8.contains(&format!("host.{method}(&r#type, callback, options)")));
+        assert!(quickjs.contains(&format!(
+            "host.{method}(&r#type, callback, options).map_err"
+        )));
+    }
+    assert_eq!(
+        v8.matches("v8_transfer_stored_value_lease(scope);").count(),
+        3
+    );
+    assert_eq!(
+        quickjs
+            .matches("quickjs_transfer_stored_value_lease(&ctx)?;")
+            .count(),
+        3
+    );
 }
 
 #[test]
@@ -201,17 +298,13 @@ fn the_quickjs_glue_names_the_engine_items_it_uses() {
         .find(|f| f.name == "node_qjs.rs")
         .expect("node_qjs.rs");
 
-    assert!(
-        file.contents
-            .contains("https://docs.rs/rquickjs/0.12.2/rquickjs/")
-    );
     for call in [
-        "impl<'js, T: NodeOps",
-        "rquickjs::class::JsClass<'js>",
-        "rquickjs::Class::<NodeClass<T>>::define(",
-        "rquickjs::function::Constructor::new_class::<",
+        "pub fn install_node<'js, T: NodeOps",
+        "quickjs_host::<T>",
+        "quickjs_callback_boundary",
+        "rquickjs::function::Constructor::new_prototype",
         "rquickjs::object::Accessor::new",
-        "rquickjs::function::Func::new",
+        "rquickjs::Function::new",
         "set_prototype(",
         "rquickjs::atom::PredefinedAtom::SymbolToStringTag",
     ] {
@@ -360,14 +453,21 @@ fn a_pair_iterable_emits_three_views_and_a_for_each_over_one_host_hook() {
             .contains("call_js_function(scope, callback, this_arg, &[value, key, container])"),
         "`forEach` does not call the page's callback with `(value, key, container)`"
     );
-    assert!(
-        v8.contents.matches(".length(1)").count() == 1,
-        "only `forEach` reports a required argument"
-    );
-    assert!(
-        v8.contents.matches(".length(0)").count() == 3,
-        "the three views take no arguments"
-    );
+    for (member, length) in [("for_each", 1), ("entries", 0), ("keys", 0), ("values", 0)] {
+        let marker = format!("let iterable_{member}_template = ");
+        let template = v8
+            .contents
+            .split_once(&marker)
+            .expect("the iterable member template is present")
+            .1
+            .split_once(';')
+            .expect("the template binding is terminated")
+            .0;
+        assert!(
+            template.contains(&format!(".length({length})")),
+            "the `{member}` view has the required argument count"
+        );
+    }
 
     let ops = generated_file(&model, "pair_box_ops.rs");
     assert!(ops.contents.contains(
@@ -399,13 +499,13 @@ fn a_union_arm_is_selected_by_its_own_test_in_declaration_order() {
     let v8 = impl_body(&contents, &model.unions[0].name, "v8");
 
     let sequence_at = v8
-        .find("if value.is_object() && has_iterator(scope, value) {")
+        .find("if value.is_object() && has_iterator(scope, value)? {")
         .expect("the sequence arm is selected by its `@@iterator`, on an object");
     let record_at = v8
         .find("if value.is_object() && !value.is_array() {")
         .expect("the record arm is selected as an object that is not an array");
     let fallback_at = v8
-        .find("Ok::<String, JsError>(string_from_v8(scope, value))")
+        .find("string_from_v8(scope, value)")
         .expect("the unguarded `DOMString` arm is the fallback");
     assert!(
         sequence_at < record_at && record_at < fallback_at,
@@ -415,11 +515,11 @@ fn a_union_arm_is_selected_by_its_own_test_in_declaration_order() {
     // The arms are not merely guarded: each one converts through the conversion
     // its test selects it for.
     assert!(
-        v8.contains("sequence_from_v8(scope, value, |scope, item| Ok::<String, JsError>(string_from_v8(scope, item)))"),
+        v8.contains("sequence_from_v8(scope, value, string_from_v8)"),
         "the sequence arm does not use the `GetIterator` conversion"
     );
     assert!(
-        v8.contains("record_from_v8(scope, value, |scope, key| Ok::<String, JsError>(string_from_v8(scope, key)), |scope, item| Ok::<String, JsError>(string_from_v8(scope, item)))"),
+        v8.contains("record_from_v8(scope, value, string_from_v8, string_from_v8)"),
         "the record arm does not use the `es-to-record` conversion"
     );
 }
@@ -441,9 +541,8 @@ fn impl_body(contents: &str, name: &str, engine: &str) -> String {
     rest[..end].to_string()
 }
 
-/// The QuickJS impl carries a record test too, because it converts every arm
-/// through the same table; its sequence arm stays an array check because
-/// `rquickjs`'s `Vec<T>: FromJs` reads an array and has no `@@iterator` step.
+/// The QuickJS impl tests records and the sequence iterator protocol before
+/// falling back to a primitive conversion.
 #[test]
 fn the_quickjs_union_arms_carry_the_same_tests() {
     let model = tenta_idl::parse_webidl(
@@ -456,13 +555,65 @@ fn the_quickjs_union_arms_carry_the_same_tests() {
     let qjs = impl_body(&contents, &model.unions[0].name, "quickjs");
 
     assert!(
-        qjs.contains("if value.is_object() && !value.is_array() {"),
+        qjs.contains("if value.is_object() {"),
         "the QuickJS record arm has no test"
     );
     assert!(
-        qjs.contains("if value.is_array() {"),
-        "the QuickJS sequence arm is still an array check"
+        qjs.contains("if quickjs_has_iterator(ctx, &value)? {"),
+        "the QuickJS sequence arm must use the iterator protocol"
     );
+}
+
+#[test]
+fn callback_interface_union_arms_follow_callable_iterable_and_platform_tests() {
+    let model = tenta_idl::parse_webidl(include_str!("fixtures/callback_union/union.webidl"))
+        .expect("the callback union fixture parses");
+    let contents = generated_file(&model, "types.rs").contents;
+    for engine in ["v8", "quickjs"] {
+        let callback = impl_body(&contents, "ListenerOrHandler", engine);
+        let callable = callback
+            .find("if value.is_function()")
+            .expect("callable test");
+        let object = callback
+            .find("if value.is_object() {")
+            .expect("object test");
+        assert!(
+            callable < object,
+            "{engine} must select the function arm first"
+        );
+        assert!(
+            callback.contains("the value matches no arm of the union"),
+            "{engine} must reject unrelated primitives"
+        );
+
+        let iterable = impl_body(&contents, "ListenerOrSequenceOfDomString", engine);
+        let iterator = if engine == "v8" {
+            "if value.is_object() && has_iterator(scope, value)?"
+        } else {
+            "if quickjs_has_iterator(ctx, &value)?"
+        };
+        assert!(
+            iterable.find(iterator).expect("iterable test")
+                < iterable
+                    .find("if value.is_object() {")
+                    .expect("listener object test"),
+            "{engine} must select an iterable before a callback interface"
+        );
+
+        let platform = impl_body(&contents, "ListenerOrCallbackUnionProbe", engine);
+        let native = if engine == "v8" {
+            "if let Some(inner) = interface_handle_from_v8::<CallbackUnionProbe>"
+        } else {
+            "if quickjs_is_interface(ctx, &value, \"CallbackUnionProbe\")"
+        };
+        assert!(
+            platform.find(native).expect("native interface test")
+                < platform
+                    .find("if value.is_object() {")
+                    .expect("listener object test"),
+            "{engine} must select the branded platform object first"
+        );
+    }
 }
 
 /// Every buffer source arm of a union is guarded by the test its conversion
@@ -524,22 +675,20 @@ fn every_buffer_union_arm_is_guarded_by_the_class_it_converts() {
             ))
             .unwrap_or_else(|| panic!("the `{name}` arm does not use its own conversion"));
         let fallback_at = v8
-            .find("Ok::<String, JsError>(string_from_v8(scope, value))")
+            .find("string_from_v8(scope, value)")
             .expect("the unguarded `USVString` arm is the fallback");
         assert!(
             arm_at < fallback_at,
             "the `{name}` arm is emitted after the string fallback, which shadows it"
         );
 
-        // The QuickJS arm is broad — every buffer source is an object, and the
-        // `rquickjs` predicate for one cannot be compiled here — but it still
-        // has to be a test, so that the string arm stays the fallback.
+        // Native buffer brands must be checked before the string fallback.
         let qjs = impl_body(&contents, union, "quickjs");
         let qjs_arm_at = qjs
-            .find("if value.is_object() {")
+            .find("if quickjs_is_buffer(&value,")
             .unwrap_or_else(|| panic!("the QuickJS `{name}` arm has no test"));
         let qjs_fallback_at = qjs
-            .find("<String as rquickjs::FromJs>")
+            .find("rquickjs::Coerced::<rquickjs::String>::from_js")
             .expect("the unguarded QuickJS `USVString` arm is the fallback");
         assert!(
             qjs_arm_at < qjs_fallback_at,
@@ -722,6 +871,45 @@ fn a_nullable_callback_attribute_converts_loosely_only_when_annotated() {
         ),
         "the callback interface conversion has no object gate"
     );
+
+    let manager_qjs = generated_file(&model, "manager_qjs.rs").contents;
+    assert!(
+        manager_qjs.contains("if value.is_function() { <OccurrenceHandler as rquickjs::FromJs>::from_js(&ctx, value) }"),
+        "the unannotated QuickJS callback setter must test native callability"
+    );
+    assert!(
+        manager_qjs.contains("if !value.is_object() { Ok(None) } else { <ErrorHandler as rquickjs::FromJs>::from_js(&ctx, value).map(Some) }"),
+        "only the annotated nullable QuickJS callback setter accepts a non-callable object"
+    );
+    let onabort_qjs = generated_file(&model, "abort_signal_qjs.rs").contents;
+    assert!(
+        onabort_qjs.contains("if !value.is_object() { Ok(None) } else { <EventHandlerNonNull as rquickjs::FromJs>::from_js(&ctx, value).map(Some) }"),
+        "the HTML callback typedef must reach the same setter-only legacy rule"
+    );
+    let event_target_qjs = generated_file(&model, "event_target_qjs.rs").contents;
+    assert!(
+        event_target_qjs.contains(
+            "if value.is_object() { <EventListener as rquickjs::FromJs>::from_js(&ctx, value) }"
+        ),
+        "the QuickJS callback interface argument accepts objects without requiring callability"
+    );
+}
+
+#[test]
+fn quickjs_callback_argument_wrappers_keep_their_inner_gate() {
+    let model = tenta_idl::parse_webidl(
+        "callback Handler = undefined (); interface Target { undefined call(optional Handler? callback); undefined many(Handler... callbacks); };",
+    )
+    .expect("callback argument fixture parses");
+    let qjs = generated_file(&model, "target_qjs.rs").contents;
+    assert!(
+        qjs.contains("if __raw_value.is_undefined() { None } else { Some({ let value = __raw_value; if value.is_null() || value.is_undefined() { Ok(None) } else { { let value = value; if value.is_function()"),
+        "optional nullable callback conversion must keep the strict gate for a present value"
+    );
+    assert!(
+        qjs.contains(".map(|__raw_value| { let value = __raw_value; if value.is_function()"),
+        "each variadic callback element must be checked for callability"
+    );
 }
 
 #[test]
@@ -776,12 +964,145 @@ fn a_nullable_optional_string_argument_is_borrowed_through_its_outer_option() {
         "the V8 argument moves the inner `Option` into the closure"
     );
 
-    // The QuickJS arm is not compiled by any gate in this repository (the
-    // `quickjs` feature does not build), so this asserts the emitted text only;
-    // see `quickjs_pass` for why it carries the same fix.
+    // The QuickJS generator must borrow the same optional nullable string.
     let qjs = generated_file(&model, "sample_qjs.rs").contents;
     assert!(
-        qjs.contains("probe(value.0.as_ref().map(|inner| inner.as_deref()))"),
+        qjs.contains("probe(value.as_ref().map(|v| v.as_deref()))"),
         "the QuickJS argument does not borrow the outer `Option` by reference"
+    );
+}
+
+#[test]
+fn generated_numeric_conversions_use_restricted_helpers_and_preserve_unrestricted_values() {
+    let model = tenta_idl::parse_webidl(
+        "dictionary NumberInit { float narrow; unrestricted float wideFloat; double restricted; unrestricted double wide; }; \
+         interface NumberSample { undefined accept(float narrow, unrestricted float wideFloat, double restricted, unrestricted double wide); };",
+    )
+    .expect("numeric fixture parses");
+    let types = generated_file(&model, "types.rs");
+    let v8 = generated_file(&model, "number_sample_v8.rs");
+    let qjs = generated_file(&model, "number_sample_qjs.rs");
+    for output in [&types.contents, &v8.contents] {
+        assert!(output.contains("and_then(restricted_f32)"));
+        assert!(output.contains("and_then(restricted_f64)"));
+    }
+    for output in [&types.contents, &qjs.contents] {
+        assert!(output.contains("restricted_f32(v.0).map_err"));
+    }
+    assert!(
+        types
+            .contents
+            .contains("result.wide = Some((number_from_v8(scope, member))?);")
+    );
+    assert!(types.contents.contains("number as f32"));
+    assert!(qjs.contents.contains("v.0 as f32"));
+}
+
+#[test]
+fn quickjs_derived_interface_constructor_links_its_parent_function() {
+    let model = tenta_idl::parse_webidl(
+        "interface Base { constructor(); }; interface Derived : Base { constructor(); };",
+    )
+    .expect("inheritance fixture parses");
+    let parent = generated_file(&model, "base_qjs.rs");
+    let child = generated_file(&model, "derived_qjs.rs");
+    assert!(!parent.contents.contains("parent_constructor"));
+    assert!(
+        child
+            .contents
+            .contains("let parent_constructor: rquickjs::Function = global.get(\"Base\")?;")
+    );
+    assert!(
+        child
+            .contents
+            .contains("constructor.set_prototype(Some(&parent_constructor))?;")
+    );
+}
+
+#[test]
+fn buffer_reference_annotation_changes_only_the_annotated_operation() {
+    let model = tenta_idl::parse_webidl(
+        "interface BufferReferenceProbe { \
+         [TentaBufferReferences] ArrayBufferView echoView(ArrayBufferView value); \
+         [TentaBufferReferences] BufferSource echoSource(BufferSource value); \
+         undefined copied(BufferSource value); };",
+    )
+    .expect("the annotated toy interface parses");
+    let ops = generated_file(&model, "buffer_reference_probe_ops.rs").contents;
+    assert!(ops.contains(
+        "fn echo_view(&self, value: ArrayBufferViewRef) -> Result<ArrayBufferViewRef, JsError>"
+    ));
+    assert!(ops.contains(
+        "fn echo_source(&self, value: BufferSourceRef) -> Result<BufferSourceRef, JsError>"
+    ));
+    assert!(ops.contains("fn copied(&self, value: Vec<u8>) -> Result<(), JsError>"));
+    let v8 = generated_file(&model, "buffer_reference_probe_v8.rs").contents;
+    let quickjs = generated_file(&model, "buffer_reference_probe_qjs.rs").contents;
+    assert!(v8.contains("v8_checked_begin_stored_value_lease(scope)"));
+    assert!(v8.contains("array_buffer_view_ref_from_v8(scope, raw)"));
+    assert!(v8.contains("buffer_source_ref_to_v8(scope, value)"));
+    assert!(quickjs.contains("quickjs_begin_buffer_reference_lease(&ctx)?"));
+    assert!(!quickjs.contains("quickjs_transfer_stored_value_lease(&ctx)?"));
+    assert!(quickjs.contains("buffer_source_ref_from_quickjs(&ctx, __raw_value)"));
+    assert!(quickjs.contains("array_buffer_view_ref_to_quickjs(&ctx, result)"));
+}
+
+#[test]
+fn buffer_reference_annotation_preserves_other_argument_shapes() {
+    let model = tenta_idl::parse_webidl(
+        "interface BufferReferenceProbe { \
+         [TentaBufferReferences] undefined optionalCount(BufferSource value, optional unsigned long count); \
+         [TentaBufferReferences] undefined variadicCount(BufferSource value, unsigned long... counts); };",
+    )
+    .expect("ordinary optional and variadic arguments remain supported");
+    let ops = generated_file(&model, "buffer_reference_probe_ops.rs").contents;
+    assert!(ops.contains("fn optional_count(&self, value: BufferSourceRef, count: Option<u32>)"));
+    assert!(ops.contains("fn variadic_count(&self, value: BufferSourceRef, counts: Vec<u32>)"));
+    let qjs = generated_file(&model, "buffer_reference_probe_qjs.rs").contents;
+    assert!(!qjs.contains("quickjs_transfer_stored_value_lease(&ctx)?"));
+}
+
+#[test]
+fn buffer_reference_annotation_refuses_unsupported_shapes() {
+    for declaration in [
+        "[TentaBufferReferences] undefined wrong(optional BufferSource source);",
+        "[TentaBufferReferences] undefined wrong(BufferSource... sources);",
+        "[TentaBufferReferences] undefined wrong(BufferSource? source);",
+        "[TentaBufferReferences] undefined wrong(sequence<BufferSource> sources);",
+        "[TentaBufferReferences] undefined wrong(ArrayBuffer buffer);",
+        "[TentaBufferReferences] undefined wrong(long value);",
+        "[TentaBufferReferences] Promise<BufferSource> wrong(BufferSource source);",
+    ] {
+        let source = format!("interface BufferReferenceProbe {{ {declaration} }};");
+        let error = tenta_idl::parse_webidl(&source).expect_err(declaration);
+        assert!(
+            error.to_string().contains("TentaBufferReferences"),
+            "{declaration}: {error}"
+        );
+    }
+    for source in [
+        "[TentaBufferReferences] interface Wrong { undefined call(); };",
+        "interface Wrong { [TentaBufferReferences] readonly attribute long value; };",
+        "interface Wrong { [TentaBufferReferences] constructor(); };",
+        "interface Wrong { undefined call([TentaBufferReferences] long value); };",
+        "[TentaBufferReferences] dictionary Wrong { long value; };",
+        "namespace Wrong { [TentaBufferReferences] undefined call(BufferSource value); };",
+    ] {
+        assert!(
+            tenta_idl::parse_webidl(source)
+                .expect_err("annotation is operation-only")
+                .to_string()
+                .contains("TentaBufferReferences"),
+            "{source}",
+        );
+    }
+    let mixed = "interface BufferReferenceProbe { \
+        [TentaBufferReferences] undefined mixed(BufferSource source); \
+        undefined mixed(DOMString ordinary, long other); };";
+    assert!(
+        tenta_idl::parse_webidl(mixed)
+            .expect_err("mixed annotation overloads are unsupported")
+            .to_string()
+            .contains("TentaBufferReferences")
     );
 }

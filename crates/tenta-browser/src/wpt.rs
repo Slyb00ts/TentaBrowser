@@ -128,7 +128,7 @@ use tokio::sync::oneshot;
 use tokio::task::{JoinSet, LocalSet};
 
 use crate::context::{BrowserContext, ContextOptions, PageOptions};
-use crate::engine::Engine;
+use crate::engine::{Engine, JsEngine};
 
 /// Harness statuses, indexed the way `testharness.js` numbers them.
 const HARNESS_STATUS: [&str; 4] = ["OK", "ERROR", "TIMEOUT", "PRECONDITION_FAILED"];
@@ -183,9 +183,37 @@ const ORDER_GRACE: Duration = Duration::from_millis(250);
 /// refreshes it anyway.
 const HOST_TTL: Duration = Duration::from_secs(60);
 
+/// The explicit backend under test; an unavailable backend is a tooling error.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend {
+    #[default]
+    V8,
+    QuickJs,
+}
+
+impl Backend {
+    fn engine(self) -> JsEngine {
+        match self {
+            Self::V8 => JsEngine::V8,
+            Self::QuickJs => JsEngine::QuickJs,
+        }
+    }
+
+    fn product(self) -> &'static str {
+        match self {
+            Self::V8 => "tentabrowser",
+            Self::QuickJs => "tentabrowser-qjs",
+        }
+    }
+}
+
 /// A run: the base URL to resolve test paths against and the tests to run.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Plan {
+    /// Defaults to V8 for existing plans. Never silently falls back to another engine.
+    #[serde(default)]
+    pub backend: Backend,
     /// Origin every `tests[].url` is relative to, e.g.
     /// `http://web-platform.test:8000`.
     pub base: String,
@@ -229,6 +257,7 @@ pub struct Results {
 pub struct BrowserInfo {
     pub name: String,
     pub version: String,
+    pub backend: Backend,
 }
 
 /// One test's outcome.
@@ -516,6 +545,7 @@ fn worker_count(plan: &Plan) -> usize {
 pub async fn run(plan: Plan) -> Result<Results, Error> {
     let workers = worker_count(&plan);
     let engine = Engine::builder()
+        .js(plan.backend.engine())
         .io_threads(workers)
         .page_threads(workers)
         .max_tier(Tier::Js)
@@ -603,8 +633,9 @@ pub async fn run(plan: Plan) -> Result<Results, Error> {
         .collect();
     Ok(Results {
         browser: BrowserInfo {
-            name: "tentabrowser".to_owned(),
+            name: plan.backend.product().to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
+            backend: plan.backend,
         },
         tests,
     })
@@ -798,6 +829,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn plans_select_a_known_backend_and_old_plans_default_to_v8() {
+        let old: Plan = serde_json::from_str(r#"{"base":"http://example.test"}"#).unwrap();
+        assert_eq!(old.backend, Backend::V8);
+        let quickjs: Plan =
+            serde_json::from_str(r#"{"base":"http://example.test","backend":"quickjs"}"#).unwrap();
+        assert_eq!(quickjs.backend, Backend::QuickJs);
+        assert!(
+            serde_json::from_str::<Plan>(r#"{"base":"http://example.test","backend":"auto"}"#,)
+                .is_err()
+        );
+    }
+
+    #[cfg(not(all(feature = "v8", feature = "quickjs")))]
+    #[tokio::test]
+    async fn an_unavailable_backend_is_refused_without_running_tests() {
+        let backend = if cfg!(feature = "v8") {
+            "quickjs"
+        } else {
+            "v8"
+        };
+        let plan: Plan = serde_json::from_value(serde_json::json!({
+            "base": "http://example.test", "backend": backend,
+        }))
+        .unwrap();
+        assert!(matches!(run(plan).await, Err(Error::Unsupported { .. })));
+    }
+
+    #[test]
     fn only_the_wpt_hosts_and_their_subdomains_are_mapped() {
         assert!(is_wpt_host("web-platform.test"));
         assert!(is_wpt_host("WEB-PLATFORM.TEST"));
@@ -910,6 +969,7 @@ mod tests {
     #[test]
     fn jobs_maps_to_at_least_one_worker() {
         let plan = |jobs| Plan {
+            backend: Backend::V8,
             base: "http://web-platform.test:8000".to_owned(),
             resolver_rules: false,
             jobs,
@@ -957,6 +1017,7 @@ mod tests {
             browser: BrowserInfo {
                 name: "tentabrowser".to_owned(),
                 version: "0.0.1".to_owned(),
+                backend: Backend::V8,
             },
             tests: vec![TestOutcome {
                 test: "/index.html".to_owned(),
@@ -973,6 +1034,7 @@ mod tests {
         let value = serde_json::to_value(&results).expect("serializes");
         assert_eq!(value["browser"]["name"], "tentabrowser");
         assert_eq!(value["browser"]["version"], "0.0.1");
+        assert_eq!(value["browser"]["backend"], "v8");
         assert_eq!(value["tests"][0]["test"], "/index.html");
         assert_eq!(value["tests"][0]["status"], "OK");
         assert_eq!(value["tests"][0]["duration_ms"], 12);

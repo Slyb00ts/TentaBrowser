@@ -139,7 +139,7 @@ impl ScrollBehavior {
         scope: &mut v8::PinScope<'_, '_>,
         value: v8::Local<v8::Value>,
     ) -> Result<Self, JsError> {
-        let text = string_from_v8(scope, value);
+        let text = string_from_v8(scope, value)?;
         Self::parse(&text)
             .ok_or_else(|| JsError::type_error("the value is not a member of enum ScrollBehavior"))
     }
@@ -210,9 +210,12 @@ impl EventListenerOptions {
             let member = self.capture;
             let key = v8_string(scope, "capture")?;
             let value = (Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, member).into()))?;
-            object
-                .set(scope, key.into(), value)
-                .ok_or_else(|| JsError::type_error("the dictionary member cannot be defined"))?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
         }
         Ok(object.into())
     }
@@ -222,10 +225,13 @@ impl EventListenerOptions {
 impl<'js> rquickjs::FromJs<'js> for EventListenerOptions {
     fn from_js(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {
         let mut result = Self::default();
+        if !value.is_object() && !value.is_null() && !value.is_undefined() { return Err(rquickjs::Exception::throw_type(ctx, "dictionary requires an object")); }
         let Some(object) = value.as_object() else {
             return Ok(result);
         };
-        if let Some(member) = object.get::<_, Option<bool>>("capture")? {
+        let member: rquickjs::Value = object.get("capture")?;
+        if !member.is_undefined() {
+            let member = rquickjs::Coerced::<bool>::from_js(ctx, member).map(|v| v.0)?;
             result.capture = member;
         }
         Ok(result)
@@ -236,7 +242,11 @@ impl<'js> rquickjs::FromJs<'js> for EventListenerOptions {
 impl<'js> rquickjs::IntoJs<'js> for EventListenerOptions {
     fn into_js(self, ctx: &rquickjs::Ctx<'js>) -> rquickjs::Result<rquickjs::Value<'js>> {
         let object = rquickjs::Object::new(ctx.clone())?;
-        object.set("capture", self.capture)?;
+        {
+            let member = self.capture;
+            let value = (rquickjs::IntoJs::into_js(member, ctx))?;
+            object.prop("capture", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
         Ok(object.into_value())
     }
 }
@@ -274,11 +284,11 @@ impl AddEventListenerOptions {
         if let Some(member) = dictionary_member(scope, object, "capture")? {
             result.capture = (Ok::<bool, JsError>(bool_from_v8(scope, member)))?;
         }
-        if let Some(member) = dictionary_member(scope, object, "passive")? {
-            result.passive = Some((Ok::<bool, JsError>(bool_from_v8(scope, member)))?);
-        }
         if let Some(member) = dictionary_member(scope, object, "once")? {
             result.once = (Ok::<bool, JsError>(bool_from_v8(scope, member)))?;
+        }
+        if let Some(member) = dictionary_member(scope, object, "passive")? {
+            result.passive = Some((Ok::<bool, JsError>(bool_from_v8(scope, member)))?);
         }
         if let Some(member) = dictionary_member(scope, object, "signal")? {
             result.signal = Some((handle_from_v8::<AbortSignal>(scope, member))?);
@@ -296,33 +306,45 @@ impl AddEventListenerOptions {
             let member = self.capture;
             let key = v8_string(scope, "capture")?;
             let value = (Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, member).into()))?;
-            object
-                .set(scope, key.into(), value)
-                .ok_or_else(|| JsError::type_error("the dictionary member cannot be defined"))?;
-        }
-        {
-            let member = self.passive.clone();
-            let key = v8_string(scope, "passive")?;
-            let value = (match member { Some(inner) => Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, inner).into()), None => Ok(v8::null(scope).into()) })?;
-            object
-                .set(scope, key.into(), value)
-                .ok_or_else(|| JsError::type_error("the dictionary member cannot be defined"))?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
         }
         {
             let member = self.once;
             let key = v8_string(scope, "once")?;
             let value = (Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, member).into()))?;
-            object
-                .set(scope, key.into(), value)
-                .ok_or_else(|| JsError::type_error("the dictionary member cannot be defined"))?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
         }
-        {
-            let member = self.signal.clone();
+        if let Some(inner) = &self.passive {
+            let member = *inner;
+            let key = v8_string(scope, "passive")?;
+            let value = (Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, member).into()))?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
+        }
+        if let Some(inner) = &self.signal {
+            let member = *inner;
             let key = v8_string(scope, "signal")?;
-            let value = (match member { Some(inner) => handle_to_v8::<AbortSignal>(scope, inner), None => Ok(v8::null(scope).into()) })?;
-            object
-                .set(scope, key.into(), value)
-                .ok_or_else(|| JsError::type_error("the dictionary member cannot be defined"))?;
+            let value = (handle_to_v8::<AbortSignal>(scope, member))?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
         }
         Ok(object.into())
     }
@@ -332,19 +354,28 @@ impl AddEventListenerOptions {
 impl<'js> rquickjs::FromJs<'js> for AddEventListenerOptions {
     fn from_js(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {
         let mut result = Self::default();
+        if !value.is_object() && !value.is_null() && !value.is_undefined() { return Err(rquickjs::Exception::throw_type(ctx, "dictionary requires an object")); }
         let Some(object) = value.as_object() else {
             return Ok(result);
         };
-        if let Some(member) = object.get::<_, Option<bool>>("capture")? {
+        let member: rquickjs::Value = object.get("capture")?;
+        if !member.is_undefined() {
+            let member = rquickjs::Coerced::<bool>::from_js(ctx, member).map(|v| v.0)?;
             result.capture = member;
         }
-        if let Some(member) = object.get::<_, Option<bool>>("passive")? {
-            result.passive = Some(member);
-        }
-        if let Some(member) = object.get::<_, Option<bool>>("once")? {
+        let member: rquickjs::Value = object.get("once")?;
+        if !member.is_undefined() {
+            let member = rquickjs::Coerced::<bool>::from_js(ctx, member).map(|v| v.0)?;
             result.once = member;
         }
-        if let Some(member) = object.get::<_, Option<Handle<AbortSignal>>>("signal")? {
+        let member: rquickjs::Value = object.get("passive")?;
+        if !member.is_undefined() {
+            let member = rquickjs::Coerced::<bool>::from_js(ctx, member).map(|v| v.0)?;
+            result.passive = Some(member);
+        }
+        let member: rquickjs::Value = object.get("signal")?;
+        if !member.is_undefined() {
+            let member = <Handle<AbortSignal> as rquickjs::FromJs>::from_js(ctx, member)?;
             result.signal = Some(member);
         }
         Ok(result)
@@ -355,10 +386,24 @@ impl<'js> rquickjs::FromJs<'js> for AddEventListenerOptions {
 impl<'js> rquickjs::IntoJs<'js> for AddEventListenerOptions {
     fn into_js(self, ctx: &rquickjs::Ctx<'js>) -> rquickjs::Result<rquickjs::Value<'js>> {
         let object = rquickjs::Object::new(ctx.clone())?;
-        object.set("capture", self.capture)?;
-        object.set("passive", self.passive)?;
-        object.set("once", self.once)?;
-        object.set("signal", self.signal)?;
+        {
+            let member = self.capture;
+            let value = (rquickjs::IntoJs::into_js(member, ctx))?;
+            object.prop("capture", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
+        {
+            let member = self.once;
+            let value = (rquickjs::IntoJs::into_js(member, ctx))?;
+            object.prop("once", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
+        if let Some(member) = self.passive {
+            let value = (rquickjs::IntoJs::into_js(member, ctx))?;
+            object.prop("passive", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
+        if let Some(member) = self.signal {
+            let value = (rquickjs::IntoJs::into_js(member, ctx))?;
+            object.prop("signal", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
         Ok(object.into_value())
     }
 }
@@ -413,25 +458,34 @@ impl EventInit {
             let member = self.bubbles;
             let key = v8_string(scope, "bubbles")?;
             let value = (Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, member).into()))?;
-            object
-                .set(scope, key.into(), value)
-                .ok_or_else(|| JsError::type_error("the dictionary member cannot be defined"))?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
         }
         {
             let member = self.cancelable;
             let key = v8_string(scope, "cancelable")?;
             let value = (Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, member).into()))?;
-            object
-                .set(scope, key.into(), value)
-                .ok_or_else(|| JsError::type_error("the dictionary member cannot be defined"))?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
         }
         {
             let member = self.composed;
             let key = v8_string(scope, "composed")?;
             let value = (Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, member).into()))?;
-            object
-                .set(scope, key.into(), value)
-                .ok_or_else(|| JsError::type_error("the dictionary member cannot be defined"))?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
         }
         Ok(object.into())
     }
@@ -441,16 +495,23 @@ impl EventInit {
 impl<'js> rquickjs::FromJs<'js> for EventInit {
     fn from_js(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {
         let mut result = Self::default();
+        if !value.is_object() && !value.is_null() && !value.is_undefined() { return Err(rquickjs::Exception::throw_type(ctx, "dictionary requires an object")); }
         let Some(object) = value.as_object() else {
             return Ok(result);
         };
-        if let Some(member) = object.get::<_, Option<bool>>("bubbles")? {
+        let member: rquickjs::Value = object.get("bubbles")?;
+        if !member.is_undefined() {
+            let member = rquickjs::Coerced::<bool>::from_js(ctx, member).map(|v| v.0)?;
             result.bubbles = member;
         }
-        if let Some(member) = object.get::<_, Option<bool>>("cancelable")? {
+        let member: rquickjs::Value = object.get("cancelable")?;
+        if !member.is_undefined() {
+            let member = rquickjs::Coerced::<bool>::from_js(ctx, member).map(|v| v.0)?;
             result.cancelable = member;
         }
-        if let Some(member) = object.get::<_, Option<bool>>("composed")? {
+        let member: rquickjs::Value = object.get("composed")?;
+        if !member.is_undefined() {
+            let member = rquickjs::Coerced::<bool>::from_js(ctx, member).map(|v| v.0)?;
             result.composed = member;
         }
         Ok(result)
@@ -461,9 +522,21 @@ impl<'js> rquickjs::FromJs<'js> for EventInit {
 impl<'js> rquickjs::IntoJs<'js> for EventInit {
     fn into_js(self, ctx: &rquickjs::Ctx<'js>) -> rquickjs::Result<rquickjs::Value<'js>> {
         let object = rquickjs::Object::new(ctx.clone())?;
-        object.set("bubbles", self.bubbles)?;
-        object.set("cancelable", self.cancelable)?;
-        object.set("composed", self.composed)?;
+        {
+            let member = self.bubbles;
+            let value = (rquickjs::IntoJs::into_js(member, ctx))?;
+            object.prop("bubbles", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
+        {
+            let member = self.cancelable;
+            let value = (rquickjs::IntoJs::into_js(member, ctx))?;
+            object.prop("cancelable", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
+        {
+            let member = self.composed;
+            let value = (rquickjs::IntoJs::into_js(member, ctx))?;
+            object.prop("composed", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
         Ok(object.into_value())
     }
 }
@@ -516,9 +589,12 @@ impl ScrollOptions {
             let member = self.behavior;
             let key = v8_string(scope, "behavior")?;
             let value = (member.to_v8(scope))?;
-            object
-                .set(scope, key.into(), value)
-                .ok_or_else(|| JsError::type_error("the dictionary member cannot be defined"))?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
         }
         Ok(object.into())
     }
@@ -528,10 +604,13 @@ impl ScrollOptions {
 impl<'js> rquickjs::FromJs<'js> for ScrollOptions {
     fn from_js(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {
         let mut result = Self::default();
+        if !value.is_object() && !value.is_null() && !value.is_undefined() { return Err(rquickjs::Exception::throw_type(ctx, "dictionary requires an object")); }
         let Some(object) = value.as_object() else {
             return Ok(result);
         };
-        if let Some(member) = object.get::<_, Option<ScrollBehavior>>("behavior")? {
+        let member: rquickjs::Value = object.get("behavior")?;
+        if !member.is_undefined() {
+            let member = <ScrollBehavior as rquickjs::FromJs>::from_js(ctx, member)?;
             result.behavior = member;
         }
         Ok(result)
@@ -542,7 +621,11 @@ impl<'js> rquickjs::FromJs<'js> for ScrollOptions {
 impl<'js> rquickjs::IntoJs<'js> for ScrollOptions {
     fn into_js(self, ctx: &rquickjs::Ctx<'js>) -> rquickjs::Result<rquickjs::Value<'js>> {
         let object = rquickjs::Object::new(ctx.clone())?;
-        object.set("behavior", self.behavior)?;
+        {
+            let member = self.behavior;
+            let value = (rquickjs::IntoJs::into_js(member, ctx))?;
+            object.prop("behavior", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
         Ok(object.into_value())
     }
 }
@@ -607,25 +690,34 @@ impl ScrollToOptions {
             let member = self.behavior;
             let key = v8_string(scope, "behavior")?;
             let value = (member.to_v8(scope))?;
-            object
-                .set(scope, key.into(), value)
-                .ok_or_else(|| JsError::type_error("the dictionary member cannot be defined"))?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
         }
-        {
-            let member = self.left.clone();
+        if let Some(inner) = &self.left {
+            let member = *inner;
             let key = v8_string(scope, "left")?;
-            let value = (match member { Some(inner) => Ok::<v8::Local<v8::Value>, JsError>(v8::Number::new(scope, inner as f64).into()), None => Ok(v8::null(scope).into()) })?;
-            object
-                .set(scope, key.into(), value)
-                .ok_or_else(|| JsError::type_error("the dictionary member cannot be defined"))?;
+            let value = (Ok::<v8::Local<v8::Value>, JsError>(v8::Number::new(scope, member as f64).into()))?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
         }
-        {
-            let member = self.top.clone();
+        if let Some(inner) = &self.top {
+            let member = *inner;
             let key = v8_string(scope, "top")?;
-            let value = (match member { Some(inner) => Ok::<v8::Local<v8::Value>, JsError>(v8::Number::new(scope, inner as f64).into()), None => Ok(v8::null(scope).into()) })?;
-            object
-                .set(scope, key.into(), value)
-                .ok_or_else(|| JsError::type_error("the dictionary member cannot be defined"))?;
+            let value = (Ok::<v8::Local<v8::Value>, JsError>(v8::Number::new(scope, member as f64).into()))?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
         }
         Ok(object.into())
     }
@@ -635,16 +727,23 @@ impl ScrollToOptions {
 impl<'js> rquickjs::FromJs<'js> for ScrollToOptions {
     fn from_js(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {
         let mut result = Self::default();
+        if !value.is_object() && !value.is_null() && !value.is_undefined() { return Err(rquickjs::Exception::throw_type(ctx, "dictionary requires an object")); }
         let Some(object) = value.as_object() else {
             return Ok(result);
         };
-        if let Some(member) = object.get::<_, Option<ScrollBehavior>>("behavior")? {
+        let member: rquickjs::Value = object.get("behavior")?;
+        if !member.is_undefined() {
+            let member = <ScrollBehavior as rquickjs::FromJs>::from_js(ctx, member)?;
             result.behavior = member;
         }
-        if let Some(member) = object.get::<_, Option<f64>>("left")? {
+        let member: rquickjs::Value = object.get("left")?;
+        if !member.is_undefined() {
+            let member = rquickjs::Coerced::<f64>::from_js(ctx, member).and_then(|v| { if true || v.0.is_finite() { Ok(v.0 as f64) } else { Err(rquickjs::Exception::throw_type(ctx, "non-finite number")) } })?;
             result.left = Some(member);
         }
-        if let Some(member) = object.get::<_, Option<f64>>("top")? {
+        let member: rquickjs::Value = object.get("top")?;
+        if !member.is_undefined() {
+            let member = rquickjs::Coerced::<f64>::from_js(ctx, member).and_then(|v| { if true || v.0.is_finite() { Ok(v.0 as f64) } else { Err(rquickjs::Exception::throw_type(ctx, "non-finite number")) } })?;
             result.top = Some(member);
         }
         Ok(result)
@@ -655,9 +754,19 @@ impl<'js> rquickjs::FromJs<'js> for ScrollToOptions {
 impl<'js> rquickjs::IntoJs<'js> for ScrollToOptions {
     fn into_js(self, ctx: &rquickjs::Ctx<'js>) -> rquickjs::Result<rquickjs::Value<'js>> {
         let object = rquickjs::Object::new(ctx.clone())?;
-        object.set("behavior", self.behavior)?;
-        object.set("left", self.left)?;
-        object.set("top", self.top)?;
+        {
+            let member = self.behavior;
+            let value = (rquickjs::IntoJs::into_js(member, ctx))?;
+            object.prop("behavior", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
+        if let Some(member) = self.left {
+            let value = (rquickjs::IntoJs::into_js(member, ctx))?;
+            object.prop("left", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
+        if let Some(member) = self.top {
+            let value = (rquickjs::IntoJs::into_js(member, ctx))?;
+            object.prop("top", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
         Ok(object.into_value())
     }
 }
@@ -675,9 +784,9 @@ pub enum AddEventListenerOptionsOrBoolean {
 impl AddEventListenerOptionsOrBoolean {
     /// Converts a JavaScript value to this union.
     ///
-    /// Arms are tried in declaration order, each one behind the WebIDL test
-    /// that selects it — a sequence by its `@@iterator`, a record by being an
-    /// object that is not an array. The first arm that has no test of its own
+    /// Tested arms keep declaration order except callback interfaces follow
+    /// callable, platform, buffer and iterable arms. A sequence uses
+    /// `@@iterator`; the first arm without a test
     /// is the fallback.
     pub fn from_v8<'s>(
         scope: &mut v8::PinScope<'s, '_>,
@@ -717,7 +826,7 @@ impl<'js> rquickjs::FromJs<'js> for AddEventListenerOptionsOrBoolean {
             return <AddEventListenerOptions as rquickjs::FromJs>::from_js(ctx, value).map(AddEventListenerOptionsOrBoolean::AddEventListenerOptions);
         }
         if value.is_bool() {
-            return <bool as rquickjs::FromJs>::from_js(ctx, value).map(AddEventListenerOptionsOrBoolean::Boolean);
+            return rquickjs::Coerced::<bool>::from_js(ctx, value).map(|v| v.0).map(AddEventListenerOptionsOrBoolean::Boolean);
         }
         Err(rquickjs::Exception::throw_type(ctx, "the value matches no arm of the union"))
     }
@@ -746,9 +855,9 @@ pub enum EventListenerOptionsOrBoolean {
 impl EventListenerOptionsOrBoolean {
     /// Converts a JavaScript value to this union.
     ///
-    /// Arms are tried in declaration order, each one behind the WebIDL test
-    /// that selects it — a sequence by its `@@iterator`, a record by being an
-    /// object that is not an array. The first arm that has no test of its own
+    /// Tested arms keep declaration order except callback interfaces follow
+    /// callable, platform, buffer and iterable arms. A sequence uses
+    /// `@@iterator`; the first arm without a test
     /// is the fallback.
     pub fn from_v8<'s>(
         scope: &mut v8::PinScope<'s, '_>,
@@ -788,7 +897,7 @@ impl<'js> rquickjs::FromJs<'js> for EventListenerOptionsOrBoolean {
             return <EventListenerOptions as rquickjs::FromJs>::from_js(ctx, value).map(EventListenerOptionsOrBoolean::EventListenerOptions);
         }
         if value.is_bool() {
-            return <bool as rquickjs::FromJs>::from_js(ctx, value).map(EventListenerOptionsOrBoolean::Boolean);
+            return rquickjs::Coerced::<bool>::from_js(ctx, value).map(|v| v.0).map(EventListenerOptionsOrBoolean::Boolean);
         }
         Err(rquickjs::Exception::throw_type(ctx, "the value matches no arm of the union"))
     }
@@ -817,18 +926,18 @@ pub enum NodeOrDomString {
 impl NodeOrDomString {
     /// Converts a JavaScript value to this union.
     ///
-    /// Arms are tried in declaration order, each one behind the WebIDL test
-    /// that selects it — a sequence by its `@@iterator`, a record by being an
-    /// object that is not an array. The first arm that has no test of its own
+    /// Tested arms keep declaration order except callback interfaces follow
+    /// callable, platform, buffer and iterable arms. A sequence uses
+    /// `@@iterator`; the first arm without a test
     /// is the fallback.
     pub fn from_v8<'s>(
         scope: &mut v8::PinScope<'s, '_>,
         value: v8::Local<'s, v8::Value>,
     ) -> Result<Self, JsError> {
-        if value.is_object() {
-            return (handle_from_v8::<Node>(scope, value)).map(NodeOrDomString::Node);
+        if let Some(inner) = interface_handle_from_v8::<Node>(scope, value)? {
+            return Ok(NodeOrDomString::Node(inner));
         }
-        (Ok::<String, JsError>(string_from_v8(scope, value))).map(NodeOrDomString::DomString)
+        (string_from_v8(scope, value)).map(NodeOrDomString::DomString)
     }
 
     /// Converts this union to a JavaScript value.
@@ -852,10 +961,10 @@ impl NodeOrDomString {
 #[cfg(feature = "quickjs")]
 impl<'js> rquickjs::FromJs<'js> for NodeOrDomString {
     fn from_js(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {
-        if value.is_object() {
+        if quickjs_is_interface(ctx, &value, "Node") {
             return <Handle<Node> as rquickjs::FromJs>::from_js(ctx, value).map(NodeOrDomString::Node);
         }
-        <String as rquickjs::FromJs>::from_js(ctx, value).map(NodeOrDomString::DomString)
+        rquickjs::Coerced::<rquickjs::String>::from_js(ctx, value).and_then(|v| v.0.to_string_lossy()).map(NodeOrDomString::DomString)
     }
 }
 

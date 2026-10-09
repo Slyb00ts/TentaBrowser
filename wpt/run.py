@@ -26,8 +26,8 @@ Subcommands:
 
 Products:
   chromium             Playwright's Chromium driven by tools/driver-chromium.mjs
-  tentabrowser         tenta-wpt-driver, a [[bin]] of the tenta-browser crate
-                       built with its v8 feature (see TentaBrowserDriver)
+  tentabrowser         tenta-wpt-driver with the explicit V8 backend
+  tentabrowser-qjs     the same driver with the explicit QuickJS backend
 
 Expectations are a trust boundary, not a measurement. `candidate` writes machine
 output under the gitignored wpt/results/; only an explicit `promote` moves a
@@ -375,19 +375,25 @@ class ChromiumDriver(Driver):
 class TentaBrowserDriver(Driver):
     name = "tentabrowser"
 
-    def __init__(self, driver: Path):
+    def __init__(self, driver: Path, backend: str = "v8"):
         self.driver = driver
+        self.backend = backend
 
     def identity(self) -> dict:
-        return {"path": str(self.driver), "sha256": sha256_file(self.driver)}
+        return {"path": str(self.driver), "sha256": sha256_file(self.driver), "backend": self.backend}
 
     def run(self, plan: dict) -> dict:
+        plan["backend"] = self.backend
         plan_path = RESULTS / ".plan.json"
         out_path = RESULTS / ".driver-results.json"
         plan_path.write_text(json.dumps(plan))
         subprocess.run([str(self.driver), str(plan_path), str(out_path)], check=True)
         with out_path.open("rb") as handle:
-            return json.load(handle)
+            outcome = json.load(handle)
+        actual = outcome.get("browser", {}).get("backend")
+        if actual != self.backend:
+            tool_error(f"driver reported backend {actual!r}, requested {self.backend!r}; rebuild the driver")
+        return outcome
 
 
 def checked_driver(path: Path, source: str) -> Path:
@@ -418,7 +424,7 @@ def resolve_driver(explicit: str | None) -> Path:
             return checked_driver(candidate, str(candidate))
     tool_error(
         "no tenta-wpt-driver binary found; build one with "
-        "`cargo build --release -p tenta-browser --features v8 --bin tenta-wpt-driver`, "
+        "`cargo build --release -p tenta-browser --features v8,quickjs --bin tenta-wpt-driver`, "
         "or name it with --driver / $TENTA_WPT_DRIVER"
     )
 
@@ -426,8 +432,9 @@ def resolve_driver(explicit: str | None) -> Path:
 def make_driver(args: argparse.Namespace) -> Driver:
     if args.product == "chromium":
         return ChromiumDriver(args.channel, args.executable)
-    if args.product == "tentabrowser":
-        return TentaBrowserDriver(resolve_driver(args.driver))
+    if args.product in ("tentabrowser", "tentabrowser-qjs"):
+        backend = "quickjs" if args.product == "tentabrowser-qjs" else "v8"
+        return TentaBrowserDriver(resolve_driver(args.driver), backend)
     tool_error(f"unknown product {args.product}")
 
 
@@ -933,6 +940,20 @@ def report_stamp(report: dict) -> dict[str, str]:
     }
 
 
+def report_identity_problems(product: str, report: dict) -> list[str]:
+    """Reject a misfiled or unlabelled report before it can bless another engine."""
+    problems = []
+    if report.get("product") != product:
+        problems.append(f"product differs: requested {product!r}, report {report.get('product')!r}")
+    backend = {"tentabrowser": "v8", "tentabrowser-qjs": "quickjs"}.get(product)
+    if backend:
+        for section in ("browser", "driver"):
+            actual = (report.get(section) or {}).get("backend")
+            if actual != backend:
+                problems.append(f"{section}.backend differs: expected {backend!r}, report {actual!r}")
+    return problems
+
+
 def comparability(
     product: str,
     directory: str,
@@ -948,7 +969,7 @@ def comparability(
     has to say which stamp moved.
     """
     paths = paths or Paths()
-    problems: list[str] = []
+    problems = report_identity_problems(product, report)
     if report.get("truncated"):
         problems.append("the run was truncated (`--max-minutes` or a harness `run deadline reached`)")
     if baseline is None:
@@ -1047,6 +1068,9 @@ def generate_candidate(
     """
     paths = paths or Paths()
     directory = directory.strip("/")
+    identity_problems = report_identity_problems(product, report)
+    if identity_problems:
+        tool_error("cannot generate candidate: " + "; ".join(identity_problems))
     root = paths.candidate_dir(product, directory)
     if root.exists():
         shutil.rmtree(root)
@@ -1663,7 +1687,7 @@ def build_parser() -> argparse.ArgumentParser:
         p = sub.add_parser(name)
         p.add_argument("--dir", action="append", required=True, help="WPT directory, e.g. dom/nodes (repeatable)")
         if name != "list":
-            p.add_argument("--product", choices=["chromium", "tentabrowser"], required=True)
+            p.add_argument("--product", choices=["chromium", "tentabrowser", "tentabrowser-qjs"], required=True)
         if name == "run":
             p.add_argument("--jobs", type=int, default=load_config()["runner"]["jobs"])
             p.add_argument("--max-minutes", type=float, default=0, help="stop starting new tests after N minutes")
@@ -1671,7 +1695,7 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--executable", help="browser executable for chromium")
             p.add_argument(
                 "--driver",
-                help="tenta-wpt-driver binary for the tentabrowser product "
+                help="tenta-wpt-driver binary for either tentabrowser product "
                 "(default: $TENTA_WPT_DRIVER, then target/release, then target/debug)",
             )
         if name == "promote":

@@ -1,0 +1,25 @@
+{
+  "base_component_map_sha256": "38f56ee3b04dc8a2b38039031aef43bf9dcd45eda36332bc4c9905a2840fe31a",
+  "limitations": [
+    "Source and notice applicability do not establish browser integration.",
+    "Native23 Storage Symbol latency regression remains open."
+  ],
+  "native30_archive_sha256": "f7393a5194ca5e8360b10c50b465944dad656fec071f7f82dddf01544aa6d8c3",
+  "native30_receipt_sha256": "8327281d17c8cef118ac25f8736fe5b8d0b648d0388281601f62e77e96757e8d",
+  "native_incremental_actions": [
+    "CXX obj/rusty_v8/binding.o",
+    "AR obj/librusty_v8.a"
+  ],
+  "notice_policy": "Retain the 91 reviewed notice texts and original upstream headers. This record relates the unchanged prior component map to the two-action native30 increment; new configurations require fresh review.",
+  "predecessor_native23_archive_sha256": "744252be94bd7a095a64db86ca10d8349493447860bdbc8a2ede5bb028bd985f",
+  "scope": "Native30 incremental notice applicability; no new full GN component audit",
+  "source_delta": "TentaBrowser-authored slow-callback synchronous termination shim in the existing Deno-derived MIT binding translation unit; it includes and calls existing BSD-licensed V8 internal API headers. Rust-only Symbol and termination controls plus Rust declaration add no native third-party component.",
+  "unchanged_inputs": [
+    "GN arguments",
+    "feature configuration",
+    "generated startup snapshot",
+    "embedded builtins",
+    "native dependency revisions",
+    "Temporal and Diplomat ABI package versions"
+  ]
+}

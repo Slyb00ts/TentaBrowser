@@ -32,6 +32,41 @@ fn tail(harness: &Harness) -> Option<String> {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn engine_initialization_failure_does_not_report_a_scriptless_success() {
+    let harness = Harness::builder(&body(
+        "<script>first</script><script>second</script><p id=tail>after</p>",
+    ))
+    .failing_engine("runtime initialization failed")
+    .build();
+    let error = harness
+        .settle(Settle::Load)
+        .await
+        .expect_err("navigation fails");
+    assert!(matches!(error, tenta_core::Error::Unsupported { reason }
+        if reason == "runtime initialization failed"));
+    let record = harness.record.lock().unwrap();
+    assert_eq!(record.engine_creations, 1, "do not retry at later scripts");
+    assert!(record.scripts.is_empty());
+    assert!(
+        harness.page.navigation().is_none(),
+        "no successful navigation is published"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_static_navigation_does_not_require_engine_initialization() {
+    let harness = Harness::builder(&body("<p id=tail>static</p>"))
+        .failing_engine("runtime initialization failed")
+        .build();
+    harness
+        .settle(Settle::Load)
+        .await
+        .expect("static navigation");
+    assert_eq!(tail(&harness), Some("static".to_owned()));
+    assert_eq!(harness.record.lock().unwrap().engine_creations, 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn an_inline_script_runs_at_the_pause_and_sees_only_what_came_before_it() {
     let harness = Harness::new(&body(
         "<div id=before>before</div><script>first</script><p id=tail>after</p>",

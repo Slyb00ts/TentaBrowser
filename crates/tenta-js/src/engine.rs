@@ -25,12 +25,12 @@
 //! 2. [`PageEngine::document`] returns a clone of the shared handle. Borrow it
 //!    for the body of one operation and drop it, exactly as
 //!    `tenta_dom::SharedSink` does for the parser.
-//! 3. Nothing may free nodes in a document a `tenta_html::Parser` is currently
-//!    parsing into: the parser holds arena handles it has not finished with,
-//!    and a sweep through a shared handle could hand a recycled slot back to
-//!    it. A caller that pauses a parse to run script is the one place the
-//!    engine and the parser legitimately interleave, and it must resume the
-//!    parse before anything reclaims.
+//! 3. Every raw handle a parser can reuse must have a native lifetime root.
+//!    `tenta_dom::SharedSink` pins each published handle until finish/drop, so
+//!    an engine pressure checkpoint may reclaim unrelated script-created nodes
+//!    while parsing is paused. A checkpoint may run only before host work with
+//!    no active conversion frame or document borrow; explicit trim does not
+//!    sweep the native arena.
 //!
 //! Unlike the rest of `tenta-js`, this module needs no engine feature: the
 //! traits are engine-independent by construction, and `tenta-js` compiles
@@ -39,12 +39,13 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use tenta_core::TimerRule;
+use tenta_core::{NativeMemoryBudget, TimerRule};
 use tenta_net::CookieJar;
 
 use crate::bindings::host::SharedDocument;
 use crate::event_loop::ProvenanceSink;
 use crate::fetch::{FetchCompletion, FetchDriver};
+use crate::storage::PageStorage;
 use crate::xhr::{XhrCompletion, XhrDriver};
 
 /// How a script was delivered to the document.
@@ -136,6 +137,11 @@ pub struct PageEngineConfig {
     /// per-engine copy. The binding layer only passes it through; the jar's
     /// policy and its storage rules stay in `tenta-net`.
     pub cookies: CookieJar,
+    /// The context's local storage and this page's session namespace.
+    pub storage: PageStorage,
+    /// Shared native accounting for the page and all of its document contexts.
+    /// The Page owns this Arc across navigation-runtime replacement.
+    pub native_memory: NativeMemoryBudget,
 }
 
 /// One isolate driving one document.
@@ -145,37 +151,38 @@ pub struct PageEngineConfig {
 /// that crosses threads is the watchdog an engine hands out, which is `Send`
 /// for exactly that reason.
 ///
-/// `document`, [`PageEngine::run_script`] and
-/// [`PageEngine::dispatch_lifecycle`] are the methods that touch page state;
-/// everything else advances or interrogates the engine's own queues.
+/// `document`, [`PageEngine::run_script`], [`PageEngine::evaluate`] and
+/// [`PageEngine::dispatch_lifecycle`] touch page state. Engine entries may
+/// run native callbacks; the page checks [`PageEngine::native_failure`] after
+/// each one and discards a poisoned engine.
 ///
-/// # Why this trait grew one entry after being frozen
-///
-/// It was declared frozen when it was written, and [`PageEngine::dispatch_lifecycle`]
-/// is the one sanctioned exception, made because the alternative is a broken
-/// engine rather than an unfinished one: the page books `DOMContentLoaded` and
-/// `load` for its settle machine but has no way to deliver either to script, so
-/// `window.onload` never runs and the WPT harness's own `window` `load` handler
-/// — which is what makes `all_loaded` true — can never fire. That is not a
-/// missing feature a page can work around; it is the engine failing to do what
-/// HTML says it does.
-///
-/// One entry serves both events rather than one each, because the two differ
-/// only in *what* is fired, never in *how*: the target, the flags and the
-/// trusted-ness of each are fixed by the standard and are a function of the
-/// event, so a second entry would duplicate the dispatch seam and the
-/// native-dispatch guard for no information. The enum is the vocabulary the
-/// growth spends, so a later lifecycle event is a variant rather than another
-/// method.
+/// One lifecycle entry serves both `DOMContentLoaded` and `load`: the event
+/// fixes its target and flags, while the page supplies the moment it fires.
 pub trait PageEngine {
+    /// The native callback that failed, if a Rust panic poisoned this engine.
+    ///
+    /// Sticky for the engine's remaining lifetime. Check after every entry,
+    /// including those returning no result: this requires crashing the page
+    /// group and discarding the engine, not reporting a script exception.
+    fn native_failure(&self) -> Option<&'static str> {
+        None
+    }
+
     /// The document this engine is bound to — the same handle the parser
     /// writes into, so a paused parse and running script see one tree.
     fn document(&self) -> SharedDocument;
 
-    /// Compiles and runs one script to completion, including its microtask
-    /// checkpoint. A [`ScriptError`] is a page-level failure the caller
-    /// reports and survives; it is not an engine failure.
+    /// Compiles and runs one script. The caller performs its microtask
+    /// checkpoint after checking [`Self::native_failure`]. Without a native
+    /// failure, a [`ScriptError`] is a script failure the page can survive.
     fn run_script(&mut self, source: &str, kind: ScriptKind) -> Result<(), ScriptError>;
+
+    /// Evaluates an expression in the current document's world and returns its
+    /// JavaScript string completion. The caller provides a per-call deadline,
+    /// performs the microtask checkpoint after this entry returns, and keeps
+    /// the document alive through both entries. This method does not perform
+    /// the checkpoint or await a returned Promise.
+    fn evaluate(&mut self, source: &str, timeout: Duration) -> Result<String, ScriptError>;
 
     /// Fires one user-agent lifecycle event at the target HTML prescribes, as a
     /// real DOM event the page can observe: it reaches `on*` handlers and

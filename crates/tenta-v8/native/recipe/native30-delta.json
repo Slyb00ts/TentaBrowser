@@ -1,0 +1,49 @@
+{
+  "base_recipe_inputs": {
+    "changed-files.json": "a0abd0977a4bb630aa402001a32967ccdc2eb91b5e862c189b9214df3c748b93",
+    "prepare_source.py": "81d27d8e37efeba8e56b14d3784e3bf54a4024d71cdc466f3b202c4c8fe2cf47",
+    "supplemental-inputs.lock.json": "3079347bdda38be7df5e05dc0369a202c9c61798b168d4a1816f26336f6d8ac1",
+    "web-idl-legacy-combined.patch": "2091d2806100fb4ea488312f88fa31ecee871fa773ecd431b4f6da26561a32cd"
+  },
+  "base_recipe_patch_sha256": "2091d2806100fb4ea488312f88fa31ecee871fa773ecd431b4f6da26561a32cd",
+  "changed": [
+    {
+      "base_sha256": "8a3feec10da11c2acfafa62c6c5f68f92a7623d11732f288a4f3fbd8752c2d61",
+      "bytes": 6651,
+      "modified_sha256": "c1dd2a8681209b0a51531d028462955857ce5022e189969103360255dab40841",
+      "path": "Cargo.toml"
+    },
+    {
+      "base_sha256": "811a28e10a980154cd874998f6d2060b2f00a7638937980ef2a5628387c1c246",
+      "bytes": 186011,
+      "modified_sha256": "60a01149edae4b48326da58ee771b00a0dbef2483fd23dc3baf5d8e5db2dce25",
+      "path": "src/binding.cc"
+    },
+    {
+      "base_sha256": "87c4ca76a224ce0c97322b2419acb70c4290de3f7d35756dcdc74c22d6b864c8",
+      "bytes": 109870,
+      "modified_sha256": "920642c2d95d8ed8a951efa2ef3cf8448c8bfbff7ec1b04cc38e84ea22027424",
+      "path": "src/isolate.rs"
+    },
+    {
+      "base_sha256": "063fb12cd2c7b0f78ffde7ce75aaf974a6030e481bae5ef19b59958567d4b749",
+      "bytes": 44107,
+      "modified_sha256": "9366e3af23f56e8fc3569bcc54d27c72e81189db9caa45456972bc4fea38702c",
+      "path": "tests/web_idl_order.rs"
+    },
+    {
+      "base_sha256": null,
+      "bytes": 3868,
+      "modified_sha256": "b6498146b3bfcd533e901733f9856c038caa4e569c9be207218285e692b66bcc",
+      "path": "tests/termination_now.rs"
+    },
+    {
+      "base_sha256": null,
+      "bytes": 7160,
+      "modified_sha256": "ade53b760a64b2e00c1278b7bf26eb089a96fb388d4640f5646ac3b17dfa0015",
+      "path": "examples/symbol_store_control.rs"
+    }
+  ],
+  "incremental_patch_sha256": "a688da8fe4174962bfd41242d95560ee271b17333197c40889cd904ad99e036a",
+  "status": "Source reconstruction delta only; native 30/30 evidence is in the preserved root receipt."
+}

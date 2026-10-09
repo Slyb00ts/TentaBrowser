@@ -1,0 +1,43 @@
+{
+  "status": "complete",
+  "started_at": "2026-09-24T05:59:52.662229+00:00",
+  "pid": 60301,
+  "process_group": 60301,
+  "log": "/tmp/tenta-v8-ordinary-brand-stage/run-attempt1/nextest.log",
+  "command": [
+    "cargo",
+    "+1.98.0",
+    "nextest",
+    "run",
+    "--release",
+    "--locked",
+    "--manifest-path",
+    "/tmp/tenta-v8-native-build/v8-152.2.0/Cargo.toml",
+    "--test",
+    "web_idl_legacy",
+    "--test",
+    "web_idl_order",
+    "--test",
+    "ordinary_object_brand",
+    "--no-fail-fast"
+  ],
+  "environment": {
+    "V8_FROM_SOURCE": "1",
+    "CLANG_BASE_PATH": "/tmp/tenta-v8-native-build/tools/clang",
+    "LIBCLANG_PATH": "/opt/homebrew/opt/llvm/lib",
+    "GN": "/tmp/tenta-v8-native-build/tools/gn/gn",
+    "NINJA": "/tmp/tenta-v8-ordinary-brand-stage/ninja_guard.py",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/tmp/tenta-v8-native-build/target",
+    "GN_ARGS": "symbol_level=0 mac_sdk_path=\"/private/tmp/tenta-v8-native-build/target/release/gn_out/sdk/tenta/MacOSX26.5.sdk\"",
+    "SOURCE_DATE_EPOCH": "1790121600",
+    "SDKROOT": "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
+    "NINJA_STATUS": "[%f/%t] "
+  },
+  "ninja_log": "/tmp/tenta-v8-native-build/target/release/gn_out/.ninja_log",
+  "exit_code": 0,
+  "finished_at": "2026-09-24T06:00:16.707173+00:00",
+  "log_sha256": "fe67e7d3010189e3fe1d1e0027c567158478b9d076588a6e4a5a119fed30424a",
+  "passed_tests": [],
+  "expected_test_count": 23
+}

@@ -12,7 +12,7 @@ use tentabrowser::{BlockClass, Error, SearchError};
 /// | Code | Meaning |
 /// |------|---------|
 /// | 0 | the command did what it was asked |
-/// | 1 | the request never reached a server (`net::ERR_*` on stderr) |
+/// | 1 | transport or script execution failed (`net::ERR_*` on transport errors) |
 /// | 2 | the command line or the filesystem policy refused the request |
 /// | 3 | the server answered 4xx or 5xx (`--allow-http-errors` to accept) |
 /// | 4 | a search provider blocked the query (the class is on stderr) |

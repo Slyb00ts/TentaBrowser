@@ -110,13 +110,14 @@ definition = "fixture with inline script, one XHR and one `fetch` that mutate th
 rtt_ms = 0
 expect_stdout_contains = "js-xhr: done (2 requests)"
 [scenario.commands]
-# No `tentabrowser` entry, and not because JavaScript is still landing: the shipped CLI is Tier 1
-# by construction (`PageOptions::tier1()` in `crates/tentabrowser-cli/src/fetch.rs`, and
-# `crates/tentabrowser-cli/tests/tier.rs` asserts its dependency graph stays free of `v8`), so
-# `fetch --dump text` cannot run the fixture's script and never prints the marker. The P2
-# in-process harness carries this gate; `crates/tenta-browser/tests/xhr_js.rs` is where the
-# fixture's behaviour is asserted today. The `mode = "inprocess"` rows below are declared for that
-# harness and are not measured yet — `bench/run.py` reports every non-`cli` mode as not implemented.
+# No `tentabrowser` entry: the benchmark harness selects the default CLI binary,
+# which intentionally excludes V8. An explicit `--features v8` build can run
+# this fixture with `fetch --wait networkidle --eval` (covered by the CLI test),
+# but adding that command here would make a normal default-binary benchmark fail.
+# The in-process subject has its own driver: `bench/js_xhr.py`, using the
+# release `tenta-browser` example `js_xhr`. This legacy CLI row is kept for
+# reference/Chromium process measurements, which are not in-process timings.
+# The other `mode = "inprocess"` rows remain unmeasured by this CLI driver.
 reference = ["fetch", "{url}", "--dump", "text", "--allow-private-network", "--quiet"]
 # Chromium's --dump-dom serialises at `load`, before the XHR and fetch have settled; a virtual-time
 # budget lets pending async work (timers, in-flight responses) complete before the dump.
@@ -251,6 +252,83 @@ path = "/"
 mode = "inprocess"
 applicable_to = ["tentabrowser"]
 definition = "10⁶ `hasAttribute('id')` (primitive return, one-byte string literal argument so the fast path applies) and 10⁶ `getAttribute('id')` (string return) calls after 10⁴ warm-up, mean ns per call"
+
+# Standalone real-engine mutation driver: `bench/dom_mutation_hooks.py`. The
+# generic runner does not yet execute this in-process scenario.
+[[scenario]]
+name = "S-dom-mutation-hooks"
+phase = "P2"
+fixture = "none"
+path = "/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "8192 warmed iterations each on detached and connected elements, with set/removeAttribute, Text.data replacement and append/removeChild; exact semantic checksums, per-task time and whole-process CPU/RSS, no MutationObserver registrations"
+
+# Standalone engine-example driver: `bench/listener_gc.py`. The generic
+# `bench/run.py` does not yet execute in-process scenarios.
+[[scenario]]
+name = "S-listener-gc"
+phase = "P2"
+fixture = "none"
+path = "/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "Real V8 or QuickJS listener GC: connected and JS-rooted detached listeners survive, detached self/cross capture cycles are measured for reclamation, with noncapturing control; report three trim/sweep safe-point rounds, node counts, CPU, wall time and peak process RSS"
+
+# Focused Storage measurement, not a complete P2 budget gate. Run with
+# `bench/storage_calls.py`, using release storage_calls/storage_calls_qjs examples.
+[[scenario]]
+name = "S-storage-calls"
+phase = "P2"
+fixture = "none"
+path = "/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "100000 calls each to localStorage getItem, named read, setItem and named write over 128 keys after 1000 warm-up calls; changing overwrites, untimed value verification, ns/call, process CPU/wall time and peak RSS"
+
+# Native Stylo/CSSOM lifecycle comparison, run with `bench/cssom_lifecycle.py`.
+# The nested detached-rule workload is candidate-only because its API did not
+# exist in the pre-nested release example.
+[[scenario]]
+name = "S-cssom-lifecycle"
+phase = "P2"
+fixture = "none"
+path = "/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "Stylo flat CSSRuleHandle acquisition/drop and insert/delete at 64/256/1024 rules versus a preserved pre-nested binary; candidate-only detached nested insertion/deletion/last-handle drop at 16/64/256 live markers; operation p50/p95, process CPU/wall and peak RSS"
+
+# Standalone SharedSink ownership comparison: `bench/shared_parse.py`.
+# This focused workload does not replace the full HTML parsing budget gate.
+[[scenario]]
+name = "S-shared-parse"
+phase = "P2"
+fixture = "none"
+path = "/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "Eight fresh SharedSink parses and teardown after two warmups for flat, template and depth-capped nested inputs; paired preserved binaries, parse p50/p95, ns/byte, whole-process CPU/wall and peak RSS"
+
+# Candidate-only boundedness workload: `bench/wrapper_pressure.py`.
+[[scenario]]
+name = "S-wrapper-pressure"
+phase = "P2"
+fixture = "none"
+path = "/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "Fresh V8 or QuickJS processes run uninterrupted detached-node, owner-wrapper, connected-tree and deep-tree allocation tasks; verify identities, collection epochs and native reclamation, then report task p50/p95, process CPU/wall and peak RSS without a pre-graph speedup claim"
+
+# Real-engine CSSOM comparison: `bench/cssom_wrapper_graph.py`.
+# Native S-cssom-lifecycle does not measure JavaScript wrapper collection.
+[[scenario]]
+name = "S-cssom-wrapper-graph"
+phase = "P2"
+fixture = "none"
+path = "/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "V8 or QuickJS over 64 CSS rules: 8192 existing-style reads after 128 warmup reads, 256 insert/read/delete pairs and three explicit trim rounds; paired task timings include task-end collection, with whole-process CPU/wall and peak RSS; separate behavior tests prove wrapper state and directed reachability"
 
 [[scenario]]
 name = "S-isolate"

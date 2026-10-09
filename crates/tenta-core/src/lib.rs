@@ -8,6 +8,7 @@
 
 pub mod arena;
 pub mod atom;
+pub mod budget_ledger;
 pub mod budgets;
 pub mod embedder;
 pub mod error;
@@ -19,6 +20,10 @@ pub mod trace;
 
 pub use arena::{Arena, Key};
 pub use atom::Atom;
+pub use budget_ledger::{
+    NativeMemoryBudget, NativeMemoryComponent, NativeMemoryFailure, NativeMemoryFailureCause,
+    NativeMemoryReservation,
+};
 pub use budgets::{BudgetKind, Budgets};
 pub use error::{Error, Result};
 pub use fs_policy::{DownloadPolicy, FsPolicy};

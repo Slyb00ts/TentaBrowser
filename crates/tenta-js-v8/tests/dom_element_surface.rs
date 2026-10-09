@@ -699,9 +699,8 @@ fn a_named_node_map_removal_throws_not_found_for_a_missing_name() {
             el.setAttributeNS('ns', 'p:a', 'v');
             const byName = el.attributes.getNamedItem('p:a');
             const byNs = el.attributes.getNamedItemNS('ns', 'a');
-            // Read before the removal: an attached `Attr` follows its element,
-            // so after `removeNamedItemNS` below it reports the empty string -
-            // correct, but not what this test is about.
+            // The same Attr object is returned by both lookup paths, and its
+            // value remains available after removal detaches it.
             const attachedValue = byName && byName.value;
             const removedNs = el.attributes.removeNamedItemNS('ns', 'a');
             let missing = 'none';
@@ -710,6 +709,7 @@ fn a_named_node_map_removal_throws_not_found_for_a_missing_name() {
             [
                 attachedValue,
                 byName === byNs,
+                removedNs === byName,
                 removedNs.localName,
                 show(removedNs.ownerElement),
                 removedNs.value,
@@ -718,11 +718,9 @@ fn a_named_node_map_removal_throws_not_found_for_a_missing_name() {
             ].join('|');
             "#,
         ),
-        // Both lookups name the same *attribute*; the two wrappers they return
-        // are not one object, because an attribute has no per-entry identity in
-        // this tree. `attr_not_found` is what makes the last `removeNamedItem`
-        // throw rather than no-op.
-        "v|false|a|null|v|NotFoundError|0"
+        // Both lookups and removal return the same Attr object. `attr_not_found`
+        // makes the last `removeNamedItem` throw rather than no-op.
+        "v|true|true|a|null|v|NotFoundError|0"
     );
 }
 

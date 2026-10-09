@@ -1,10 +1,8 @@
 //! The page: one navigation, one parse, one settle, pinned to one page
 //! thread (`docs/spec/02-architecture.md` §3 and §5).
 //!
-//! Tier 1 never runs scripts, so the page's whole job is: issue the document
-//! request on the io runtime, stream the response into the parser on the page
-//! thread, record every subresource hint without issuing it
-//! (`docs/spec/02-architecture.md` §1.2), and settle.
+//! Tier 1 only fetches and parses the document. JavaScript pages run scripts
+//! through a page-thread runtime while parsing and settling.
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
@@ -14,10 +12,14 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
-use tenta_core::{BudgetKind, Budgets, ContextId, Error, FrameId, PageId, RequestId, Result, Tier};
+use tenta_core::{
+    BudgetKind, Budgets, ContextId, Error, FrameId, NativeMemoryBudget, NativeMemoryFailure,
+    PageId, RequestId, Result, Tier,
+};
 use tenta_dom::{Document as DomDocument, SharedDocument, SharedSink};
 use tenta_html::{Encoding, ParseStatus, Parser, ParserOptions, PreloadHint};
 use tenta_js::engine::{LifecycleEvent, PageEngineFactory};
+use tenta_js::storage::PageStorage;
 use tenta_net::policy::cookies::{CookieJar, Site};
 use tenta_net::policy::error_names::ErrorName;
 use tenta_net::request::RequestLimits;
@@ -133,7 +135,7 @@ impl Goto {
 /// A guard that bumps the navigation generation if the goto future is dropped
 /// before completion, so a dropped navigation doesn't install its document.
 struct GotoGuard {
-    answer: oneshot::Receiver<Result<Navigation>>,
+    answer: oneshot::Receiver<Result<NavigateOutcome>>,
     inner: Arc<PageInner>,
     generation: u64,
     completed: bool,
@@ -157,7 +159,7 @@ impl Drop for GotoGuard {
 }
 
 impl std::future::Future for GotoGuard {
-    type Output = Result<Navigation>;
+    type Output = Result<NavigateOutcome>;
 
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
@@ -175,6 +177,11 @@ impl std::future::Future for GotoGuard {
             std::task::Poll::Pending => std::task::Poll::Pending,
         }
     }
+}
+
+struct NavigateOutcome {
+    navigation: Navigation,
+    evaluation: Option<Result<String>>,
 }
 
 /// What a navigation learned.
@@ -261,6 +268,8 @@ pub struct PageConfig {
     /// from. It is a clone of one `Rc`-shared handle; see
     /// [`tenta_js::engine::PageEngineConfig::cookies`].
     pub cookies: CookieJar,
+    /// The context's local areas and this page's session namespace.
+    pub storage: PageStorage,
     /// Called once, from [`Page::close`], so whoever registered the page
     /// (its context's group table) can forget it without polling.
     pub on_close: Option<Arc<dyn Fn(PageId) + Send + Sync>>,
@@ -275,6 +284,7 @@ struct PageState {
     settle: Option<SettleState>,
     tier: Tier,
     crashed: Option<String>,
+    native_memory_crash: Option<NativeMemoryFailure>,
     closed: bool,
     /// Generation counter for navigation cancellation. Each new navigation
     /// captures this value; if it changes before commit, the navigation was
@@ -298,6 +308,9 @@ struct PageInner {
     /// because a runtime is rebuilt for every navigation and the budget is a
     /// property of the page (`crate::script_cpu`).
     script_cpu: ScriptCpu,
+    /// One native accounting state for the page, including all navigations
+    /// and any Send wire that outlives a navigation's engine.
+    native_memory: NativeMemoryBudget,
 }
 
 impl PageInner {
@@ -314,9 +327,23 @@ impl PageInner {
     }
 
     fn mark_crashed(&self, reason: &str) {
+        self.mark_crashed_with(reason, None);
+    }
+
+    fn native_memory_crash(&self) -> Option<NativeMemoryFailure> {
+        self.state.lock().native_memory_crash
+    }
+
+    fn mark_crashed_with(&self, reason: &str, native_memory: Option<NativeMemoryFailure>) {
         {
             let mut state = self.state.lock();
+            // Several unwinding paths can observe the same terminal failure.
+            // Keep its first cause and emit one crash event for this page.
+            if state.crashed.is_some() {
+                return;
+            }
             state.crashed = Some(reason.to_owned());
+            state.native_memory_crash = native_memory;
             state.document = None;
             // A crash is raised on the page thread while the navigation that
             // caused it is parked in `settle_loop`, waiting on
@@ -358,6 +385,32 @@ impl ScriptBudget for PageInner {
         );
         self.mark_crashed(&reason);
     }
+
+    fn crash_reason(&self) -> Option<String> {
+        PageInner::crash_reason(self)
+    }
+
+    fn native_memory(&self) -> NativeMemoryBudget {
+        self.native_memory.clone()
+    }
+
+    fn crash_native_memory(&self, failure: NativeMemoryFailure) {
+        self.mark_crashed_with(
+            &format!(
+                "{} budget exceeded in {}",
+                failure.kind,
+                failure.component.name()
+            ),
+            Some(failure),
+        );
+    }
+}
+
+fn native_memory_budget_error(failure: NativeMemoryFailure) -> Error {
+    Error::BudgetExceeded {
+        kind: failure.kind,
+        component: Some(failure.component.name().to_owned()),
+    }
 }
 
 /// A page. Cloning gives another handle to the same page; the state lives on
@@ -389,6 +442,7 @@ impl Page {
                     settle: None,
                     tier: Tier::Net,
                     crashed: None,
+                    native_memory_crash: None,
                     closed: false,
                     navigation_generation: 0,
                     document_navigation_id: 0,
@@ -398,6 +452,7 @@ impl Page {
                 // Notified when generation changes (B-R3-1)
                 generation_changed: Notify::new(),
                 script_cpu: ScriptCpu::new(config.budgets.script_cpu),
+                native_memory: NativeMemoryBudget::for_page(config.budgets.page_memory_mb),
                 config,
             }),
         }
@@ -521,8 +576,52 @@ impl Page {
         self.goto_url(url, options).await
     }
 
+    /// Navigates, waits for `options.wait_until`, then evaluates `source` in
+    /// the loaded document's JavaScript world before that world is released.
+    ///
+    /// The completion is converted to a string by JavaScript. A returned
+    /// Promise is not awaited, and work queued by this expression is not part
+    /// of the navigation's preceding settle. This is an atomic operation
+    /// because the current page runtime is released when `goto` returns.
+    pub async fn goto_with_eval(
+        &self,
+        url: &str,
+        options: Goto,
+        source: &str,
+    ) -> Result<(Navigation, String)> {
+        if self.inner.config.max_tier < Tier::Js {
+            return Err(Error::TierDenied {
+                needed: Tier::Js,
+                ceiling: self.inner.config.max_tier,
+            });
+        }
+        if !self.inner.config.javascript {
+            return Err(Error::unsupported(
+                "this page was created with JavaScript disabled",
+            ));
+        }
+        let url =
+            Url::parse(url).map_err(|err| Error::invalid(format!("invalid URL {url:?}: {err}")))?;
+        let outcome = self
+            .goto_url_inner(url, options, Some(source.to_owned()))
+            .await?;
+        let value = outcome
+            .evaluation
+            .expect("goto_with_eval always requests an evaluation")?;
+        Ok((outcome.navigation, value))
+    }
+
     /// [`Page::goto`] with an already parsed URL.
-    pub async fn goto_url(&self, mut url: Url, options: Goto) -> Result<Navigation> {
+    pub async fn goto_url(&self, url: Url, options: Goto) -> Result<Navigation> {
+        Ok(self.goto_url_inner(url, options, None).await?.navigation)
+    }
+
+    async fn goto_url_inner(
+        &self,
+        mut url: Url,
+        options: Goto,
+        evaluation: Option<String>,
+    ) -> Result<NavigateOutcome> {
         // Credentials in the URL never reach the wire (tenta-net strips them)
         // and never show in `Navigation.url`, events or the document URL,
         // as `location.href` never shows them in Chrome.
@@ -555,23 +654,34 @@ impl Page {
         let (reply, answer) = oneshot::channel();
         thread.post_job(Box::new(move || {
             Box::pin(async move {
-                let result =
-                    match catch_unwind_future(navigate(inner, url, options, generation)).await {
-                        Ok(result) => result,
-                        Err(payload) => {
-                            let reason = panic_message(&payload);
-                            reporter.mark_crashed(&reason);
-                            Err(Error::Crashed { reason })
-                        }
-                    };
+                let (result, panicked) = match catch_unwind_future(navigate(
+                    inner, url, options, generation, evaluation,
+                ))
+                .await
+                {
+                    Ok(result) => (result, false),
+                    Err(payload) => {
+                        let reason = panic_message(&payload);
+                        reporter.mark_crashed(&reason);
+                        (Err(Error::Crashed { reason }), true)
+                    }
+                };
                 // A crash that `navigate` returned as an ordinary error — a page
                 // that burned its script budget — is normalized here: the page's
                 // own reason is the truth, and the aborted navigation it caused
                 // (an `Aborted` net error, or the `Crashed` the checks inside
                 // produced) must not mask it.
-                let result = match (result, reporter.crash_reason()) {
-                    (Err(_), Some(reason)) => Err(Error::Crashed { reason }),
-                    (result, _) => result,
+                let result = if panicked {
+                    // A native unwind outranks any simultaneous budget flag.
+                    result
+                } else {
+                    match (result, reporter.crash_reason()) {
+                        (_, Some(reason)) => Err(reporter
+                            .native_memory_crash()
+                            .map(native_memory_budget_error)
+                            .unwrap_or(Error::Crashed { reason })),
+                        (result, _) => result,
+                    }
                 };
                 let _ = reply.send(result);
             })
@@ -604,6 +714,9 @@ impl Page {
             drop(state);
             self.inner.generation_changed.notify_waiters();
         }
+        // Area wrappers may outlive the page runtime; close the session here
+        // so they cannot retain or write page data after terminal close.
+        self.inner.config.storage.close_session();
         if let Some(on_close) = &self.inner.config.on_close {
             on_close(self.inner.config.id);
         }
@@ -661,7 +774,8 @@ async fn navigate(
     url: Url,
     options: Goto,
     generation: u64,
-) -> Result<Navigation> {
+    evaluation: Option<String>,
+) -> Result<NavigateOutcome> {
     // Check if this navigation was cancelled; if so, return an aborted error.
     let check_cancelled = |inner: &Arc<PageInner>| -> Result<()> {
         let state = inner.state.lock();
@@ -985,12 +1099,14 @@ async fn navigate(
 
     // The tree becomes the page's at the first install point at which the page
     // owns it alone; a tree an engine is bound to is still shared until the
-    // engine is gone (`DeferredDocument`, built once the parse handed the tree
-    // over). The engine is not released here: the settle call this navigation
-    // is about to run pumps it.
+    // engine is gone (`DeferredDocument`). An evaluation also keeps the tree
+    // shared until it runs after settle. The engine is not released here:
+    // the settle call this navigation is about to run pumps it.
     {
         let mut state = inner.state.lock();
-        if let Some(document) = deferred.take_if_owned() {
+        if evaluation.is_none()
+            && let Some(document) = deferred.take_if_owned()
+        {
             state.document = Some(document);
         }
         state.hints = recorded;
@@ -1131,10 +1247,28 @@ async fn navigate(
                 state.navigation = Some(navigation.clone());
                 state.settle = Some(SettleState::Timeout { pending });
             }
-            return Ok(navigation);
+            return Ok(NavigateOutcome {
+                navigation,
+                evaluation: evaluation.map(|_| Err(Error::timeout("evaluate", timeout_millis))),
+            });
         }
         Err(e) => return Err(e),
     };
+
+    // The engine still owns the shared document here. Evaluating before
+    // `deferred.take()` preserves the globals and handlers the page's scripts
+    // installed during navigation. A page with no script creates its engine
+    // lazily over this same parsed tree.
+    let evaluation = evaluation.map(|source| {
+        evaluate_in_navigation(
+            &inner,
+            &deferred,
+            &tracker,
+            &source,
+            deadline,
+            timeout_millis,
+        )
+    });
 
     // Check and write under one lock to prevent race with close() (N-R4-1/N-R4-2)
     let navigation = Navigation {
@@ -1168,7 +1302,47 @@ async fn navigate(
         state.navigation = Some(navigation.clone());
         state.settle = Some(settle);
     }
-    Ok(navigation)
+    Ok(NavigateOutcome {
+        navigation,
+        evaluation,
+    })
+}
+
+fn evaluate_in_navigation(
+    inner: &Arc<PageInner>,
+    deferred: &DeferredDocument,
+    tracker: &Rc<RefCell<SettleTracker>>,
+    source: &str,
+    deadline: Instant,
+    timeout_millis: u64,
+) -> Result<String> {
+    let document = deferred
+        .shared()
+        .ok_or_else(|| Error::invalid("the page has no document to evaluate"))?;
+    runtime::ensure_runtime(
+        inner.config.id,
+        document.clone(),
+        &inner.config,
+        Rc::clone(tracker),
+        Arc::clone(inner) as Arc<dyn ScriptBudget>,
+    )
+    .map_err(Error::unsupported)?;
+    runtime::note_parse_finished(inner.config.id, document);
+    let remaining = deadline.saturating_duration_since(inner.config.clock.now());
+    if remaining.is_zero() {
+        return Err(Error::timeout("evaluate", timeout_millis));
+    }
+    let outcome = runtime::with_runtime_for(inner.config.id, document, |runtime| {
+        runtime.evaluate(source, remaining)
+    })
+    .ok_or_else(|| Error::unsupported("the JavaScript runtime was unavailable"))?;
+    if let Some(reason) = inner.crash_reason() {
+        return Err(inner
+            .native_memory_crash()
+            .map(native_memory_budget_error)
+            .unwrap_or(Error::Crashed { reason }));
+    }
+    outcome
 }
 
 struct ParsedBody {
@@ -1321,9 +1495,10 @@ struct DeferredEntry {
 /// parse, and a task holding the tree would keep the page from ever installing
 /// it alone.
 ///
-/// The task's body runs inside `catch_unwind_future`, so a panic in the page's
-/// own code is logged rather than swallowed into a dropped `JoinHandle`
-/// (`docs/spec/02-architecture.md` §8).
+/// The task's body runs inside `catch_unwind_future`. A panic in an async
+/// script crashes its page and discards the runtime immediately, even while
+/// the main document is suspended on a streaming response body; otherwise a
+/// dropped `JoinHandle` would swallow the crash (`02-architecture.md` §8).
 fn start_deferred_script(
     timing: runtime::DeferredTiming,
     meta: runtime::ScriptMeta,
@@ -1352,11 +1527,12 @@ fn start_deferred_script(
                 })
                 .await;
                 if let Err(payload) = fetched {
-                    tracing::error!(
-                        ?page,
-                        reason = %panic_message(&payload),
-                        "the fetch of an async script panicked"
-                    );
+                    let reason = panic_message(&payload);
+                    inner.mark_crashed(&reason);
+                    if let Some(document) = document.upgrade() {
+                        drop(runtime::take_runtime_for(page, &document));
+                    }
+                    tracing::error!(?page, reason, "an async script task panicked");
                 }
                 drop(pending);
             });
@@ -1565,6 +1741,7 @@ async fn drive_parse(
     deadline: Instant,
 ) -> Result<ParseStep> {
     let config = &inner.config;
+    document.borrow().check_observer_health()?;
     let mut status = status;
     while status == ParseStatus::Script {
         // A script the parse is paused on is work in flight: it holds a
@@ -1607,6 +1784,7 @@ async fn drive_parse(
         let encoding = parser.encoding();
         // Resuming is the caller's statement that it is done with the pause.
         status = parser.resume();
+        document.borrow().check_observer_health()?;
         match deferred {
             // The script's fetch outlives this iteration, so its count travels
             // with it rather than being released here.
@@ -1616,6 +1794,7 @@ async fn drive_parse(
             None => drop(pending),
         }
     }
+    document.borrow().check_observer_health()?;
     Ok(match status {
         ParseStatus::Continue => ParseStep::Fed,
         ParseStatus::Stopped => ParseStep::Stopped,
@@ -1767,6 +1946,7 @@ async fn parse_body(
                 // The parse is over, whatever the body did: the tree it built
                 // so far is the page's, and no parser writes into it again.
                 document = parser.finish();
+                document.borrow().check_observer_health()?;
                 runtime::note_parse_finished(inner.config.id, &document);
                 let encoding = match restarted {
                     Some(encoding) => encoding.name().to_owned(),
@@ -1931,6 +2111,7 @@ async fn parse_body(
     }
 
     document = parser.finish();
+    document.borrow().check_observer_health()?;
     runtime::note_parse_finished(inner.config.id, &document);
     let encoding = match restarted {
         Some(encoding) => encoding.name().to_owned(),

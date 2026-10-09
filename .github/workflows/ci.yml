@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # nightly.yml owns the schedule and manual trigger and reuses these jobs.
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,6 +21,11 @@ jobs:
         os: [macos-14, ubuntu-24.04, windows-2022]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify the native V8 Temporal ABI dependency lock
+        run: python crates/tenta-v8/native/validation/verify_temporal_lock.py --lockfile Cargo.lock
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.0
@@ -28,10 +35,14 @@ jobs:
         with:
           tool: cargo-nextest,cargo-deny
       - run: cargo fmt --all --check
-      - run: cargo xtask lint-deps
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo clippy -p tenta-testutil --all-targets --features capture -- -D warnings
-      - run: cargo nextest run --workspace
+      - run: cargo run --locked --quiet --package xtask -- lint-deps
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Check browser hosts and bindings with both JavaScript backends
+        run: cargo clippy --locked -p tenta-browser -p tentabrowser-cli -p tenta-idl --all-targets --features tenta-browser/v8,tenta-browser/quickjs,tentabrowser-cli/v8,tenta-idl/v8,tenta-idl/quickjs -- -D warnings
+      - run: cargo clippy --locked -p tenta-testutil --all-targets --features capture -- -D warnings
+      - run: cargo nextest run --locked --workspace
+      - name: Test browser hosts and bindings with both JavaScript backends
+        run: cargo nextest run --locked -p tenta-browser -p tentabrowser-cli -p tenta-idl --features tenta-browser/v8,tenta-browser/quickjs,tentabrowser-cli/v8,tenta-idl/v8,tenta-idl/quickjs
       # The WPT runner's judge and its expectations round-trip. Stdlib only and
       # no checkout, server or driver: `compare`, `candidate` and `promote` are
       # pure over a stored results file, which is what makes them testable here.
@@ -40,6 +51,8 @@ jobs:
         if: matrix.os == 'ubuntu-24.04'
       - run: cargo deny check
         if: matrix.os == 'ubuntu-24.04'
+      - name: Ensure validation did not change dependency locks
+        run: git diff --exit-code -- Cargo.lock
 
   mobile-nightly:
     name: ${{ matrix.target }} (tenta-core)
@@ -71,7 +84,7 @@ jobs:
         run: cargo install cargo-ndk && rustup target add ${{ matrix.target }}
       - name: Build tenta-core (Android)
         if: contains(matrix.target, 'android')
-        run: cargo ndk -t ${{ matrix.target }} build -p tenta-core
+        run: cargo ndk -t ${{ matrix.target }} build --locked -p tenta-core
       - name: Build tenta-core
         if: "!contains(matrix.target, 'android')"
-        run: cargo build -p tenta-core --target ${{ matrix.target }}
+        run: cargo build --locked -p tenta-core --target ${{ matrix.target }}

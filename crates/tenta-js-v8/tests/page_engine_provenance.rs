@@ -74,6 +74,10 @@ fn config() -> PageEngineConfig {
         locale: "en-US".to_owned(),
         timezone: None,
         cookies: CookieJar::new(),
+        storage: tenta_js::storage::PageStorage::isolated(),
+        native_memory: tenta_core::NativeMemoryBudget::for_page(
+            tenta_core::Budgets::platform_default().page_memory_mb,
+        ),
     }
 }
 

@@ -6,6 +6,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use boring::ssl::{AlpnError, SslAcceptor, SslMethod, select_next_proto};
@@ -13,6 +14,7 @@ use bytes::Bytes;
 use parking_lot::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
 
 /// What the server should do once a client connects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +30,14 @@ pub enum TlsMode {
     /// Serve one HTTP/2 request then close the TCP connection without GOAWAY.
     /// Used for testing BLOCKING-1: handling of TCP close without GOAWAY.
     ServeH2DropAfterOne,
+    /// Refuse the first POST stream on a healthy reused HTTP/2 connection.
+    ServeH2RefusePostOnce,
+    /// Refuse two POST streams to prove automatic replay is bounded.
+    ServeH2RefusePostTwice,
+    /// Reset a POST with CANCEL, which does not guarantee safe replay.
+    ServeH2CancelPost,
+    /// Read a POST body, then close without sending response headers.
+    ServeH2CloseAfterPostBody,
     /// Serve one HTTP/2 request then go silent: hold the TCP connection open
     /// but answer no further stream and no PING. Models a peer that a NAT or
     /// firewall dropped mid-connection (BLOCKING-2, round 5): the socket looks
@@ -68,6 +78,14 @@ pub struct TlsCapture {
     resumptions: Mutex<Vec<bool>>,
     /// Every HTTP/1.1 request head, verbatim, including the blank line.
     http1_heads: Mutex<Vec<Vec<u8>>>,
+    /// Completed close events for the drop-after-one fixture.
+    h2_closed: AtomicUsize,
+    h2_closed_notify: Notify,
+    h2_drop_request: Notify,
+    /// Paths accepted in the deterministic reset/retry fixture.
+    replay_paths: Mutex<Vec<String>>,
+    /// Bodies processed after a stream was accepted by the retry fixture.
+    replay_bodies: Mutex<Vec<(String, Vec<u8>)>>,
 }
 
 impl TlsCapture {
@@ -101,6 +119,34 @@ impl TlsCapture {
     /// Every HTTP/1.1 request head exactly as it arrived, blank line included.
     pub fn http1_heads(&self) -> Vec<Vec<u8>> {
         self.http1_heads.lock().clone()
+    }
+
+    pub async fn wait_h2_closed(&self, count: usize) {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let notified = self.h2_closed_notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.h2_closed.load(Ordering::Acquire) >= count {
+                    break;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .expect("the HTTP/2 fixture did not close its connection");
+    }
+
+    pub fn drop_h2_after_response(&self) {
+        self.h2_drop_request.notify_one();
+    }
+
+    pub fn replay_paths(&self) -> Vec<String> {
+        self.replay_paths.lock().clone()
+    }
+
+    pub fn replay_bodies(&self) -> Vec<(String, Vec<u8>)> {
+        self.replay_bodies.lock().clone()
     }
 }
 
@@ -217,6 +263,14 @@ impl TlsServer {
                                 serve_h2_drop_after_one(tls, Arc::clone(&capture)).await;
                             }
                         }
+                        TlsMode::ServeH2RefusePostOnce
+                        | TlsMode::ServeH2RefusePostTwice
+                        | TlsMode::ServeH2CancelPost => {
+                            serve_h2_reset_post(tls, Arc::clone(&capture), mode).await;
+                        }
+                        TlsMode::ServeH2CloseAfterPostBody => {
+                            serve_h2_close_after_post_body(tls, Arc::clone(&capture)).await;
+                        }
                         TlsMode::ServeH2HangAfterOne => {
                             serve_h2_hang_after_one(tls, Arc::clone(&capture)).await;
                         }
@@ -287,7 +341,8 @@ async fn serve_h2(tls: tokio_boring::SslStream<tokio::net::TcpStream>, capture: 
 }
 
 /// Serves one HTTP/2 request then drops the connection without GOAWAY.
-/// Used for testing BLOCKING-1: TCP close without GOAWAY.
+/// The test releases the socket after consuming its response, so no timing
+/// window can swallow a later request head.
 async fn serve_h2_drop_after_one(
     tls: tokio_boring::SslStream<tokio::net::TcpStream>,
     capture: Arc<TlsCapture>,
@@ -297,48 +352,167 @@ async fn serve_h2_drop_after_one(
     };
     if let Some(Ok((request, mut responder))) = connection.accept().await {
         capture.arrivals.lock().push(std::time::Instant::now());
-        let path = request.uri().path().to_owned();
-        let mut body = Vec::new();
-        let mut incoming = request.into_body();
-        while let Some(Ok(chunk)) = incoming.data().await {
-            let _ = incoming.flow_control().release_capacity(chunk.len());
-            body.extend_from_slice(&chunk);
-        }
-        let payload = if body.is_empty() {
-            Bytes::from_static(b"hello from h2")
-        } else {
-            Bytes::from(body)
-        };
-        // `/temporary` answers 307 to `/echo`, so a retried request with a
-        // body has to replay it on the next hop.
-        let response = if path == "/temporary" {
-            http::Response::builder()
-                .status(307)
-                .header("location", "/echo")
-                .header("content-length", "0")
-                .body(())
-                .expect("response")
-        } else {
-            http::Response::builder()
+        tokio::spawn(async move {
+            let mut body = Vec::new();
+            let mut incoming = request.into_body();
+            while let Some(Ok(chunk)) = incoming.data().await {
+                let _ = incoming.flow_control().release_capacity(chunk.len());
+                body.extend_from_slice(&chunk);
+            }
+            let payload = if body.is_empty() {
+                Bytes::from_static(b"hello from h2")
+            } else {
+                Bytes::from(body)
+            };
+            let response = http::Response::builder()
                 .status(200)
                 .header("content-type", "text/plain")
                 .header("content-length", payload.len().to_string())
                 .body(())
-                .expect("response")
-        };
-        let end_of_stream = path == "/temporary";
-        if let Ok(mut stream) = responder.send_response(response, end_of_stream)
-            && !end_of_stream
-        {
-            let _ = stream.send_data(payload, true);
+                .expect("response");
+            if let Ok(mut stream) = responder.send_response(response, false) {
+                let _ = stream.send_data(payload, true);
+            }
+        });
+        // The connection must keep polling while the handler reads the body
+        // and sends the response. poll_closed drives frames without accepting
+        // a second stream whose responder the fixture would then discard.
+        tokio::select! {
+            _ = capture.h2_drop_request.notified() => {}
+            _ = std::future::poll_fn(|cx| connection.poll_closed(cx)) => {}
         }
-        // Frames are written only while the connection is driven: keep
-        // accepting (nothing arrives) until the response is on the wire,
-        // then drop the TCP connection without a GOAWAY.
-        let _ = tokio::time::timeout(Duration::from_millis(100), connection.accept()).await;
     }
-    // The TCP connection will be closed without a proper HTTP/2 goodbye.
     drop(connection);
+    capture.h2_closed.fetch_add(1, Ordering::Release);
+    capture.h2_closed_notify.notify_waiters();
+}
+
+/// Resets a reused POST stream before processing, then serves the retry and
+/// redirect on the same healthy connection. This makes replay observable
+/// without any timer-based race against a closed socket.
+async fn serve_h2_reset_post(
+    tls: tokio_boring::SslStream<tokio::net::TcpStream>,
+    capture: Arc<TlsCapture>,
+    mode: TlsMode,
+) {
+    let (reason, mut resets_left) = match mode {
+        TlsMode::ServeH2RefusePostOnce => (tenta_h2::Reason::REFUSED_STREAM, 1),
+        TlsMode::ServeH2RefusePostTwice => (tenta_h2::Reason::REFUSED_STREAM, 2),
+        TlsMode::ServeH2CancelPost => (tenta_h2::Reason::CANCEL, 1),
+        _ => unreachable!("reset fixture mode"),
+    };
+    let Ok(mut connection) = tenta_h2::server::handshake(tls).await else {
+        return;
+    };
+    while let Some(Ok((request, mut responder))) = connection.accept().await {
+        capture.arrivals.lock().push(std::time::Instant::now());
+        let path = request.uri().path().to_owned();
+        capture.replay_paths.lock().push(path.clone());
+        if path == "/temporary" && resets_left > 0 {
+            resets_left -= 1;
+            // No request body is read or application action performed.
+            responder.send_reset(reason);
+            continue;
+        }
+        let capture = Arc::clone(&capture);
+        tokio::spawn(async move {
+            let mut body = Vec::new();
+            let mut incoming = request.into_body();
+            while let Some(Ok(chunk)) = incoming.data().await {
+                let _ = incoming.flow_control().release_capacity(chunk.len());
+                body.extend_from_slice(&chunk);
+            }
+            capture
+                .replay_bodies
+                .lock()
+                .push((path.clone(), body.clone()));
+            let payload = if body.is_empty() {
+                Bytes::from_static(b"hello from h2")
+            } else {
+                Bytes::from(body)
+            };
+            let response = if path == "/temporary" {
+                http::Response::builder()
+                    .status(307)
+                    .header("location", "/echo")
+                    .header("content-length", "0")
+                    .body(())
+                    .expect("response")
+            } else {
+                http::Response::builder()
+                    .status(200)
+                    .header("content-type", "text/plain")
+                    .header("content-length", payload.len().to_string())
+                    .body(())
+                    .expect("response")
+            };
+            let end_of_stream = path == "/temporary";
+            if let Ok(mut stream) = responder.send_response(response, end_of_stream)
+                && !end_of_stream
+            {
+                let _ = stream.send_data(payload, true);
+            }
+        });
+    }
+}
+
+/// Proves that a pooled transport error after a POST body was received does
+/// not grant permission to replay that POST. The response head is never sent.
+async fn serve_h2_close_after_post_body(
+    tls: tokio_boring::SslStream<tokio::net::TcpStream>,
+    capture: Arc<TlsCapture>,
+) {
+    let Ok(mut connection) = tenta_h2::server::handshake(tls).await else {
+        return;
+    };
+    while let Some(Ok((request, mut responder))) = connection.accept().await {
+        let path = request.uri().path().to_owned();
+        capture.replay_paths.lock().push(path.clone());
+        if path == "/temporary" {
+            let mut incoming = request.into_body();
+            let observed = Arc::clone(&capture);
+            let (done, received) = tokio::sync::oneshot::channel();
+            tokio::spawn(async move {
+                let mut body = Vec::new();
+                while let Some(Ok(chunk)) = incoming.data().await {
+                    let _ = incoming.flow_control().release_capacity(chunk.len());
+                    body.extend_from_slice(&chunk);
+                }
+                observed.replay_bodies.lock().push((path, body));
+                let _ = done.send(());
+            });
+            // Keep the responder alive while the connection driver receives
+            // the body. Dropping it earlier would send RST_STREAM instead of
+            // exercising an ambiguous transport close.
+            tokio::select! {
+                _ = received => {}
+                _ = std::future::poll_fn(|cx| connection.poll_closed(cx)) => {}
+            }
+            drop(connection);
+            drop(responder);
+            return;
+        }
+        let observed = Arc::clone(&capture);
+        tokio::spawn(async move {
+            let mut incoming = request.into_body();
+            let mut body = Vec::new();
+            while let Some(Ok(chunk)) = incoming.data().await {
+                let _ = incoming.flow_control().release_capacity(chunk.len());
+                body.extend_from_slice(&chunk);
+            }
+            observed.replay_bodies.lock().push((path, body));
+            let payload = Bytes::from_static(b"hello from h2");
+            let response = http::Response::builder()
+                .status(200)
+                .header("content-type", "text/plain")
+                .header("content-length", payload.len().to_string())
+                .body(())
+                .expect("response");
+            if let Ok(mut stream) = responder.send_response(response, false) {
+                let _ = stream.send_data(payload, true);
+            }
+        });
+    }
 }
 
 /// Serves one HTTP/2 request, then holds the connection open forever without

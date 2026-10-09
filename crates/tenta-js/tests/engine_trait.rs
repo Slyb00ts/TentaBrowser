@@ -68,6 +68,10 @@ impl PageEngine for StubEngine {
         Ok(())
     }
 
+    fn evaluate(&mut self, source: &str, _timeout: Duration) -> Result<String, ScriptError> {
+        Ok(source.to_owned())
+    }
+
     fn set_timer_rule(&mut self, rule: TimerRule) {
         self.recorder.lock().unwrap().timer_rule = Some(rule);
     }
@@ -185,6 +189,10 @@ fn config() -> PageEngineConfig {
         locale: "en-US".to_string(),
         timezone: None,
         cookies: tenta_net::CookieJar::new(),
+        storage: tenta_js::storage::PageStorage::isolated(),
+        native_memory: tenta_core::NativeMemoryBudget::for_page(
+            tenta_core::Budgets::platform_default().page_memory_mb,
+        ),
     }
 }
 

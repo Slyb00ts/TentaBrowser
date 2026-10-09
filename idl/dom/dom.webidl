@@ -75,6 +75,14 @@ interface CharacterData : Node {
 [Exposed=Window]
 interface Text : CharacterData {};
 
+// `CDATASection : Text` with no members of its own, exactly as the DOM
+// Standard declares it. It exists because `Document.createCDATASection`
+// returns one and `dom/common.js` calls that member, and because a
+// `NodeKind::CData` node had no interface name of its own before it — a CDATA
+// section wrapped as a bare `Node`.
+[Exposed=Window]
+interface CDATASection : Text {};
+
 [Exposed=Window]
 interface Comment : CharacterData {};
 
@@ -104,7 +112,7 @@ interface Element : Node {
 
   // Phase 1c: static snapshots (live collections in later phases)
   [NewObject] HTMLCollection getElementsByTagName(DOMString qualifiedName);
-  [NewObject] HTMLCollection getElementsByTagNameNS(DOMString? namespace, DOMString? localName);
+  [NewObject] HTMLCollection getElementsByTagNameNS(DOMString? namespace, DOMString localName);
   [NewObject] HTMLCollection getElementsByClassName(DOMString classNames);
 
   // Phase 2a: attribute mutation
@@ -113,17 +121,12 @@ interface Element : Node {
   undefined removeAttribute(DOMString name);
   boolean hasAttribute(DOMString name);
 
-  // d-10: the namespace-aware attribute surface. `namespace` and `localName`
-  // are declared `DOMString?` where the standard writes
-  // `[LegacyNullToEmptyString] DOMString`; the generator has no such extended
-  // attribute, and for these four operations the two are observationally the
-  // same, because the standard's own steps read the empty namespace and the
-  // null one as one case. A `None` here is that empty string. See
-  // `docs/dev/idl.md`.
+  // Namespace-aware attribute operations normalize the null and empty
+  // namespaces alike. Local names use ordinary DOMString conversion.
   undefined setAttributeNS(DOMString? namespace, DOMString qualifiedName, DOMString value);
-  DOMString? getAttributeNS(DOMString? namespace, DOMString? localName);
-  undefined removeAttributeNS(DOMString? namespace, DOMString? localName);
-  boolean hasAttributeNS(DOMString? namespace, DOMString? localName);
+  DOMString? getAttributeNS(DOMString? namespace, DOMString localName);
+  undefined removeAttributeNS(DOMString? namespace, DOMString localName);
+  boolean hasAttributeNS(DOMString? namespace, DOMString localName);
 
   // Phase 4b-1: attribute presence and toggling.
   boolean hasAttributes();
@@ -138,7 +141,7 @@ interface Element : Node {
   // the same object.
   [SameObject] readonly attribute NamedNodeMap attributes;
   Attr? getAttributeNode(DOMString name);
-  Attr? getAttributeNodeNS(DOMString? namespace, DOMString? localName);
+  Attr? getAttributeNodeNS(DOMString? namespace, DOMString localName);
   [Throws] Attr? setAttributeNode(Attr attr);
   [Throws] Attr? setAttributeNodeNS(Attr attr);
   [Throws] Attr removeAttributeNode(Attr attr);
@@ -154,6 +157,15 @@ interface Element : Node {
 
 [Exposed=Window]
 interface Document : Node {
+  // The DOM Standard's own constructor: "create a new Document with its
+  // content type set to `application/xml`, URL `about:blank`, and no
+  // browsing context" (<https://dom.spec.whatwg.org/#dom-document-document>).
+  // It is the bootstrap `dom/common.js` needs — line 59 of that file is
+  // `const xmlDocument = new Document();`, and the throw there is what made
+  // all 24 `dom/ranges` files that include the file report a harness `ERROR`
+  // with no subtests at all.
+  constructor();
+
   readonly attribute Element? documentElement;
 
   // d-9: the document-side surface the `dom/nodes` gate reads. `doctype` is the
@@ -212,7 +224,7 @@ interface Document : Node {
 
   // Phase 1c: static snapshots (live collections in later phases)
   [NewObject] HTMLCollection getElementsByTagName(DOMString qualifiedName);
-  [NewObject] HTMLCollection getElementsByTagNameNS(DOMString? namespace, DOMString? localName);
+  [NewObject] HTMLCollection getElementsByTagNameNS(DOMString? namespace, DOMString localName);
   [NewObject] HTMLCollection getElementsByClassName(DOMString classNames);
 
   [NewObject] Element createElement(DOMString localName);
@@ -231,6 +243,17 @@ interface Document : Node {
   // the WPT file that pins them.
   [Throws, NewObject] ProcessingInstruction createProcessingInstruction(DOMString target, DOMString data);
 
+  // The CDATA-section factory. It is XML-only: in an HTML document the
+  // standard's step is "throw a `NotSupportedError`"
+  // (<https://dom.spec.whatwg.org/#dom-document-createcdatasection>), which is
+  // why the constructor above and this member travel together — the document
+  // `new Document()` makes is the only one `dom/common.js` can call it on.
+  [Throws, NewObject] CDATASection createCDATASection(DOMString data);
+
+  // The range factory. A new range is collapsed at the document's own
+  // (0, 0) — the document node with offset 0.
+  [NewObject] Range createRange();
+
   // Phase 4b-3: fragment and namespace-aware creation. Frameworks batch node
   // inserts into a DocumentFragment (React range insertion, Vue fragment
   // blocks) and reach for createElementNS to build SVG/MathML subtrees.
@@ -246,11 +269,11 @@ interface Document : Node {
 // generated `@@iterator` is `%Array.prototype.values%`; application code -
 // and every framework - iterates query results far more often than it indexes
 // them.
-[Exposed=Window]
+[Exposed=Window, LegacyUnenumerableNamedProperties]
 interface HTMLCollection {
   readonly attribute unsigned long length;
   getter Element? item(unsigned long index);
-  Element? namedItem(DOMString name);
+  getter Element? namedItem(DOMString name);
   iterable<Element>;
 };
 
@@ -267,47 +290,26 @@ interface NodeList {
 // rule rest on. Every member reads the element's attribute storage, so a write
 // through `setAttribute` is visible through a map obtained before it.
 //
-// The DOM Standard declares an indexed getter, a *named* getter
-// (`getNamedItem`) and `getNamedItemNS` on this interface. Only the indexed
-// one is declared with `getter` here, matching `HTMLCollection`'s own
-// declaration, because the generator installs the indexed handler alone;
-// `getNamedItem` and `getNamedItemNS` are ordinary operations, so
-// `attributes["id"]` does not resolve while `attributes[0]` and
-// `attributes.getNamedItem("id")` do.
-[Exposed=Window]
+// The indexed and named getters follow the DOM Standard's legacy collection
+// property rules; getNamedItemNS remains an ordinary operation.
+[Exposed=Window, LegacyUnenumerableNamedProperties]
 interface NamedNodeMap {
   readonly attribute unsigned long length;
   getter Attr? item(unsigned long index);
-  Attr? getNamedItem(DOMString name);
-  Attr? getNamedItemNS(DOMString? namespace, DOMString? localName);
+  getter Attr? getNamedItem(DOMString name);
+  Attr? getNamedItemNS(DOMString? namespace, DOMString localName);
   [Throws] Attr? setNamedItem(Attr attr);
   [Throws] Attr? setNamedItemNS(Attr attr);
   [Throws] Attr removeNamedItem(DOMString name);
-  [Throws] Attr removeNamedItemNS(DOMString? namespace, DOMString? localName);
+  [Throws] Attr removeNamedItemNS(DOMString? namespace, DOMString localName);
   iterable<Attr>;
 };
 
-// d-10: `Attr` — the interface over one entry of an element's attribute list.
-//
-// **Deliberate deviation from the DOM Standard, recorded here and in
-// `docs/dev/idl.md`:** in the standard `Attr` is a `Node` (`nodeType` 2, with
-// the whole `Node` surface and an `Attr` prototype in the `Node` chain). Here
-// it is a standalone interface: an attribute is *not* a node in this tree —
-// `tenta_dom` stores an element's attributes as a packed `(ns, prefix, local,
-// value)` list inside the element, with no arena slot, id or generation — so
-// there is nothing for the `Node` members to read and no handle that could
-// name one in the arena's `TAG_NODE` space. The four `Node` members the WPT
-// attribute helpers read (`nodeType`, `nodeName`, `nodeValue`, `textContent`)
-// are therefore declared here directly, with the values the standard gives
-// them. `attr instanceof Node` is false, and `nodeValue`/`textContent` are
-// declared writable because `Node`'s are; `textContent`'s declared type is
-// `DOMString?` where the standard's `Node.textContent` is `DOMString?` too.
+// Attr is a Node with no tree position or children. Its TAG_HOST record names
+// an entry in the element's packed attribute list without allocating an arena
+// node. Inherited Node operations dispatch on that record explicitly.
 [Exposed=Window]
-interface Attr {
-  readonly attribute unsigned short nodeType;
-  readonly attribute DOMString nodeName;
-  attribute DOMString? nodeValue;
-  attribute DOMString? textContent;
+interface Attr : Node {
   readonly attribute DOMString? namespaceURI;
   readonly attribute DOMString? prefix;
   readonly attribute DOMString localName;
@@ -374,18 +376,12 @@ interface ProcessingInstruction : CharacterData {
 //    XMLDocument.prototype` cannot hold here; every document is an
 //    HTML-document-shaped `tenta_dom::Document` registered in the same arena
 //    registry.
-//  - `createDocument`'s `namespace` and `qualifiedName` are spelled
-//    `DOMString?` where the standard says `optional DOMString?` and
-//    `[LegacyNullToEmptyString] DOMString`. The generator does not implement
-//    that extended attribute, and a nullable parameter is observationally the
-//    same for this operation: the standard's own step reads "if qualifiedName is
-//    the empty string" after the conversion, and
-//    `DOMImplementation-createDocument.html` decides whether to expect a
-//    document element from `qualifiedName === null || String(qualifiedName)
-//    === ""` — the same two cases. Dropping `optional` from `namespace` changes
-//    no call `dom/nodes` makes: `createDocument()` and `createDocument('')` must
-//    both throw a `TypeError`, and both still do, because `qualifiedName` is
-//    required.
+//  - `createDocument`'s `namespace` and `qualifiedName` retain nullable
+//    compatibility signatures instead of the standard's `optional DOMString?`
+//    and `[LegacyNullToEmptyString] DOMString`. The generator now supports the
+//    annotation; aligning these signatures and host conversions remains a
+//    separate change. In particular, explicitly passing `undefined` for
+//    `qualifiedName` is not equivalent to the standard conversion.
 //  - There is no *adoption*: a node cannot move between documents. This is the
 //    one deviation that reaches beyond `DOMImplementation`, and it is why the
 //    two above are shaped the way they are. A node's document here *is* the
@@ -426,6 +422,102 @@ interface DOMImplementation {
   [NewObject] DocumentType createDocumentType(DOMString qualifiedName, DOMString publicId, DOMString systemId);
   [NewObject] Document createDocument(DOMString? namespace, DOMString? qualifiedName, optional DocumentType? doctype);
   [NewObject] Document createHTMLDocument(optional DOMString title);
+};
+
+// Range and its two relatives. The member text is the DOM Standard's own IDL
+// index (<https://dom.spec.whatwg.org/#interface-range>), so names, types,
+// order and the four `compareBoundaryPoints` constants are the spec's.
+//
+// `AbstractRange` is the base the other two derive from, and it is *not*
+// constructible — the standard gives it no constructor and neither does this
+// file, so `new AbstractRange()` is the generator's "Illegal constructor".
+//
+// Live ranges register their endpoints with `tenta-dom`: insertion, removal
+// and character-data replacement update them through the shared mutation path.
+// Endpoints retain their nodes until the range is reclaimed. Text splitting,
+// normalization and the editing operations listed below remain undeclared.
+[Exposed=Window]
+interface AbstractRange {
+  readonly attribute Node startContainer;
+  readonly attribute unsigned long startOffset;
+  readonly attribute Node endContainer;
+  readonly attribute unsigned long endOffset;
+  readonly attribute boolean collapsed;
+};
+
+// `StaticRange`'s four members come from a dictionary rather than from four
+// parameters, and they are *copied* at construction: the standard's
+// `StaticRange` deliberately does not track mutations, which is why its own
+// "collapsed" compares the copied boundary points.
+dictionary StaticRangeInit {
+  required Node startContainer;
+  required unsigned long startOffset;
+  required Node endContainer;
+  required unsigned long endOffset;
+};
+
+[Exposed=Window]
+interface StaticRange : AbstractRange {
+  constructor(StaticRangeInit init);
+};
+
+[Exposed=Window]
+interface Range : AbstractRange {
+  constructor();
+
+  readonly attribute Node commonAncestorContainer;
+
+  undefined setStart(Node node, unsigned long offset);
+  undefined setEnd(Node node, unsigned long offset);
+  undefined setStartBefore(Node node);
+  undefined setStartAfter(Node node);
+  undefined setEndBefore(Node node);
+  undefined setEndAfter(Node node);
+  undefined collapse(optional boolean toStart = false);
+  undefined selectNode(Node node);
+  undefined selectNodeContents(Node node);
+
+  const unsigned short START_TO_START = 0;
+  const unsigned short START_TO_END = 1;
+  const unsigned short END_TO_END = 2;
+  const unsigned short END_TO_START = 3;
+
+  short compareBoundaryPoints(unsigned short how, Range sourceRange);
+  [NewObject] Range cloneRange();
+  undefined detach();
+
+  // **The five tree-surgery operations this interface does NOT declare:**
+  // `deleteContents()`, `extractContents()`, `cloneContents()`,
+  // `insertNode(node)` and `surroundContents(newParent)`. The DOM Standard
+  // declares all five here. They are absent rather than stubbed, because each
+  // one's algorithm is exact — the "contained", "partially contained" and
+  // "partially contained, first/last" classifications decide a DOM shape that
+  // `dom/ranges` compares node by node and offset by offset, 63 argument rows
+  // deep — and an implementation written to a guess would be an unverifiable
+  // member, which is the bug class slice 4a removed. Their absence costs the
+  // five files named below, whose remaining subtests fail with "is not a
+  // function" *inside* a testharness test (so the harness still reports and the
+  // numerators are comparable):
+  //
+  //   | file | rows |
+  //   |---|---|
+  //   | `Range-cloneContents.html` | 63 |
+  //   | `Range-deleteContents.html` | 63 |
+  //   | `Range-extractContents.html` | 63 |
+  //   | `Range-insertNode.html` | 63 |
+  //   | `Range-surroundContents.html` | 63 |
+  //
+  // That is 315 subtest rows, all of which need the missing `tenta-dom`
+  // primitive none of this engine's tree code has: a *split* of a `Text` node
+  // at an offset (`insertNode` step 7, `Text.splitText`) and the adjacent-`Text`
+  // merge that goes with it. `extractContents` is also the first step of
+  // `surroundContents`, so the five travel as one unit.
+
+  boolean isPointInRange(Node node, unsigned long offset);
+  short comparePoint(Node node, unsigned long offset);
+  boolean intersectsNode(Node node);
+
+  stringifier;
 };
 
 // Phase 3d: HTMLElement — the interface HTML-namespace element wrappers get.
@@ -572,6 +664,22 @@ interface mixin ChildNode {
 Element includes ChildNode;
 CharacterData includes ChildNode;
 
+// `ParentNode.append` is shared by Element, Document and DocumentFragment.
+// Navigation members already declared directly on the interfaces remain there.
+//
+// `append` converts each argument with *convert nodes into a node*: a `Node`
+// is used as-is and a string becomes a `Text` containing it.
+//
+// Each string argument creates a separate Text node, including consecutive
+// strings. The operation preserves adjacent Text nodes without normalization.
+interface mixin ParentNode {
+  undefined append((Node or DOMString)... nodes);
+};
+
+Element includes ParentNode;
+Document includes ParentNode;
+DocumentFragment includes ParentNode;
+
 // Phase 4c-2: inline style. CSSStyleDeclaration exposes the `style` attribute's
 // declaration block as a CSSOM object. Camel-case named access (`style.color`)
 // needs a named-property handler the generator does not install yet, so only
@@ -582,15 +690,23 @@ CharacterData includes ChildNode;
 interface CSSStyleDeclaration {
   attribute DOMString cssText;
   readonly attribute unsigned long length;
-  DOMString item(unsigned long index);
+  getter DOMString item(unsigned long index);
   DOMString getPropertyValue(DOMString property);
   DOMString getPropertyPriority(DOMString property);
-  undefined setProperty(DOMString property, DOMString value, optional DOMString priority = "");
+  undefined setProperty(DOMString property, [LegacyNullToEmptyString] DOMString value, optional [LegacyNullToEmptyString] DOMString priority = "");
   DOMString removeProperty(DOMString property);
+  readonly attribute CSSRule? parentRule;
+};
+
+// Both inline element styles and CSSStyleRule.style have the current CSSOM
+// subclass prototype. cssFloat forwards to the same Stylo `float` property.
+[Exposed=Window]
+interface CSSStyleProperties : CSSStyleDeclaration {
+  attribute [LegacyNullToEmptyString] DOMString cssFloat;
 };
 
 interface mixin ElementCSSInlineStyle {
-  [SameObject] readonly attribute CSSStyleDeclaration style;
+  [SameObject, PutForwards=cssText] readonly attribute CSSStyleProperties style;
 };
 
 HTMLElement includes ElementCSSInlineStyle;

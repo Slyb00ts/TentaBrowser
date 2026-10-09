@@ -38,7 +38,10 @@ pub fn words(name: &str) -> Vec<String> {
     let mut current = String::new();
     let mut previous: Option<char> = None;
     for (index, &c) in chars.iter().enumerate() {
-        if c == '_' || c == '-' || c == ' ' {
+        // Enum values are arbitrary strings, not WebIDL identifiers. MIME
+        // values such as `text/html` and `application/xhtml+xml` must become
+        // valid Rust variants through the same naming path as identifiers.
+        if !c.is_alphanumeric() {
             if !current.is_empty() {
                 out.push(std::mem::take(&mut current));
             }
@@ -136,6 +139,8 @@ mod tests {
         assert_eq!(snake_case("base64Data"), "base64_data");
         assert_eq!(snake_case("Float32Array"), "float32_array");
         assert_eq!(pascal_case("content-box"), "ContentBox");
+        assert_eq!(pascal_case("text/html"), "TextHtml");
+        assert_eq!(pascal_case("application/xhtml+xml"), "ApplicationXhtmlXml");
         assert_eq!(pascal_case(""), "EmptyString");
     }
 }

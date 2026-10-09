@@ -10,6 +10,10 @@
 //! Without the drain the entries stay in the table for the life of the world
 //! and keep a stored callback alive with them — a silent leak on a hot path
 //! (`element.innerHTML = …` detaches a subtree on every assignment).
+//!
+//! The collector can release an unrooted listener before the native sweep.
+//! Drain-specific tests keep its noncapturing callback reachable from script
+//! so they still exercise the deferred exact-generation drain.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -65,7 +69,8 @@ fn a_swept_nodes_listener_is_drained_and_its_stored_callback_released() {
 
     engine
         .run_script(
-            "document.querySelector('#other').addEventListener('x', () => {});",
+            "globalThis.retainedCallback = () => {}; \
+             document.querySelector('#other').addEventListener('x', retainedCallback);",
             ScriptKind::Classic,
         )
         .expect("the registering script runs");
@@ -172,11 +177,10 @@ fn a_live_nodes_listener_survives_a_drain() {
     );
 }
 
-/// The defect the exact-key drain exists to close. The drain runs at one
-/// `trim_memory` and consumes the record of the *previous* sweep; the page runs
-/// script in between, and a script allocation can take the freed slot. A drain
-/// that matched on the id alone would then remove the live node's listener —
-/// generation-blind — and it would silently stop firing.
+/// A script can reuse a slot after a native sweep. Its task-end graph checkpoint
+/// drains the old listener by exact node reference, including generation, and
+/// must leave the new listener on that slot working. The shared native listener
+/// test separately checks the two generations coexist before that drain.
 #[test]
 fn a_listener_on_a_node_that_reuses_a_freed_slot_survives_the_drain() {
     let (document, _target, other) = test_document();
@@ -184,9 +188,10 @@ fn a_listener_on_a_node_that_reuses_a_freed_slot_survives_the_drain() {
 
     engine
         .run_script(
-            "document.querySelector('#other').addEventListener('x', () => { \
+            "globalThis.retainedCallback = () => { \
                  globalThis.freedFired = true; \
-             });",
+             }; \
+             document.querySelector('#other').addEventListener('x', retainedCallback);",
             ScriptKind::Classic,
         )
         .expect("the registering script runs");
@@ -212,8 +217,9 @@ fn a_listener_on_a_node_that_reuses_a_freed_slot_survives_the_drain() {
         "the sweep records the freed node's reference, generation included"
     );
 
-    // Script runs before the next trim and allocates a node into the freed
-    // slot, registering a listener on it.
+    // Script allocates a node into the freed slot and registers a listener.
+    // Its task-end checkpoint drains the old generation before run_script
+    // returns, without removing the new generation's listener.
     engine
         .run_script(
             "globalThis.reused = document.createElement('span'); \
@@ -222,8 +228,8 @@ fn a_listener_on_a_node_that_reuses_a_freed_slot_survives_the_drain() {
         )
         .expect("the reusing script runs");
 
-    // The slot really was reused, under a bumped generation. Assert that before
-    // the drain, so the test cannot pass by the allocation landing elsewhere.
+    // The slot really was reused under a bumped generation, so the test cannot
+    // pass by the allocation landing elsewhere.
     {
         let doc = document.borrow();
         assert!(doc.is_live(other), "the arena hands the freed slot back");
@@ -235,22 +241,26 @@ fn a_listener_on_a_node_that_reuses_a_freed_slot_survives_the_drain() {
     }
     assert_eq!(
         engine.listener_count(),
-        2,
-        "the freed node's entry and the reused node's are both registered"
-    );
-
-    // The drain consumes the freed node's reference. It must take only that
-    // entry: a drain on the id alone would also remove the live listener.
-    engine.trim_memory();
-    assert_eq!(
-        engine.listener_count(),
         1,
-        "only the freed node's entry was drained, not the reused slot's"
+        "task-end collection drains the old entry but keeps the reused slot's listener"
     );
     assert_eq!(
         engine.stored_value_count(),
         1,
-        "the freed node's stored callback was released; the live one was not"
+        "the old callback is released while the reused listener stays rooted"
+    );
+
+    // A later explicit trim must not drain the new generation's entry either.
+    engine.trim_memory();
+    assert_eq!(
+        engine.listener_count(),
+        1,
+        "a later trim leaves the reused slot's listener registered"
+    );
+    assert_eq!(
+        engine.stored_value_count(),
+        1,
+        "the reused slot's stored callback remains live"
     );
 
     engine

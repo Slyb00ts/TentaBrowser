@@ -1,0 +1,545 @@
+{
+  "archive": {
+    "bytes": 115756712,
+    "sha256": "744252be94bd7a095a64db86ca10d8349493447860bdbc8a2ede5bb028bd985f"
+  },
+  "binding": {
+    "bytes": 39814,
+    "sha256": "d6594abe610e3364c13c0b78a901c2eaa3a6422afaebcafdee9c8af6950315b1"
+  },
+  "configuration": {
+    "crt_static": false,
+    "features": [
+      "use_custom_libcxx"
+    ],
+    "gn_args": "is_debug = false\nuse_custom_libcxx = true\nv8_enable_sandbox = false\nv8_enable_pointer_compression = false\nv8_enable_v8_checks = false\nhost_cpu = \"arm64\"\nclang_base_path = \"/tmp/tenta-v8-native-build/tools/clang\"\ntreat_warnings_as_errors = false\nsymbol_level = 0\nmac_sdk_path = \"/private/tmp/tenta-v8-native-build/target/release/gn_out/sdk/tenta/MacOSX26.5.sdk\"\ntarget_cpu = \"arm64\"\n",
+    "native_build": {
+      "DEBUG_defined": false,
+      "arch": "arm64",
+      "asan": false,
+      "atomic_object_field_writes": true,
+      "cet_shadow_stack": false,
+      "cfi": false,
+      "clang": true,
+      "clang_coverage": false,
+      "code_comments": false,
+      "component_build": false,
+      "concurrent_marking": true,
+      "cppgc_microtask_queue": true,
+      "current_cpu": "arm64",
+      "dcheck_always_on": false,
+      "debug_code": false,
+      "debugging_features": false,
+      "dict_property_const_tracking": false,
+      "direct_handle": false,
+      "disassembler": false,
+      "dumpling": false,
+      "full_debug": false,
+      "gdbjit": false,
+      "has_jitless": false,
+      "has_maglev": true,
+      "has_turbofan": true,
+      "has_wasm_interpreter": false,
+      "has_webassembly": true,
+      "i18n": true,
+      "is_android": false,
+      "is_ios": false,
+      "is_linux": false,
+      "js_shared_memory": true,
+      "lite_mode": false,
+      "local_off_stack_check": false,
+      "lower_limits_mode": false,
+      "memory_corruption_api": false,
+      "mips_arch_variant": "",
+      "mips_use_msa": false,
+      "msan": false,
+      "official_build": false,
+      "pointer_compression": false,
+      "pointer_compression_shared_cage": false,
+      "runtime_call_stats": false,
+      "sandbox": false,
+      "sandbox_hardware_support": false,
+      "simd_mips": false,
+      "simulator_run": false,
+      "single_generation": false,
+      "slow_dchecks": false,
+      "sparkplug_plus": true,
+      "target_cpu": "arm64",
+      "temporal": true,
+      "test_only_sync_points": false,
+      "tsan": false,
+      "ubsan": false,
+      "use_sanitizer": false,
+      "v8_cfi": false,
+      "v8_current_cpu": "arm64",
+      "v8_target_cpu": "arm64",
+      "verification_features": false,
+      "verify_csa": false,
+      "verify_heap": false,
+      "verify_predictable": false,
+      "wasm_random_fuzzers": true
+    },
+    "native_debug": false,
+    "source_date_epoch": 1790121600,
+    "target": "aarch64-apple-darwin",
+    "v8_features": {
+      "v8_cppgc_microtask_queue": true,
+      "v8_deprecation_warnings": true,
+      "v8_enable_31bit_smis_on_64bit_arch": false,
+      "v8_enable_direct_handle": false,
+      "v8_enable_extensible_ro_snapshot": true,
+      "v8_enable_gdbjit": false,
+      "v8_enable_hugepage": false,
+      "v8_enable_i18n_support": true,
+      "v8_enable_javascript_promise_hooks": true,
+      "v8_enable_lite_mode": false,
+      "v8_enable_map_packing": false,
+      "v8_enable_memory_accounting_checks": false,
+      "v8_enable_object_print": false,
+      "v8_enable_pointer_compression": false,
+      "v8_enable_pointer_compression_shared_cage": false,
+      "v8_enable_sandbox": false,
+      "v8_enable_short_builtin_calls": false,
+      "v8_enable_temporal_support": true,
+      "v8_enable_v8_checks": false,
+      "v8_enable_webassembly": true,
+      "v8_imminent_deprecation_warnings": false,
+      "v8_optimized_debug": true,
+      "v8_random_seed": "314159265",
+      "v8_use_default_hasher_secret": false,
+      "v8_use_perfetto": false,
+      "v8_use_siphash": false
+    }
+  },
+  "evidence_manifest_sha256": "655c8ec3ec7647d0e72fa887a540f32aae72a72dac157d5ccf5738a0101b40e0",
+  "generated_snapshot": {
+    "embedded.S": {
+      "bytes": 5666548,
+      "sha256": "5bc6264b42331d7ac574368b1afb1f613e470f4bfd12ea22aa65c0e2b97f4e6f"
+    },
+    "snapshot.cc": {
+      "bytes": 1228880,
+      "sha256": "77c189845459e89ebf5d8253631772e4848f90f9996da972e6373b25e881a42a"
+    }
+  },
+  "helper_patch_sha256": "b72ddc9ec0110c9a10eeb8c63edaa1091d878206ae018c58731b4bffd1df24ad",
+  "incremental_native_plan": {
+    "actions": [
+      "CXX obj/rusty_v8/binding.o",
+      "AR obj/librusty_v8.a"
+    ],
+    "command": [
+      "/tmp/tenta-v8-native-build/tools/ninja/ninja",
+      "-C",
+      "/tmp/tenta-v8-native-build/target/release/gn_out",
+      "-j",
+      "1",
+      "rusty_v8"
+    ],
+    "dry_run_exit": 0,
+    "stderr": "",
+    "stdout": "ninja: Entering directory `/tmp/tenta-v8-native-build/target/release/gn_out'\n[1/2] CXX obj/rusty_v8/binding.o\n[2/2] AR obj/librusty_v8.a\n",
+    "unexpected": []
+  },
+  "limitations": [
+    "Only macOS arm64/default custom-libc++ built and tested",
+    "No pointer-compressed/heap-checking/sanitizer native run",
+    "No injected allocator OOM test",
+    "This new native23 binding-package route is pending; the preceding native19 package passed46/46",
+    "No live TentaBrowser native routing or native performance result",
+    "Full native panic containment remains an open gate",
+    "Native source/notice inventory unchanged except the reviewed classifier; no publication"
+  ],
+  "native_tests": {
+    "cases": [
+      {
+        "binary": "v8::web_idl_legacy",
+        "name": "v8::web_idl_legacy only_marked_indexed_handlers_consult_the_definer_during_set",
+        "seconds": 0.033,
+        "status": "pass",
+        "test": "only_marked_indexed_handlers_consult_the_definer_during_set"
+      },
+      {
+        "binary": "v8::ordinary_object_brand",
+        "name": "v8::ordinary_object_brand script_records_and_ordinary_intrinsic_prototypes_are_accepted",
+        "seconds": 0.037,
+        "status": "pass",
+        "test": "script_records_and_ordinary_intrinsic_prototypes_are_accepted"
+      },
+      {
+        "binary": "v8::ordinary_object_brand",
+        "name": "v8::ordinary_object_brand native_wrappers_and_interceptors_are_rejected_without_a_callback",
+        "seconds": 0.037,
+        "status": "pass",
+        "test": "native_wrappers_and_interceptors_are_rejected_without_a_callback"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order enumerator_gc_and_exceptions_preserve_exactly_once_callback_behavior",
+        "seconds": 0.039,
+        "status": "pass",
+        "test": "enumerator_gc_and_exceptions_preserve_exactly_once_callback_behavior"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order failed_definitions_do_not_publish_phantom_creation_records",
+        "seconds": 0.039,
+        "status": "pass",
+        "test": "failed_definitions_do_not_publish_phantom_creation_records"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order growing_weak_instance_table_preserves_live_order_and_releases_dead_keys",
+        "seconds": 0.039,
+        "status": "pass",
+        "test": "growing_weak_instance_table_preserves_live_order_and_releases_dead_keys"
+      },
+      {
+        "binary": "v8::ordinary_object_brand",
+        "name": "v8::ordinary_object_brand cross_realm_objects_remain_classifiable_after_real_gc",
+        "seconds": 0.039,
+        "status": "pass",
+        "test": "cross_realm_objects_remain_classifiable_after_real_gc"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order descriptor_replacement_preserves_order_and_delete_recreation_moves_it",
+        "seconds": 0.039,
+        "status": "pass",
+        "test": "descriptor_replacement_preserves_order_and_delete_recreation_moves_it"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order cross_realm_access_keeps_the_creation_context_order",
+        "seconds": 0.045,
+        "status": "pass",
+        "test": "cross_realm_access_keeps_the_creation_context_order"
+      },
+      {
+        "binary": "v8::ordinary_object_brand",
+        "name": "v8::ordinary_object_brand specialized_values_and_proxy_traps_do_not_enter_the_ordinary_branch",
+        "seconds": 0.061,
+        "status": "pass",
+        "test": "specialized_values_and_proxy_traps_do_not_enter_the_ordinary_branch"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order hot_named_and_numeric_stores_keep_chronology_across_dictionary_transition",
+        "seconds": 0.028,
+        "status": "pass",
+        "test": "hot_named_and_numeric_stores_keep_chronology_across_dictionary_transition"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order marked_global_template_uses_its_hidden_global_creation_context",
+        "seconds": 0.025,
+        "status": "pass",
+        "test": "marked_global_template_uses_its_hidden_global_creation_context"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order marked_string_chronology_precedes_symbols_and_filters_in_the_same_order",
+        "seconds": 0.023,
+        "status": "pass",
+        "test": "marked_string_chronology_precedes_symbols_and_filters_in_the_same_order"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order marked_indexed_and_named_keys_are_normalized_once_in_spec_order",
+        "seconds": 0.024,
+        "status": "pass",
+        "test": "marked_indexed_and_named_keys_are_normalized_once_in_spec_order"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order nonenumerable_ordinary_keys_shadow_prototype_keys",
+        "seconds": 0.023,
+        "status": "pass",
+        "test": "nonenumerable_ordinary_keys_shadow_prototype_keys"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order ordinary_derived_receiver_enumerates_marked_prototype_without_cached_reordering",
+        "seconds": 0.02,
+        "status": "pass",
+        "test": "ordinary_derived_receiver_enumerates_marked_prototype_without_cached_reordering"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order named_only_marked_prototype_observes_updated_supported_names",
+        "seconds": 0.026,
+        "status": "pass",
+        "test": "named_only_marked_prototype_observes_updated_supported_names"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order numeric_own_key_shadows_an_unmarked_named_interceptor_prototype",
+        "seconds": 0.026,
+        "status": "pass",
+        "test": "numeric_own_key_shadows_an_unmarked_named_interceptor_prototype"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order independently_restored_contexts_keep_distinct_order_tables",
+        "seconds": 0.034,
+        "status": "pass",
+        "test": "independently_restored_contexts_keep_distinct_order_tables"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order template_clones_have_independent_creation_records",
+        "seconds": 0.013,
+        "status": "pass",
+        "test": "template_clones_have_independent_creation_records"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order ordinary_store_receiver_controls_where_creation_is_recorded",
+        "seconds": 0.015,
+        "status": "pass",
+        "test": "ordinary_store_receiver_controls_where_creation_is_recorded"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order weak_order_records_do_not_retain_dead_instances",
+        "seconds": 0.013,
+        "status": "pass",
+        "test": "weak_order_records_do_not_retain_dead_instances"
+      },
+      {
+        "binary": "v8::web_idl_order",
+        "name": "v8::web_idl_order snapshot_round_trip_preserves_order_and_accepts_new_records",
+        "seconds": 0.024,
+        "status": "pass",
+        "test": "snapshot_round_trip_preserves_order_and_accepts_new_records"
+      }
+    ],
+    "exact_exit_record_sha256": "11a5ae150a4695d1acbc355bcd77d7031b03fc26691c475cbb6765e6cbd42489",
+    "exit_code": 0,
+    "finished_at": "2026-09-24T06:00:16.707173+00:00",
+    "nextest_log_sha256": "fe67e7d3010189e3fe1d1e0027c567158478b9d076588a6e4a5a119fed30424a",
+    "note": "Native command exit0 and 23/23. The scheduling runner returned1 afterward because its first PASS parser did not accept nextest progress counters; reviewed postprocessing verified the original result/log and preserved artifacts without rerunning tests.",
+    "passed": 23,
+    "postprocessing_receipt_sha256": "655c8ec3ec7647d0e72fa887a540f32aae72a72dac157d5ccf5738a0101b40e0",
+    "run_id": "7fbbce90-73a3-4d89-abb8-6e9c827b8f11",
+    "skipped": 0,
+    "started_at": "2026-09-24T05:59:52.662229+00:00"
+  },
+  "previous_accepted_native_manifest_sha256": "54178d78095ff2f8db748f5ffd32ee5ddfa041863a0cda403c8b05fb58c21967",
+  "schema": 1,
+  "source_changed_files": [
+    {
+      "candidate_sha256": "8a3feec10da11c2acfafa62c6c5f68f92a7623d11732f288a4f3fbd8752c2d61",
+      "path": "Cargo.toml",
+      "upstream_sha256": "3aea3bd11b63d6b7bccd4f728c50e6df277d960692b95d9cf85a3baa7c214493"
+    },
+    {
+      "candidate_sha256": "4be0440ceb420a9fb167a334725df55bfafe9c0318bdf4e5a9232e32fba08aa2",
+      "path": "Cargo.toml.orig",
+      "upstream_sha256": "6e48d95df14f8e75e11c68749fc62f7817a78bafe8ab16a7c47c8f1fa6641c20"
+    },
+    {
+      "candidate_sha256": "811a28e10a980154cd874998f6d2060b2f00a7638937980ef2a5628387c1c246",
+      "path": "src/binding.cc",
+      "upstream_sha256": "fdb0b468e34426852e377ee6820e92cab6efcbe8951916076cd35068f02b1155"
+    },
+    {
+      "candidate_sha256": "46a97fc39d33c070756f6807d7f12d9d999d552f18c4059720815bb1d33eb496",
+      "path": "src/property_handler_flags.rs",
+      "upstream_sha256": "75bf24a643f404fa0a3ebc755aafdfc94df223cf6b0d302a69404ee30667b540"
+    },
+    {
+      "candidate_sha256": "cc7abee1e87b71277a3c89b5061d9fa2ce2919f30c66cc8b6000bddf152bb9c2",
+      "path": "src/value.rs",
+      "upstream_sha256": "880e6ee335bb001cb91d4d73147789df7b97c1ac5257fbe6b8766c81c2b83d4a"
+    },
+    {
+      "candidate_sha256": "c26f3491b1b86b7bb28bf25838bd3a98ce4c6a1a14759af8b8efbaf61fdc8ac2",
+      "path": "tests/ordinary_object_brand.rs",
+      "upstream_sha256": null
+    },
+    {
+      "candidate_sha256": "962811481c4258840d5778dfb18f6211f3eb1f3c226f4ecefe2238735c240bae",
+      "path": "tests/web_idl_legacy.rs",
+      "upstream_sha256": null
+    },
+    {
+      "candidate_sha256": "063fb12cd2c7b0f78ffde7ce75aaf974a6030e481bae5ef19b59958567d4b749",
+      "path": "tests/web_idl_order.rs",
+      "upstream_sha256": null
+    },
+    {
+      "candidate_sha256": "b83ebc15a8ff66c2f56c0b5b78d01be1261282d661033934dd36102b2a887b3d",
+      "path": "v8/include/v8-template.h",
+      "upstream_sha256": "5ff060cc76e892c0c345a699c0438fe09e23f643a64572f738ec9ff1cfd2d122"
+    },
+    {
+      "candidate_sha256": "c4bee02b134300dd6725500229cb4a38ecaff473b5ed70bcb3cc77608a0fb0d8",
+      "path": "v8/src/api/api.cc",
+      "upstream_sha256": "4e41e5b30d1b62a60d4346898d6411f79198b5042977a7542462f010d0bc32c7"
+    },
+    {
+      "candidate_sha256": "d702c71d63e27fe34eac7ac27943000958eb72a546f342ba6321cb7d7875ba19",
+      "path": "v8/src/diagnostics/objects-debug.cc",
+      "upstream_sha256": "b468bd6b88fbebaa157e13c9352780cf7d528b58bed03af99ec448ded133accb"
+    },
+    {
+      "candidate_sha256": "4cb7fcbd86c6e38bfa80f0fc87d2b1b4b54df2ce0cce5edf12d655523bec00b3",
+      "path": "v8/src/heap/factory.cc",
+      "upstream_sha256": "89410839dd69a59c592f2b887c9d8f69fc7087e21d5f466bd762dc0837305c7a"
+    },
+    {
+      "candidate_sha256": "28b75ad1f536c0ed537718e9769ac16a76f197cc43b81dad3a8a820d929c562d",
+      "path": "v8/src/ic/ic.cc",
+      "upstream_sha256": "9a9cd5120b1c813eb9221d4ace7113f569179d3ab8890820a0cce2889c016a46"
+    },
+    {
+      "candidate_sha256": "4d53291ab42b7325f6bc3266ee959786d6c30dc266a8696402d8e6557c1dc7b5",
+      "path": "v8/src/objects/api-callbacks-inl.h",
+      "upstream_sha256": "7dd731d71692b3b2a1218b123e6540ccb9e2f7ff96a28a8b165b7a46c1813f0f"
+    },
+    {
+      "candidate_sha256": "f72d65478b008ccbe846a1319c8e47de583e71cec8249132c24c8359134d340f",
+      "path": "v8/src/objects/api-callbacks.h",
+      "upstream_sha256": "ed44e131d3a8e84b1c39cef80e01e5033d97ff75f98deb9419491da7a088bf85"
+    },
+    {
+      "candidate_sha256": "c645e50e963b9ae853f49a2e6a409d538e09fb8ea258838f649d3bfe9dcbce86",
+      "path": "v8/src/objects/api-callbacks.tq",
+      "upstream_sha256": "fa78630546f8a9e4dce0149283206d3787c9e59bbcd7c8bcaf0a17a9d2587dde"
+    },
+    {
+      "candidate_sha256": "6ed0b24598e8c7900a9b38f3b63e615ec54042e956a96002825a6dd2088090e4",
+      "path": "v8/src/objects/contexts.h",
+      "upstream_sha256": "e670fd5ddc42097b83809010dca061f2773897a8da51994727bbf47f4cd6b092"
+    },
+    {
+      "candidate_sha256": "b988bd86ca493bf18b1b4aa7d0bb0d7bdb7a16a7daa944008703c20e2f92552f",
+      "path": "v8/src/objects/js-objects-inl.h",
+      "upstream_sha256": "adc5195df2aa38117d1fe1151ef4773f00a4324e5be3761a59032087f41f75cf"
+    },
+    {
+      "candidate_sha256": "db88abafbde592bf0bb0ee94712443f17b0af1f9919c9ab2b8c46ac6c515789e",
+      "path": "v8/src/objects/js-objects.cc",
+      "upstream_sha256": "9131de2c95b8b77e9a43483153efe57f4407c7ca0487b739c66d8d34e6f1dfe9"
+    },
+    {
+      "candidate_sha256": "3a32d1d7e8f5a503af9adad955dab35a6021503bf468d8f4b6943643b4a029b5",
+      "path": "v8/src/objects/js-objects.h",
+      "upstream_sha256": "e6ce43fe1cdeb34356b1c387433ab288dcddc4a9bc6708a626ebc94594f28f29"
+    },
+    {
+      "candidate_sha256": "c907a4c77224c181accc95970ba55b05929b07d896bb48a8d6b21f29986173e3",
+      "path": "v8/src/objects/keys.cc",
+      "upstream_sha256": "b49330264912984a2a39a66bc6b5f3481d1e08a05d6bc620475997a19797fcb9"
+    },
+    {
+      "candidate_sha256": "7a8773df049246a06891013e4595c981c43ab2038478e4a92eb12ca31781aeee",
+      "path": "v8/src/objects/keys.h",
+      "upstream_sha256": "a555c0be1780afd8554b2ae40d56ff3e285b5e0427bf61b5a6a0cf312a0571f8"
+    },
+    {
+      "candidate_sha256": "0935041a1df3e3cfa335f17431215155a1ebdd7716c4c703aa2f0191352d122b",
+      "path": "v8/src/objects/lookup.cc",
+      "upstream_sha256": "8d9d9896269081515c8963e4e3c80d616c521089d3b9916f9c33eb2b8b8502fc"
+    },
+    {
+      "candidate_sha256": "793b0c8d730ca4aa6fe84792952db18e3b652ce7d56bdae20673a685fb821ae3",
+      "path": "v8/src/objects/objects-body-descriptors-inl.h",
+      "upstream_sha256": "60134629a47e8213d1e3dbc07dd4bb757e959f93c16c90252c3d200eee3856e4"
+    },
+    {
+      "candidate_sha256": "4274e623dba7436ee5080fce59728eac0d759d1e3973cda31c56a08ccbacae71",
+      "path": "v8/src/objects/objects.cc",
+      "upstream_sha256": "8587c406e7dccee8800a42979e090b6a81f742d330a3de2b99466fecc25fc112"
+    }
+  ],
+  "source_patch_sha256": "2091d2806100fb4ea488312f88fa31ecee871fa773ecd431b4f6da26561a32cd",
+  "source_reconstruction": {
+    "active_changed_files_identical": 25,
+    "command": [
+      "python3",
+      "/tmp/tenta-v8-ordinary-brand-stage/integration/recipe/prepare_source.py",
+      "--crate-archive",
+      "/Users/critix/.cargo/registry/cache/index.crates.io-1949cf8c6b5b557f/v8-152.2.0.crate",
+      "--inputs",
+      "/tmp/tenta-v8-hook-stage/integration/reproduction-inputs",
+      "--destination",
+      "/tmp/tenta-v8-ordinary-brand-stage/integration/reproduced-source-native23"
+    ],
+    "exit_code": 0,
+    "failure_controls_passed": 5,
+    "patch_sha256": "2091d2806100fb4ea488312f88fa31ecee871fa773ecd431b4f6da26561a32cd",
+    "python": "3.14.7 (main, Aug  5 2026, 10:29:49) [Clang 21.0.0 (clang-2100.1.1.101)]",
+    "recipe_sha256": "81d27d8e37efeba8e56b14d3784e3bf54a4024d71cdc466f3b202c4c8fe2cf47",
+    "status": "verified offline reconstruction; all25 changed files equal the executed native source",
+    "verified_supplemental_inputs": 46
+  },
+  "status": "native23 source tests passed; this new binding-package artifact route remains unexecuted",
+  "temporal_abi_contract_sha256": "f9a5949931b95ace69d3226949f4017d10ddd1c29160ea1f561f913e633f29e6",
+  "toolchain_evidence": {
+    "provenance/bootstrap-source-provenance.json": {
+      "bytes": 933,
+      "sha256": "116def2e101411afbf200d9e581da6814b2f612cd0303dc5a24c71f2ba27c9b8",
+      "source": "/tmp/tenta-v8-native-build/bootstrap-source-provenance.json"
+    },
+    "provenance/clang-toolchain-provenance.json": {
+      "bytes": 2293,
+      "sha256": "0528a2b7dea0e1b7b759242e13735d017ca62a02ec03af0278697cab7145f9fc",
+      "source": "/tmp/tenta-v8-native-build/clang-toolchain-provenance.json"
+    },
+    "provenance/gn-ninja-package-provenance.json": {
+      "bytes": 386,
+      "sha256": "360847a9c447ce653ea485532b67ce56f32d8015b71520422e74d4f13811f1bf",
+      "source": "/tmp/tenta-v8-native-build/gn-ninja-package-provenance.json"
+    },
+    "provenance/rust-toolchain-provenance.json": {
+      "bytes": 431,
+      "sha256": "dbbf1e68a874458744a0c0ad496dd01d5283796f1e359c6ab5065f52e1d670d2",
+      "source": "/tmp/tenta-v8-native-build/rust-toolchain-provenance.json"
+    },
+    "provenance/rust-vendor-provenance.json": {
+      "bytes": 30185,
+      "sha256": "c6363cd4be9994eb0339e3ee86f088d98366bb315b8c396f0466f6e108bed620",
+      "source": "/tmp/tenta-v8-native-build/rust-vendor-provenance.json"
+    },
+    "provenance/sdk-26.5-provenance.json": {
+      "bytes": 12739,
+      "sha256": "96b6e682a9b3dc3a5281464dd00ef200574bfcfbe16f6a0fd3a3d7410553fd03",
+      "source": "/tmp/tenta-v8-native-build/sdk-26.5-provenance.json"
+    },
+    "provenance/toolchain-provenance.json": {
+      "bytes": 2259,
+      "sha256": "16a365f99be7fde4bfb7f842862259903da06f14b075186383a2cd63cd0a1448",
+      "source": "/tmp/tenta-v8-native-build/toolchain-provenance.json"
+    }
+  },
+  "unchanged_generated_engine_inputs": [
+    {
+      "file": "snapshot.cc",
+      "sha256": "77c189845459e89ebf5d8253631772e4848f90f9996da972e6373b25e881a42a"
+    },
+    {
+      "file": "embedded.S",
+      "sha256": "5bc6264b42331d7ac574368b1afb1f613e470f4bfd12ea22aa65c0e2b97f4e6f"
+    },
+    {
+      "file": "args.gn",
+      "sha256": "253110db25aeb29ab68f7ca0f506a79be2026f9e44a3468ef49b4fd02c165aee"
+    },
+    {
+      "file": "v8_features.json",
+      "sha256": "c0beee408bef3286d6f8d020269fe6e83c1f5fe1a03175ee5c0af43b6b18a0b3"
+    },
+    {
+      "file": "v8_build_config.json",
+      "sha256": "e4beddbfff237536ef0980f77ac5c71cd253765539c38946552d85cfbb63fcc8"
+    }
+  ],
+  "upstream_package": {
+    "archive_sha256": "a10fe1a92da5c32c7c7f838ce36c0ccfcfd5edf0865b58bdde820aa64cea9888",
+    "embedded_v8_version": "15.2.124.1",
+    "name": "v8",
+    "version": "152.2.0"
+  }
+}

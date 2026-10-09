@@ -1,0 +1,690 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -294,3 +294,11 @@
+ [[test]]
+ name = "ordinary_object_brand"
+ path = "tests/ordinary_object_brand.rs"
++
++[[example]]
++name = "symbol_store_control"
++path = "examples/symbol_store_control.rs"
++
++[[test]]
++name = "termination_now"
++path = "tests/termination_now.rs"
+--- a/src/binding.cc
++++ b/src/binding.cc
+@@ -27,6 +27,9 @@
+ #include "v8-platform.h"
+ #include "v8-profiler.h"
+ #include "v8.h"
++#include "v8/src/api/api-inl.h"
++#include "v8/src/execution/isolate.h"
++#include "v8/src/execution/isolate-inl.h"
+ #include "v8/src/flags/flags.h"
+ #include "v8/src/libplatform/default-platform.h"
+ #include "v8/src/objects/instance-type.h"
+@@ -425,6 +428,24 @@
+   isolate->TerminateExecution();
+ }
+ 
++// Unlike the public API's asynchronous StackGuard request, this is called
++// from an active same-thread slow API callback after a sticky host budget
++// failure. It must not be called from a Fast API, GC, or heap-limit hook.
++// V8's API callback return path observes the exception field immediately.
++// A sticky budget failure dominates even a pending ordinary page exception.
++// Follow public ThrowException's clear-internal-then-Throw sequence; Throw
++// propagates the termination sentinel to the external TryCatch. If termination
++// is already active, there is nothing more to do.
++void v8__Isolate__TerminateExecutionNowFromCallback(v8::Isolate* isolate) {
++  auto* internal = reinterpret_cast<v8::internal::Isolate*>(isolate);
++  if (internal->has_exception() && internal->is_execution_terminating()) return;
++  v8::EnterV8BasicScope api_scope(internal);
++  if (internal->has_exception()) {
++    internal->clear_internal_exception();
++  }
++  internal->TerminateExecution();
++}
++
+ bool v8__Isolate__IsExecutionTerminating(v8::Isolate* isolate) {
+   return isolate->IsExecutionTerminating();
+ }
+--- a/src/isolate.rs
++++ b/src/isolate.rs
+@@ -825,6 +825,9 @@
+     data: *mut c_void,
+   );
+   fn v8__Isolate__TerminateExecution(isolate: *const RealIsolate);
++  fn v8__Isolate__TerminateExecutionNowFromCallback(
++    isolate: *const RealIsolate,
++  );
+   fn v8__Isolate__IsExecutionTerminating(isolate: *const RealIsolate) -> bool;
+   fn v8__Isolate__CancelTerminateExecution(isolate: *const RealIsolate);
+   fn v8__Isolate__GetMicrotasksPolicy(
+@@ -1068,6 +1071,26 @@
+     true
+   }
+ 
++  /// Synchronously raises V8's uncatchable termination exception from the
++  /// currently active API callback. Unlike [`Self::terminate_execution`], this
++  /// is not an asynchronous watchdog request. The exception is visible to
++  /// V8's API callback return path before another JavaScript statement runs.
++  ///
++  /// # Safety
++  /// Call only on this isolate's thread inside an active slow V8 function or
++  /// property callback after a sticky hard host failure. Allocation must be
++  /// permitted; never call this in a Fast API, GC, or heap-limit hook. The
++  /// sticky failure takes precedence over a pending ordinary page exception,
++  /// which this call replaces with V8's
++  /// uncatchable termination sentinel. This may allocate while V8 constructs a
++  /// message, so it must not run in a no-allocation or GC hook.
++  #[inline(always)]
++  pub unsafe fn terminate_execution_now_from_callback(&self) {
++    unsafe {
++      v8__Isolate__TerminateExecutionNowFromCallback(self.as_real_ptr());
++    }
++  }
++
+   /// See [`IsolateHandle::cancel_terminate_execution`]
+   #[inline(always)]
+   pub fn cancel_terminate_execution(&self) -> bool {
+--- a/tests/web_idl_order.rs
++++ b/tests/web_idl_order.rs
+@@ -838,3 +838,281 @@
+         "virtual,middle,2,10,first"
+     );
+ }
++
++fn publish_indexed_only(scope: &mut v8::PinScope<'_, '_>) {
++    let template = v8::ObjectTemplate::new(scope);
++    template.set_indexed_property_handler(
++        v8::IndexedPropertyHandlerConfiguration::new()
++            .enumerator(indexed_names)
++            .query(indexed_query)
++            .flags(v8::PropertyHandlerFlags::WEB_IDL_LEGACY),
++    );
++    let object = template.new_instance(scope).expect("indexed-only instance");
++    publish(scope, "indexedOnly", object);
++}
++
++#[test]
++fn public_symbol_store_keeps_ordinary_descriptor_and_order() {
++    with_objects(|scope| {
++        publish_indexed_only(scope);
++        assert_eq!(
++            evaluate(
++                scope,
++                r#"
++            (() => {
++                for (const object of [marked, ordinary, indexedOnly]) {
++                    const first = Symbol('first'), last = Symbol.iterator;
++                    function cycle(value) { object[first] = value; const got = object[first]; delete object[first]; return got; }
++                    let checksum = 0;
++                    for (let i = 0; i < 10000; ++i) checksum += cycle(i);
++                    if (checksum !== 49995000) throw Error('checksum');
++                    object[first] = 17; object[last] = 23;
++                    const d = Object.getOwnPropertyDescriptor(object, first);
++                    if (!d.writable || !d.enumerable || !d.configurable || d.value !== 17) throw Error('descriptor');
++                    let keys = Object.getOwnPropertySymbols(object);
++                    if (keys.length !== 2 || keys[0] !== first || keys[1] !== last) throw Error('first order');
++                    delete object[first]; object[first] = 29;
++                    keys = Object.getOwnPropertySymbols(object);
++                    if (keys[0] !== last || keys[1] !== first || object[last] !== 23) throw Error('reinsert order');
++                }
++                marked['10'] = 1; marked.middle = 2; marked['2'] = 3;
++                if (Object.keys(marked).join(',') !== 'virtual,10,middle,2') throw Error('string order');
++                if (Object.keys(indexedOnly).join(',') !== '0,2') throw Error('index order');
++                return 'ok';
++            })()
++        "#
++            ),
++            "ok"
++        );
++    });
++}
++
++#[test]
++fn public_symbol_store_obeys_accessors_and_readonly() {
++    with_objects(|scope| {
++        assert_eq!(
++            evaluate(
++                scope,
++                r#"
++            (() => {
++                for (const object of [marked, ordinary]) {
++                    const key = Symbol('setter');
++                    function store(value) { object[key] = value; }
++                    function strictStore(value) { 'use strict'; object[key] = value; }
++                    for (let i = 0; i < 10000; ++i) store(i);
++                    let calls = 0, receiver, seen;
++                    const setter = function(value) { ++calls; receiver = this; seen = value; };
++                    Object.defineProperty(object, key, {set: setter, configurable: true});
++                    store(123);
++                    if (calls !== 1 || receiver !== object || seen !== 123 || Object.getOwnPropertyDescriptor(object, key).set !== setter) throw Error('own setter');
++                    Object.defineProperty(object, key, {value: 7, writable: false, configurable: true});
++                    store(99);
++                    if (object[key] !== 7 || Reflect.set(object, key, 88)) throw Error('own readonly');
++                    let threw = false;
++                    try { strictStore(66); } catch (e) { threw = e instanceof TypeError; }
++                    if (!threw || object[key] !== 7) throw Error('strict readonly');
++                    delete object[key];
++                    const proto = Object.create(Object.getPrototypeOf(object));
++                    Object.setPrototypeOf(object, proto);
++                    Object.defineProperty(proto, key, {set: setter, configurable: true});
++                    store(321);
++                    if (calls !== 2 || receiver !== object || seen !== 321 || Object.hasOwn(object, key)) throw Error('inherited setter');
++                    Object.defineProperty(proto, key, {value: 11, writable: false, configurable: true});
++                    store(55);
++                    if (Reflect.set(object, key, 44) || Object.hasOwn(object, key) || object[key] !== 11) throw Error('inherited readonly');
++                    threw = false;
++                    try { strictStore(33); } catch (e) { threw = e instanceof TypeError; }
++                    if (!threw) throw Error('inherited strict readonly');
++                }
++                return 'ok';
++            })()
++        "#
++            ),
++            "ok"
++        );
++    });
++}
++
++#[test]
++fn public_symbol_store_obeys_extensibility_and_distinct_receiver() {
++    with_objects(|scope| {
++        assert_eq!(
++            evaluate(
++                scope,
++                r#"
++            (() => {
++                for (const target of [marked, ordinary]) {
++                    const key = Symbol('distinct');
++                    target[key] = 1;
++                    const receiver = {};
++                    function store(value) { return Reflect.set(target, key, value, receiver); }
++                    for (let i = 0; i < 10000; ++i) if (!store(i)) throw Error('warmup');
++                    if (receiver[key] !== 9999 || target[key] !== 1) throw Error('distinct receiver');
++                    Object.defineProperty(receiver, key, {value: 5, writable: false, configurable: true});
++                    if (store(9) || receiver[key] !== 5 || target[key] !== 1) throw Error('receiver readonly');
++                    let calls = 0;
++                    Object.defineProperty(receiver, key, {set() { ++calls; }, configurable: true});
++                    if (store(9) || calls !== 0) throw Error('receiver accessor');
++                    delete receiver[key]; Object.preventExtensions(receiver);
++                    if (store(9) || Object.hasOwn(receiver, key)) throw Error('nonextensible receiver');
++                    const fresh = Symbol('fresh');
++                    const ordinaryTarget = {[fresh]: 3};
++                    if (!Reflect.set(ordinaryTarget, fresh, 4, target) || target[fresh] !== 4 || ordinaryTarget[fresh] !== 3) throw Error('marked receiver');
++                    Object.defineProperty(target, fresh, {value: 8, writable: false, configurable: true});
++                    if (Reflect.set(ordinaryTarget, fresh, 4, target) || target[fresh] !== 8) throw Error('marked receiver readonly');
++                    Object.defineProperty(target, fresh, {set() { ++calls; }, configurable: true});
++                    if (Reflect.set(ordinaryTarget, fresh, 4, target) || calls !== 0) throw Error('marked receiver accessor');
++                    // Interceptor objects deliberately refuse PreventExtensions in this V8.
++                    if (Reflect.preventExtensions(target) || !Object.isExtensible(target)) throw Error('API extensibility contract');
++                }
++                const key = Symbol('ordinary sealed');
++                const plain = {[key]: 1};
++                function write(value) { plain[key] = value; }
++                for (let i = 0; i < 10000; ++i) write(i);
++                Object.preventExtensions(plain); write(13);
++                const fresh = Symbol('new');
++                if (plain[key] !== 13 || Reflect.set(plain, fresh, 7)) throw Error('plain nonextensible');
++                let threw = false;
++                try { (function() { 'use strict'; plain[fresh] = 9; })(); } catch (e) { threw = e instanceof TypeError; }
++                if (!threw || Object.hasOwn(plain, fresh)) throw Error('strict nonextensible');
++                return 'ok';
++            })()
++        "#
++            ),
++            "ok"
++        );
++    });
++}
++
++fn intercept_symbol_store<'s>(
++    scope: &mut v8::PinScope<'s, '_>,
++    name: v8::Local<'s, v8::Name>,
++    value: v8::Local<'s, v8::Value>,
++    args: v8::PropertyCallbackArguments<'s>,
++    mut rv: v8::ReturnValue<v8::Boolean>,
++) -> v8::Intercepted {
++    boundary!(scope, v8::Intercepted::kYes, {
++        if !name.is_symbol() {
++            return v8::Intercepted::kNo;
++        }
++        let data = v8::Local::<v8::Array>::try_from(args.data()).expect("counter array");
++        let count = data
++            .get_index(scope, 0)
++            .expect("counter")
++            .uint32_value(scope)
++            .expect("integer");
++        let next = v8::Integer::new_from_unsigned(scope, count + 1);
++        assert_eq!(data.set_index(scope, 0, next.into()), Some(true));
++        assert_eq!(data.set_index(scope, 1, value), Some(true));
++        rv.set_bool(true);
++        v8::Intercepted::kYes
++    })
++}
++
++#[test]
++fn symbol_intercepting_handler_keeps_its_callbacks() {
++    with_objects(|scope| {
++        for (name, indexed_mark) in [("symbolNamed", false), ("symbolIndexed", true)] {
++            let template = v8::ObjectTemplate::new(scope);
++            let zero = v8::Integer::new(scope, 0);
++            let data = v8::Array::new_with_elements(scope, &[zero.into(), zero.into()]);
++            template.set_named_property_handler(
++                v8::NamedPropertyHandlerConfiguration::new()
++                    .setter(intercept_symbol_store)
++                    .data(data.into())
++                    .flags(if indexed_mark {
++                        v8::PropertyHandlerFlags::NONE
++                    } else {
++                        v8::PropertyHandlerFlags::WEB_IDL_LEGACY
++                    }),
++            );
++            if indexed_mark {
++                template.set_indexed_property_handler(
++                    v8::IndexedPropertyHandlerConfiguration::new()
++                        .query(indexed_query)
++                        .flags(v8::PropertyHandlerFlags::WEB_IDL_LEGACY),
++                );
++            }
++            let object = template.new_instance(scope).expect("symbol interceptor");
++            publish(scope, name, object);
++            publish(scope, &format!("{name}Counts"), data.into());
++        }
++        assert_eq!(
++            evaluate(
++                scope,
++                r#"
++            (() => {
++                for (const [object, counts] of [[symbolNamed, symbolNamedCounts], [symbolIndexed, symbolIndexedCounts]]) {
++                    const key = Symbol('intercepted');
++                    function store(value) { object[key] = value; }
++                    for (let i = 0; i < 10000; ++i) store(i);
++                    if (counts[0] !== 10000 || counts[1] !== 9999 || Object.hasOwn(object, key) || Object.getOwnPropertySymbols(object).length) throw Error('interception');
++                }
++                return 'ok';
++            })()
++        "#
++            ),
++            "ok"
++        );
++    });
++}
++
++#[test]
++fn private_keys_stay_out_of_public_symbol_exemption() {
++    with_objects(|scope| {
++        let key = v8::String::new(scope, "marked").expect("key");
++        let global = scope.get_current_context().global(scope);
++        let value = global.get(scope, key.into()).expect("marked");
++        let object = v8::Local::<v8::Object>::try_from(value).expect("object");
++        let private = v8::Private::new(scope, None);
++        let sentinel = v8::Integer::new(scope, 42);
++        assert_eq!(
++            object.set_private(scope, private, sentinel.into()),
++            Some(true)
++        );
++        assert_eq!(
++            object
++                .get_private(scope, private)
++                .expect("private")
++                .int32_value(scope),
++            Some(42)
++        );
++        assert_eq!(object.delete_private(scope, private), Some(true));
++        assert!(
++            object
++                .get_private(scope, private)
++                .expect("deleted private")
++                .is_undefined()
++        );
++        assert_eq!(
++            evaluate(
++                scope,
++                r#"
++            (() => {
++                class ReturnTarget { constructor(target) { return target; } }
++                class Stamp extends ReturnTarget {
++                    #value = 1;
++                    static read(target) { return target.#value; }
++                    static write(target, value) { target.#value = value; }
++                    static has(target) { return #value in target; }
++                }
++                for (const object of [marked, ordinary]) {
++                    new Stamp(object);
++                    for (let i = 0; i < 10000; ++i) Stamp.write(object, i);
++                    if (Stamp.read(object) !== 9999 || !Stamp.has(object) || Object.getOwnPropertySymbols(object).length) throw Error('private brand');
++                    let threw = false;
++                    try { new Stamp(object); } catch (e) { threw = e instanceof TypeError; }
++                    if (!threw) throw Error('duplicate brand');
++                }
++                if (Stamp.has({})) throw Error('brand leaked');
++                let threw = false;
++                try { Stamp.write({}, 8); } catch (e) { threw = e instanceof TypeError; }
++                if (!threw) throw Error('missing brand');
++                return 'ok';
++            })()
++        "#
++            ),
++            "ok"
++        );
++    });
++}
+--- /dev/null
++++ b/tests/termination_now.rs
+@@ -0,0 +1,121 @@
++//! A hard host failure must stop the active API callback before the next JS statement.
++
++use std::panic::{AssertUnwindSafe, catch_unwind};
++use std::sync::Once;
++use std::sync::atomic::{AtomicBool, Ordering};
++
++static CALLBACK_PANICKED: AtomicBool = AtomicBool::new(false);
++
++fn initialize() {
++  static INIT: Once = Once::new();
++  INIT.call_once(|| {
++    v8::V8::initialize_platform(
++      v8::new_default_platform(0, false).make_shared(),
++    );
++    v8::V8::initialize();
++  });
++}
++
++fn stop_now(
++  scope: &mut v8::PinScope,
++  _args: v8::FunctionCallbackArguments,
++  _return_value: v8::ReturnValue<v8::Value>,
++) {
++  if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
++    // SAFETY: V8 called this slow function callback on the isolate thread.
++    // No page exception is pending; a hard host failure owns this path.
++    unsafe { scope.terminate_execution_now_from_callback() };
++    // Repeated termination must leave the original uncatchable exception.
++    unsafe { scope.terminate_execution_now_from_callback() };
++  })) {
++    CALLBACK_PANICKED.store(true, Ordering::SeqCst);
++    std::mem::forget(payload);
++    scope.terminate_execution();
++  }
++}
++
++fn stop_after_ordinary_throw(
++  scope: &mut v8::PinScope,
++  _args: v8::FunctionCallbackArguments,
++  _return_value: v8::ReturnValue<v8::Value>,
++) {
++  if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
++    let message =
++      v8::String::new(scope, "page exception").expect("fixed string");
++    let ordinary = v8::Exception::type_error(scope, message);
++    scope.throw_exception(ordinary);
++    // SAFETY: this is the same slow callback and isolate thread. The hard
++    // failure supersedes its ordinary pending page exception.
++    unsafe { scope.terminate_execution_now_from_callback() };
++  })) {
++    CALLBACK_PANICKED.store(true, Ordering::SeqCst);
++    std::mem::forget(payload);
++    scope.terminate_execution();
++  }
++}
++
++fn evaluate(scope: &mut v8::PinScope<'_, '_>, source: &str) -> String {
++  let source = v8::String::new(scope, source).expect("source");
++  let script =
++    v8::Script::compile(scope, source, None).expect("compiled script");
++  script
++    .run(scope)
++    .expect("run script")
++    .to_rust_string_lossy(scope)
++}
++
++fn run_case(callback: impl v8::MapFnTo<v8::FunctionCallback>) {
++  initialize();
++  CALLBACK_PANICKED.store(false, Ordering::SeqCst);
++  let isolate = &mut v8::Isolate::new(Default::default());
++  v8::scope!(let handle_scope, isolate);
++  let context = v8::Context::new(handle_scope, Default::default());
++  let mut context_scope = v8::ContextScope::new(handle_scope, context);
++  v8::scope!(let scope, &mut context_scope);
++  let key = v8::String::new(scope, "stopNow").expect("fixed key");
++  let function = v8::Function::builder(callback)
++    .build(scope)
++    .expect("native callback");
++  assert_eq!(
++    context
++      .global(scope)
++      .set(scope, key.into(), function.into()),
++    Some(true),
++  );
++  assert_eq!(
++    evaluate(
++      scope,
++      "globalThis.after = 0; globalThis.caught = 0; globalThis.finalized = 0; 'ready'",
++    ),
++    "ready",
++  );
++  {
++    v8::tc_scope!(let tc, scope);
++    let source = v8::String::new(
++      tc,
++      "try { stopNow(); globalThis.after = 1; } catch (_) { globalThis.caught = 1; } finally { globalThis.finalized = 1; }",
++    )
++    .expect("source");
++    let script =
++      v8::Script::compile(tc, source, None).expect("compiled script");
++    assert!(script.run(tc).is_none());
++    assert!(tc.has_terminated());
++    assert!(!tc.can_continue());
++  }
++  assert!(!CALLBACK_PANICKED.load(Ordering::SeqCst));
++  scope.cancel_terminate_execution();
++  assert_eq!(
++    evaluate(scope, "[after, caught, finalized].join('|')"),
++    "0|0|0",
++  );
++}
++
++#[test]
++fn synchronous_termination_skips_after_catch_and_finally() {
++  run_case(stop_now);
++}
++
++#[test]
++fn synchronous_termination_supersedes_a_pending_page_exception() {
++  run_case(stop_after_ordinary_throw);
++}
+--- /dev/null
++++ b/examples/symbol_store_control.rs
+@@ -0,0 +1,189 @@
++//! Same-artifact, separate-call-site Symbol store/read/delete controls.
++//! No forced optimization, tracing, counters or descriptor checks in timing.
++
++use std::panic::{AssertUnwindSafe, catch_unwind};
++use std::time::Instant;
++
++fn decline_query<'s>(
++    scope: &mut v8::PinScope<'s, '_>,
++    _name: v8::Local<'s, v8::Name>,
++    _args: v8::PropertyCallbackArguments<'s>,
++    _rv: v8::ReturnValue<v8::Integer>,
++) -> v8::Intercepted {
++    match catch_unwind(AssertUnwindSafe(|| v8::Intercepted::kNo)) {
++        Ok(result) => result,
++        Err(payload) => {
++            std::mem::forget(payload);
++            scope.terminate_execution();
++            v8::Intercepted::kYes
++        }
++    }
++}
++
++fn empty_names<'s>(
++    scope: &mut v8::PinScope<'s, '_>,
++    _args: v8::PropertyCallbackArguments<'s>,
++    mut rv: v8::ReturnValue<v8::Array>,
++) {
++    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
++        rv.set(v8::Array::new(scope, 0));
++    })) {
++        std::mem::forget(payload);
++        scope.terminate_execution();
++    }
++}
++
++const CONTROL: &str = r#"
++(() => {
++    const object = globalThis.CASE_LABEL;
++    const persistent = Symbol('persistent');
++    const transient = Symbol('transient');
++    object[persistent] = 73;
++    function CASE_LABELCycle(count) {
++        let checksum = 0;
++        for (let i = 0; i < count; ++i) {
++            object[transient] = i;
++            checksum += object[transient];
++            delete object[transient];
++        }
++        return checksum;
++    }
++    function CASE_LABELCheck() {
++        const d = Object.getOwnPropertyDescriptor(object, persistent);
++        if (!d || d.value !== 73 || !d.writable || !d.enumerable || !d.configurable || Object.hasOwn(object, transient)) throw Error('persistent descriptor');
++        object[transient] = 91;
++        const t = Object.getOwnPropertyDescriptor(object, transient);
++        if (!t || t.value !== 91 || !t.writable || !t.enumerable || !t.configurable) throw Error('transient descriptor');
++        const keys = Object.getOwnPropertySymbols(object);
++        if (keys.length !== 2 || keys[0] !== persistent || keys[1] !== transient) throw Error('symbol order');
++        // Preserve the workload's shape: deleting a non-last persistent key
++        // could permanently convert this receiver to dictionary properties.
++        // Non-last deletion/reinsertion is covered by the native test suite.
++        if (!delete object[transient] || Object.hasOwn(object, transient)) throw Error('delete transient');
++        return true;
++    }
++    return [CASE_LABELCycle, CASE_LABELCheck];
++})()
++"#;
++
++struct Case {
++    name: &'static str,
++    run: v8::Global<v8::Function>,
++    check: v8::Global<v8::Function>,
++}
++
++fn create_case(scope: &mut v8::PinScope<'_, '_>, name: &'static str) -> Case {
++    let object = if name == "plain" {
++        v8::Object::new(scope)
++    } else {
++        let template = v8::ObjectTemplate::new(scope);
++        let flags = v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS
++            | if name == "marked" {
++                v8::PropertyHandlerFlags::WEB_IDL_LEGACY
++            } else {
++                v8::PropertyHandlerFlags::NONE
++            };
++        template.set_named_property_handler(
++            v8::NamedPropertyHandlerConfiguration::new()
++                .query(decline_query)
++                .enumerator(empty_names)
++                .flags(flags),
++        );
++        template.new_instance(scope).expect("API receiver")
++    };
++    let global = scope.get_current_context().global(scope);
++    let key = v8::String::new(scope, name).expect("case name");
++    assert_eq!(global.set(scope, key.into(), object.into()), Some(true));
++    let source = v8::String::new(scope, &CONTROL.replace("CASE_LABEL", name)).expect("case source");
++    let script = v8::Script::compile(scope, source, None).expect("compile case");
++    let value = script.run(scope).expect("initialize case");
++    let functions = v8::Local::<v8::Array>::try_from(value).expect("case functions");
++    let run = functions.get_index(scope, 0).expect("run");
++    let check = functions.get_index(scope, 1).expect("check");
++    Case {
++        name,
++        run: v8::Global::new(
++            scope,
++            v8::Local::<v8::Function>::try_from(run).expect("run function"),
++        ),
++        check: v8::Global::new(
++            scope,
++            v8::Local::<v8::Function>::try_from(check).expect("check function"),
++        ),
++    }
++}
++
++fn check(scope: &mut v8::PinScope<'_, '_>, case: &Case) {
++    let function = v8::Local::new(scope, &case.check);
++    let receiver = v8::undefined(scope);
++    let result = function
++        .call(scope, receiver.into(), &[])
++        .expect("descriptor/order check");
++    assert!(result.is_true(), "{} control failed", case.name);
++}
++
++fn batch(scope: &mut v8::PinScope<'_, '_>, case: &Case, count: u32) -> (u128, u64) {
++    let function = v8::Local::new(scope, &case.run);
++    let receiver = v8::undefined(scope);
++    let count_value = v8::Integer::new_from_unsigned(scope, count);
++    let start = Instant::now();
++    let value = function
++        .call(scope, receiver.into(), &[count_value.into()])
++        .expect("timed cycle");
++    let elapsed = start.elapsed().as_nanos();
++    let checksum = value.number_value(scope).expect("numeric checksum");
++    let expected = u64::from(count) * u64::from(count - 1) / 2;
++    assert_eq!(checksum, expected as f64, "{} checksum", case.name);
++    (elapsed, expected)
++}
++
++fn main() {
++    let arguments: Vec<_> = std::env::args().skip(1).collect();
++    assert!(
++        arguments.len() <= 1,
++        "usage: symbol_store_control [1000|10000|100000]"
++    );
++    let warmup: u32 = arguments
++        .first()
++        .map_or(100_000, |s| s.parse().expect("warmup integer"));
++    assert!(
++        [1_000, 10_000, 100_000].contains(&warmup),
++        "unsupported warmup"
++    );
++    v8::V8::initialize_platform(v8::new_default_platform(0, false).make_shared());
++    v8::V8::initialize();
++    let isolate = &mut v8::Isolate::new(Default::default());
++    v8::scope!(let scope, isolate);
++    let context = v8::Context::new(scope, Default::default());
++    let mut entered = v8::ContextScope::new(scope, context);
++    v8::scope!(let scope, &mut entered);
++    let cases = [
++        create_case(scope, "marked"),
++        create_case(scope, "unmarked"),
++        create_case(scope, "plain"),
++    ];
++    for case in &cases {
++        check(scope, case);
++        for _ in 0..2 {
++            batch(scope, case, warmup);
++            check(scope, case);
++        }
++    }
++    for batch_index in 0..10 {
++        for position in 0..cases.len() {
++            let case = &cases[(batch_index + position) % cases.len()];
++            let (elapsed, checksum) = batch(scope, case, 100_000);
++            check(scope, case);
++            println!(
++                "{{\"case\":\"{}\",\"warmup\":{},\"warmup_batches\":2,\"batch\":{},\"position\":{},\"iterations\":100000,\"elapsed_ns\":{},\"ns_per_lifecycle\":{},\"checksum\":{}}}",
++                case.name,
++                warmup,
++                batch_index,
++                position,
++                elapsed,
++                elapsed as f64 / 100_000.0,
++                checksum
++            );
++        }
++    }
++}

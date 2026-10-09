@@ -1,0 +1,10 @@
+{
+  "url": "https://storage.googleapis.com/chromium-browser-clang/Mac_arm64/rust-toolchain-b998449636a48e2c4a362809085b600a0174e1f2-5-llvmorg-23-init-19482-g53d18800.tar.xz",
+  "sha256": "1765d9be3b30726f5f5ad60d8bc50ee66501220bc942019782cf423de3f7114e",
+  "archive_bytes": 246837492,
+  "extracted_file_bytes": 1303593656,
+  "entries": 8378,
+  "package": "v8 152.2.0",
+  "source": "v8/DEPS",
+  "verified_before_extraction": true
+}

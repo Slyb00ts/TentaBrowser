@@ -1,0 +1,39 @@
+{
+  "rust_toolchain": {
+    "url": "https://storage.googleapis.com/chromium-browser-clang/Mac_arm64/rust-toolchain-b998449636a48e2c4a362809085b600a0174e1f2-5-llvmorg-23-init-19482-g53d18800.tar.xz",
+    "sha256": "1765d9be3b30726f5f5ad60d8bc50ee66501220bc942019782cf423de3f7114e",
+    "archive_bytes": 246837492,
+    "extracted_file_bytes": 1303593656,
+    "entries": 8378,
+    "package": "v8 152.2.0",
+    "source": "v8/DEPS",
+    "verified_before_extraction": true
+  },
+  "binaries": {
+    "clang": {
+      "path": "/opt/homebrew/Cellar/llvm/23.1.1/bin/clang-23",
+      "sha256": "c72aa97fac1f5f655cd684d5f809c589c0df0839af4d4028ba48c72eb3928c02",
+      "version": "Homebrew clang version 23.1.1\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm/23.1.1/bin\nConfiguration file: /opt/homebrew/Cellar/llvm/23.1.1/etc/clang/arm64-apple-darwin27.cfg"
+    },
+    "clang++": {
+      "path": "/opt/homebrew/Cellar/llvm/23.1.1/bin/clang-23",
+      "sha256": "c72aa97fac1f5f655cd684d5f809c589c0df0839af4d4028ba48c72eb3928c02",
+      "version": "Homebrew clang version 23.1.1\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm/23.1.1/bin\nConfiguration file: /opt/homebrew/Cellar/llvm/23.1.1/etc/clang/arm64-apple-darwin27.cfg"
+    },
+    "gn": {
+      "path": "/private/tmp/tenta-v8-native-build/tools/gn/gn",
+      "sha256": "b0723a3eb237552323a24938d9955a176489037a3b1e6bf152af5d6b98164f4e",
+      "version": "2486 (641ace93dd95)"
+    },
+    "ninja": {
+      "path": "/private/tmp/tenta-v8-native-build/tools/ninja/ninja",
+      "sha256": "6c03e94e3ee141301a7e5151227508ac8cec05c12d79ed9240062a86a0e2d14f",
+      "version": "1.12.1"
+    },
+    "v8-rustc": {
+      "path": "/private/tmp/tenta-v8-native-build/v8-152.2.0/third_party/rust-toolchain/bin/rustc",
+      "sha256": "8a78adf68bce8e6ef6dda04117b3998654958067c7b6886f7e5c1a6280bbdb25",
+      "version": "rustc 1.98.0-nightly (b99844963 2026-06-16) (b998449636a48e2c4a362809085b600a0174e1f2-5-llvmorg-23-init-19482-g53d18800 chromium)\nbinary: rustc\ncommit-hash: b998449636a48e2c4a362809085b600a0174e1f2\ncommit-date: 2026-06-16\nhost: aarch64-apple-darwin\nrelease: 1.98.0-nightly\nLLVM version: 23.0.0"
+    }
+  }
+}

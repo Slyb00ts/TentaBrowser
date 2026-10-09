@@ -19,9 +19,36 @@ use crate::error::{
     hierarchy_request, index_size, invalid_state, no_modification_allowed, not_found, syntax,
 };
 use crate::interner::{DocInterner, LocalName};
-use crate::mutation::{Mutation, MutationObserverSink, MutationRecord, NoopObserverSink};
+use crate::mutation::{
+    Mutation, MutationObserverSink, MutationRecord, NoopObserverSink, ReplaceAllWith,
+};
 use crate::selectors::SelectorCache;
 use crate::text::{TextChunk, TextRope};
+
+mod ranges;
+pub use ranges::{LiveRangeId, RangeBoundary};
+mod wrapper_claims;
+pub use wrapper_claims::WrapperClaimError;
+mod charged_deque;
+mod charged_hash;
+mod observer_agent;
+mod observer_hooks;
+mod observer_host;
+mod observer_journal;
+mod observer_ownership;
+mod observer_pins;
+mod observer_registry;
+mod observer_semantics;
+pub use observer_agent::{ObserverAgent, ObserverGraphEdge};
+pub use observer_hooks::SharedObserverAgent;
+pub use observer_host::{
+    NativeObserveError, NativeObserver, NativeRecordBatch, NativeRecordView, ObserverListKind,
+    PublishedObserverList, PublishedObserverRecord,
+};
+pub use observer_journal::{
+    ObserveOptionsInput, ObserverId, ObserverNode, OptionsError, RecordType,
+};
+pub use observer_registry::ObserverAttachment;
 
 /// Where the document is in its lifecycle. Tier 1 only ever reports
 /// `Complete` once parsing ends; the real state machine arrives with the
@@ -154,6 +181,9 @@ pub struct Document {
     /// Pre-order positions, rebuilt lazily after a structural change.
     order: RefCell<OrderIndex>,
     detached_roots: HashSet<NodeId>,
+    /// Claims after the first wrapper of a node. The first claim lives in
+    /// HAS_WRAPPER, so native-only and singly wrapped nodes need no entry.
+    extra_wrapper_claims: HashMap<NodeId, usize>,
     /// Every node the most recent [`Document::sweep_detached`] freed, subtree
     /// included and not only the freed roots, each carrying the generation it
     /// had before its slot was recycled. Reused across sweeps (cleared and
@@ -180,7 +210,12 @@ pub struct Document {
     structure_generation: u64,
     mutations_since_sweep: u64,
     observer: Box<dyn MutationObserverSink>,
+    /// Stable native registration nodes for every independent wrapper world
+    /// using this Document. Native-only Documents need no header. Once
+    /// attached, it retains retired pin ledgers until mutable maintenance.
+    observer_registry: Option<Arc<observer_registry::ObserverRegistry>>,
     document_id: u64,
+    live_ranges: ranges::LiveRanges,
     url: Option<Url>,
     base_url: Option<Url>,
     /// The first connected `<base>` element in tree order, if any.
@@ -220,6 +255,7 @@ impl Document {
         let mut arena = DomArena::new();
         let document_node = arena.alloc_container(NodeKind::Document);
         arena.nodes.flags[document_node.raw() as usize].insert(NodeFlags::CONNECTED);
+        let document_id = next_document_id();
         Self {
             arena,
             rope: TextRope::new(),
@@ -232,6 +268,7 @@ impl Document {
             indexes: RefCell::new(Indexes::default()),
             order: RefCell::new(OrderIndex::default()),
             detached_roots: HashSet::new(),
+            extra_wrapper_claims: HashMap::new(),
             sweep_freed: Vec::new(),
             hosts: HashMap::new(),
             dirty_values: HashMap::new(),
@@ -240,7 +277,9 @@ impl Document {
             structure_generation: 1,
             mutations_since_sweep: 0,
             observer: Box::new(NoopObserverSink),
-            document_id: next_document_id(),
+            observer_registry: None,
+            document_id,
+            live_ranges: ranges::LiveRanges::default(),
             url: None,
             base_url: None,
             first_connected_base: None,
@@ -864,18 +903,27 @@ impl Document {
         self.element_children(self.document_node).next()
     }
 
-    /// The `<head>` element, if present.
+    /// The first HTML `<head>` child of an HTML `<html>` root.
     pub fn head(&self) -> Option<NodeId> {
         let root = self.document_element()?;
-        self.element_children(root)
-            .find(|id| self.tag(*id) == Some(atoms::HEAD))
+        if self.namespace(root) != Some(atoms::NS_HTML) || self.tag(root) != Some(atoms::HTML) {
+            return None;
+        }
+        self.element_children(root).find(|id| {
+            self.namespace(*id) == Some(atoms::NS_HTML) && self.tag(*id) == Some(atoms::HEAD)
+        })
     }
 
-    /// The `<body>` element, if present.
+    /// The first HTML `<body>` or `<frameset>` child of an HTML `<html>` root.
     pub fn body(&self) -> Option<NodeId> {
         let root = self.document_element()?;
-        self.element_children(root)
-            .find(|id| matches!(self.tag(*id), Some(t) if t == atoms::BODY || t == atoms::FRAMESET))
+        if self.namespace(root) != Some(atoms::NS_HTML) || self.tag(root) != Some(atoms::HTML) {
+            return None;
+        }
+        self.element_children(root).find(|id| {
+            self.namespace(*id) == Some(atoms::NS_HTML)
+                && matches!(self.tag(*id), Some(t) if t == atoms::BODY || t == atoms::FRAMESET)
+        })
     }
 
     // ------------------------------------------------------------- elements
@@ -1673,15 +1721,16 @@ impl Document {
     /// requires. The parser reports the option's close through
     /// [`tenta_html::TreeSink::maybe_clone_option_into_selectedcontent`]
     /// because cloning needs tree access it does not have.
-    pub fn clone_option_into_selectedcontent(&mut self, option: NodeId) {
+    pub fn clone_option_into_selectedcontent(&mut self, option: NodeId) -> Result<()> {
+        self.check_observer_health()?;
         if !self.arena.is_live(option) || !self.has_attribute(option, atoms::SELECTED) {
-            return;
+            return Ok(());
         }
         let Some(select) = self
             .ancestors(option)
             .find(|node| self.tag(*node) == Some(atoms::SELECT))
         else {
-            return;
+            return Ok(());
         };
         // A `<selectedcontent>` lives in the select's display `<button>` at the
         // top of the subtree, so it is found in the first handful of nodes when
@@ -1695,20 +1744,23 @@ impl Document {
             .take(MAX_SELECTEDCONTENT_SCAN)
             .find(|node| self.tag(*node) == Some(atoms::SELECTEDCONTENT))
         else {
-            return;
+            return Ok(());
         };
-        for child in self.children(target).collect::<Vec<_>>() {
-            let _ = self.mutate(Mutation::Remove { child });
+        while self.first_child(target).is_some() {
+            let child = self.first_child(target);
+            self.mutate(Mutation::Remove { child })?;
         }
-        for child in self.children(option).collect::<Vec<_>>() {
-            let Ok(clone) = self.clone_node(child, true) else {
-                continue;
-            };
-            let _ = self.mutate(Mutation::Append {
+        let mut child = self.first_child(option);
+        while child.is_some() {
+            let next = self.next_sibling(child);
+            let clone = self.clone_node(child, true)?;
+            self.mutate(Mutation::Append {
                 parent: target,
                 child: clone,
-            });
+            })?;
+            child = next;
         }
+        Ok(())
     }
 
     // --------------------------------------------------------- node lifetime
@@ -1759,23 +1811,9 @@ impl Document {
                 self.arena.nodes.handles[slot] > 0,
                 "handle count underflow at {id:?}"
             );
-            if self.arena.nodes.handles[slot] != u16::MAX {
-                self.arena.nodes.handles[slot] = self.arena.nodes.handles[slot].saturating_sub(1);
-            }
+            self.arena.nodes.handles[slot] = self.arena.nodes.handles[slot].saturating_sub(1);
             self.invalidate_keep(id);
         }
-    }
-
-    /// Sets or clears the "a JavaScript wrapper exists" bit. The bindings
-    /// call it on wrapper creation and from the engine's weak callback
-    /// (`docs/spec/04-dom-and-css.md` §1.1).
-    pub fn set_has_wrapper(&mut self, id: NodeId, has_wrapper: bool) {
-        if !self.arena.is_live(id) {
-            return;
-        }
-        let slot = self.index(id);
-        self.arena.nodes.flags[slot].set(NodeFlags::HAS_WRAPPER, has_wrapper);
-        self.invalidate_keep(id);
     }
 
     #[inline]
@@ -1820,6 +1858,23 @@ impl Document {
         node
     }
 
+    /// Native-handle presence and the total published wrapper claims in a
+    /// lifetime subtree, including shadow roots and template contents. A
+    /// collector subtracts its own wrappers to detect foreign-world roots.
+    pub fn subtree_retention(&self, root: NodeId) -> (bool, usize) {
+        let mut nodes = Vec::new();
+        self.collect_subtree(root, &mut Vec::new(), &mut nodes);
+        let mut native_handles = false;
+        let mut wrappers = 0usize;
+        for node in nodes {
+            native_handles |= self.handle_count(node) != 0;
+            // A total above usize::MAX cannot be materialized by a process;
+            // retaining the group is conservative even for corrupted input.
+            wrappers = wrappers.saturating_add(self.wrapper_count(node));
+        }
+        (native_handles, wrappers)
+    }
+
     /// Clears the cached sweep decision of the detached root that owns `id`.
     /// Connected nodes are never sweep candidates, so they cost nothing here.
     fn invalidate_keep(&mut self, id: NodeId) {
@@ -1835,6 +1890,14 @@ impl Document {
     /// Walks every detached root and frees the subtrees no wrapper and no
     /// Rust handle references (`docs/spec/04-dom-and-css.md` §1.1).
     pub fn sweep_detached(&mut self) -> SweepStats {
+        // Retired worlds can no longer expose their native node pins. Release
+        // those pins before computing detached-root keep decisions, including
+        // a sweep with no intervening mutation.
+        if let Some(registry) = self.observer_registry.clone() {
+            registry
+                .drain_retired(self)
+                .expect("a Document owns the registry it drains during sweep");
+        }
         let mut stats = SweepStats::default();
         self.mutations_since_sweep = 0;
         // Cleared, not replaced: the buffer is reused so a sweep that frees
@@ -1990,6 +2053,100 @@ impl Document {
 
     /// The single mutation path (`docs/spec/04-dom-and-css.md` §1).
     pub fn mutate(&mut self, mutation: Mutation) -> Result<()> {
+        let Some(registry) = self.observer_registry.clone() else {
+            return self.mutate_unobserved(mutation);
+        };
+        registry.drain_retired(self)?;
+        let mut has_active_world = false;
+        let mut empty_world = None;
+        registry.for_each_active(|registration, agent| {
+            // Sticky native failure must win before caller validation, even
+            // when this world was not the one executing the failed callback.
+            let state = agent.lock();
+            state.check_document(self)?;
+            let only_empty_world = !has_active_world && !state.journal().has_registrations();
+            drop(state);
+            empty_world = only_empty_world.then(|| (Arc::clone(registration), agent));
+            has_active_world = true;
+            Ok(())
+        })?;
+        // A dead weak world may have been retired by the active walk. Release
+        // its physical handles before this operation reserves range/observer
+        // capacity or changes links, even when no live observer remains.
+        registry.drain_retired(self)?;
+        if !has_active_world {
+            return self.mutate_unobserved(mutation);
+        }
+        self.validate_observed_mutation(&mutation)?;
+        let preparation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some((registration, agent)) = empty_world {
+                // Removal reports whether it changed a native attribute. The
+                // empty-world effect hook can request notification from that
+                // result, without an extra scan of the attribute tombstones.
+                let request_notification = !matches!(&mutation, Mutation::RemoveAttribute { .. })
+                    && observer_semantics::requests_notification(self, &mutation);
+                return Ok(Some(observer_hooks::ObservedMutation::without_records(
+                    Arc::clone(&registry),
+                    registration,
+                    agent,
+                    request_notification,
+                )));
+            }
+            self.prepare_observed_mutation(&mutation)
+        }));
+        let mut observed = match preparation {
+            Ok(Ok(Some(observed))) => observed,
+            Ok(Ok(None)) => {
+                registry.drain_retired(self)?;
+                return self.mutate_unobserved(mutation);
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(panic) => {
+                self.poison_observer_preparation();
+                std::panic::resume_unwind(panic)
+            }
+        };
+        // Native callbacks still have their outer catch_unwind boundary. This
+        // guard poisons every participating world on a panic between effect
+        // hooks or between their commits. Node slots retain unconsumed owners.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            observed.check_pre_effect()?;
+            self.apply_observed_mutation(mutation, &mut observed)?;
+            observed.commit();
+            Ok(())
+        }));
+        match outcome {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => self.finish_observed_error(&mut observed, error),
+            Err(panic) => {
+                observed.retain_after_panic();
+                std::panic::resume_unwind(panic)
+            }
+        }
+    }
+
+    /// A later native step may fail after an earlier DOM effect. Cleanup is
+    /// part of the same panic boundary as the effect, and every unconsumed
+    /// operation stays in its registration slot until cleanup succeeds.
+    fn finish_observed_error(
+        &mut self,
+        observed: &mut observer_hooks::ObservedMutation,
+        error: Error,
+    ) -> Result<()> {
+        let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            observed.finish_failure(self)
+        }));
+        match cleanup {
+            Ok(Ok(())) => Err(error),
+            Ok(Err(cleanup_error)) => Err(cleanup_error),
+            Err(panic) => {
+                observed.retain_after_panic();
+                std::panic::resume_unwind(panic)
+            }
+        }
+    }
+
+    fn mutate_unobserved(&mut self, mutation: Mutation) -> Result<()> {
         match mutation {
             Mutation::Append { parent, child } => self.insert(parent, child, NodeId::NONE),
             Mutation::InsertBefore {
@@ -2008,19 +2165,158 @@ impl Document {
                         "the node to replace is not a child of the parent",
                     ));
                 }
-                let anchor = self.next_sibling(old_child);
-                self.remove(old_child)?;
+                self.validate_insert_excluding(parent, new_child, old_child, old_child)?;
+                if self.kind(new_child) == NodeKind::Fragment {
+                    self.preflight_range_removals(
+                        std::iter::once(old_child).chain(self.children(new_child)),
+                    )?;
+                } else if new_child == old_child {
+                    self.preflight_range_removals([new_child])?;
+                } else {
+                    self.preflight_range_removals([new_child, old_child])?;
+                }
+                let mut anchor = self.next_sibling(old_child);
+                if anchor == new_child {
+                    anchor = self.next_sibling(new_child);
+                }
+                // Adoption removes the replacement before removing the old
+                // child. This order also determines live-range boundary fixups.
+                self.unlink(new_child)?;
+                if self.parent(old_child).is_some() {
+                    self.remove(old_child)?;
+                }
                 self.insert(parent, new_child, anchor)
             }
+            Mutation::ReplaceAll {
+                parent,
+                replacement,
+            } => self.replace_all_unobserved(parent, replacement),
             Mutation::SetAttribute {
                 element,
                 name,
                 value,
-            } => self.set_attribute(element, name, &value),
-            Mutation::RemoveAttribute { element, name } => self.remove_attribute(element, name),
+            } => self.set_attribute(element, name, &value, false),
+            Mutation::ReplaceAttribute {
+                element,
+                name,
+                value,
+            } => self.set_attribute(element, name, &value, true),
+            Mutation::RemoveAttribute { element, name } => {
+                self.remove_attribute(element, name).map(|_| ())
+            }
+            Mutation::AddMissingAttributes {
+                element,
+                attributes,
+            } => {
+                self.add_missing_attributes_unobserved(element, attributes);
+                Ok(())
+            }
             Mutation::SetText { node, text } => self.set_text(node, &text),
+            Mutation::AppendTextData { node, text } => self.append_parser_text_data(node, &text),
+            Mutation::ReplaceData {
+                node,
+                offset,
+                count,
+                data,
+            } => self.replace_text_data(node, offset, count, &data),
             Mutation::ReparentChildren { from, to } => self.reparent_children(from, to),
         }
+    }
+
+    /// Validate the restricted internal replace-all sources and every range
+    /// fixup before any tree link changes. In particular, Document parent
+    /// hierarchy constraints are outside this operation's current callers.
+    fn validate_replace_all(&self, parent: NodeId, replacement: ReplaceAllWith) -> Result<()> {
+        if !self.arena.is_live(parent)
+            || !matches!(
+                self.kind(parent),
+                NodeKind::Element | NodeKind::Fragment | NodeKind::ShadowRoot
+            )
+        {
+            return Err(hierarchy_request(
+                "replace-all parent must be an element or fragment",
+            ));
+        }
+        match replacement {
+            ReplaceAllWith::Empty => self.preflight_range_removals(self.children(parent)),
+            ReplaceAllWith::Text(node) => {
+                if !self.arena.is_live(node)
+                    || self.kind(node) != NodeKind::Text
+                    || self.parent(node).is_some()
+                {
+                    return Err(hierarchy_request("replace-all text must be detached"));
+                }
+                self.preflight_range_removals(self.children(parent))
+            }
+            ReplaceAllWith::ChildrenOf(source) => {
+                if !self.arena.is_live(source) {
+                    return Err(hierarchy_request("replace-all source is stale"));
+                }
+                let source_parent = self.parent(source);
+                let valid_source = match self.kind(source) {
+                    NodeKind::Fragment => !source_parent.is_some(),
+                    // FragmentSink's private <html> construction root is a
+                    // child of an otherwise detached DocumentFragment.
+                    NodeKind::Element => {
+                        source_parent.is_some()
+                            && self.kind(source_parent) == NodeKind::Fragment
+                            && !self.parent(source_parent).is_some()
+                            && self.tag(source) == Some(atoms::HTML)
+                    }
+                    _ => false,
+                };
+                if !valid_source
+                    || self.is_inclusive_ancestor(source, parent)
+                    || self.is_inclusive_ancestor(parent, source)
+                {
+                    return Err(hierarchy_request(
+                        "replace-all source must be a detached fragment or parser root",
+                    ));
+                }
+                for child in self.children(source) {
+                    if matches!(
+                        self.kind(child),
+                        NodeKind::Document | NodeKind::ShadowRoot | NodeKind::DocType
+                    ) {
+                        return Err(hierarchy_request("replace-all source has an invalid child"));
+                    }
+                }
+                self.preflight_range_removals(self.children(parent).chain(self.children(source)))
+            }
+        }
+    }
+
+    fn replace_all_unobserved(
+        &mut self,
+        parent: NodeId,
+        replacement: ReplaceAllWith,
+    ) -> Result<()> {
+        self.validate_replace_all(parent, replacement)?;
+        let removed = self.children(parent).count();
+        for _ in 0..removed {
+            let child = self.first_child(parent);
+            self.unlink(child)?;
+        }
+        let added = match replacement {
+            ReplaceAllWith::Empty => 0,
+            ReplaceAllWith::Text(node) => {
+                self.link(parent, node, NodeId::NONE);
+                1
+            }
+            ReplaceAllWith::ChildrenOf(source) => {
+                let count = self.children(source).count();
+                for _ in 0..count {
+                    let child = self.first_child(source);
+                    self.unlink(child)?;
+                    self.link(parent, child, NodeId::NONE);
+                }
+                count
+            }
+        };
+        if removed != 0 || added != 0 {
+            self.bump();
+        }
+        Ok(())
     }
 
     /// Parse an HTML fragment and set it as the innerHTML of an element.
@@ -2041,22 +2337,13 @@ impl Document {
 
         let frag_root = self.parse_fragment(ctx_name, html)?;
 
-        // Remove all existing children of the element
-        let child_ids: Vec<NodeId> = self.children(element).collect();
-        for child_id in child_ids {
-            self.mutate(Mutation::Remove { child: child_id })?;
-        }
-
-        // Reparent the fragment's children to the element
-        self.mutate(Mutation::ReparentChildren {
-            from: frag_root,
-            to: element,
-        })?;
-
-        // Remove the now-empty fragment root
-        self.mutate(Mutation::Remove { child: frag_root })?;
-
-        Ok(())
+        // The parser root remains inside a detached construction fragment.
+        // Replacing all children emits one parent record; no page can observe
+        // this private source. The empty tree is reclaimed by the normal sweep.
+        self.mutate(Mutation::ReplaceAll {
+            parent: element,
+            replacement: ReplaceAllWith::ChildrenOf(frag_root),
+        })
     }
 
     /// Replaces `element` with the nodes parsed from `html`.
@@ -2088,6 +2375,7 @@ impl Document {
         }
         let ctx_name = self.element_name(parent).unwrap_or_else(body_context);
         let frag_root = self.parse_fragment(ctx_name, html)?;
+        self.preflight_range_removals([element])?;
         self.insert_fragment(frag_root, parent, element)?;
         self.mutate(Mutation::Remove { child: element })?;
         Ok(())
@@ -2141,32 +2429,26 @@ impl Document {
     }
 
     /// Parses `html` as an HTML fragment in the context of `ctx_name` and
-    /// returns the fragment root: a bare `<html>` element appended to the
-    /// document node whose children are the parsed nodes. Callers move the
-    /// children out and remove the root.
+    /// returns a detached construction tree's bare `<html>` root, whose
+    /// children are the parsed nodes. Callers move the children out and
+    /// remove the root.
     fn parse_fragment(&mut self, ctx_name: QualName, html: &str) -> Result<NodeId> {
         use tenta_html::{Parser, ParserOptions};
 
-        // Snapshot the document node's current children before parsing.
-        let before: Vec<NodeId> = self.children(self.document_node()).collect();
-
-        // Parse the fragment into this Document's own arena.
-        // The parser consumes the sink by value, so we move self out and back.
-        let taken = std::mem::take(self);
         let opts = ParserOptions {
             fragment_context: Some(ctx_name),
             scripting_enabled: false,
+            quirks_mode: Some(self.quirks_mode()),
             ..ParserOptions::default()
         };
-        let mut parser = Parser::new(taken, opts);
+        // The synthetic <html> must not become a second document element.
+        // Borrow the same arena through a sink with a detached parse target.
+        let sink = crate::sink::FragmentSink::new(self);
+        let mut parser = Parser::new(sink, opts);
         parser.feed_str(html);
-        *self = parser.finish();
-
-        // The new fragment root is the bare <html> created by create_root and
-        // appended to document_node after the snapshot.
-        self.children(self.document_node())
-            .find(|c| !before.contains(c))
-            .ok_or_else(|| tenta_core::Error::invalid("fragment parsing produced no root"))
+        let root = parser.finish();
+        self.check_observer_health()?;
+        root
     }
 
     /// Moves every child of `frag_root` into `parent` before `before` (in
@@ -2238,6 +2520,16 @@ impl Document {
     }
 
     fn validate_insert(&self, parent: NodeId, child: NodeId, before: NodeId) -> Result<()> {
+        self.validate_insert_excluding(parent, child, before, NodeId::NONE)
+    }
+
+    fn validate_insert_excluding(
+        &self,
+        parent: NodeId,
+        child: NodeId,
+        before: NodeId,
+        excluded: NodeId,
+    ) -> Result<()> {
         if !self.arena.is_live(parent) || !self.arena.is_live(child) {
             return Err(hierarchy_request("insert with a stale node"));
         }
@@ -2272,15 +2564,79 @@ impl Document {
         if before.is_some() && self.parent(before) != parent {
             return Err(not_found("the reference node is not a child of the parent"));
         }
+        if self.kind(parent) == NodeKind::Document {
+            let kind = self.kind(child);
+            let has_element = match kind {
+                NodeKind::Text | NodeKind::CData => {
+                    return Err(hierarchy_request("a document cannot contain Text children"));
+                }
+                NodeKind::Fragment => {
+                    let mut elements = 0;
+                    for node in self.children(child) {
+                        match self.kind(node) {
+                            NodeKind::Text | NodeKind::CData => {
+                                return Err(hierarchy_request(
+                                    "a document cannot contain Text children",
+                                ));
+                            }
+                            NodeKind::Element => elements += 1,
+                            _ => {}
+                        }
+                    }
+                    if elements > 1 {
+                        return Err(hierarchy_request(
+                            "a document cannot contain multiple elements",
+                        ));
+                    }
+                    elements == 1
+                }
+                NodeKind::Element => true,
+                _ => false,
+            };
+            if has_element {
+                let existing = self
+                    .children(parent)
+                    .any(|node| node != excluded && self.kind(node) == NodeKind::Element);
+                let following_doctype = before.is_some()
+                    && self
+                        .children(parent)
+                        .skip_while(|node| *node != before)
+                        .any(|node| node != excluded && self.kind(node) == NodeKind::DocType);
+                if existing || following_doctype {
+                    return Err(hierarchy_request(
+                        "a document requires one element after its doctype",
+                    ));
+                }
+            } else if kind == NodeKind::DocType {
+                let existing = self
+                    .children(parent)
+                    .any(|node| node != excluded && self.kind(node) == NodeKind::DocType);
+                let preceding_element = self
+                    .children(parent)
+                    .take_while(|node| *node != before)
+                    .any(|node| node != excluded && self.kind(node) == NodeKind::Element);
+                if existing || preceding_element {
+                    return Err(hierarchy_request(
+                        "a document requires one doctype before its element",
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 
     fn insert(&mut self, parent: NodeId, child: NodeId, before: NodeId) -> Result<()> {
         self.validate_insert(parent, child, before)?;
+        let before = if before == child {
+            self.next_sibling(child)
+        } else {
+            before
+        };
         if self.kind(child) == NodeKind::Fragment {
             // Inserting a fragment moves its children, as the DOM standard
             // requires, and leaves the fragment empty.
             let children: Vec<NodeId> = self.children(child).collect();
+            self.preflight_range_removals(children.iter().copied())?;
             for node in children {
                 self.unlink(node)?;
                 self.link(parent, node, before);
@@ -2312,6 +2668,7 @@ impl Document {
             self.mark_detached_root(child);
             return Ok(());
         }
+        self.adjust_ranges_for_removal(child, parent)?;
         let (i, p) = (self.index(child), self.index(parent));
         let prev = self.arena.nodes.prev[i];
         let next = self.arena.nodes.next[i];
@@ -2346,6 +2703,7 @@ impl Document {
     }
 
     fn link(&mut self, parent: NodeId, child: NodeId, before: NodeId) {
+        self.adjust_ranges_for_insertion(parent, before);
         let (i, p) = (self.index(child), self.index(parent));
         let prev = if before.is_some() {
             self.arena.nodes.prev[before.raw() as usize]
@@ -2412,6 +2770,7 @@ impl Document {
             ));
         }
         let children: Vec<NodeId> = self.children(from).collect();
+        self.preflight_range_removals(children.iter().copied())?;
         for child in children {
             self.unlink(child)?;
             self.link(to, child, NodeId::NONE);
@@ -2442,7 +2801,13 @@ impl Document {
         }
     }
 
-    fn set_attribute(&mut self, element: NodeId, name: QualName, value: &str) -> Result<()> {
+    fn set_attribute(
+        &mut self,
+        element: NodeId,
+        name: QualName,
+        value: &str,
+        replace_node: bool,
+    ) -> Result<()> {
         if self.kind(element) != NodeKind::Element {
             return Err(hierarchy_request("attributes belong to elements"));
         }
@@ -2459,9 +2824,9 @@ impl Document {
         // writes and in the number of attributes on the element.
         // Skip dead (tombstone) slots when looking for existing attribute.
         let attrs_slice = self.arena.element_attrs(data);
-        let position = attrs_slice
-            .iter()
-            .position(|(n, v)| !v.is_dead() && *n == stored_name);
+        let position = attrs_slice.iter().position(|(n, v)| {
+            !v.is_dead() && n.ns == stored_name.ns && n.local == stored_name.local
+        });
         let old_value = position
             .map(|index| attrs_slice[index].1)
             .and_then(|value| {
@@ -2474,7 +2839,12 @@ impl Document {
         match position {
             Some(index) => {
                 let new_value = self.arena.push_attr_value(value);
-                self.arena.replace_element_attr(data, index, new_value);
+                if replace_node {
+                    self.arena
+                        .replace_element_attr_node(data, index, stored_name, new_value);
+                } else {
+                    self.arena.replace_element_attr(data, index, new_value);
+                }
             }
             None => {
                 let new_value = self.arena.push_attr_value(value);
@@ -2498,18 +2868,18 @@ impl Document {
         Ok(())
     }
 
-    fn remove_attribute(&mut self, element: NodeId, name: QualName) -> Result<()> {
+    /// Return whether a live attribute was removed, reusing its native lookup.
+    fn remove_attribute(&mut self, element: NodeId, name: QualName) -> Result<bool> {
         if self.kind(element) != NodeKind::Element {
             return Err(hierarchy_request("attributes belong to elements"));
         }
         let stored_name = AttrName::from_qual(name);
         let data = self.arena.nodes.data[self.index(element)];
         let attrs_slice = self.arena.element_attrs(data);
-        let Some(position) = attrs_slice
-            .iter()
-            .position(|(n, v)| !v.is_dead() && *n == stored_name)
-        else {
-            return Ok(());
+        let Some(position) = attrs_slice.iter().position(|(n, v)| {
+            !v.is_dead() && n.ns == stored_name.ns && n.local == stored_name.local
+        }) else {
+            return Ok(false);
         };
         let old_value = self
             .arena
@@ -2533,7 +2903,7 @@ impl Document {
             old_value: Some(old_value),
         });
         self.after_attribute_change(element, stored_name.local);
-        Ok(())
+        Ok(true)
     }
 
     fn after_attribute_change(&mut self, element: NodeId, local: Atom) {
@@ -2554,9 +2924,26 @@ impl Document {
     ///
     /// One pass: the missing attributes are appended to the element's slice in
     /// a single relocation rather than one per attribute.
-    pub fn add_attributes_if_missing(&mut self, element: NodeId, attrs: Vec<Attribute>) {
+    pub fn add_attributes_if_missing(
+        &mut self,
+        element: NodeId,
+        attrs: Vec<Attribute>,
+    ) -> Result<()> {
+        self.mutate(Mutation::AddMissingAttributes {
+            element,
+            attributes: attrs,
+        })
+    }
+
+    /// The parser's one-pass native attribute insertion. Observer facts are
+    /// prepared before this effect by `Document::mutate`.
+    fn add_missing_attributes_unobserved(
+        &mut self,
+        element: NodeId,
+        attrs: Vec<Attribute>,
+    ) -> usize {
         if self.kind(element) != NodeKind::Element || attrs.is_empty() {
-            return;
+            return 0;
         }
         let data = self.arena.nodes.data[self.index(element)];
         let mut added: Vec<(AttrName, AttrValue, Attribute)> = Vec::new();
@@ -2575,7 +2962,7 @@ impl Document {
             added.push((name, value, attr));
         }
         if added.is_empty() {
-            return;
+            return 0;
         }
         let stored: Vec<(AttrName, AttrValue)> = added
             .iter()
@@ -2599,6 +2986,30 @@ impl Document {
         }
         let last = added.last().expect("added is not empty").0.local;
         self.after_attribute_change(element, last);
+        added.len()
+    }
+
+    /// Whether one parser attribute will be added after accounting for both
+    /// existing attributes and earlier entries in the same tokenizer batch.
+    fn parser_attribute_is_missing(
+        &self,
+        element: NodeId,
+        attributes: &[Attribute],
+        index: usize,
+    ) -> bool {
+        if self.kind(element) != NodeKind::Element {
+            return false;
+        }
+        let name = AttrName::from_qual(attributes[index].name);
+        let data = self.arena.nodes.data[self.index(element)];
+        !self
+            .arena
+            .element_attrs(data)
+            .iter()
+            .any(|(stored, _)| *stored == name)
+            && attributes[..index]
+                .iter()
+                .all(|earlier| AttrName::from_qual(earlier.name) != name)
     }
 
     fn reindex_id(&mut self, element: NodeId, value: &str) {
@@ -2656,6 +3067,13 @@ impl Document {
     }
 
     fn set_text(&mut self, node: NodeId, text: &str) -> Result<()> {
+        let length = utf16_len(self.text_data(node).unwrap_or_default());
+        self.write_character_data(node, text)?;
+        self.adjust_ranges_for_data(node, 0, length, utf16_len(text));
+        Ok(())
+    }
+
+    fn write_character_data(&mut self, node: NodeId, text: &str) -> Result<()> {
         if !self.kind(node).is_character_data_subclass() {
             return Err(hierarchy_request("only character data nodes hold text"));
         }
@@ -2735,6 +3153,21 @@ impl Document {
         count: u32,
         data: &str,
     ) -> Result<()> {
+        self.mutate(Mutation::ReplaceData {
+            node,
+            offset,
+            count,
+            data: data.to_owned(),
+        })
+    }
+
+    fn replace_text_data(
+        &mut self,
+        node: NodeId,
+        offset: u32,
+        count: u32,
+        data: &str,
+    ) -> Result<()> {
         if !self.kind(node).is_character_data_subclass() {
             return Err(hierarchy_request("only character data nodes hold text"));
         }
@@ -2749,10 +3182,9 @@ impl Document {
         replaced.push_str(&current[..start]);
         replaced.push_str(data);
         replaced.push_str(&current[end..]);
-        self.mutate(Mutation::SetText {
-            node,
-            text: replaced,
-        })
+        self.write_character_data(node, &replaced)?;
+        self.adjust_ranges_for_data(node, offset, count, utf16_len(data));
+        Ok(())
     }
 
     /// Appends `data` to a character-data node's data
@@ -2769,6 +3201,7 @@ impl Document {
     /// Appends `text` to `parent`, merging with a trailing text node as the
     /// HTML tree construction algorithm requires.
     pub fn append_text(&mut self, parent: NodeId, text: &str) -> Result<()> {
+        self.check_observer_health()?;
         if !self.arena.is_live(parent) || !self.kind(parent).is_container() {
             return Err(hierarchy_request(
                 "text can only be appended to a container",
@@ -2776,28 +3209,61 @@ impl Document {
         }
         let last = self.last_child(parent);
         if last.is_some() && self.kind(last) == NodeKind::Text {
-            self.extend_text(last, text);
-            self.bump();
-            return Ok(());
+            if self.observer_registry.is_none() {
+                return self.append_parser_text_data(last, text);
+            }
+            return self.mutate(Mutation::AppendTextData {
+                node: last,
+                text: text.to_owned(),
+            });
         }
         let node = self.create_text(text);
-        self.insert(parent, node, NodeId::NONE)
+        self.mutate(Mutation::Append {
+            parent,
+            child: node,
+        })
     }
 
     /// Appends `text` before `sibling`, merging with a preceding text node.
     pub fn insert_text_before(&mut self, sibling: NodeId, text: &str) -> Result<()> {
+        self.check_observer_health()?;
         let parent = self.parent(sibling);
         if !parent.is_some() {
             return Err(not_found("the reference node has no parent"));
         }
         let prev = self.previous_sibling(sibling);
         if prev.is_some() && self.kind(prev) == NodeKind::Text {
-            self.extend_text(prev, text);
-            self.bump();
-            return Ok(());
+            if self.observer_registry.is_none() {
+                return self.append_parser_text_data(prev, text);
+            }
+            return self.mutate(Mutation::AppendTextData {
+                node: prev,
+                text: text.to_owned(),
+            });
         }
         let node = self.create_text(text);
-        self.insert(parent, node, sibling)
+        self.mutate(Mutation::InsertBefore {
+            parent,
+            child: node,
+            before: sibling,
+        })
+    }
+
+    /// Keep parser text coalescing O(1) amortized while preserving the native
+    /// diagnostic old-value contract when a recording sink is installed.
+    fn append_parser_text_data(&mut self, node: NodeId, text: &str) -> Result<()> {
+        if self.kind(node) != NodeKind::Text {
+            return Err(hierarchy_request("parser text append requires a text node"));
+        }
+        let old_value = (!text.is_empty() && self.observer.wants_record())
+            .then(|| self.text_data(node).unwrap_or_default().to_owned());
+        self.extend_text(node, text);
+        if let Some(old_value) = old_value {
+            self.observer
+                .record(MutationRecord::CharacterData { node, old_value });
+        }
+        self.bump();
+        Ok(())
     }
 
     /// Extends an existing text node with `text`.
@@ -2921,6 +3387,7 @@ impl Document {
                     + indexes.classes.bytes()
                     + indexes.tags.bytes()
                     + self.detached_roots.capacity() * size_of::<NodeId>()
+                    + self.extra_wrapper_claims.allocation_size()
                     + self.sweep_freed.capacity() * size_of::<NodeRef>()
                     + self.element_prefixes.capacity()
                         * (size_of::<NodeId>() + size_of::<Atom>() + 1)
@@ -2931,6 +3398,7 @@ impl Document {
                         .map(|value| value.capacity())
                         .sum::<usize>()
                     + self.dirty_checkedness.capacity() * (size_of::<NodeId>() + 1 + 1)
+                    + self.live_ranges.memory_bytes()
             },
         }
     }
@@ -3215,6 +3683,10 @@ impl OrderIndex {
 
 impl Drop for Document {
     fn drop(&mut self) {
+        if let Some(registry) = self.observer_registry.take() {
+            registry.drain_all_on_document_drop(self);
+        }
+        self.release_all_live_ranges();
         // The arena is plain vectors, so dropping it is flat; nothing here
         // recurses even for a million-deep tree.
         debug_assert!(self.arena.slots() >= self.arena.live());

@@ -1,0 +1,855 @@
+{
+  "status": "Observed default macOS arm64 host components mapped to pinned notices; includes a disclosed optional/build-tool superset; other target and redistribution review remain separate.",
+  "scope": "Pinned native dependencies and reconstructed Rust vendor notice texts; some components may be build-only or unused in a target.",
+  "remaining": [
+    "Reaudit the native graph and notices for each additional target/configuration.",
+    "Include this notice directory and the binding MIT/local Apache licenses with any redistributed source/native bundle; review distribution-specific obligations before publishing."
+  ],
+  "files": [
+    {
+      "component": "abseil",
+      "path": "texts/abseil/LICENSE",
+      "source": "https://chromium.googlesource.com/chromium/src/third_party/abseil-cpp/+/ff6e8ce3e932c16cebd1611c8fc42c45080a0e55/LICENSE?format=TEXT",
+      "revision": "ff6e8ce3e932c16cebd1611c8fc42c45080a0e55",
+      "tree": "9acfe105e5ff19d3a7bb84a809cf04118e41ea18",
+      "bytes": 11361,
+      "sha256": "c79a7fea0e3cac04cd43f20e7b648e5a0ff8fa5344e644b0ee09ca1162b62747",
+      "git_blob_sha1": "ccd61dcfe3dbcdf77a72794d7794b1e112a39e0b"
+    },
+    {
+      "component": "dragonbox",
+      "path": "texts/dragonbox/LICENSE-Apache2-LLVM",
+      "source": "https://chromium.googlesource.com/external/github.com/jk-jeon/dragonbox/+/beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44/LICENSE-Apache2-LLVM?format=TEXT",
+      "revision": "beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44",
+      "tree": "176383f02746d0248e7b04409367f691cc231cef",
+      "bytes": 12262,
+      "sha256": "9e45e856bedccee9f67254082ca11851d954de2fed7448c4bed19ad9aab99a91",
+      "git_blob_sha1": "bd8b243dfa02d4e7080150180520f742d2861d15"
+    },
+    {
+      "component": "dragonbox",
+      "path": "texts/dragonbox/LICENSE-Boost",
+      "source": "https://chromium.googlesource.com/external/github.com/jk-jeon/dragonbox/+/beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44/LICENSE-Boost?format=TEXT",
+      "revision": "beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44",
+      "tree": "176383f02746d0248e7b04409367f691cc231cef",
+      "bytes": 1338,
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+      "git_blob_sha1": "36b7cd93cdfbac762f5be4c6ce276df2ea6305c2"
+    },
+    {
+      "component": "fast_float",
+      "path": "texts/fast_float/LICENSE-APACHE",
+      "source": "https://chromium.googlesource.com/external/github.com/fastfloat/fast_float/+/34164f547b7df3f5d794ff67e9f885c36819ebfc/LICENSE-APACHE?format=TEXT",
+      "revision": "34164f547b7df3f5d794ff67e9f885c36819ebfc",
+      "tree": "7be0e666e0f643d2ff82fc4b754dcbbc4673d157",
+      "bytes": 10767,
+      "sha256": "097a889aa954d04e088b790b10a4014d6189561d0a6013935a73ce3d4ddaaf06",
+      "git_blob_sha1": "26f4398f24999c3908a11653e3b5ba6f9d681123"
+    },
+    {
+      "component": "fast_float",
+      "path": "texts/fast_float/LICENSE-BOOST",
+      "source": "https://chromium.googlesource.com/external/github.com/fastfloat/fast_float/+/34164f547b7df3f5d794ff67e9f885c36819ebfc/LICENSE-BOOST?format=TEXT",
+      "revision": "34164f547b7df3f5d794ff67e9f885c36819ebfc",
+      "tree": "7be0e666e0f643d2ff82fc4b754dcbbc4673d157",
+      "bytes": 1337,
+      "sha256": "8d8291caf1cee26d23acf3eb67c9f9a2d58f1c681b16a4fbe8cbfb9e3c0b5a9b",
+      "git_blob_sha1": "127a5bc39ba030c7cb99cc0aedc4f280ffe27310"
+    },
+    {
+      "component": "fast_float",
+      "path": "texts/fast_float/LICENSE-MIT",
+      "source": "https://chromium.googlesource.com/external/github.com/fastfloat/fast_float/+/34164f547b7df3f5d794ff67e9f885c36819ebfc/LICENSE-MIT?format=TEXT",
+      "revision": "34164f547b7df3f5d794ff67e9f885c36819ebfc",
+      "tree": "7be0e666e0f643d2ff82fc4b754dcbbc4673d157",
+      "bytes": 1079,
+      "sha256": "e562f3f974ced7e69dd1db77b820b36bcf8f30377f1aa105723fba449c53c4e6",
+      "git_blob_sha1": "2fb2a37ad7fda521092c8b7b16911176c3f8a81b"
+    },
+    {
+      "component": "fp16",
+      "path": "texts/fp16/LICENSE",
+      "source": "https://chromium.googlesource.com/external/github.com/Maratyszcza/FP16/+/782eea126dc5c755827be751a099eb01826175cf/LICENSE?format=TEXT",
+      "revision": "782eea126dc5c755827be751a099eb01826175cf",
+      "tree": "e27b4cdd20d6f95e62ccb2fe446fc3a566943105",
+      "bytes": 1157,
+      "sha256": "17e4f539024be2749ee729d1e2f01d24cef12ece8c9bf18e91a4349be29c80bf",
+      "git_blob_sha1": "eabec6c86a3c7117090954b3756012b37b7c3786"
+    },
+    {
+      "component": "highway",
+      "path": "texts/highway/LICENSE",
+      "source": "https://chromium.googlesource.com/external/github.com/google/highway/+/2607d3b5b0113992fe84d3848859eae13b3b52c1/LICENSE?format=TEXT",
+      "revision": "2607d3b5b0113992fe84d3848859eae13b3b52c1",
+      "tree": "e240dc0bc54afd953256adbe67eb2f267beb9d86",
+      "bytes": 20785,
+      "sha256": "e340270d4f64384569a91d546acb5b094d69ce47f0c015db77abb74dc6f815af",
+      "git_blob_sha1": "1af4f15ca709c0e74e610c09fe91022f354aea58"
+    },
+    {
+      "component": "icu",
+      "path": "texts/icu/LICENSE",
+      "source": "https://chromium.googlesource.com/chromium/deps/icu/+/d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738/LICENSE?format=TEXT",
+      "revision": "d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738",
+      "tree": "1a597ddb83a0d67c5138b9ef1554a45d5d152ec7",
+      "bytes": 27718,
+      "sha256": "e55522d81edc687a341a4411e0776e54ca654e90147f354a90458aaced4116af",
+      "git_blob_sha1": "5a2eda629500c36c75377c1d693d8b584fcf40e6"
+    },
+    {
+      "component": "icu",
+      "path": "texts/icu/license.html",
+      "source": "https://chromium.googlesource.com/chromium/deps/icu/+/d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738/license.html?format=TEXT",
+      "revision": "d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738",
+      "tree": "1a597ddb83a0d67c5138b9ef1554a45d5d152ec7",
+      "bytes": 622,
+      "sha256": "c62d7697c03979f5056d28b338fafc7a1152820f7b379adf4a9d88cd37160f96",
+      "git_blob_sha1": "24846726670049cb129f1d72a9dd097ded9712d1"
+    },
+    {
+      "component": "inspector_protocol",
+      "path": "texts/inspector_protocol/LICENSE",
+      "source": "https://chromium.googlesource.com/v8/v8/+/refs/tags/15.2.124.1/third_party/inspector_protocol/LICENSE?format=TEXT",
+      "revision": "refs/tags/15.2.124.1",
+      "tree": "c48d0f2b24c6e09219cfc958c20e0a90fec52d91",
+      "bytes": 1537,
+      "sha256": "450ebb9e9e50c2809d9ca581931fc8946d8d5aa0c8c35aae9ac471342fe4a88e",
+      "git_blob_sha1": "1e5610962e92ddd84eaddb72486defbb82732f0d"
+    },
+    {
+      "component": "libcxx",
+      "path": "texts/libcxx/LICENSE.TXT",
+      "source": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx/+/b16984ce99c702355a5b2b4c52574e82cec41fb9/LICENSE.TXT?format=TEXT",
+      "revision": "b16984ce99c702355a5b2b4c52574e82cec41fb9",
+      "tree": "259b31836fe451d0c58620553af519c5cfbb0d65",
+      "bytes": 16703,
+      "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b",
+      "git_blob_sha1": "e159d283443f92ac78b964d2bccebe8f95d5d445"
+    },
+    {
+      "component": "libcxxabi",
+      "path": "texts/libcxxabi/LICENSE.TXT",
+      "source": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxxabi/+/8f11bb1d4438d0239d0dfc1bd9456a9f31629dda/LICENSE.TXT?format=TEXT",
+      "revision": "8f11bb1d4438d0239d0dfc1bd9456a9f31629dda",
+      "tree": "63eed58f0937ba832a2195cd848f9f53ef8ecea9",
+      "bytes": 16706,
+      "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c",
+      "git_blob_sha1": "b75c0441bcd5be32b5a07e2a1ffc7e67b6d99f16"
+    },
+    {
+      "component": "llvm-libc",
+      "path": "texts/llvm-libc/LICENSE.TXT",
+      "source": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc/+/75ae50cd48c8a9d70f552ccff040029968778da9/LICENSE.TXT?format=TEXT",
+      "revision": "75ae50cd48c8a9d70f552ccff040029968778da9",
+      "tree": "a76e949547e2e0c26351b50c2a0774bd56e1f08b",
+      "bytes": 15140,
+      "sha256": "ebcd9bbf783a73d05c53ba4d586b8d5813dcdf3bbec50265860ccc885e606f47",
+      "git_blob_sha1": "24806ab4c9eb291db4d28e159901f7a0901b9fd1"
+    },
+    {
+      "component": "rapidhash-v8",
+      "path": "texts/rapidhash-v8/LICENSE",
+      "source": "https://chromium.googlesource.com/v8/v8/+/refs/tags/15.2.124.1/third_party/rapidhash-v8/LICENSE?format=TEXT",
+      "revision": "refs/tags/15.2.124.1",
+      "tree": "d2b73802401a6c6d55eb221270450cdde8ce5a14",
+      "bytes": 1705,
+      "sha256": "db672df7faf793fbe28b8074fdd10822363e1525816b45c9627754885de842b0",
+      "git_blob_sha1": "e70352870fba33e50902c8765cf71e3397b6667c"
+    },
+    {
+      "component": "rust-stdlib",
+      "path": "texts/rust-stdlib/COPYRIGHT-library.html",
+      "source": "share/doc/rustc/COPYRIGHT-library.html",
+      "source_archive": "https://storage.googleapis.com/chromium-browser-clang/Mac_arm64/rust-toolchain-b998449636a48e2c4a362809085b600a0174e1f2-5-llvmorg-23-init-19482-g53d18800.tar.xz",
+      "source_archive_sha256": "1765d9be3b30726f5f5ad60d8bc50ee66501220bc942019782cf423de3f7114e",
+      "bytes": 1435128,
+      "sha256": "7807d12c0c8a196ae3b47ada81ddc92ab2a835d8eb68788c440e656a21de3201",
+      "git_blob_sha1": "a4719c1e28a10c3ad890a4306d404bba5c125360"
+    },
+    {
+      "component": "rust-vendor/calendrical_calculations-v0_2",
+      "path": "texts/rust-vendor/calendrical_calculations-v0_2/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/calendrical_calculations-v0_2/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 11351,
+      "sha256": "192ea857d1bff2b87c174de36cbae5c173234726c6b8eceab9790a535d7dbc95",
+      "git_blob_sha1": "76b537c5e902b1f2b661e322e7e36115a8a61c58"
+    },
+    {
+      "component": "rust-vendor/core_maths-v0_1",
+      "path": "texts/rust-vendor/core_maths-v0_1/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/core_maths-v0_1/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1070,
+      "sha256": "9ebf8c4cc0b735ca13a766451f7b8097db3185975ceb2ba94b5abf439156a91f",
+      "git_blob_sha1": "26bf22dc71314227af6a761ce23cffd1e3a2e69c"
+    },
+    {
+      "component": "rust-vendor/diplomat-runtime-v0_15",
+      "path": "texts/rust-vendor/diplomat-runtime-v0_15/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/diplomat-runtime-v0_15/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 10843,
+      "sha256": "639c20c7f14fb122750d5ad1a6cfb116d9bf8d103e709ee40949e5a12a731666",
+      "git_blob_sha1": "05fcffa855c462ea158300001086670aa852605d"
+    },
+    {
+      "component": "rust-vendor/diplomat-runtime-v0_15",
+      "path": "texts/rust-vendor/diplomat-runtime-v0_15/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/diplomat-runtime-v0_15/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1080,
+      "sha256": "3337fe6e4a3830ad87c23cb9d6d750f9a1e5c45efc08de9c76c1a207fc6966c4",
+      "git_blob_sha1": "cf62c31bc7531d2fcb7bb4e8125a9f039953396a"
+    },
+    {
+      "component": "rust-vendor/diplomat-v0_15",
+      "path": "texts/rust-vendor/diplomat-v0_15/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/diplomat-v0_15/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 10843,
+      "sha256": "639c20c7f14fb122750d5ad1a6cfb116d9bf8d103e709ee40949e5a12a731666",
+      "git_blob_sha1": "05fcffa855c462ea158300001086670aa852605d"
+    },
+    {
+      "component": "rust-vendor/diplomat-v0_15",
+      "path": "texts/rust-vendor/diplomat-v0_15/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/diplomat-v0_15/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1080,
+      "sha256": "3337fe6e4a3830ad87c23cb9d6d750f9a1e5c45efc08de9c76c1a207fc6966c4",
+      "git_blob_sha1": "cf62c31bc7531d2fcb7bb4e8125a9f039953396a"
+    },
+    {
+      "component": "rust-vendor/diplomat_core-v0_15",
+      "path": "texts/rust-vendor/diplomat_core-v0_15/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/diplomat_core-v0_15/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 10843,
+      "sha256": "639c20c7f14fb122750d5ad1a6cfb116d9bf8d103e709ee40949e5a12a731666",
+      "git_blob_sha1": "05fcffa855c462ea158300001086670aa852605d"
+    },
+    {
+      "component": "rust-vendor/diplomat_core-v0_15",
+      "path": "texts/rust-vendor/diplomat_core-v0_15/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/diplomat_core-v0_15/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1080,
+      "sha256": "3337fe6e4a3830ad87c23cb9d6d750f9a1e5c45efc08de9c76c1a207fc6966c4",
+      "git_blob_sha1": "cf62c31bc7531d2fcb7bb4e8125a9f039953396a"
+    },
+    {
+      "component": "rust-vendor/displaydoc-v0_2",
+      "path": "texts/rust-vendor/displaydoc-v0_2/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/displaydoc-v0_2/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 10847,
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+      "git_blob_sha1": "16fe87b06e802f094b3fbb0894b137bca2b16ef1"
+    },
+    {
+      "component": "rust-vendor/displaydoc-v0_2",
+      "path": "texts/rust-vendor/displaydoc-v0_2/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/displaydoc-v0_2/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1023,
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+      "git_blob_sha1": "31aa79387f27e730e33d871925e152e35e428031"
+    },
+    {
+      "component": "rust-vendor/either-v1",
+      "path": "texts/rust-vendor/either-v1/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/either-v1/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 10847,
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+      "git_blob_sha1": "16fe87b06e802f094b3fbb0894b137bca2b16ef1"
+    },
+    {
+      "component": "rust-vendor/either-v1",
+      "path": "texts/rust-vendor/either-v1/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/either-v1/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1043,
+      "sha256": "7576269ea71f767b99297934c0b2367532690f8c4badc695edf8e04ab6a1e545",
+      "git_blob_sha1": "9203baa055d41d89e1ab8f4d6aa9180a49e078a7"
+    },
+    {
+      "component": "rust-vendor/icu_calendar-v2",
+      "path": "texts/rust-vendor/icu_calendar-v2/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/icu_calendar-v2/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/icu_calendar_data-v2",
+      "path": "texts/rust-vendor/icu_calendar_data-v2/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/icu_calendar_data-v2/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/icu_collections-v2",
+      "path": "texts/rust-vendor/icu_collections-v2/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/icu_collections-v2/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/icu_locale-v2",
+      "path": "texts/rust-vendor/icu_locale-v2/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/icu_locale-v2/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/icu_locale_core-v2",
+      "path": "texts/rust-vendor/icu_locale_core-v2/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/icu_locale_core-v2/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/icu_locale_data-v2",
+      "path": "texts/rust-vendor/icu_locale_data-v2/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/icu_locale_data-v2/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/icu_provider-v2",
+      "path": "texts/rust-vendor/icu_provider-v2/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/icu_provider-v2/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/ixdtf-v0_6",
+      "path": "texts/rust-vendor/ixdtf-v0_6/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/ixdtf-v0_6/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/libm-v0_2",
+      "path": "texts/rust-vendor/libm-v0_2/LICENSE.txt",
+      "source": "third_party/rust/chromium_crates_io/vendor/libm-v0_2/LICENSE.txt",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 14088,
+      "sha256": "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7",
+      "git_blob_sha1": "2f8e41f147472510b05e0adeadf350df6f5a6b96"
+    },
+    {
+      "component": "rust-vendor/litemap-v0_8",
+      "path": "texts/rust-vendor/litemap-v0_8/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/litemap-v0_8/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/num-traits-v0_2",
+      "path": "texts/rust-vendor/num-traits-v0_2/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/num-traits-v0_2/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 10847,
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+      "git_blob_sha1": "16fe87b06e802f094b3fbb0894b137bca2b16ef1"
+    },
+    {
+      "component": "rust-vendor/num-traits-v0_2",
+      "path": "texts/rust-vendor/num-traits-v0_2/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/num-traits-v0_2/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1071,
+      "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+      "git_blob_sha1": "39d4bdb5acd313c1a92dbeaa1c379aaf0596a315"
+    },
+    {
+      "component": "rust-vendor/potential_utf-v0_1",
+      "path": "texts/rust-vendor/potential_utf-v0_1/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/potential_utf-v0_1/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/proc-macro2-v1",
+      "path": "texts/rust-vendor/proc-macro2-v1/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/proc-macro2-v1/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 9723,
+      "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+      "git_blob_sha1": "1b5ec8b78e237b5c3b3d812a7c0a6589d0f7161d"
+    },
+    {
+      "component": "rust-vendor/proc-macro2-v1",
+      "path": "texts/rust-vendor/proc-macro2-v1/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/proc-macro2-v1/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1023,
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+      "git_blob_sha1": "31aa79387f27e730e33d871925e152e35e428031"
+    },
+    {
+      "component": "rust-vendor/quote-v1",
+      "path": "texts/rust-vendor/quote-v1/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/quote-v1/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 9723,
+      "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+      "git_blob_sha1": "1b5ec8b78e237b5c3b3d812a7c0a6589d0f7161d"
+    },
+    {
+      "component": "rust-vendor/quote-v1",
+      "path": "texts/rust-vendor/quote-v1/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/quote-v1/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1023,
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+      "git_blob_sha1": "31aa79387f27e730e33d871925e152e35e428031"
+    },
+    {
+      "component": "rust-vendor/resb-v0_1",
+      "path": "texts/rust-vendor/resb-v0_1/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/resb-v0_1/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/serde-v1",
+      "path": "texts/rust-vendor/serde-v1/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/serde-v1/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 9723,
+      "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+      "git_blob_sha1": "1b5ec8b78e237b5c3b3d812a7c0a6589d0f7161d"
+    },
+    {
+      "component": "rust-vendor/serde-v1",
+      "path": "texts/rust-vendor/serde-v1/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/serde-v1/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1023,
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+      "git_blob_sha1": "31aa79387f27e730e33d871925e152e35e428031"
+    },
+    {
+      "component": "rust-vendor/serde_core-v1",
+      "path": "texts/rust-vendor/serde_core-v1/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/serde_core-v1/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 9723,
+      "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+      "git_blob_sha1": "1b5ec8b78e237b5c3b3d812a7c0a6589d0f7161d"
+    },
+    {
+      "component": "rust-vendor/serde_core-v1",
+      "path": "texts/rust-vendor/serde_core-v1/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/serde_core-v1/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1023,
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+      "git_blob_sha1": "31aa79387f27e730e33d871925e152e35e428031"
+    },
+    {
+      "component": "rust-vendor/serde_derive-v1",
+      "path": "texts/rust-vendor/serde_derive-v1/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/serde_derive-v1/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 9723,
+      "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+      "git_blob_sha1": "1b5ec8b78e237b5c3b3d812a7c0a6589d0f7161d"
+    },
+    {
+      "component": "rust-vendor/serde_derive-v1",
+      "path": "texts/rust-vendor/serde_derive-v1/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/serde_derive-v1/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1023,
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+      "git_blob_sha1": "31aa79387f27e730e33d871925e152e35e428031"
+    },
+    {
+      "component": "rust-vendor/smallvec-v1",
+      "path": "texts/rust-vendor/smallvec-v1/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/smallvec-v1/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 10847,
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+      "git_blob_sha1": "16fe87b06e802f094b3fbb0894b137bca2b16ef1"
+    },
+    {
+      "component": "rust-vendor/smallvec-v1",
+      "path": "texts/rust-vendor/smallvec-v1/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/smallvec-v1/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1072,
+      "sha256": "0b28172679e0009b655da42797c03fd163a3379d5cfa67ba1f1655e974a2a1a9",
+      "git_blob_sha1": "9729c1284e1bff82ca875abbf0fb4ec540804cd6"
+    },
+    {
+      "component": "rust-vendor/stable_deref_trait-v1",
+      "path": "texts/rust-vendor/stable_deref_trait-v1/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/stable_deref_trait-v1/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 10847,
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+      "git_blob_sha1": "16fe87b06e802f094b3fbb0894b137bca2b16ef1"
+    },
+    {
+      "component": "rust-vendor/stable_deref_trait-v1",
+      "path": "texts/rust-vendor/stable_deref_trait-v1/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/stable_deref_trait-v1/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1056,
+      "sha256": "5e05b024f653a5ce199e77cbbbd42fb5553562ec714b819421ed0c3e552a75d7",
+      "git_blob_sha1": "3bf61a09010e049f639d5e70c7d4b1b7e163435f"
+    },
+    {
+      "component": "rust-vendor/strck-v1",
+      "path": "texts/rust-vendor/strck-v1/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/strck-v1/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1057,
+      "sha256": "7e24648e3d082d4f8026cdedb21d084d91ef13223bff6b76cb8bf19a744b7d28",
+      "git_blob_sha1": "3752b79341fff34acb7106627270d2214614c322"
+    },
+    {
+      "component": "rust-vendor/syn-v2",
+      "path": "texts/rust-vendor/syn-v2/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/syn-v2/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 9723,
+      "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+      "git_blob_sha1": "1b5ec8b78e237b5c3b3d812a7c0a6589d0f7161d"
+    },
+    {
+      "component": "rust-vendor/syn-v2",
+      "path": "texts/rust-vendor/syn-v2/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/syn-v2/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1023,
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+      "git_blob_sha1": "31aa79387f27e730e33d871925e152e35e428031"
+    },
+    {
+      "component": "rust-vendor/synstructure-v0_13",
+      "path": "texts/rust-vendor/synstructure-v0_13/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/synstructure-v0_13/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1052,
+      "sha256": "219920e865eee70b7dcfc948a86b099e7f4fe2de01bcca2ca9a20c0a033f2b59",
+      "git_blob_sha1": "f78f1c15d12999c23b42c6328bd495cb0df0043c"
+    },
+    {
+      "component": "rust-vendor/temporal_capi-v0_2",
+      "path": "texts/rust-vendor/temporal_capi-v0_2/LICENSE-Apache",
+      "source": "third_party/rust/chromium_crates_io/vendor/temporal_capi-v0_2/LICENSE-Apache",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 11333,
+      "sha256": "4e6bdc19db64d455dbddc0ee2f53ecba556f0226d4558954b5f02673c7358e59",
+      "git_blob_sha1": "551045b58932a5c379fb52128905469bcab84f50"
+    },
+    {
+      "component": "rust-vendor/temporal_capi-v0_2",
+      "path": "texts/rust-vendor/temporal_capi-v0_2/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/temporal_capi-v0_2/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1060,
+      "sha256": "073d3574ac6389e263360572b331e045dda7ac5cdba239ce5bdb02f299ef47bb",
+      "git_blob_sha1": "d5624ad0c1fb69a743809cff7ec210b05309f904"
+    },
+    {
+      "component": "rust-vendor/temporal_rs-v0_2",
+      "path": "texts/rust-vendor/temporal_rs-v0_2/LICENSE-Apache",
+      "source": "third_party/rust/chromium_crates_io/vendor/temporal_rs-v0_2/LICENSE-Apache",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 11333,
+      "sha256": "4e6bdc19db64d455dbddc0ee2f53ecba556f0226d4558954b5f02673c7358e59",
+      "git_blob_sha1": "551045b58932a5c379fb52128905469bcab84f50"
+    },
+    {
+      "component": "rust-vendor/temporal_rs-v0_2",
+      "path": "texts/rust-vendor/temporal_rs-v0_2/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/temporal_rs-v0_2/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1060,
+      "sha256": "073d3574ac6389e263360572b331e045dda7ac5cdba239ce5bdb02f299ef47bb",
+      "git_blob_sha1": "d5624ad0c1fb69a743809cff7ec210b05309f904"
+    },
+    {
+      "component": "rust-vendor/timezone_provider-v0_2",
+      "path": "texts/rust-vendor/timezone_provider-v0_2/LICENSE-Apache",
+      "source": "third_party/rust/chromium_crates_io/vendor/timezone_provider-v0_2/LICENSE-Apache",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 11333,
+      "sha256": "4e6bdc19db64d455dbddc0ee2f53ecba556f0226d4558954b5f02673c7358e59",
+      "git_blob_sha1": "551045b58932a5c379fb52128905469bcab84f50"
+    },
+    {
+      "component": "rust-vendor/timezone_provider-v0_2",
+      "path": "texts/rust-vendor/timezone_provider-v0_2/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/timezone_provider-v0_2/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1060,
+      "sha256": "073d3574ac6389e263360572b331e045dda7ac5cdba239ce5bdb02f299ef47bb",
+      "git_blob_sha1": "d5624ad0c1fb69a743809cff7ec210b05309f904"
+    },
+    {
+      "component": "rust-vendor/tinystr-v0_8",
+      "path": "texts/rust-vendor/tinystr-v0_8/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/tinystr-v0_8/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/unicode-ident-v1",
+      "path": "texts/rust-vendor/unicode-ident-v1/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/unicode-ident-v1/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 9723,
+      "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+      "git_blob_sha1": "1b5ec8b78e237b5c3b3d812a7c0a6589d0f7161d"
+    },
+    {
+      "component": "rust-vendor/unicode-ident-v1",
+      "path": "texts/rust-vendor/unicode-ident-v1/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/unicode-ident-v1/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1023,
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+      "git_blob_sha1": "31aa79387f27e730e33d871925e152e35e428031"
+    },
+    {
+      "component": "rust-vendor/unicode-ident-v1",
+      "path": "texts/rust-vendor/unicode-ident-v1/LICENSE-UNICODE",
+      "source": "third_party/rust/chromium_crates_io/vendor/unicode-ident-v1/LICENSE-UNICODE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1995,
+      "sha256": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1",
+      "git_blob_sha1": "11f2842a303a7935740f7a1d09139b0b9c28c3b6"
+    },
+    {
+      "component": "rust-vendor/utf8_iter-v1",
+      "path": "texts/rust-vendor/utf8_iter-v1/LICENSE-APACHE",
+      "source": "third_party/rust/chromium_crates_io/vendor/utf8_iter-v1/LICENSE-APACHE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "git_blob_sha1": "d645695673349e3947e8e5ae42332d0ac3164cd7"
+    },
+    {
+      "component": "rust-vendor/utf8_iter-v1",
+      "path": "texts/rust-vendor/utf8_iter-v1/LICENSE-MIT",
+      "source": "third_party/rust/chromium_crates_io/vendor/utf8_iter-v1/LICENSE-MIT",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 1053,
+      "sha256": "3fa4ca83dcc9237839b1bdeb2e6d16bdfb5ec0c5ce42b24694d8bbf0dcbef72c",
+      "git_blob_sha1": "3317c82e2f677cf6d16b1ac57672bfdab2b15066"
+    },
+    {
+      "component": "rust-vendor/writeable-v0_6",
+      "path": "texts/rust-vendor/writeable-v0_6/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/writeable-v0_6/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/yoke-derive-v0_8",
+      "path": "texts/rust-vendor/yoke-derive-v0_8/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/yoke-derive-v0_8/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/yoke-v0_8",
+      "path": "texts/rust-vendor/yoke-v0_8/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/yoke-v0_8/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/zerofrom-derive-v0_1",
+      "path": "texts/rust-vendor/zerofrom-derive-v0_1/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/zerofrom-derive-v0_1/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/zerofrom-v0_1",
+      "path": "texts/rust-vendor/zerofrom-v0_1/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/zerofrom-v0_1/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/zerotrie-v0_2",
+      "path": "texts/rust-vendor/zerotrie-v0_2/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/zerotrie-v0_2/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/zerovec-derive-v0_11",
+      "path": "texts/rust-vendor/zerovec-derive-v0_11/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/zerovec-derive-v0_11/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/zerovec-v0_11",
+      "path": "texts/rust-vendor/zerovec-v0_11/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/zerovec-v0_11/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "rust-vendor/zoneinfo64-v0_3",
+      "path": "texts/rust-vendor/zoneinfo64-v0_3/LICENSE",
+      "source": "third_party/rust/chromium_crates_io/vendor/zoneinfo64-v0_3/LICENSE",
+      "source_proof": "../source-reproduction-attempt12-result.json",
+      "bytes": 2195,
+      "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+      "git_blob_sha1": "c9be6012c53792604f970ffa54350c31fcbd4b3f"
+    },
+    {
+      "component": "simdutf",
+      "path": "texts/simdutf/LICENSE",
+      "source": "https://chromium.googlesource.com/chromium/src/third_party/simdutf/+/f7356eed293f8208c40b3c1b344a50bd70971983/LICENSE?format=TEXT",
+      "revision": "f7356eed293f8208c40b3c1b344a50bd70971983",
+      "tree": "6123564324038cf176c37fbd3dfac2bbee1deb32",
+      "bytes": 1059,
+      "sha256": "fc8dbc04e03ad4efc08a647ffe7f995b811a95bc04c0e85a56d5277c6593fa5f",
+      "git_blob_sha1": "74c8302ba92830e170dfae35957468edd2e25271"
+    },
+    {
+      "component": "siphash",
+      "path": "texts/siphash/LICENSE",
+      "source": "https://chromium.googlesource.com/v8/v8/+/refs/tags/15.2.124.1/third_party/siphash/LICENSE?format=TEXT",
+      "revision": "refs/tags/15.2.124.1",
+      "tree": "514827bdf7603a020c241f16d31e00946c2d4555",
+      "bytes": 6555,
+      "sha256": "36ffd9dc085d529a7e60e1276d73ae5a030b020313e6c5408593a6ae2af39673",
+      "git_blob_sha1": "670154e3538863b2d9891fd5483160fbdfc89164"
+    },
+    {
+      "component": "utf8-decoder",
+      "path": "texts/utf8-decoder/LICENSE",
+      "source": "https://chromium.googlesource.com/v8/v8/+/refs/tags/15.2.124.1/third_party/utf8-decoder/LICENSE?format=TEXT",
+      "revision": "refs/tags/15.2.124.1",
+      "tree": "00bdaa4104989d6d36a4f00b990510931971c73f",
+      "bytes": 1087,
+      "sha256": "3f712e5fbdfdbd5ee7d9b8c8152580220df55de47f4eba2f26c95c4de19ad096",
+      "git_blob_sha1": "b59bef2fb6a81448fccc34f3d45c9405b70bd0dd"
+    },
+    {
+      "component": "v8",
+      "path": "texts/v8/LICENSE",
+      "source": "https://chromium.googlesource.com/v8/v8/+/refs/tags/15.2.124.1/LICENSE?format=TEXT",
+      "revision": "refs/tags/15.2.124.1",
+      "tree": "a55bfa224a46e6c851148fb6530a79098cce345d",
+      "bytes": 3093,
+      "sha256": "6ab33af8774a0f396ee3aeeb761e3229057682d6f9fa7f572e390c2cb3a6e509",
+      "git_blob_sha1": "9898b2d4833bfe87c05ba9106f082ed600bb2aab"
+    },
+    {
+      "component": "v8",
+      "path": "texts/v8/LICENSE.fdlibm",
+      "source": "https://chromium.googlesource.com/v8/v8/+/refs/tags/15.2.124.1/LICENSE.fdlibm?format=TEXT",
+      "revision": "refs/tags/15.2.124.1",
+      "tree": "a55bfa224a46e6c851148fb6530a79098cce345d",
+      "bytes": 250,
+      "sha256": "e7115e18444dae09d17f361ddc365fb1d342640fe500796209c63f7c80dfae10",
+      "git_blob_sha1": "b54cb52278e1847b4f9faa1db09d6b526cd3ddc6"
+    },
+    {
+      "component": "v8",
+      "path": "texts/v8/LICENSE.strongtalk",
+      "source": "https://chromium.googlesource.com/v8/v8/+/refs/tags/15.2.124.1/LICENSE.strongtalk?format=TEXT",
+      "revision": "refs/tags/15.2.124.1",
+      "tree": "a55bfa224a46e6c851148fb6530a79098cce345d",
+      "bytes": 1482,
+      "sha256": "6a585a9f466654abc8fc0829d56b1bc987e3a073d31faa03bba37d33640a23cd",
+      "git_blob_sha1": "9bd62e4f231a357d47073bdece85373325dd732f"
+    },
+    {
+      "component": "v8",
+      "path": "texts/v8/LICENSE.v8",
+      "source": "https://chromium.googlesource.com/v8/v8/+/refs/tags/15.2.124.1/LICENSE.v8?format=TEXT",
+      "revision": "refs/tags/15.2.124.1",
+      "tree": "a55bfa224a46e6c851148fb6530a79098cce345d",
+      "bytes": 1527,
+      "sha256": "4af93c12062c58058378de2397dc1c92bbff9ddfb1d583a01c84127557ce97ca",
+      "git_blob_sha1": "933718a9ef9dae4cb4afa56e490211760d8a949f"
+    },
+    {
+      "component": "valgrind",
+      "path": "texts/valgrind/LICENSE",
+      "source": "https://chromium.googlesource.com/v8/v8/+/refs/tags/15.2.124.1/third_party/valgrind/LICENSE?format=TEXT",
+      "revision": "refs/tags/15.2.124.1",
+      "tree": "42254edd463806ad4cb6852cb03020b8fed86188",
+      "bytes": 2439,
+      "sha256": "ebf25b8ce59c9e8883acd1ca75b6fc121937ca034f666c4077d2be739d2e1622",
+      "git_blob_sha1": "0be0037ca2e9a4e5e46c48703b0c05a39a11c985"
+    },
+    {
+      "component": "wasm-api",
+      "path": "texts/wasm-api/LICENSE",
+      "source": "https://chromium.googlesource.com/v8/v8/+/refs/tags/15.2.124.1/third_party/wasm-api/LICENSE?format=TEXT",
+      "revision": "refs/tags/15.2.124.1",
+      "tree": "0256d0bd67ebbd3bebe25df4deefda14f797bac8",
+      "bytes": 11358,
+      "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+      "git_blob_sha1": "8f71f43fee3f78649d238238cbde51e6d7055c82"
+    },
+    {
+      "component": "zlib",
+      "path": "texts/zlib/LICENSE",
+      "source": "https://chromium.googlesource.com/chromium/src/third_party/zlib/+/42c2f19a14d33b4ed327ab898fe7b652013aa740/LICENSE?format=TEXT",
+      "revision": "42c2f19a14d33b4ed327ab898fe7b652013aa740",
+      "tree": "6bbe967f230720c15dd9f557308f5d9de0d4bb77",
+      "bytes": 1002,
+      "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2",
+      "git_blob_sha1": "b7a69d058e616651eae27b3f90c0b7fd36c099b2"
+    }
+  ]
+}

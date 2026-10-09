@@ -1,0 +1,210 @@
+--- a/src/binding.cc
++++ b/src/binding.cc
+@@ -27,6 +27,9 @@
+ #include "v8-platform.h"
+ #include "v8-profiler.h"
+ #include "v8.h"
++#include "v8/src/api/api-inl.h"
++#include "v8/src/execution/isolate.h"
++#include "v8/src/execution/isolate-inl.h"
+ #include "v8/src/flags/flags.h"
+ #include "v8/src/libplatform/default-platform.h"
+ #include "v8/src/objects/instance-type.h"
+@@ -425,6 +428,24 @@
+   isolate->TerminateExecution();
+ }
+ 
++// Unlike the public API's asynchronous StackGuard request, this is called
++// from an active same-thread slow API callback after a sticky host budget
++// failure. It must not be called from a Fast API, GC, or heap-limit hook.
++// V8's API callback return path observes the exception field immediately.
++// A sticky budget failure dominates even a pending ordinary page exception.
++// Follow public ThrowException's clear-internal-then-Throw sequence; Throw
++// propagates the termination sentinel to the external TryCatch. If termination
++// is already active, there is nothing more to do.
++void v8__Isolate__TerminateExecutionNowFromCallback(v8::Isolate* isolate) {
++  auto* internal = reinterpret_cast<v8::internal::Isolate*>(isolate);
++  if (internal->has_exception() && internal->is_execution_terminating()) return;
++  v8::EnterV8BasicScope api_scope(internal);
++  if (internal->has_exception()) {
++    internal->clear_internal_exception();
++  }
++  internal->TerminateExecution();
++}
++
+ bool v8__Isolate__IsExecutionTerminating(v8::Isolate* isolate) {
+   return isolate->IsExecutionTerminating();
+ }
+--- a/src/isolate.rs
++++ b/src/isolate.rs
+@@ -825,6 +825,9 @@
+     data: *mut c_void,
+   );
+   fn v8__Isolate__TerminateExecution(isolate: *const RealIsolate);
++  fn v8__Isolate__TerminateExecutionNowFromCallback(
++    isolate: *const RealIsolate,
++  );
+   fn v8__Isolate__IsExecutionTerminating(isolate: *const RealIsolate) -> bool;
+   fn v8__Isolate__CancelTerminateExecution(isolate: *const RealIsolate);
+   fn v8__Isolate__GetMicrotasksPolicy(
+@@ -1068,6 +1071,26 @@
+     true
+   }
+ 
++  /// Synchronously raises V8's uncatchable termination exception from the
++  /// currently active API callback. Unlike [`Self::terminate_execution`], this
++  /// is not an asynchronous watchdog request. The exception is visible to
++  /// V8's API callback return path before another JavaScript statement runs.
++  ///
++  /// # Safety
++  /// Call only on this isolate's thread inside an active slow V8 function or
++  /// property callback after a sticky hard host failure. Allocation must be
++  /// permitted; never call this in a Fast API, GC, or heap-limit hook. The
++  /// sticky failure takes precedence over a pending ordinary page exception,
++  /// which this call replaces with V8's
++  /// uncatchable termination sentinel. This may allocate while V8 constructs a
++  /// message, so it must not run in a no-allocation or GC hook.
++  #[inline(always)]
++  pub unsafe fn terminate_execution_now_from_callback(&self) {
++    unsafe {
++      v8__Isolate__TerminateExecutionNowFromCallback(self.as_real_ptr());
++    }
++  }
++
+   /// See [`IsolateHandle::cancel_terminate_execution`]
+   #[inline(always)]
+   pub fn cancel_terminate_execution(&self) -> bool {
+--- a/tests/termination_now.rs
++++ b/tests/termination_now.rs
+@@ -0,0 +1,121 @@
++//! A hard host failure must stop the active API callback before the next JS statement.
++
++use std::panic::{AssertUnwindSafe, catch_unwind};
++use std::sync::Once;
++use std::sync::atomic::{AtomicBool, Ordering};
++
++static CALLBACK_PANICKED: AtomicBool = AtomicBool::new(false);
++
++fn initialize() {
++  static INIT: Once = Once::new();
++  INIT.call_once(|| {
++    v8::V8::initialize_platform(
++      v8::new_default_platform(0, false).make_shared(),
++    );
++    v8::V8::initialize();
++  });
++}
++
++fn stop_now(
++  scope: &mut v8::PinScope,
++  _args: v8::FunctionCallbackArguments,
++  _return_value: v8::ReturnValue<v8::Value>,
++) {
++  if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
++    // SAFETY: V8 called this slow function callback on the isolate thread.
++    // No page exception is pending; a hard host failure owns this path.
++    unsafe { scope.terminate_execution_now_from_callback() };
++    // Repeated termination must leave the original uncatchable exception.
++    unsafe { scope.terminate_execution_now_from_callback() };
++  })) {
++    CALLBACK_PANICKED.store(true, Ordering::SeqCst);
++    std::mem::forget(payload);
++    scope.terminate_execution();
++  }
++}
++
++fn stop_after_ordinary_throw(
++  scope: &mut v8::PinScope,
++  _args: v8::FunctionCallbackArguments,
++  _return_value: v8::ReturnValue<v8::Value>,
++) {
++  if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
++    let message =
++      v8::String::new(scope, "page exception").expect("fixed string");
++    let ordinary = v8::Exception::type_error(scope, message);
++    scope.throw_exception(ordinary);
++    // SAFETY: this is the same slow callback and isolate thread. The hard
++    // failure supersedes its ordinary pending page exception.
++    unsafe { scope.terminate_execution_now_from_callback() };
++  })) {
++    CALLBACK_PANICKED.store(true, Ordering::SeqCst);
++    std::mem::forget(payload);
++    scope.terminate_execution();
++  }
++}
++
++fn evaluate(scope: &mut v8::PinScope<'_, '_>, source: &str) -> String {
++  let source = v8::String::new(scope, source).expect("source");
++  let script =
++    v8::Script::compile(scope, source, None).expect("compiled script");
++  script
++    .run(scope)
++    .expect("run script")
++    .to_rust_string_lossy(scope)
++}
++
++fn run_case(callback: impl v8::MapFnTo<v8::FunctionCallback>) {
++  initialize();
++  CALLBACK_PANICKED.store(false, Ordering::SeqCst);
++  let isolate = &mut v8::Isolate::new(Default::default());
++  v8::scope!(let handle_scope, isolate);
++  let context = v8::Context::new(handle_scope, Default::default());
++  let mut context_scope = v8::ContextScope::new(handle_scope, context);
++  v8::scope!(let scope, &mut context_scope);
++  let key = v8::String::new(scope, "stopNow").expect("fixed key");
++  let function = v8::Function::builder(callback)
++    .build(scope)
++    .expect("native callback");
++  assert_eq!(
++    context
++      .global(scope)
++      .set(scope, key.into(), function.into()),
++    Some(true),
++  );
++  assert_eq!(
++    evaluate(
++      scope,
++      "globalThis.after = 0; globalThis.caught = 0; globalThis.finalized = 0; 'ready'",
++    ),
++    "ready",
++  );
++  {
++    v8::tc_scope!(let tc, scope);
++    let source = v8::String::new(
++      tc,
++      "try { stopNow(); globalThis.after = 1; } catch (_) { globalThis.caught = 1; } finally { globalThis.finalized = 1; }",
++    )
++    .expect("source");
++    let script =
++      v8::Script::compile(tc, source, None).expect("compiled script");
++    assert!(script.run(tc).is_none());
++    assert!(tc.has_terminated());
++    assert!(!tc.can_continue());
++  }
++  assert!(!CALLBACK_PANICKED.load(Ordering::SeqCst));
++  scope.cancel_terminate_execution();
++  assert_eq!(
++    evaluate(scope, "[after, caught, finalized].join('|')"),
++    "0|0|0",
++  );
++}
++
++#[test]
++fn synchronous_termination_skips_after_catch_and_finally() {
++  run_case(stop_now);
++}
++
++#[test]
++fn synchronous_termination_supersedes_a_pending_page_exception() {
++  run_case(stop_after_ordinary_throw);
++}
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -298,3 +298,7 @@
+ [[example]]
+ name = "symbol_store_control"
+ path = "examples/symbol_store_control.rs"
++
++[[test]]
++name = "termination_now"
++path = "tests/termination_now.rs"

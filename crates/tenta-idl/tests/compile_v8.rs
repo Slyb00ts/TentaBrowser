@@ -13,7 +13,16 @@
 
 #![cfg(feature = "v8")]
 
-#[allow(dead_code)]
+// Generated conversions keep one shape for Copy/owned and narrow/wide types,
+// as in tenta-js's generated binding module. Handwritten tests stay linted.
+#[allow(
+    dead_code,
+    clippy::wrong_self_convention,
+    clippy::unnecessary_cast,
+    clippy::single_match,
+    clippy::unnecessary_map_on_constructor,
+    clippy::clone_on_copy
+)]
 mod toy_bindings {
     include!("golden/toy/prelude.rs");
     include!("golden/toy/types.rs");
@@ -29,12 +38,24 @@ mod toy_bindings {
     include!("golden/toy/byte_box_ops.rs");
     include!("golden/toy/byte_box_register.rs");
     include!("golden/toy/byte_box_v8.rs");
+    include!("golden/toy/buffer_reference_probe_ops.rs");
+    include!("golden/toy/buffer_reference_probe_register.rs");
+    include!("golden/toy/buffer_reference_probe_v8.rs");
     include!("golden/toy/payload_box_ops.rs");
     include!("golden/toy/payload_box_register.rs");
     include!("golden/toy/payload_box_v8.rs");
 }
 
-#[allow(dead_code)]
+// Generated conversions keep one shape for Copy/owned and narrow/wide types,
+// as in tenta-js's generated binding module. Handwritten tests stay linted.
+#[allow(
+    dead_code,
+    clippy::wrong_self_convention,
+    clippy::unnecessary_cast,
+    clippy::single_match,
+    clippy::unnecessary_map_on_constructor,
+    clippy::clone_on_copy
+)]
 mod dom_bindings {
     include!("golden/dom/prelude.rs");
     include!("golden/dom/types.rs");

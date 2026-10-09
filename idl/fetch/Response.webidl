@@ -12,9 +12,9 @@
 //  - `BodyInit` is declared as the arms this slice can convert. The standard's
 //    `BodyInit` is `(ReadableStream or XMLHttpRequestBodyInit)` and
 //    `XMLHttpRequestBodyInit` is `(Blob or BufferSource or FormData or
-//    URLSearchParams or USVString)`. `ReadableStream` and `FormData` exist
-//    nowhere in this repository, so the union is the two arm types that do: a
-//    buffer source and a scalar value string. `Blob` has since gained a real
+//    URLSearchParams or USVString)`. The served body extraction remains limited
+//    to a buffer source and a scalar value string; Streams is unimplemented,
+//    and FormData body extraction has not been added. `Blob` has a real
 //    declaration (`idl/fileapi/Blob.webidl`, which carries the host-side brand
 //    check its own `BlobPart` arm needs) and this union is deliberately not
 //    widened to it, because that changes the body path of `Response`, `Request`
@@ -43,20 +43,15 @@
 //    reads `text/plain;charset=UTF-8` here against the standard's
 //    `application/x-www-form-urlencoded;charset=UTF-8` — a page-visible
 //    deviation, and the same one `fetch()`'s `body` has.
-//    Declaring the arm is not the fix: `union_test`
-//    (`crates/tenta-idl/src/codegen/types.rs`) gives `Type::Interface(_)` the
-//    test `value.is_object()` — every object, not a brand check — so an arm
-//    declared before `USVString` would capture `{}`, an `Array` and a `Date`,
-//    and `new Response({})` would fail the `URLSearchParams` conversion instead
-//    of stringifying to `"[object Object]"`. Serving it properly needs a
-//    platform-object brand-check helper in the generator's prelude beside
-//    `has_iterator`, which is a separate slice.
+//    The generator now supports interface-brand selection. Serving this arm
+//    still requires widening BodyInit and implementing the corresponding host
+//    body extraction and inferred content type.
 //  - `Body` declares only the three members that need neither a
 //    `ReadableStream` nor a `Blob`: `bodyUsed`, `json()` and `text()`. `body`,
 //    `arrayBuffer()`, `blob()`, `bytes()`, `formData()` and `textStream()` are
 //    left out, because every one of them returns or reads a `ReadableStream`
-//    (or `FormData`, which does not exist here; `Blob` now does, in
-//    `idl/fileapi/Blob.webidl`, but `blob()` and `bytes()` need the value kinds
+//    (or need body conversions for `FormData` and `Blob`, declared in
+//    `idl/xhr/FormData.webidl` and `idl/fileapi/Blob.webidl`, and the value kinds
 //    below rather than a declaration). `Response.body` in
 //    particular arrives with Streams (`d-5b`). A declared-but-unimplemented
 //    member is the bug class slice 4a removed, so none is declared.

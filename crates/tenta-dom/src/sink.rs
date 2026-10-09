@@ -125,7 +125,11 @@ impl TreeSink for Document {
     }
 
     fn add_attrs_if_missing(&mut self, target: &NodeId, attrs: Vec<Attribute>) {
-        self.add_attributes_if_missing(*target, attrs);
+        if let Err(error) = self.add_attributes_if_missing(*target, attrs) {
+            self.parse_error(Cow::Owned(format!(
+                "sink attribute insertion refused: {error}"
+            )));
+        }
     }
 
     fn remove_from_parent(&mut self, target: &NodeId) {
@@ -177,6 +181,13 @@ impl TreeSink for Document {
     }
 
     fn pop(&mut self, node: &NodeId) -> ParseControl {
+        // A void TreeSink operation may have reached a sticky observer budget
+        // or native failure. Stop before another parser-blocking script; the
+        // page reads the original typed failure from the Document.
+        if self.check_observer_health().is_err() {
+            self.stopped = true;
+            return ParseControl::Stop;
+        }
         // The predicate is moved out for the call: it takes `&Document`, and
         // it lives in the document it inspects.
         let Some(mut predicate) = self.stop_after.take() else {
@@ -193,7 +204,11 @@ impl TreeSink for Document {
     }
 
     fn maybe_clone_option_into_selectedcontent(&mut self, option: &NodeId) {
-        self.clone_option_into_selectedcontent(*option);
+        if let Err(error) = self.clone_option_into_selectedcontent(*option) {
+            self.parse_error(Cow::Owned(format!(
+                "selected-content cloning refused: {error}"
+            )));
+        }
     }
 
     fn parse_error(&mut self, message: Cow<'static, str>) {
@@ -206,6 +221,132 @@ impl TreeSink for Document {
 
     fn finish(self) -> Document {
         self
+    }
+}
+
+/// Parses a fragment into an existing arena without attaching the parser's
+/// synthetic `<html>` root to the live document. All writes still use the
+/// normal document sink and its mutation validation and bookkeeping.
+pub(crate) struct FragmentSink<'a> {
+    document: &'a mut Document,
+    container: NodeId,
+}
+
+impl<'a> FragmentSink<'a> {
+    pub(crate) fn new(document: &'a mut Document) -> Self {
+        let container = document.create_fragment();
+        Self {
+            document,
+            container,
+        }
+    }
+}
+
+impl TreeSink for FragmentSink<'_> {
+    type Handle = NodeId;
+    type Output = tenta_core::Result<NodeId>;
+
+    fn document(&mut self) -> NodeId {
+        self.container
+    }
+
+    fn create_element(
+        &mut self,
+        name: QualName,
+        attrs: Vec<Attribute>,
+        flags: ElementFlags,
+    ) -> NodeId {
+        TreeSink::create_element(self.document, name, attrs, flags)
+    }
+
+    fn create_comment(&mut self, text: &str) -> NodeId {
+        TreeSink::create_comment(self.document, text)
+    }
+
+    fn create_pi(&mut self, target: &str, data: &str) -> NodeId {
+        TreeSink::create_pi(self.document, target, data)
+    }
+
+    fn append(&mut self, parent: &NodeId, child: NodeOrText<'_, NodeId>) {
+        TreeSink::append(self.document, parent, child);
+    }
+
+    fn append_before_sibling(&mut self, sibling: &NodeId, child: NodeOrText<'_, NodeId>) {
+        TreeSink::append_before_sibling(self.document, sibling, child);
+    }
+
+    fn append_based_on_parent_node(
+        &mut self,
+        element: &NodeId,
+        prev_element: &NodeId,
+        child: NodeOrText<'_, NodeId>,
+    ) {
+        TreeSink::append_based_on_parent_node(self.document, element, prev_element, child);
+    }
+
+    fn append_doctype_to_document(&mut self, name: &str, public_id: &str, system_id: &str) {
+        let doctype = self.document.create_doctype(name, public_id, system_id);
+        self.document
+            .sink_insert(self.container, doctype, NodeId::NONE);
+    }
+
+    fn add_attrs_if_missing(&mut self, target: &NodeId, attrs: Vec<Attribute>) {
+        TreeSink::add_attrs_if_missing(self.document, target, attrs);
+    }
+
+    fn remove_from_parent(&mut self, target: &NodeId) {
+        TreeSink::remove_from_parent(self.document, target);
+    }
+
+    fn reparent_children(&mut self, node: &NodeId, new_parent: &NodeId) {
+        TreeSink::reparent_children(self.document, node, new_parent);
+    }
+
+    fn get_template_contents(&mut self, target: &NodeId) -> NodeId {
+        TreeSink::get_template_contents(self.document, target)
+    }
+
+    fn element_name(&self, target: &NodeId) -> QualName {
+        TreeSink::element_name(self.document, target)
+    }
+
+    fn is_mathml_annotation_xml_integration_point(&self, target: &NodeId) -> bool {
+        TreeSink::is_mathml_annotation_xml_integration_point(self.document, target)
+    }
+
+    fn set_quirks_mode(&mut self, mode: QuirksMode) {
+        TreeSink::set_quirks_mode(self.document, mode);
+    }
+
+    fn mark_script_already_started(&mut self, node: &NodeId) {
+        TreeSink::mark_script_already_started(self.document, node);
+    }
+
+    fn pop(&mut self, node: &NodeId) -> ParseControl {
+        TreeSink::pop(self.document, node)
+    }
+
+    fn maybe_clone_option_into_selectedcontent(&mut self, option: &NodeId) {
+        TreeSink::maybe_clone_option_into_selectedcontent(self.document, option);
+    }
+
+    fn parse_error(&mut self, message: Cow<'static, str>) {
+        TreeSink::parse_error(self.document, message);
+    }
+
+    fn set_current_line(&mut self, line: u64) {
+        TreeSink::set_current_line(self.document, line);
+    }
+
+    fn finish(self) -> Self::Output {
+        let root = self.document.first_child(self.container);
+        if root.is_some() {
+            Ok(root)
+        } else {
+            Err(tenta_core::Error::invalid(
+                "fragment parsing produced no root",
+            ))
+        }
     }
 }
 

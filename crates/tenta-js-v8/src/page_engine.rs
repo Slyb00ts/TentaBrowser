@@ -21,6 +21,7 @@
 //! `HAS_WRAPPER`, and a caller must not be holding a borrow of it at the time.
 
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tenta_core::{Origin, TimerRule};
@@ -33,9 +34,13 @@ use tenta_js::event_loop::{Clock, MonoTime, ProvenanceSink};
 use tenta_js::fetch::{FetchCompletion, FetchDriver};
 use tenta_js::xhr::{XhrCompletion, XhrDriver};
 
-use crate::{Engine, world};
+use crate::Engine;
 
 impl PageEngine for Engine {
+    fn native_failure(&self) -> Option<&'static str> {
+        Engine::native_failure(self)
+    }
+
     /// **Invariant.** A page engine is always built over a document, and this
     /// is where that invariant is cashed: the only constructors that leave the
     /// engine without one — [`Engine::new`] and [`Engine::with_heap_limit`] —
@@ -114,6 +119,14 @@ impl PageEngine for Engine {
         let scheduler = self.host.scheduler.clone();
         scheduler
             .with_origin(Origin::Tracked, || self.run_classified(source, timeout))
+            .map_err(|failure| ScriptError {
+                kind: failure.kind,
+                message: failure.message,
+            })
+    }
+
+    fn evaluate(&mut self, source: &str, timeout: Duration) -> Result<String, ScriptError> {
+        self.run_inner(source, Some(timeout))
             .map_err(|failure| ScriptError {
                 kind: failure.kind,
                 message: failure.message,
@@ -234,14 +247,11 @@ impl PageEngine for Engine {
     /// (`Engine::install_script_host` in `Engine::build`), which is what makes
     /// the release real rather than a silent no-op.
     fn trim_memory(&mut self) {
-        let _entry = self.entered();
-        // V8's embedder memory-pressure entry point, which collects
-        // synchronously — the browser's replacement for an exposed `gc()`.
-        self.isolate.low_memory_notification();
-        if let Some(dom) = &self.dom {
-            world::reclaim_dead_bookkeeping(&dom.state, &dom.ctx.documents);
-            dom.ctx.drain_swept_listeners();
+        if self.native_failure().is_some() {
+            return;
         }
+        let _entry = self.entered();
+        self.graph_checkpoint();
     }
 
     fn gc_epoch(&self) -> u64 {
@@ -254,7 +264,7 @@ impl PageEngine for Engine {
     /// its thread-safe handle, which is exactly what this hands out. `None`
     /// would tell the page it has no way to break a runaway script.
     fn watchdog(&self) -> Option<Box<dyn EngineWatchdog>> {
-        Some(Box::new(V8Watchdog(self.isolate.thread_safe_handle())))
+        Some(Box::new(V8Watchdog(Arc::clone(&self.termination))))
     }
 }
 
@@ -265,11 +275,11 @@ impl PageEngine for Engine {
 /// `IsolateHandle` is `Send + Sync` and holds a lock over the isolate pointer,
 /// so a terminate that races teardown sees a disposed isolate and does nothing
 /// rather than dereferencing it.
-struct V8Watchdog(v8::IsolateHandle);
+struct V8Watchdog(Arc<crate::termination::TerminationGate>);
 
 impl EngineWatchdog for V8Watchdog {
     fn terminate(&self) {
-        self.0.terminate_execution();
+        self.0.request();
     }
 }
 
@@ -318,11 +328,13 @@ impl PageEngineFactory for V8EngineFactory {
             // clock itself.
             EngineClock::Virtual => Clock::virtual_at(MonoTime::ZERO),
         };
-        let mut engine = Engine::with_document_on_clock(
+        let mut engine = Engine::with_document_on_clock_storage_and_memory(
             document,
             clock,
             config.max_heap_bytes,
             config.cookies.clone(),
+            config.storage.clone(),
+            config.native_memory.clone(),
         );
         // The page derives the rule from its settle configuration, so the
         // engine and the settle machine cannot disagree about what defers a

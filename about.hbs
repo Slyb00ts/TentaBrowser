@@ -35,7 +35,8 @@ Used by:
 
 ## Manual notices
 
-The following material is not a Rust crate and is therefore not seen by `cargo about`.
+The following notices cover source and native components whose attribution is
+not fully represented by Rust crate metadata in `cargo about`.
 
 ### Render fixture corpus (`render-fixtures/`)
 
@@ -55,3 +56,40 @@ integration test suite and its `LICENSE` file are vendored unchanged except for 
 HTTP/2 client fingerprint patch documented in `crates/tenta-h2/TENTA-PATCH.md`; the
 crate keeps the MIT license of the original. The upstream HPACK story fixture corpus
 is not vendored.
+
+### Native QuickJS forks (`crates/tenta-quickjs-{core,sys}/`)
+
+The renamed `tenta-quickjs-core` and `tenta-quickjs-sys` packages derive from
+[rquickjs](https://github.com/DelSkayn/rquickjs) 0.12.2 at revision
+`635f9322ccc875e3f9851e7f75ec538cf3274fd5`, under the MIT License. Their
+`UPSTREAM.json` files record exact crates.io archive checksums. The binding
+license omitted from the upstream core/sys archives is retained from the
+same-version facade archive. The sys package bundles QuickJS-ng 0.15.1 with
+its original MIT license and copyright notices in `quickjs/LICENSE`.
+The native hook and ownership changes are documented in
+`crates/tenta-quickjs-core/TENTA-PATCH.md`; `upstream-diff.patch` records the
+source delta. These are local unpublished forks, not original upstream releases.
+
+### Local V8 bindings and native patch (`crates/tenta-v8/`)
+
+`tenta-v8` derives its Rust binding files from MIT-licensed rusty_v8 152.2.0
+(Deno authors), crate SHA-256
+`a10fe1a92da5c32c7c7f838ce36c0ccfcfd5edf0865b58bdde820aa64cea9888`.
+The recorded VCS revision is `2768994f664e8a6e3aba27503606c58339136e2a` with the
+upstream dirty flag set; the crate checksum identifies the actual source.
+Original headers and the restored exact upstream MIT license are retained.
+TentaBrowser's local changes are Apache-2.0.
+
+The matched native archive derives from BSD-licensed V8 15.2.124.1 with the
+opt-in legacy property hooks and native ordinary-record classifier. Source and
+build records pin the native dependencies and toolchains. The companion
+[notice index](crates/tenta-v8/native/notices/NOTICES.md) retains 91 exact upstream
+notice files covering the observed macOS arm64 components and a disclosed
+optional/build-tool superset. The native23 applicability record relates the
+unchanged base component inventory to the two-action binding-object/archive
+increment; it is not a new complete inventory or other-target review.
+
+Retain that directory, original headers and the binding MIT/local Apache licenses
+with redistributed source/native artifacts. Source reconstruction, native tests,
+artifact routing, browser behavior and distribution-specific obligations have
+separate evidence. No package or native archive is published by this preparation.

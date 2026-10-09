@@ -1,36 +1,38 @@
-//! V8 backend (rusty_v8): isolates, snapshots, fast API, native Wasm, worker isolates.
+//! V8 page execution with native WebIDL bindings and the shared HTML event loop.
 //!
-//! P2 package (a) foundation (`docs/spec/05-javascript.md` §4). This first
-//! slice initialises the V8 platform once per process and evaluates a script
-//! on a freshly created isolate. The per-thread isolate pool, the dedicated
-//! engine root thread that owns `V8::initialize`, the custom `PlatformImpl`
-//! task routing and the startup snapshot land in the following WP1 steps; the
-//! `evaluate` entry point and its error mapping are kept stable so they grow
-//! into the pooled path rather than being replaced.
-
-#[allow(unused_imports)]
-use tenta_core as _;
+//! A page engine owns an isolate and wrapper world for its document. Page scripts,
+//! timers, fetch/XHR completions and lifecycle events enter through the shared
+//! engine contract, with watchdogs and sticky native-panic containment.
+//! Isolate pooling, custom platform task routing, startup snapshots and worker
+//! isolates remain open P2 packages (`docs/spec/05-javascript.md` §4).
 
 mod host;
 mod page_engine;
 mod promise;
 mod script_host;
+mod structured_clone;
+mod termination;
 mod world;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Once;
+use std::sync::{Arc, Once};
 
 use tenta_js::bindings::WrapperWorld;
 use tenta_js::bindings::host::{
     HostContext, HostObject, SharedContext, SharedDocument, deliver_xhr_completion, encode_host,
     encode_node, insert_fetched_response,
 };
-use tenta_js::bindings::{Handle, handle_from_v8, handle_to_v8};
+use tenta_js::bindings::{
+    Handle, clear_v8_callback_admission, handle_from_v8, handle_to_v8,
+    install_native_callback_state_for_isolate, install_v8_callback_admission,
+    v8_isolate_callback_boundary,
+};
 use tenta_js::dom::events::{DispatchTarget, EventKind, EventRecord, ScriptHost, dispatch_at};
 use tenta_js::engine::{LifecycleEvent, ScriptErrorKind};
 use tenta_js::event_loop::{Clock, EventLoop, FiringRelease, MonoTime};
 use tenta_js::fetch::{FetchCompletion, FetchOutcome};
+use tenta_js::storage::PageStorage;
 use tenta_js::xhr::XhrCompletion;
 use tenta_net::CookieJar;
 
@@ -88,6 +90,7 @@ pub struct Engine {
     // `heap_guard`; `Engine`'s `Drop` removes that callback before either field
     // is dropped, so this is sound regardless of field order.
     isolate: v8::OwnedIsolate,
+    termination: Arc<termination::TerminationGate>,
     context: v8::Global<v8::Context>,
     heap_guard: Option<Box<HeapGuard>>,
     // The isolate's GC epilogue callback holds a raw pointer into `gc_counter`
@@ -102,6 +105,8 @@ pub struct Engine {
     // the very loop `run_event_loop` drives.
     event_loop: EventLoop,
     host: Rc<HostState>,
+    /// Shared with the page and any Send clone wire beyond this isolate.
+    native_memory: tenta_core::NativeMemoryBudget,
     // The deadline every subsequent run is given, when the page set one. `None`
     // leaves the watchdog off, which is what one-shot evaluation wants.
     script_timeout: Option<std::time::Duration>,
@@ -128,6 +133,9 @@ struct DomWorld {
 /// a run to turn that termination into a heap-limit [`JsError`].
 struct HeapGuard {
     handle: v8::IsolateHandle,
+    // Stable for the isolate's lifetime. The callback receives only `data`, so
+    // it uses this address to record a panic in the isolate's shared marker.
+    isolate: v8::UnsafeRawIsolatePtr,
     tripped: std::sync::atomic::AtomicBool,
 }
 
@@ -142,12 +150,18 @@ unsafe extern "C" fn on_near_heap_limit(
     // SAFETY: `data` is the pointer to the `HeapGuard` boxed in the owning
     // `Engine`, which outlives the isolate that holds this callback.
     let guard = unsafe { &*(data as *const HeapGuard) };
-    guard
-        .tripped
-        .store(true, std::sync::atomic::Ordering::Release);
-    guard.handle.terminate_execution();
-    // Headroom so the interrupted allocation can complete and unwind.
-    current_heap_limit + current_heap_limit / 2
+    // SAFETY: the guard's raw address belongs to the live isolate invoking
+    // this callback. The shared reference is used only during this invocation.
+    let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr(&guard.isolate) };
+    let headroom = current_heap_limit.saturating_add(current_heap_limit / 2);
+    v8_isolate_callback_boundary(isolate, "on_near_heap_limit", headroom, || {
+        guard
+            .tripped
+            .store(true, std::sync::atomic::Ordering::Release);
+        guard.handle.terminate_execution();
+        // Headroom lets the interrupted allocation finish and unwind.
+        headroom
+    })
 }
 
 /// How many collections this isolate has completed, bumped by a GC epilogue
@@ -169,17 +183,22 @@ struct GcCounter {
 /// advances the epoch, and a spurious advance costs the sweep one pointless
 /// check, while a missed one would leave a detached node pinned.
 unsafe extern "C" fn on_gc_epilogue(
-    _isolate: v8::UnsafeRawIsolatePtr,
+    isolate: v8::UnsafeRawIsolatePtr,
     _gc_type: v8::GCType,
     _flags: v8::GCCallbackFlags,
     data: *mut std::os::raw::c_void,
 ) {
-    // SAFETY: `data` is the pointer to the `GcCounter` boxed in the owning
-    // `Engine`, which outlives the isolate that holds this callback.
-    let counter = unsafe { &*(data as *const GcCounter) };
-    counter
-        .epoch
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // SAFETY: V8 supplies its live isolate during this GC callback. No handle
+    // is created and the reference does not escape the callback.
+    let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr(&isolate) };
+    v8_isolate_callback_boundary(isolate, "on_gc_epilogue", (), || {
+        // SAFETY: `data` is the pointer to the `GcCounter` boxed in the owning
+        // `Engine`, which outlives the isolate that holds this callback.
+        let counter = unsafe { &*(data as *const GcCounter) };
+        counter
+            .epoch
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    });
 }
 
 // The isolates this thread has entered through an `IsolateEntry`, innermost
@@ -334,6 +353,10 @@ impl Engine {
             None,
             Clock::virtual_at(MonoTime::ZERO),
             CookieJar::new(),
+            PageStorage::isolated(),
+            tenta_core::NativeMemoryBudget::for_page(
+                tenta_core::Budgets::platform_default().page_memory_mb,
+            ),
         )
     }
 
@@ -346,6 +369,10 @@ impl Engine {
             None,
             Clock::virtual_at(MonoTime::ZERO),
             CookieJar::new(),
+            PageStorage::isolated(),
+            tenta_core::NativeMemoryBudget::for_page(
+                tenta_core::Budgets::platform_default().page_memory_mb,
+            ),
         )
     }
 
@@ -364,6 +391,10 @@ impl Engine {
             Some(doc),
             Clock::virtual_at(MonoTime::ZERO),
             CookieJar::new(),
+            PageStorage::isolated(),
+            tenta_core::NativeMemoryBudget::for_page(
+                tenta_core::Budgets::platform_default().page_memory_mb,
+            ),
         )
     }
 
@@ -394,7 +425,52 @@ impl Engine {
         max_heap_bytes: Option<usize>,
         cookies: CookieJar,
     ) -> Self {
-        Self::build(max_heap_bytes, Some(doc), clock, cookies)
+        Self::with_document_on_clock_and_storage(
+            doc,
+            clock,
+            max_heap_bytes,
+            cookies,
+            PageStorage::isolated(),
+        )
+    }
+
+    /// Builds a DOM engine with the page's storage namespace.
+    pub fn with_document_on_clock_and_storage(
+        doc: SharedDocument,
+        clock: Clock,
+        max_heap_bytes: Option<usize>,
+        cookies: CookieJar,
+        storage: PageStorage,
+    ) -> Self {
+        Self::with_document_on_clock_storage_and_memory(
+            doc,
+            clock,
+            max_heap_bytes,
+            cookies,
+            storage,
+            tenta_core::NativeMemoryBudget::for_page(
+                tenta_core::Budgets::platform_default().page_memory_mb,
+            ),
+        )
+    }
+
+    /// Builds a DOM engine with the page's shared native memory ledger.
+    pub fn with_document_on_clock_storage_and_memory(
+        doc: SharedDocument,
+        clock: Clock,
+        max_heap_bytes: Option<usize>,
+        cookies: CookieJar,
+        storage: PageStorage,
+        native_memory: tenta_core::NativeMemoryBudget,
+    ) -> Self {
+        Self::build(
+            max_heap_bytes,
+            Some(doc),
+            clock,
+            cookies,
+            storage,
+            native_memory,
+        )
     }
 
     fn build(
@@ -402,6 +478,8 @@ impl Engine {
         doc: Option<SharedDocument>,
         clock: Clock,
         cookies: CookieJar,
+        storage: PageStorage,
+        native_memory: tenta_core::NativeMemoryBudget,
     ) -> Self {
         ensure_platform();
         let mut params = v8::CreateParams::default();
@@ -410,6 +488,10 @@ impl Engine {
         }
         let mut isolate = v8::Isolate::new(params);
 
+        // This slot must exist before any native V8 hook can fire, including
+        // on a DOM-less engine that installs no generated WebIDL templates.
+        install_native_callback_state_for_isolate(&mut isolate);
+
         // The event loop owns "when a task runs"; V8 must not drain microtasks on
         // its own, so the engine can run them at the HTML checkpoint instead.
         isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
@@ -417,6 +499,9 @@ impl Engine {
         let heap_guard = max_heap_bytes.map(|_| {
             let mut guard = Box::new(HeapGuard {
                 handle: isolate.thread_safe_handle(),
+                // SAFETY: the isolate is alive here and its RealIsolate address
+                // stays fixed until Engine removes the callback during Drop.
+                isolate: unsafe { isolate.as_raw_isolate_ptr() },
                 tripped: std::sync::atomic::AtomicBool::new(false),
             });
             let data = (&mut *guard as *mut HeapGuard).cast::<std::os::raw::c_void>();
@@ -433,8 +518,15 @@ impl Engine {
             counter
         };
 
+        let termination = termination::TerminationGate::new(isolate.thread_safe_handle());
         let event_loop = EventLoop::new(clock);
-        let host = HostState::new(event_loop.scheduler(), cookies);
+        let host = HostState::new(
+            event_loop.scheduler(),
+            cookies,
+            native_memory.clone(),
+            Arc::clone(&termination),
+        );
+        let engine_native_memory = native_memory.clone();
 
         let (context, dom) = {
             v8::scope!(let handle_scope, &mut isolate);
@@ -445,24 +537,36 @@ impl Engine {
                         let mut context_scope = v8::ContextScope::new(handle_scope, local);
                         v8::scope!(let scope, &mut context_scope);
                         host::install(scope, local, host.scheduler.clock().time_origin_ms());
+                        install_dom_exception(scope);
                     }
                     // The host callbacks reach this state through the context slot.
                     local.set_slot::<HostState>(host.clone());
                     (v8::Global::new(handle_scope, local), None)
                 }
-                Some(doc) => Self::install_dom(handle_scope, &host, doc),
+                Some(doc) => Self::install_dom(handle_scope, &host, doc, storage, native_memory),
             }
         };
         let mut engine = Engine {
             isolate,
+            termination,
             context,
             heap_guard,
             gc_counter,
             event_loop,
             host,
+            native_memory: engine_native_memory,
             script_timeout: None,
             dom,
         };
+        if let Some(dom) = &engine.dom {
+            let admission: Rc<dyn tenta_js::bindings::V8CallbackAdmission> =
+                Rc::new(world::cycles::Admission::new(
+                    Rc::clone(&dom.state),
+                    dom.ctx.clone(),
+                    Arc::clone(&engine.termination),
+                ));
+            install_v8_callback_admission(&mut engine.isolate, admission);
+        }
         engine.install_script_host();
         // `Isolate::new` leaves the isolate it built **entered**, and that entry
         // has to be given back before `build` returns. A settled `Engine` is
@@ -536,15 +640,19 @@ impl Engine {
         handle_scope: &mut v8::PinScope<'_, '_, ()>,
         host: &Rc<HostState>,
         doc: SharedDocument,
+        storage: PageStorage,
+        native_memory: tenta_core::NativeMemoryBudget,
     ) -> (v8::Global<v8::Context>, Option<DomWorld>) {
         let state = Rc::new(RefCell::new(world::WorldState::default()));
         // Events timestamp against the loop clock, so `evt.timeStamp` and
         // `performance.now()` are readings of the same clock.
-        let ctx = HostContext::new(doc.clone(), host.scheduler.clock(), host.cookies.clone());
-        let document_ref = {
-            let doc = doc.borrow();
-            doc.node_ref(doc.document_node())
-        };
+        let (ctx, document_ref) = HostContext::new_with_installed_observer(
+            doc.clone(),
+            host.scheduler.clock(),
+            host.cookies.clone(),
+            storage,
+            native_memory,
+        );
 
         // The generated installers require a context-carrying scope, but the
         // global template must exist before the context built from it. A
@@ -560,12 +668,14 @@ impl Engine {
         // be on the template the global object is built from rather than added
         // to the object afterwards (`host::install_window_event_handlers`).
         host::install_window_event_handlers(scope, global_template);
+        host::install_window_storage_accessors(scope, global_template);
+        host::install_window_crypto_accessor(scope, global_template);
         // This one template outlives the block: the window's prototype chain is
         // chained to `EventTarget.prototype` once the context exists
         // (`host::install_window_prototype`).
         let event_target;
+        let mut registry = world::SkeletonRegistry::default();
         {
-            let mut registry = world::SkeletonRegistry::default();
             // Install interfaces parent-first: EventTarget is the root (Node
             // inherits it), so it must precede Node.
             event_target = tenta_js::bindings::install_event_target::<HostObject>(
@@ -584,6 +694,14 @@ impl Engine {
             .expect("install the CharacterData interface");
             tenta_js::bindings::install_text::<HostObject>(scope, global_template, &mut registry)
                 .expect("install the Text interface");
+            // CDATASection : Text, so it installs after Text. A `CData` node's
+            // wrapper is picked by kind in `world.rs`.
+            tenta_js::bindings::install_cdata_section::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the CDATASection interface");
             tenta_js::bindings::install_comment::<HostObject>(
                 scope,
                 global_template,
@@ -748,6 +866,36 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the DOMImplementation interface");
+            tenta_js::bindings::install_dom_parser::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the DOMParser interface");
+            tenta_js::bindings::install_xml_serializer::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the XMLSerializer interface");
+            // AbstractRange roots at Object; StaticRange and Range both derive
+            // from it, so it is installed first and the two concrete interfaces
+            // after it. Neither is a node: a range spends no handle tag, it is a
+            // host record under TAG_HOST (see `HostRecord::Range`).
+            tenta_js::bindings::install_abstract_range::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the AbstractRange interface");
+            tenta_js::bindings::install_static_range::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the StaticRange interface");
+            tenta_js::bindings::install_range::<HostObject>(scope, global_template, &mut registry)
+                .expect("install the Range interface");
             tenta_js::bindings::install_node_list::<HostObject>(
                 scope,
                 global_template,
@@ -766,11 +914,9 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the DOMTokenList interface");
-            // `Attr` and `NamedNodeMap` both root at `Object`, so their order
-            // among themselves and relative to the node types is free:
-            // `Element.attributes` resolves the map's template through the
-            // isolate's cache at call time, and the map's `item` mints `Attr`
-            // wrappers the same way.
+            // `Attr : Node` requires Node's template to be installed first.
+            // `NamedNodeMap` is independent and resolves Attr wrappers through
+            // the isolate's template cache when its members run.
             tenta_js::bindings::install_attr::<HostObject>(scope, global_template, &mut registry)
                 .expect("install the Attr interface");
             tenta_js::bindings::install_named_node_map::<HostObject>(
@@ -779,12 +925,64 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the NamedNodeMap interface");
+            tenta_js::bindings::install_style_sheet::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the StyleSheet interface");
+            tenta_js::bindings::install_css_style_sheet::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the CSSStyleSheet interface");
+            tenta_js::bindings::install_css_rule::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the CSSRule interface");
+            tenta_js::bindings::install_css_grouping_rule::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the CSSGroupingRule interface");
+            tenta_js::bindings::install_css_style_rule::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the CSSStyleRule interface");
+            tenta_js::bindings::install_css_rule_list::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the CSSRuleList interface");
             tenta_js::bindings::install_css_style_declaration::<HostObject>(
                 scope,
                 global_template,
                 &mut registry,
             )
             .expect("install the CSSStyleDeclaration interface");
+            tenta_js::bindings::install_css_style_properties::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the CSSStyleProperties interface");
+            tenta_js::bindings::install_css::<HostObject>(scope, global_template, &mut registry)
+                .expect("install the CSS namespace");
+            tenta_js::bindings::install_storage::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the Storage interface");
+            tenta_js::bindings::install_crypto::<HostObject>(scope, global_template, &mut registry)
+                .expect("install the Crypto interface");
             // Event has no DOM parent (its prototype chain roots at Object), so
             // its install order relative to the node types is free.
             tenta_js::bindings::install_event::<HostObject>(scope, global_template, &mut registry)
@@ -796,19 +994,43 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the CustomEvent interface");
-            // UIEvent : Event, then MouseEvent : UIEvent (parent-first).
+            // UIEvent : Event, then the UI event subclasses (parent-first).
             tenta_js::bindings::install_ui_event::<HostObject>(
                 scope,
                 global_template,
                 &mut registry,
             )
             .expect("install the UIEvent interface");
+            tenta_js::bindings::install_composition_event::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the CompositionEvent interface");
+            tenta_js::bindings::install_focus_event::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the FocusEvent interface");
+            tenta_js::bindings::install_keyboard_event::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the KeyboardEvent interface");
             tenta_js::bindings::install_mouse_event::<HostObject>(
                 scope,
                 global_template,
                 &mut registry,
             )
             .expect("install the MouseEvent interface");
+            tenta_js::bindings::install_wheel_event::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the WheelEvent interface");
             // ProgressEvent's prototype chain also roots at Event.
             tenta_js::bindings::install_progress_event::<HostObject>(
                 scope,
@@ -927,12 +1149,21 @@ impl Engine {
             let mut context_scope = v8::ContextScope::new(scope, local);
             v8::scope!(let inner, &mut context_scope);
             host::install(inner, local, host.scheduler.clock().time_origin_ms());
+            registry
+                .link_constructor_prototypes(inner)
+                .expect("link interface constructors in the real context");
             // The window is an `EventTarget`, so its prototype chain has to
             // reach that interface's prototype — the one fact about the window
             // the generated glue cannot express, since the window is the global
             // object rather than an instance of any template.
             host::install_window_prototype(inner, local, &event_target);
             install_dom_exception(inner);
+            world::cycles::initialize(inner, &mut state.borrow_mut())
+                .expect("capture native listener-collection intrinsics");
+            state
+                .borrow_mut()
+                .capture_buffer_intrinsic(inner)
+                .expect("capture native ArrayBuffer resizable getter");
 
             // Materialise the `document` wrapper, expose it as a global, then
             // hand the world to the runtime so the generated getters can create
@@ -944,12 +1175,14 @@ impl Engine {
                     "Document",
                     tenta_js::bindings::host::encode_node(ctx.slot, document_ref),
                 )
+                .expect("document wrapper admission")
                 .expect("the document wrapper");
             let key = v8::String::new(inner, "document").expect("`document` fits the string limit");
             local
                 .global(inner)
                 .set(inner, key.into(), document_object.into());
-            tenta_js::bindings::set_wrapper_world(inner, Box::new(world));
+            tenta_js::bindings::set_wrapper_world(inner, Box::new(world))
+                .expect("capture legacy property intrinsics and install the wrapper world");
         }
         // The host callbacks reach this state through the context slot.
         local.set_slot::<HostState>(host.clone());
@@ -996,17 +1229,47 @@ impl Engine {
         self.isolate.low_memory_notification();
     }
 
+    /// Applies pending finalizers for diagnostics after [`Engine::low_memory_gc`].
+    /// All kinds share the same poison-aware reclamation path used by the
+    /// wrapper collector, including event details and host-owned listeners.
+    fn reclaim_finalized_bookkeeping(&mut self) {
+        let _entry = self.entered();
+        if self.native_failure().is_some() {
+            return;
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.dom.as_ref().map_or(Ok(false), |dom| {
+                world::reclaim_dead_bookkeeping(&self.isolate, &dom.state, &dom.ctx.documents)
+            })
+        }));
+        match result {
+            Ok(Ok(_)) => {}
+            Ok(Err(())) => {
+                tenta_js::bindings::poison_native_callback(
+                    &self.isolate,
+                    "finalized wrapper reclamation",
+                );
+            }
+            Err(payload) => {
+                tenta_js::bindings::poison_native_callback(
+                    &self.isolate,
+                    "finalized wrapper reclamation",
+                );
+                if let Err(nested) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
+                {
+                    std::mem::forget(nested);
+                }
+            }
+        }
+    }
+
     /// Drains event wrappers a finalizer has collected, releasing their slab
     /// records and any interned `CustomEvent` detail (test-only; the same sweep
     /// runs lazily at the head of `wrapper`). Call after [`Engine::low_memory_gc`]
     /// to make reclamation observable without waiting for the next wrapper.
     pub fn reclaim_dead_events(&mut self) {
-        let _entry = self.entered();
-        if let Some(dom) = &self.dom {
-            let dead = dom.state.borrow_mut().take_dead_events();
-            let mut state = dom.state.borrow_mut();
-            world::reclaim_dead_events(&mut state, &dom.ctx.events, dead);
-        }
+        self.reclaim_finalized_bookkeeping();
     }
 
     /// The number of live stored values in the wrapper world (test-only): a
@@ -1025,12 +1288,7 @@ impl Engine {
     /// lazily at the head of `wrapper`). Call after [`Engine::low_memory_gc`] to
     /// make reclamation observable without waiting for the next wrapper.
     pub fn reclaim_dead_hosts(&mut self) {
-        let _entry = self.entered();
-        if let Some(dom) = &self.dom {
-            let dead = dom.state.borrow_mut().take_dead_hosts();
-            let mut state = dom.state.borrow_mut();
-            world::reclaim_dead_hosts(&mut state, &dom.ctx, dead);
-        }
+        self.reclaim_finalized_bookkeeping();
     }
 
     /// The number of live `URL`, `URLSearchParams`, `Headers`,
@@ -1079,6 +1337,9 @@ impl Engine {
         &mut self,
         expression: &str,
     ) -> Option<Handle<T>> {
+        if self.native_failure().is_some() {
+            return None;
+        }
         // Running the expression is entering script, so this entry clears a
         // termination a watchdog left pending, like every other way in.
         let _entry = self.entered();
@@ -1175,7 +1436,84 @@ impl Engine {
     /// stack-guard interrupt flag behind a short lock, once per script or
     /// callback, which is nothing next to running one.
     fn discard_stray_termination(&mut self) {
-        self.isolate.cancel_terminate_execution();
+        if self.native_failure().is_some() {
+            self.isolate.terminate_execution();
+        } else {
+            self.termination.reset();
+        }
+    }
+
+    /// Runs the closed wrapper graph transaction at an outer task safe point.
+    /// Its temporary handle scopes close before GC and before restored roots
+    /// are published. The caller has already entered this isolate and holds no
+    /// native document, listener, or wrapper-world borrow.
+    fn graph_checkpoint(&mut self) -> bool {
+        if self.native_failure().is_some() {
+            return false;
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some(dom) = &self.dom {
+                v8::scope!(let handle_scope, &mut self.isolate);
+                let context = v8::Local::new(handle_scope, &self.context);
+                let mut context_scope = v8::ContextScope::new(handle_scope, context);
+                v8::scope!(let scope, &mut context_scope);
+                world::cycles::checkpoint(scope, &dom.state, &dom.ctx, &self.termination, false)
+            } else {
+                self.isolate.low_memory_notification();
+                Ok(true)
+            }
+        }));
+        match result {
+            Ok(Ok(completed)) => completed,
+            Ok(Err(())) => {
+                tenta_js::bindings::poison_native_callback(
+                    &self.isolate,
+                    "wrapper graph collection",
+                );
+                false
+            }
+            Err(payload) => {
+                tenta_js::bindings::poison_native_callback(
+                    &self.isolate,
+                    "wrapper graph collection",
+                );
+                if let Err(nested) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
+                {
+                    std::mem::forget(nested);
+                }
+                false
+            }
+        }
+    }
+
+    /// The native boundary that failed, if this engine is poisoned.
+    ///
+    /// The engine cannot be resumed after this failure: a host operation may
+    /// have only partly completed. Page hosts use this sticky marker to report
+    /// a crash; direct callers receive an error from every later evaluation.
+    pub fn native_failure(&self) -> Option<&'static str> {
+        tenta_js::bindings::native_callback_failure(&self.isolate)
+    }
+
+    fn native_failure_error(&self) -> Option<ScriptFailure> {
+        self.native_failure().map(|callback| ScriptFailure {
+            kind: ScriptErrorKind::Terminated,
+            message: format!("native boundary `{callback}` failed; this engine must be discarded"),
+        })
+    }
+
+    fn native_memory_failure_error(&self) -> Option<ScriptFailure> {
+        self.native_memory
+            .first_failure()
+            .map(|failure| ScriptFailure {
+                kind: ScriptErrorKind::Terminated,
+                message: format!(
+                    "{} budget exceeded in {}",
+                    failure.kind,
+                    failure.component.name()
+                ),
+            })
     }
 
     /// The whole run: an optional deadline watchdog, one context-scoped
@@ -1196,10 +1534,16 @@ impl Engine {
         // spawned, so a stray termination from an earlier entry cannot abort
         // this script and be blamed on this run's own deadline.
         let _entry = self.entered();
+        if let Some(failure) = self.native_failure_error() {
+            return Err(failure);
+        }
+        if let Some(failure) = self.native_memory_failure_error() {
+            return Err(failure);
+        }
         self.discard_stray_termination();
 
         let watchdog = timeout.map(|timeout| {
-            let handle = self.isolate.thread_safe_handle();
+            let termination = Arc::clone(&self.termination);
             let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
             let join = std::thread::spawn(move || {
                 // Terminate only on a genuine deadline; an early cancel (the run
@@ -1207,7 +1551,7 @@ impl Engine {
                 if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
                     cancel_rx.recv_timeout(timeout)
                 {
-                    handle.terminate_execution();
+                    termination.request();
                 }
             });
             (cancel_tx, join)
@@ -1228,6 +1572,13 @@ impl Engine {
             (outcome, tc.has_terminated())
         };
         self.host.exit_script();
+        // The script's handle scopes and callback frames are closed. Keep the
+        // deadline armed while the closed graph checkpoint runs: its elapsed
+        // time belongs to this task, and a request during recovery is handed
+        // off only after the graph has been restored.
+        if self.dom.is_some() && self.native_memory.first_failure().is_none() {
+            self.graph_checkpoint();
+        }
 
         if let Some((cancel_tx, join)) = watchdog {
             let _ = cancel_tx.send(());
@@ -1255,8 +1606,13 @@ impl Engine {
         // it keeps this function's own contract, that a run which ended in a
         // termination leaves the isolate resumable, true without depending on
         // what the caller does next, and it is one flag clear per run.
-        if terminated || timeout.is_some() {
-            self.isolate.cancel_terminate_execution();
+        if let Some(failure) = self.native_failure_error() {
+            return Err(failure);
+        }
+        let requested = self.termination.take_requested_and_reset();
+
+        if let Some(failure) = self.native_memory_failure_error() {
+            return Err(failure);
         }
 
         if heap_tripped {
@@ -1264,13 +1620,18 @@ impl Engine {
                 kind: ScriptErrorKind::Terminated,
                 message: "script exceeded the isolate heap limit".to_owned(),
             })
-        } else if terminated && timeout.is_some() {
+        } else if (terminated || requested) && timeout.is_some() {
             Err(ScriptFailure {
                 kind: ScriptErrorKind::Terminated,
                 message: format!(
                     "script execution exceeded the {:?} deadline",
                     timeout.expect("timeout is set when a deadline watchdog ran")
                 ),
+            })
+        } else if requested {
+            Err(ScriptFailure {
+                kind: ScriptErrorKind::Terminated,
+                message: "script execution was terminated".to_owned(),
             })
         } else {
             // Anything else: the script's own syntax or uncaught exception, or a
@@ -1292,7 +1653,7 @@ impl Engine {
         self.checkpoint();
 
         let mut run = 0;
-        while run < max_tasks {
+        while run < max_tasks && self.native_failure().is_none() {
             let progressed = self.event_loop.advance_to_next_timer();
             if self.host.ready.borrow().is_empty() {
                 if progressed {
@@ -1306,9 +1667,9 @@ impl Engine {
             // one at a time rather than moved into a local batch. A panic raised
             // on the Rust side of the drain unwinds through here, and a local
             // batch would be dropped on the way out, silently losing every
-            // handler that had not run yet. (A panic *inside* a binding does not
-            // reach this frame at all: it crosses an `extern "C"` boundary and
-            // aborts the process.)
+            // handler that had not run yet. A generated binding catches its
+            // own panic before returning through V8, poisons the engine and
+            // terminates script; the page observes that marker after return.
             run += self.invoke_ready(max_tasks - run);
         }
         run
@@ -1346,9 +1707,15 @@ impl Engine {
     /// goes through; on the other drive paths it is the one in front of the
     /// first handler.
     fn checkpoint(&mut self) {
+        if self.native_failure().is_some() {
+            return;
+        }
         self.discard_stray_termination();
         self.isolate.perform_microtask_checkpoint();
         self.host.microtasks_pending.set(false);
+        if self.dom.is_some() {
+            self.graph_checkpoint();
+        }
     }
 
     /// Settles the promises a batch of fetch completions names, entering the
@@ -1379,7 +1746,7 @@ impl Engine {
     ///   pins.
     pub fn settle_fetches(&mut self, completions: Vec<FetchCompletion>) {
         let _entry = self.entered();
-        if completions.is_empty() {
+        if completions.is_empty() || self.native_failure().is_some() {
             return;
         }
         // This entry can settle a promise a terminated script left behind, and
@@ -1422,6 +1789,7 @@ impl Engine {
         if queued {
             self.host.microtasks_pending.set(true);
         }
+        self.graph_checkpoint();
     }
 
     /// Delivers a batch of XHR completions: for each, the event its outcome
@@ -1459,7 +1827,7 @@ impl Engine {
     ///   nothing — not even the one-event fallback — is fired for it.
     pub fn settle_xhr(&mut self, completions: Vec<XhrCompletion>) {
         let _entry = self.entered();
-        if completions.is_empty() {
+        if completions.is_empty() || self.native_failure().is_some() {
             return;
         }
         // A completion can arrive after a watchdog terminated the script that
@@ -1523,6 +1891,8 @@ impl Engine {
                 dom.ctx.events.borrow_mut().remove(event_key);
             }
         }
+        drop(_native);
+        self.graph_checkpoint();
     }
 
     /// Fires one user-agent lifecycle event — `DOMContentLoaded` or `load` — as
@@ -1561,6 +1931,9 @@ impl Engine {
     /// this path by calling `dispatchEvent`.
     pub fn dispatch_lifecycle(&mut self, event: LifecycleEvent) {
         let _entry = self.entered();
+        if self.native_failure().is_some() {
+            return;
+        }
         // Runs page script, so it starts with nothing pending, like every other
         // way in.
         self.discard_stray_termination();
@@ -1630,6 +2003,8 @@ impl Engine {
         if orphaned {
             dom.ctx.events.borrow_mut().remove(event_key);
         }
+        drop(_native);
+        self.graph_checkpoint();
     }
 
     /// Invokes up to `budget` handlers from the ready queue and returns how many
@@ -1652,7 +2027,7 @@ impl Engine {
     fn invoke_ready(&mut self, budget: usize) -> usize {
         let mut run = 0;
         let mut taken = 0;
-        while taken < budget {
+        while taken < budget && self.native_failure().is_none() {
             let next = self.host.ready.borrow_mut().pop_front();
             let Some(ready) = next else { break };
             // A handler cancelled in the deferral window still costs budget: a
@@ -1684,6 +2059,9 @@ impl Engine {
     /// [`Self::frame_due`] says a rendering opportunity is owed — that call is
     /// the only thing that advances the frame clock.
     pub fn next_wakeup(&self) -> Option<std::time::Duration> {
+        if self.native_failure().is_some() {
+            return None;
+        }
         // Handlers a bounded pump held back are due work the timer heap no
         // longer knows about: it handed them over when they fired. A microtask
         // checkpoint owed since the last script entry is work no queue here
@@ -1713,6 +2091,9 @@ impl Engine {
     pub fn pump_due_timers(&mut self, max_tasks: usize) -> usize {
         let _entry = self.entered();
         self.checkpoint();
+        if self.native_failure().is_some() {
+            return 0;
+        }
 
         // Exactly one sweep of the timer heap per pump. A zero-delay timer a
         // handler schedules is due the moment it is scheduled, so re-reading
@@ -1742,6 +2123,9 @@ impl Engine {
     /// under an arm of its own.
     pub fn run_animation_frame(&mut self) {
         let _entry = self.entered();
+        if self.native_failure().is_some() {
+            return;
+        }
         // Moves each due callback's handle onto the ready-frame queue.
         self.event_loop.run_animation_frame();
         self.drain_ready_frames();
@@ -1754,6 +2138,9 @@ impl Engine {
     /// spin.
     pub fn tick_frame(&mut self) {
         let _entry = self.entered();
+        if self.native_failure().is_some() {
+            return;
+        }
         self.event_loop.tick_frame();
         // Timers that came due this frame run as tasks, a checkpoint behind each
         // that runs to its own end. Through `invoke_ready` like every other drive
@@ -1776,7 +2163,7 @@ impl Engine {
         // had not run yet, and `clear_pending_callbacks` (a navigation commit)
         // cannot reach a batch that has already been detached from the queue, so
         // the discarded callbacks would keep running against the old document.
-        loop {
+        while self.native_failure().is_none() {
             let next = self.host.ready_frames.borrow_mut().pop_front();
             let Some((handler, timestamp)) = next else {
                 break;
@@ -1854,6 +2241,9 @@ impl Engine {
         handler: &v8::Global<v8::Function>,
         timestamp: Option<f64>,
     ) -> CallOutcome {
+        if self.native_failure().is_some() {
+            return CallOutcome::Terminated;
+        }
         self.discard_stray_termination();
         // A timer or animation-frame callback is a script activation too: an
         // event it dispatches must not checkpoint microtasks between listeners.
@@ -1940,6 +2330,7 @@ impl Drop for Engine {
         self.event_loop.clear_pending_callbacks();
         self.host.ready.borrow_mut().clear();
         self.host.ready_frames.borrow_mut().clear();
+        clear_v8_callback_admission(&mut self.isolate);
 
         // Drain the wrapper world while the isolate is still alive: this
         // reclaims every host box and drops every still-armed `Weak`, which
@@ -1947,6 +2338,10 @@ impl Drop for Engine {
         // reclaimed host. The world is the sole owner of the host boxes, so
         // this drain is the no-leak guarantee (`tests/wrapper_gc.rs`).
         if let Some(dom) = &self.dom {
+            // Stop native observer admission before releasing any wrapper,
+            // callback, or host-record roots. Retirement needs no Document
+            // borrow and leaves physical pins for its next mutable seam.
+            dom.ctx.documents.retire_observers();
             // Drop the script host first: it holds a raw isolate pointer and
             // clones of the world state, so it must go before the isolate is
             // disposed and before the world is drained below.
@@ -1960,30 +2355,41 @@ impl Drop for Engine {
             dom.promise.clear();
 
             // Apply every piece of dead bookkeeping a finalizer recorded and no
-            // later `wrapper` call swept: `HAS_WRAPPER` for the node wrappers it
+            // later `wrapper` call swept: the claims of node wrappers it
             // collected, and the snapshot and event slab entries of the others.
             // It must run before the `clear` below drops those lists, and it is
             // the same function the lazy sweep and `trim_memory` use, so the
             // three cannot drift.
-            world::reclaim_dead_bookkeeping(&dom.state, &dom.ctx.documents);
+            let _ = world::reclaim_dead_bookkeeping(&self.isolate, &dom.state, &dom.ctx.documents);
 
-            // Clear `HAS_WRAPPER` for every node still wrapped — the anchor of
-            // every live host (the ids a finalizer recorded were cleared just
-            // above) — while the document is still borrowable and the isolate
-            // still alive, before dropping the hosts. Wrappers still live at
-            // teardown are dropped here without ever running a finalizer, so
-            // their bits must be cleared explicitly; otherwise a document that
-            // outlives the engine keeps those nodes pinned forever. A handle
-            // names the document it belongs to by its slot, so each id is
-            // cleared in that document and not in the page's.
-            let ids = dom.state.borrow().wrapped_node_ids();
-            for (slot, id) in ids {
+            // Release this world's remaining claims before disarming live
+            // finalizers. Other worlds' wrappers retain their own claims, and
+            // the generation prevents old deaths from touching a reused slot.
+            let nodes = dom.state.borrow().wrapped_nodes();
+            for (slot, node) in nodes {
                 if let Some(ctx) = dom.ctx.documents.get(slot) {
-                    ctx.doc.borrow_mut().set_has_wrapper(id, false);
+                    ctx.doc.borrow_mut().release_wrapper(node);
                 }
             }
-            dom.state.borrow_mut().clear();
+            let storage_wrappers = dom.state.borrow_mut().clear();
+            drop(storage_wrappers);
+            // Records can outlive wrappers until teardown, including records
+            // in documents minted by DOMImplementation. Drop retained range
+            // endpoints while each document is still available, then break the
+            // document-set/context ownership cycle.
+            for ctx in dom.ctx.documents.all() {
+                ctx.script.borrow_mut().take();
+                ctx.host_records.replace(Default::default());
+            }
+            dom.ctx.documents.clear_minted();
         }
+        // The generated constructor and interface-brand templates own Globals
+        // in an isolate slot. Release them while the isolate is entered/alive.
+        drop(
+            self.isolate
+                .remove_slot::<tenta_js::bindings::TemplateCache>(),
+        );
+        tenta_js::bindings::clear_legacy_reflect_set(&mut self.isolate);
         // Remove the near-heap-limit callback while both fields are still alive,
         // so the isolate can never dereference the `HeapGuard` pointer during
         // teardown. This makes soundness independent of struct field drop order
@@ -2012,13 +2418,10 @@ pub fn evaluate(source: &str) -> Result<String, JsError> {
     Engine::new().evaluate(source)
 }
 
-/// Compiles `source`, runs it, and coerces the result to a string, mapping any
-/// caught exception to [`JsError`].
-/// JavaScript that installs `globalThis.DOMException` with the legacy code
-/// table (<https://webidl.spec.whatwg.org/#idl-DOMException>). The binding throw
-/// path (`throw_js_error`) constructs instances with `new DOMException(message,
-/// name)`, so `e.name`, `e.message`, `e.code` and `e instanceof DOMException`
-/// all behave per the standard.
+/// Installs `globalThis.DOMException` and its legacy code table
+/// (<https://webidl.spec.whatwg.org/#idl-DOMException>).
+/// Native binding failures use the captured prototype and native own-property
+/// definitions, without calling the page-visible constructor.
 const DOM_EXCEPTION_BOOTSTRAP: &str = r#"
 (function () {
   "use strict";
@@ -2090,6 +2493,10 @@ fn install_dom_exception(scope: &mut v8::PinScope) {
     script
         .run(scope)
         .expect("the DOMException bootstrap runs without throwing");
+    assert!(
+        tenta_js::bindings::capture_v8_dom_exception_prototype(scope),
+        "capture the realm's DOMException prototype before page script"
+    );
 }
 
 /// The value a fetch completion settles its promise with, stored in the world,
@@ -2194,6 +2601,110 @@ fn exception_message(tc: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tenta_dom::Document;
+
+    include!("css_graph_pressure_tests.inc.rs");
+    include!("native_materialization_tests.inc.rs");
+    include!("standalone_event_target_tests.inc.rs");
+    include!("slow_panic_continuation_tests.inc.rs");
+    include!("buffer_reference_runtime_tests.inc.rs");
+    include!("crypto_budget_tests.inc.rs");
+
+    #[test]
+    fn a_panic_in_the_host_promise_microtask_is_local() {
+        let document = Rc::new(RefCell::new(Document::new()));
+        let mut engine = Engine::with_document(document);
+        let mut neighbor = Engine::new();
+        engine
+            .evaluate("new Response('ok').text().then(value => globalThis.settled = value)")
+            .expect("queue a host promise settlement");
+        let world = engine.dom.as_ref().expect("document world").state.clone();
+        {
+            // The settlement job takes the world to load the value. Holding its
+            // borrow here makes that actual host path panic inside the V8
+            // microtask, without adding a production-only test hook.
+            let _borrow = world.borrow_mut();
+            engine.run_microtasks();
+        }
+        assert_eq!(engine.native_failure(), Some("promise_microtask"));
+        let error = engine.evaluate("42").expect_err("sticky native failure");
+        assert!(error.message.contains("must be discarded"));
+        engine.run_microtasks();
+        assert_eq!(engine.evaluate("1").unwrap_err().message, error.message);
+        assert_eq!(neighbor.evaluate("6 * 7").unwrap(), "42");
+        drop(engine);
+        assert_eq!(neighbor.evaluate("40 + 2").unwrap(), "42");
+    }
+
+    #[test]
+    fn weak_finalizer_panics_poison_only_the_owning_engine() {
+        for (source, callback) in [
+            (
+                "globalThis.kept = new Response('ok'); 42",
+                "adopted_wrapper_finalizer",
+            ),
+            (
+                "globalThis.kept = document.createElement('div'); 42",
+                "wrapper_finalizer",
+            ),
+        ] {
+            let document = Rc::new(RefCell::new(Document::new()));
+            let mut engine = Engine::with_document(document);
+            let mut neighbor = Engine::new();
+            engine
+                .evaluate(source)
+                .expect("create a rooted host wrapper");
+            // Task-end collection now runs after evaluate. Remove only the JS
+            // root through V8's native property API, without entering another
+            // script task that would collect the wrapper before the injected
+            // finalizer borrow is in place.
+            {
+                let _entry = engine.entered();
+                v8::scope!(let handle_scope, &mut engine.isolate);
+                let context = v8::Local::new(handle_scope, &engine.context);
+                let mut context_scope = v8::ContextScope::new(handle_scope, context);
+                v8::scope!(let scope, &mut context_scope);
+                let key = v8::String::new(scope, "kept").expect("property name");
+                assert_eq!(context.global(scope).delete(scope, key.into()), Some(true));
+            }
+            if callback == "wrapper_finalizer" {
+                // Node wrappers have a provisional native root until the
+                // closed graph checkpoint transfers it to an ephemeron. Do
+                // that transfer before the injected GC; otherwise this test
+                // would exercise a rooted object and no finalizer at all.
+                let (state, context) = {
+                    let dom = engine.dom.as_ref().expect("document world");
+                    (Rc::clone(&dom.state), dom.ctx.clone())
+                };
+                let _entry = engine.entered();
+                v8::scope!(let handle_scope, &mut engine.isolate);
+                let local = v8::Local::new(handle_scope, &engine.context);
+                let mut context_scope = v8::ContextScope::new(handle_scope, local);
+                v8::scope!(let scope, &mut context_scope);
+                world::cycles::prepare(scope, &state, &context)
+                    .expect("publish unrooted node wrapper for GC");
+            }
+            let world = engine.dom.as_ref().expect("document world").state.clone();
+            for _ in 0..5 {
+                {
+                    // The finalizer takes this borrow when V8 collects the
+                    // unreachable wrapper. The conflict tests the real GC
+                    // callback boundary without an injectable product API.
+                    let _borrow = world.borrow_mut();
+                    engine.low_memory_gc();
+                }
+                if engine.native_failure().is_some() {
+                    break;
+                }
+            }
+            assert_eq!(engine.native_failure(), Some(callback));
+            let error = engine.evaluate("1").expect_err("sticky native failure");
+            assert!(error.message.contains("must be discarded"));
+            assert_eq!(neighbor.evaluate("6 * 7").unwrap(), "42");
+            drop(engine);
+            assert_eq!(neighbor.evaluate("40 + 2").unwrap(), "42");
+        }
+    }
 
     #[test]
     fn evaluates_arithmetic_to_a_number() {
@@ -2514,5 +3025,74 @@ mod tests {
         // the rendering opportunity's animation-frame callback.
         engine.tick_frame();
         assert_eq!(engine.evaluate("globalThis.log").unwrap(), "tr");
+    }
+
+    #[test]
+    fn ranges_keep_foreign_endpoints_and_teardown_releases_child_contexts() {
+        use tenta_js::engine::PageEngine;
+
+        let root = std::rc::Rc::new(std::cell::RefCell::new(tenta_dom::Document::new()));
+        let mut engine = Engine::with_document(root);
+        engine
+            .evaluate(
+                r#"
+            (() => {
+                const foreign = new Document();
+                const text = foreign.createTextNode('foreign');
+                globalThis.range = document.createRange();
+                range.selectNodeContents(text);
+                globalThis.staticRange = new StaticRange({
+                    startContainer: text, startOffset: 1,
+                    endContainer: document, endOffset: 0
+                });
+            })();
+        "#,
+            )
+            .unwrap();
+        let child = engine.dom.as_ref().unwrap().ctx.documents.get(1).unwrap();
+        let document = child.doc.clone();
+        let weak_context = std::rc::Rc::downgrade(&child);
+        drop(child);
+        engine.trim_memory();
+        assert_eq!(document.borrow_mut().sweep_detached().nodes_freed, 0);
+        assert_eq!(
+            engine
+                .evaluate("String(range) + ':' + staticRange.startContainer.data")
+                .unwrap(),
+            "foreign:foreign"
+        );
+        drop(engine);
+        assert!(
+            weak_context.upgrade().is_none(),
+            "teardown breaks the document-set cycle"
+        );
+        assert_eq!(document.borrow_mut().sweep_detached().nodes_freed, 1);
+    }
+
+    #[test]
+    fn collected_foreign_ranges_do_not_reclaim_the_pages_same_slab_key() {
+        let document = std::rc::Rc::new(std::cell::RefCell::new(tenta_dom::Document::new()));
+        let mut engine = Engine::with_document(document);
+        engine
+            .evaluate(
+                r#"
+            globalThis.kept = document.createRange();
+            (() => {
+                const foreign = new Document();
+                const range = foreign.createRange();
+                range.selectNodeContents(foreign.createTextNode('collected'));
+            })();
+        "#,
+            )
+            .unwrap();
+        engine.low_memory_gc();
+        engine.reclaim_dead_hosts();
+        assert_eq!(engine.host_record_count(), 1);
+        let child = engine.dom.as_ref().unwrap().ctx.documents.get(1).unwrap();
+        assert!(child.host_records.borrow().is_empty());
+        assert_eq!(
+            engine.evaluate("kept.startContainer === document").unwrap(),
+            "true"
+        );
     }
 }

@@ -1273,6 +1273,33 @@ fn storage_state_rejects_a_cookie_without_a_domain() {
 }
 
 #[test]
+fn storage_state_import_rejects_a_later_invalid_cookie_without_partial_mutation() {
+    let jar = CookieJar::new();
+    store(&jar, "existing=old", HTTPS, now());
+    let valid = StorageCookie {
+        name: "new".into(),
+        value: "value".into(),
+        domain: "example.com".into(),
+        path: "/".into(),
+        expires: -1.0,
+        http_only: false,
+        secure: false,
+        same_site: "Lax".into(),
+    };
+    let invalid = StorageCookie {
+        domain: String::new(),
+        ..valid.clone()
+    };
+    let state = StorageState {
+        cookies: vec![valid, invalid],
+        origins: Vec::new(),
+    };
+    assert!(jar.load_storage_state(&state, now()).is_err());
+    assert_eq!(jar.len(), 1);
+    assert_eq!(jar.cookies()[0].name, "existing");
+}
+
+#[test]
 fn storage_state_skips_expired_cookies() {
     let state = StorageState {
         cookies: vec![StorageCookie {

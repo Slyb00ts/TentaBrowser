@@ -12,13 +12,17 @@ publish = false
 # Pulls the V8 backend and installs it as the engine factory for JavaScript
 # pages. Without it the default build stays free of V8 and `new_page` reports
 # JavaScript as unsupported rather than pretending to run it.
-v8 = ["dep:tenta-js-v8"]
+v8 = ["dep:tenta-js-v8", "wpt-driver"]
+quickjs = ["dep:tenta-js-qjs", "wpt-driver"]
+# Shared target gate: Cargo's required-features cannot express V8 OR QuickJS.
+wpt-driver = []
 
 [dependencies]
 tenta-core = { workspace = true }
 tenta-net = { workspace = true }
 tenta-js = { workspace = true }
 tenta-js-v8 = { workspace = true, optional = true }
+tenta-js-qjs = { workspace = true, optional = true }
 tenta-page = { workspace = true }
 
 bytes = { workspace = true }
@@ -45,9 +49,13 @@ unsafe_code = "forbid"
 [[bin]]
 name = "tenta-wpt-driver"
 path = "src/bin/tenta-wpt-driver.rs"
-required-features = ["v8"]
+required-features = ["wpt-driver"]
 
 [dev-dependencies]
 tenta-dom = { workspace = true }
 tenta-testutil = { workspace = true }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+
+[[example]]
+name = "js_xhr"
+required-features = ["v8"]

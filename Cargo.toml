@@ -42,6 +42,7 @@ anyhow = "1"
 bytes = "1"
 hashbrown = "0.16"
 libc = "0.2"
+winapi-util = "=0.1.11"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -55,12 +56,19 @@ tracing = "0.1"
 url = "2"
 http = "1"
 memchr = "2"
+getrandom = "=0.4.3"
 encoding_rs = "0.8"
 selectors = "0.40"
 cssparser = "0.37"
+style = { package = "stylo", version = "=0.21.0" }
+style_traits = { package = "stylo_traits", version = "=0.21.0" }
+servo_arc = "0.4.3"
+stylo_static_prefs = "=0.21.0"
 # V8 (rusty_v8), pinned to the release the snapshot and ICU data pack target
-# (docs/spec/05-javascript.md §1). Prebuilt static library by default.
-v8 = "152.2.0"
+# (docs/spec/05-javascript.md §1). Requires its matched, reviewed native artifact.
+v8 = { package = "tenta-v8", path = "crates/tenta-v8", version = "=152.2.0" }
+# QuickJS-ng, pinned to the native binding ABI used by the generated glue.
+rquickjs = { package = "tenta-quickjs-core", path = "crates/tenta-quickjs-core", version = "=0.12.2" }
 precomputed-hash = "0.1"
 unicode-normalization = "0.1"
 

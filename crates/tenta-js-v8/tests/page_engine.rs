@@ -72,6 +72,10 @@ fn config() -> PageEngineConfig {
         locale: "en-US".to_owned(),
         timezone: None,
         cookies: CookieJar::new(),
+        storage: tenta_js::storage::PageStorage::isolated(),
+        native_memory: tenta_core::NativeMemoryBudget::for_page(
+            tenta_core::Budgets::platform_default().page_memory_mb,
+        ),
     }
 }
 
@@ -221,27 +225,25 @@ fn a_script_timer_waits_for_the_driver_to_pump_it() {
 }
 
 #[test]
-fn trim_memory_advances_the_gc_epoch_and_clears_a_collected_wrapper() {
+fn trim_memory_preserves_a_connected_wrappers_identity_and_state() {
     let (document, target) = test_document();
     let mut engine = engine_over(&document);
 
     engine
         .run_script(
-            "globalThis.__wrapped = document.querySelector('#target');",
+            "{ const node = document.querySelector('#target'); \
+               node.marker = 41; \
+               globalThis.__weak = new WeakRef(node); }",
             ScriptKind::Classic,
         )
         .expect("the wrapping script runs");
+    // Finish the job that constructed the WeakRef, so V8's kept-object set
+    // cannot explain the wrapper surviving the forced collection.
+    engine.run_microtasks();
     assert!(
         document.borrow().has_wrapper(target),
         "creating the wrapper marks the node"
     );
-
-    // Drop the only reference, and do it from a second script so no frame of
-    // the script that created the wrapper is still on the stack when the
-    // collection runs.
-    engine
-        .run_script("globalThis.__wrapped = undefined;", ScriptKind::Classic)
-        .expect("the dropping script runs");
 
     let before = engine.gc_epoch();
     engine.trim_memory();
@@ -251,9 +253,55 @@ fn trim_memory_advances_the_gc_epoch_and_clears_a_collected_wrapper() {
         "a forced collection must advance the epoch: {before} -> {after}"
     );
     assert!(
-        !document.borrow().has_wrapper(target),
-        "the collected wrapper's node must be sweepable"
+        document.borrow().has_wrapper(target),
+        "a connected node retains its canonical wrapper through collection"
     );
+    engine
+        .run_script(
+            "{ const node = document.querySelector('#target'); \
+               if (__weak.deref() !== node || node.marker !== 41) \
+                 throw new Error('connected wrapper state was lost'); }",
+            ScriptKind::Classic,
+        )
+        .expect("reacquiring the connected node preserves identity and state");
+}
+
+#[test]
+fn trim_memory_reclaims_an_unreachable_detached_wrapper() {
+    let (document, target) = test_document();
+    let mut engine = engine_over(&document);
+
+    engine
+        .run_script(
+            "{ const node = document.querySelector('#target'); \
+               globalThis.__weak = new WeakRef(node); }",
+            ScriptKind::Classic,
+        )
+        .expect("the wrapping script runs");
+    engine.run_microtasks();
+    assert!(document.borrow().has_wrapper(target));
+
+    document
+        .borrow_mut()
+        .mutate(Mutation::Remove { child: target })
+        .expect("detach #target");
+    let before = engine.gc_epoch();
+    engine.trim_memory();
+    assert!(
+        engine.gc_epoch() > before,
+        "forced collection advances the epoch"
+    );
+    assert!(
+        !document.borrow().has_wrapper(target),
+        "the unreachable detached node's wrapper is reclaimed"
+    );
+    engine
+        .run_script(
+            "if (__weak.deref() !== undefined) \
+               throw new Error('detached wrapper remained reachable');",
+            ScriptKind::Classic,
+        )
+        .expect("the weak reference no longer observes the detached wrapper");
 }
 
 /// A loop V8 reaches an interrupt check inside many times while it runs.

@@ -22,21 +22,79 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::Arc;
 
-use tenta_core::Origin;
+use tenta_core::{NativeMemoryBudget, Origin};
 use tenta_js::bindings::host::{
     EventHandlerNonNull, HostObject, realm_context, refused_request_init_member, request_from_init,
 };
 use tenta_js::bindings::{
-    AddEventListenerOptionsOrBoolean, Event, EventListener, EventListenerOptionsOrBoolean,
-    EventTargetOps, JsError, RequestInit, string_from_v8, throw_js_error, throw_type_error,
-    value_from_v8, value_to_v8, world_realm,
+    AddEventListenerOptionsOrBoolean, Crypto, Event, EventListener, EventListenerOptionsOrBoolean,
+    EventTargetOps, JsError, RequestInit, Storage, handle_to_v8, native_callback_failure,
+    string_from_v8, throw_js_error, throw_type_error, v8_begin_stored_value_lease,
+    v8_end_stored_value_lease, v8_registered_slow_callback_boundary,
+    v8_transfer_stored_value_lease, value_from_v8, value_to_v8, world_realm,
 };
 use tenta_js::dom::events::{EventHandlerName, HostValue, PromiseOutcome, PromiseRef, ScriptHost};
 use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId};
 use tenta_js::fetch::FetchDriver;
 use tenta_js::xhr::XhrDriver;
 use tenta_net::CookieJar;
+
+use crate::termination::TerminationGate;
+
+// Only these wrappers cross V8's callback ABI. The implementations below stay
+// ordinary Rust functions so the boundary catches argument conversion, host
+// mutation and return-value handling as one operation. A panic terminates the
+// isolate and leaves its failure marker sticky; it is never a JS exception.
+macro_rules! guarded_callback {
+    ($wrapper:ident => $body:ident) => {
+        guarded_callback!(@impl $wrapper => $body, false);
+    };
+    ($wrapper:ident => $body:ident, listener_lease) => {
+        guarded_callback!(@impl $wrapper => $body, true);
+    };
+    (@impl $wrapper:ident => $body:ident, $listener_lease:expr) => {
+        fn $wrapper<'s>(
+            scope: &mut v8::PinScope<'s, '_>,
+            args: v8::FunctionCallbackArguments<'s>,
+            retval: v8::ReturnValue<'s, v8::Value>,
+        ) {
+            let call = |scope: &mut v8::PinScope<'s, '_>| {
+                if $listener_lease {
+                    v8_begin_stored_value_lease(scope);
+                }
+                $body(scope, args, retval);
+                if $listener_lease {
+                    v8_end_stored_value_lease(scope);
+                }
+            };
+            // SAFETY: This wrapper is installed as a V8 slow function or
+            // property callback, never called from a Fast API or GC hook.
+            unsafe { v8_registered_slow_callback_boundary(scope, stringify!($body), (), call) };
+        }
+    };
+}
+
+guarded_callback!(guarded_window_onload_getter => window_onload_getter);
+guarded_callback!(guarded_window_onload_setter => window_onload_setter);
+guarded_callback!(guarded_window_local_storage_getter => window_local_storage_getter);
+guarded_callback!(guarded_window_session_storage_getter => window_session_storage_getter);
+guarded_callback!(guarded_window_crypto_getter => window_crypto_getter);
+// The handwritten EventTarget methods acquire a callback before reading
+// page-controlled options. Their ordinary return closes that value lease.
+guarded_callback!(guarded_window_add_event_listener => window_add_event_listener, listener_lease);
+guarded_callback!(guarded_window_remove_event_listener => window_remove_event_listener, listener_lease);
+guarded_callback!(guarded_window_dispatch_event => window_dispatch_event);
+guarded_callback!(guarded_performance_now => performance_now);
+guarded_callback!(guarded_set_timeout => set_timeout);
+guarded_callback!(guarded_clear_timeout => clear_timeout);
+guarded_callback!(guarded_set_interval => set_interval);
+guarded_callback!(guarded_clear_interval => clear_interval);
+guarded_callback!(guarded_queue_microtask => queue_microtask);
+guarded_callback!(guarded_fetch => fetch);
+guarded_callback!(guarded_request_animation_frame => request_animation_frame);
+guarded_callback!(guarded_cancel_animation_frame => cancel_animation_frame);
 
 /// Timer functions whose deadline has passed, in fire order, waiting for the
 /// engine to invoke them with the isolate in hand.
@@ -70,6 +128,10 @@ pub type ReadyFrameQueue = Rc<RefCell<VecDeque<(v8::Global<v8::Function>, f64)>>
 /// and the owning engine. Every field is interior-mutable, so it is stored as a
 /// plain `Rc` rather than wrapped again.
 pub struct HostState {
+    /// The page-owned partial native-memory ledger used by structured clone.
+    pub(crate) native_memory: NativeMemoryBudget,
+    /// Deadline handoff checked during long native clone walks.
+    pub(crate) termination: Arc<TerminationGate>,
     /// The event loop's scheduling surface.
     pub scheduler: Scheduler,
     /// Timers that have fired and await invocation.
@@ -129,8 +191,15 @@ pub struct HostState {
 impl HostState {
     /// Builds host state over an event loop's `scheduler` and a browsing
     /// context's `cookies`.
-    pub fn new(scheduler: Scheduler, cookies: CookieJar) -> Rc<Self> {
+    pub(crate) fn new(
+        scheduler: Scheduler,
+        cookies: CookieJar,
+        native_memory: NativeMemoryBudget,
+        termination: Arc<TerminationGate>,
+    ) -> Rc<Self> {
         Rc::new(HostState {
+            native_memory,
+            termination,
             scheduler,
             ready: Rc::new(RefCell::new(VecDeque::new())),
             ready_frames: Rc::new(RefCell::new(VecDeque::new())),
@@ -238,26 +307,27 @@ impl Drop for NativeDispatchGuard<'_> {
 /// know about.
 pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>, time_origin_ms: f64) {
     let global = context.global(scope);
-    define(scope, global, "setTimeout", set_timeout);
-    define(scope, global, "clearTimeout", clear_timeout);
-    define(scope, global, "setInterval", set_interval);
-    define(scope, global, "clearInterval", clear_interval);
-    define(scope, global, "queueMicrotask", queue_microtask);
+    define(scope, global, "setTimeout", guarded_set_timeout);
+    define(scope, global, "clearTimeout", guarded_clear_timeout);
+    define(scope, global, "setInterval", guarded_set_interval);
+    define(scope, global, "clearInterval", guarded_clear_interval);
+    define(scope, global, "queueMicrotask", guarded_queue_microtask);
+    crate::structured_clone::install(scope, global);
     // `fetch` is defined here, before any driver exists: the global has to be
     // present from the moment script can run, and a call made before a driver is
     // installed rejects rather than throwing a `ReferenceError`.
-    define(scope, global, "fetch", fetch);
+    define(scope, global, "fetch", guarded_fetch);
     define(
         scope,
         global,
         "requestAnimationFrame",
-        request_animation_frame,
+        guarded_request_animation_frame,
     );
     define(
         scope,
         global,
         "cancelAnimationFrame",
-        cancel_animation_frame,
+        guarded_cancel_animation_frame,
     );
 
     // The window/global self-aliases: `window`, `self`, `frames`, `top` and
@@ -289,14 +359,24 @@ pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>, time_o
 /// on the stored callback — stay in [`HostObject`]'s `EventTargetOps`
 /// implementation, reached through a window host.
 fn install_window_event_target(scope: &mut v8::PinScope, global: v8::Local<v8::Object>) {
-    define(scope, global, "addEventListener", window_add_event_listener);
+    define(
+        scope,
+        global,
+        "addEventListener",
+        guarded_window_add_event_listener,
+    );
     define(
         scope,
         global,
         "removeEventListener",
-        window_remove_event_listener,
+        guarded_window_remove_event_listener,
     );
-    define(scope, global, "dispatchEvent", window_dispatch_event);
+    define(
+        scope,
+        global,
+        "dispatchEvent",
+        guarded_window_dispatch_event,
+    );
 }
 
 /// Installs the window's event handler IDL attributes — the `on*` properties
@@ -326,10 +406,10 @@ pub fn install_window_event_handlers(
     scope: &mut v8::PinScope,
     global_template: v8::Local<v8::ObjectTemplate>,
 ) {
-    let getter = v8::FunctionTemplate::builder(window_onload_getter)
+    let getter = v8::FunctionTemplate::builder(guarded_window_onload_getter)
         .length(0)
         .build(scope);
-    let setter = v8::FunctionTemplate::builder(window_onload_setter)
+    let setter = v8::FunctionTemplate::builder(guarded_window_onload_setter)
         .length(1)
         .build(scope);
     let key = v8::String::new(scope, "onload").expect("the member name fits the V8 string limit");
@@ -339,6 +419,107 @@ pub fn install_window_event_handlers(
         Some(setter),
         v8::PropertyAttribute::NONE,
     );
+}
+
+/// Installs Window's readonly storage attributes on the real global template.
+pub fn install_window_storage_accessors(
+    scope: &mut v8::PinScope,
+    global_template: v8::Local<v8::ObjectTemplate>,
+) {
+    let local = v8::FunctionTemplate::builder(guarded_window_local_storage_getter)
+        .length(0)
+        .build(scope);
+    let session = v8::FunctionTemplate::builder(guarded_window_session_storage_getter)
+        .length(0)
+        .build(scope);
+    let local_key = v8::String::new(scope, "localStorage").expect("the member name fits V8");
+    let session_key = v8::String::new(scope, "sessionStorage").expect("the member name fits V8");
+    global_template.set_accessor_property(
+        local_key.into(),
+        Some(local),
+        None,
+        v8::PropertyAttribute::NONE,
+    );
+    global_template.set_accessor_property(
+        session_key.into(),
+        Some(session),
+        None,
+        v8::PropertyAttribute::NONE,
+    );
+}
+
+/// Installs Window.crypto on the page's real global template.
+pub fn install_window_crypto_accessor(
+    scope: &mut v8::PinScope,
+    global_template: v8::Local<v8::ObjectTemplate>,
+) {
+    let getter = v8::FunctionTemplate::builder(guarded_window_crypto_getter)
+        .length(0)
+        .build(scope);
+    let key = v8::String::new(scope, "crypto").expect("the member name fits V8");
+    global_template.set_accessor_property(
+        key.into(),
+        Some(getter),
+        None,
+        v8::PropertyAttribute::NONE,
+    );
+}
+
+fn window_crypto_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let global = scope.get_current_context().global(scope);
+    if !args.this().strict_equals(global.into()) {
+        throw_js_error(scope, &JsError::type_error("Illegal invocation"));
+        return;
+    }
+    let result = window_host(scope).and_then(|host| host.crypto());
+    match result.and_then(|crypto| handle_to_v8::<Crypto>(scope, crypto)) {
+        Ok(value) => rv.set(value),
+        Err(error) => throw_js_error(scope, &error),
+    }
+}
+
+fn window_local_storage_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    window_storage_getter(scope, args, rv, false);
+}
+
+fn window_session_storage_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    window_storage_getter(scope, args, rv, true);
+}
+
+fn window_storage_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<v8::Value>,
+    session: bool,
+) {
+    let global = scope.get_current_context().global(scope);
+    if !args.this().strict_equals(global.into()) {
+        throw_js_error(scope, &JsError::type_error("Illegal invocation"));
+        return;
+    }
+    let result = window_host(scope).and_then(|host| {
+        if session {
+            host.session_storage()
+        } else {
+            host.local_storage()
+        }
+    });
+    match result.and_then(|storage| handle_to_v8::<Storage>(scope, storage)) {
+        Ok(value) => rv.set(value),
+        Err(error) => throw_js_error(scope, &error),
+    }
 }
 
 /// `window.onload`'s getter: the value the page last assigned, or `null`.
@@ -486,7 +667,7 @@ fn event_listener_args(
     scope: &mut v8::PinScope,
     args: &v8::FunctionCallbackArguments,
 ) -> Result<(String, Option<EventListener>), JsError> {
-    let type_ = string_from_v8(scope, args.get(0));
+    let type_ = string_from_v8(scope, args.get(0))?;
     let raw = args.get(1);
     let callback = if raw.is_null_or_undefined() {
         None
@@ -543,6 +724,10 @@ fn window_add_event_listener<'s>(
         throw_js_error(scope, &error);
         return;
     }
+    if native_callback_failure(scope).is_some() {
+        return;
+    }
+    v8_transfer_stored_value_lease(scope);
     retval.set_undefined();
 }
 
@@ -588,6 +773,10 @@ fn window_remove_event_listener<'s>(
         throw_js_error(scope, &error);
         return;
     }
+    if native_callback_failure(scope).is_some() {
+        return;
+    }
+    v8_transfer_stored_value_lease(scope);
     retval.set_undefined();
 }
 
@@ -656,7 +845,7 @@ fn install_performance(
     time_origin_ms: f64,
 ) {
     let performance = v8::Object::new(scope);
-    define(scope, performance, "now", performance_now);
+    define(scope, performance, "now", guarded_performance_now);
     // Fixed for the life of the loop, so a data property rather than a getter.
     // A virtual clock reports 0 (no wall-clock anchor, which is what keeps a
     // headless trace reproducible); a real one reports the Unix-epoch
@@ -901,27 +1090,12 @@ fn queue_microtask(
 /// `fetch(input, init)`: converts both arguments, creates the promise, resolves
 /// `input` against the document, and hands the request to the installed driver.
 ///
-/// What throws, and what rejects. This engine's argument conversion has four
-/// failure points, all of them before the promise exists:
-///
-/// 1. a second argument that is neither an object nor `null`/`undefined`, which
-///    is WebIDL's own `TypeError` for a dictionary conversion
-///    (<https://webidl.spec.whatwg.org/#js-dictionary>, step 1);
-/// 2. a declared member whose *conversion* throws, which is the same step's
-///    failure for that member — `{method: Symbol()}` is not a `ByteString`;
-/// 3. a declared member this engine does not serve
-///    ([`refused_request_init_member`]), named in the message;
-/// 4. the absence of a world to create the promise in.
-///
-/// A browser reports all of those as a *rejection*, because `fetch` invokes the
-/// `Request` constructor inside its own steps and rejects with whatever it
-/// throws: "If this throws an exception, reject p with it and return p"
-/// (<https://fetch.spec.whatwg.org/#dom-global-fetch>, step 2). This engine has
-/// no `Request` to invoke — the initializer is converted here instead
-/// ([`request_from_init`] is what runs the constructor's steps) — so (1) to (4)
-/// are throws and everything *after* the promise is a rejection: the method
-/// rules, the `GET`/`HEAD` body rule, and every driver refusal, exactly as they
-/// are there.
+/// A Promise-returning WebIDL operation rejects with an exception from argument
+/// conversion. A local `TryCatch` captures the exact page value thrown by a
+/// `ToString` or dictionary getter before any request reaches the driver. A
+/// native failure or execution termination is never turned into a catchable
+/// rejection. Once conversion succeeds, the shared script host owns the normal
+/// fetch promise and its later settlement.
 fn fetch(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -930,29 +1104,62 @@ fn fetch(
     let Some(state) = host_state(scope) else {
         return;
     };
-    let input = string_from_v8(scope, args.get(0));
-
     // `RequestInfo` is `(Request or USVString)`; only the second arm is
     // reachable, because `Request` is not a global this engine installs.
-    let init = match request_init(scope, args.get(1)) {
-        Ok(init) => init,
-        Err(reason) => {
-            throw_type_error(scope, &format!("Failed to execute 'fetch': {reason}"));
-            return;
+    let (input, init) = {
+        v8::tc_scope!(let tc, scope);
+        let converted = (|| -> Result<_, JsError> {
+            let input = string_from_v8(tc, args.get(0))?;
+            let init = request_init(tc, args.get(1))?;
+            // The dictionary is declared in full, so a named but unsupported
+            // member is rejected rather than converted and dropped.
+            if let Some(member) = refused_request_init_member(&init) {
+                return Err(JsError::type_error(format!(
+                    "the RequestInit member '{member}' is not implemented"
+                )));
+            }
+            Ok((input, init))
+        })();
+        match converted {
+            Ok(value) => value,
+            Err(error) => {
+                if tc.has_terminated() || native_callback_failure(tc).is_some() {
+                    tc.rethrow();
+                    tc.terminate_execution();
+                    return;
+                }
+                let reason = if let Some(reason) = tc.exception() {
+                    reason
+                } else {
+                    let message = format!("Failed to execute 'fetch': {}", error.message());
+                    let Some(message) = v8::String::new(tc, &message) else {
+                        return;
+                    };
+                    v8::Exception::type_error(tc, message)
+                };
+                // The caught exception must not escape as a synchronous throw.
+                // Its exact V8 value is the rejection reason of a fresh promise.
+                tc.reset();
+                let Some(resolver) = v8::PromiseResolver::new(tc) else {
+                    return;
+                };
+                if native_callback_failure(tc).is_some() {
+                    tc.terminate_execution();
+                    return;
+                }
+                let promise = resolver.get_promise(tc);
+                if resolver.reject(tc, reason) != Some(true) {
+                    return;
+                }
+                if native_callback_failure(tc).is_some() {
+                    tc.terminate_execution();
+                    return;
+                }
+                retval.set(promise.into());
+                return;
+            }
         }
     };
-    // The dictionary is declared in full, so a member this engine cannot honour
-    // is refused rather than converted and dropped — see
-    // [`refused_request_init_member`] for which twelve those are and why.
-    if let Some(member) = refused_request_init_member(&init) {
-        throw_type_error(
-            scope,
-            &format!(
-                "Failed to execute 'fetch': the RequestInit member '{member}' is not implemented"
-            ),
-        );
-        return;
-    }
 
     let realm = match world_realm(scope) {
         Ok(realm) => realm,
@@ -1081,11 +1288,13 @@ fn reject_promise(
 fn request_init(
     scope: &mut v8::PinScope,
     value: v8::Local<v8::Value>,
-) -> Result<RequestInit, String> {
+) -> Result<RequestInit, JsError> {
     if !value.is_null_or_undefined() && !value.is_object() {
-        return Err("the provided value is not of type 'RequestInit'".to_owned());
+        return Err(JsError::type_error(
+            "the provided value is not of type 'RequestInit'",
+        ));
     }
-    RequestInit::from_v8(scope, value).map_err(|error| error.message().to_owned())
+    RequestInit::from_v8(scope, value)
 }
 
 /// `requestAnimationFrame(callback)`: registers `callback` for the next

@@ -15,11 +15,10 @@ format = ["dep:prettyplease", "dep:syn"]
 # The generated prelude gates its engine glue on these names. Enabling `v8`
 # pulls the `v8` crate so the `compile_v8` test can type-check the generated V8
 # glue against the pinned rusty_v8 version (drift guard for the generator);
-# without it the plain `compile` include test runs instead. `quickjs` only
-# declares the cfg for now. A consumer crate declares features with the same
-# names next to its own `v8`/`rquickjs` dependencies.
+# without it the plain `compile` include test runs instead. A consumer crate
+# declares features with the same names next to its own engine dependencies.
 v8 = ["dep:v8"]
-quickjs = []
+quickjs = ["dep:rquickjs"]
 
 [dependencies]
 weedle = { package = "weedle4", version = "0.4" }
@@ -27,6 +26,7 @@ thiserror.workspace = true
 prettyplease = { version = "0.2", optional = true }
 syn = { version = "2", features = ["full", "parsing"], optional = true }
 v8 = { workspace = true, optional = true }
+rquickjs = { workspace = true, optional = true }
 
 [dev-dependencies]
 syn = { version = "2", features = ["full", "parsing"] }

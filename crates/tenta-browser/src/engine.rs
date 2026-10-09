@@ -16,9 +16,11 @@ use crate::context::{BrowserContext, ContextInner, ContextOptions};
 use crate::extensions::Extensions;
 use crate::threads::PagePool;
 
-/// Which JavaScript engine a page gets. No backend is compiled in before P2,
-/// so anything but [`JsEngine::None`] with a tier above `dom` is refused at
-/// [`EngineBuilder::build`].
+/// Which JavaScript backend JavaScript-enabled pages use.
+///
+/// A compiled backend is selected only when a page asks to run JavaScript.
+/// [`JsEngine::None`] explicitly refuses those pages while leaving Tier 0 and
+/// Tier 1 pages available.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum JsEngine {
     /// V8 where it is built, QuickJS otherwise.
@@ -26,7 +28,9 @@ pub enum JsEngine {
     Auto,
     V8,
     QuickJs,
-    /// No engine at all: Tier 0 and Tier 1 only.
+    /// Explicitly disable page engines, even when a backend is compiled in.
+    /// JavaScript-enabled pages return [`Error::Unsupported`]; Tier 0 and Tier
+    /// 1 pages remain available.
     None,
 }
 
@@ -53,6 +57,8 @@ pub struct TrimReport {
 /// Everything the engine was built with.
 #[derive(Clone, Debug)]
 pub struct EngineOptions {
+    /// The backend JavaScript-enabled pages may use. [`JsEngine::None`] refuses
+    /// JavaScript-enabled pages without affecting Tier 0 or Tier 1 pages.
     pub js: JsEngine,
     pub max_tier: Tier,
     pub profile: Profile,
@@ -183,7 +189,7 @@ impl EngineBuilder {
         // Tier 2 needs a compiled-in backend. Without one the ceiling stays at
         // Tier 1 and a higher `max_tier` is refused rather than silently
         // ignored; the `v8` feature is what raises it.
-        #[cfg(not(feature = "v8"))]
+        #[cfg(not(any(feature = "v8", feature = "quickjs")))]
         if options.max_tier > Tier::Dom {
             return Err(Error::unsupported(format!(
                 "max_tier {} needs a JavaScript engine; P1 implements up to {}",
@@ -191,7 +197,7 @@ impl EngineBuilder {
                 Tier::Dom
             )));
         }
-        #[cfg(feature = "v8")]
+        #[cfg(any(feature = "v8", feature = "quickjs"))]
         if options.max_tier > Tier::Js {
             return Err(Error::unsupported(format!(
                 "max_tier {} needs a JavaScript engine; this build implements up to {}",
@@ -199,19 +205,16 @@ impl EngineBuilder {
                 Tier::Js
             )));
         }
-        // A selector naming a backend this build did not compile in is refused,
-        // and so is one naming a backend no build implements yet — the two are
-        // different facts and the message has to say which one it is.
         #[cfg(not(feature = "v8"))]
-        if matches!(options.js, JsEngine::V8 | JsEngine::QuickJs) {
+        if options.js == JsEngine::V8 {
             return Err(Error::unsupported(
-                "no JavaScript backend is compiled in; build with the `v8` feature (P2)",
+                "V8 is not compiled in; enable the `v8` feature",
             ));
         }
-        #[cfg(feature = "v8")]
-        if matches!(options.js, JsEngine::QuickJs) {
+        #[cfg(not(feature = "quickjs"))]
+        if options.js == JsEngine::QuickJs {
             return Err(Error::unsupported(
-                "QuickJS is not implemented; this build serves JavaScript with V8 (P2)",
+                "QuickJS is not compiled in; enable the `quickjs` feature",
             ));
         }
         let net = NetRuntime::new(options.io_threads).map_err(Error::from)?;
@@ -394,7 +397,7 @@ mod tests {
     #[test]
     fn the_tier_ceiling_follows_the_compiled_in_backend() {
         // Tier 2 is reachable only when a backend can serve it.
-        #[cfg(not(feature = "v8"))]
+        #[cfg(not(any(feature = "v8", feature = "quickjs")))]
         {
             let error = Engine::builder()
                 .max_tier(Tier::Js)
@@ -402,7 +405,7 @@ mod tests {
                 .expect_err("Tier 2 needs a backend");
             assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
         }
-        #[cfg(feature = "v8")]
+        #[cfg(any(feature = "v8", feature = "quickjs"))]
         {
             let engine = Engine::builder()
                 .io_threads(1)
@@ -438,11 +441,24 @@ mod tests {
                 .expect("this build serves the V8 selector");
             engine.close();
         }
-        let error = Engine::builder()
-            .js(JsEngine::QuickJs)
-            .build()
-            .expect_err("QuickJS is not implemented");
-        assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
+        #[cfg(not(feature = "quickjs"))]
+        {
+            let error = Engine::builder()
+                .js(JsEngine::QuickJs)
+                .build()
+                .expect_err("QuickJS feature is absent");
+            assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
+        }
+        #[cfg(feature = "quickjs")]
+        {
+            let engine = Engine::builder()
+                .io_threads(1)
+                .page_threads(1)
+                .js(JsEngine::QuickJs)
+                .build()
+                .expect("QuickJS selector");
+            engine.close();
+        }
     }
 
     #[test]

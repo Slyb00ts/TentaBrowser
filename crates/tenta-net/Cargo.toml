@@ -29,7 +29,9 @@ tenta-h2 = { workspace = true }
 # through `boring`/`boring-sys`; every other crate here must stay off aws-lc-rs
 # and openssl-sys (§1.1).
 tokio = { version = "1", features = ["rt", "net", "time", "io-util", "sync", "macros"] }
-hyper = { version = "1", features = ["client", "http1"] }
+# `Error::is_parse_too_large` is gated on `server` even for client response
+# errors. Declare it here instead of relying on testutil's feature unification.
+hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
 http-body-util = "0.1"
 http-body = "1"

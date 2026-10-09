@@ -193,3 +193,20 @@ pub fn fast_return_convert(ty: &Type, expr: &str) -> String {
         format!("{expr} as {fast}")
     }
 }
+
+/// The operation-local Rust spelling of a direct buffer reference.
+/// All unannotated buffer positions retain the ordinary copied `Vec<u8>` form.
+pub fn operation_buffer_type(ty: &Type, references: bool, position: Position) -> String {
+    if references {
+        match ty {
+            Type::Buffer(crate::model::BufferType::BufferSource) => {
+                return "BufferSourceRef".into();
+            }
+            Type::Buffer(crate::model::BufferType::ArrayBufferView) => {
+                return "ArrayBufferViewRef".into();
+            }
+            _ => {}
+        }
+    }
+    rust_type(ty, position)
+}

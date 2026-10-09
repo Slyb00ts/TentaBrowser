@@ -1,22 +1,26 @@
 //! `tentabrowser fetch`: one URL, one extraction
 //! (`docs/spec/16-roadmap.md` P1; `docs/spec/13-performance.md` §1).
 //!
-//! Tier 1 only. Nothing above `tenta-net`, `tenta-html` and `tenta-dom` is
-//! reached: no script engine, no style, no fonts.
+//! The default remains Tier 1. `--eval` explicitly opts into a V8 page.
 
 use std::io::Write;
 
 use tentabrowser::{Document, Goto, PageOptions, Settle};
 
 use crate::cli::{Dump, FetchArgs, Global, Wait};
-use crate::error::{CliError, CliResult};
+use crate::error::{CliError, CliResult, EXIT_UNSUPPORTED};
 use crate::output;
 use crate::phase::Phases;
 use crate::setup::{self, Session};
 
 pub async fn run(global: &Global, args: &FetchArgs) -> CliResult<()> {
+    validate_eval(global, args)?;
     let mut phases = Phases::start();
-    let session = setup::open(global, 1)?;
+    let session = if args.eval.is_some() {
+        setup::open_eval(global)?
+    } else {
+        setup::open(global, 1)?
+    };
     phases.mark("engine");
     let outcome = fetch(&session, global, args, &mut phases).await;
     session.close();
@@ -38,14 +42,27 @@ async fn fetch(
         session.engine.fs_policy().check_write(path)?;
     }
 
-    let page = session.context.new_page(PageOptions::tier1()).await?;
+    let page = session
+        .context
+        .new_page(if args.eval.is_some() {
+            PageOptions::default()
+        } else {
+            PageOptions::tier1()
+        })
+        .await?;
     let goto = Goto::default()
         .wait_until(settle(args.wait))
         .timeout(std::time::Duration::from_millis(global.timeout));
     tracing::debug!(url = %crate::logging::url_str(&args.url), "fetch");
-    let navigation = page.goto(&args.url, goto).await;
-    let document = match navigation {
-        Ok(_) => page.take_document(),
+    let navigation = match &args.eval {
+        Some(source) => page
+            .goto_with_eval(&args.url, goto, &eval_expression(source))
+            .await
+            .map(|(_, value)| Some(value)),
+        None => page.goto(&args.url, goto).await.map(|_| None),
+    };
+    let (document, evaluation) = match navigation {
+        Ok(evaluation) => (page.take_document(), evaluation),
         Err(error) => {
             let _ = page.close().await;
             return Err(CliError::from(error));
@@ -64,7 +81,10 @@ async fn fetch(
         print_headers(&document);
     }
 
-    let body = render(&document, dump(global, args), args)?;
+    let body = match evaluation {
+        Some(value) => value,
+        None => render(&document, dump(global, args), args)?,
+    };
     phases.mark("extract");
     match &args.output {
         Some(path) => output::write_file(session.engine.fs_policy(), path, body.as_bytes())?,
@@ -79,6 +99,46 @@ async fn fetch(
         ));
     }
     Ok(())
+}
+
+fn validate_eval(global: &Global, args: &FetchArgs) -> CliResult<()> {
+    let Some(source) = &args.eval else {
+        return Ok(());
+    };
+    if source.trim().is_empty() {
+        return Err(CliError::usage(
+            "--eval needs a nonempty JavaScript expression",
+        ));
+    }
+    if args.dump.is_some() || global.json || args.main_content {
+        return Err(CliError::usage(
+            "--eval prints the expression result; omit --dump, --json and --main-content",
+        ));
+    }
+    if !cfg!(feature = "v8") {
+        return Err(CliError::new(
+            EXIT_UNSUPPORTED,
+            "--eval needs the V8 backend; rebuild with `cargo build -p tentabrowser-cli --features v8`",
+        ));
+    }
+    Ok(())
+}
+
+/// The backend returns a string completion. Preserve strings as text for
+/// shell use; serialize the other JSON values so arrays and objects retain
+/// their structure. JSON.stringify rejects cycles and BigInt, and undefined
+/// or functions have no JSON value: those are explicit script errors.
+fn eval_expression(source: &str) -> String {
+    format!(
+        "(() => {{\n\
+         const value = (\n{source}\n);\n\
+         if (value !== null && (typeof value === 'object' || typeof value === 'function') && typeof value.then === 'function') throw new TypeError('Promise results are not awaited');\n\
+         if (typeof value === 'string') return value;\n\
+         const json = JSON.stringify(value);\n\
+         if (json === undefined) throw new TypeError('evaluation result is not JSON-serializable');\n\
+         return json;\n\
+         }})()"
+    )
 }
 
 fn settle(wait: Wait) -> Settle {
@@ -106,7 +166,11 @@ fn print_headers(document: &Document) {
 /// The global `--json` is the shorthand a host reaches for; it wins over
 /// `--dump`, which defaults to text.
 fn dump(global: &Global, args: &FetchArgs) -> Dump {
-    if global.json { Dump::Json } else { args.dump }
+    if global.json {
+        Dump::Json
+    } else {
+        args.dump.unwrap_or(Dump::Text)
+    }
 }
 
 fn render(document: &Document, dump: Dump, args: &FetchArgs) -> CliResult<String> {
@@ -140,5 +204,12 @@ mod tests {
         assert_eq!(settle(Wait::Load), Settle::Load);
         assert_eq!(settle(Wait::DomContent), Settle::DomContent);
         assert_eq!(settle(Wait::NetworkIdle), Settle::NetworkIdle);
+    }
+
+    #[test]
+    fn evaluation_source_is_wrapped_as_one_expression() {
+        let source = eval_expression("({ answer: 42 })");
+        assert!(source.contains("const value = (\n({ answer: 42 })\n)"));
+        assert!(source.contains("JSON.stringify(value)"));
     }
 }

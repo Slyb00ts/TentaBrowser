@@ -172,12 +172,12 @@ of the JavaScript value:
   cannot hold a lone surrogate, and V8's `to_rust_string_lossy` maps an unpaired
   surrogate to U+FFFD, which is the substitution WebIDL's scalar-value
   conversion prescribes.
-- Each arm of a union carries its own WebIDL test — `is_object()` for the
-  object-like arms, `@@iterator` for a sequence, `is_object() && !is_array()`
-  for a record, `is_number()` for the numeric arms, and the buffer-source
-  predicates below — and the arms are tried in declaration order. The first arm
-  with no test of its own is the fallback; declaring one earlier cannot shadow a
-  later arm of the same kind.
+- Each arm of a union carries its own WebIDL test — a V8 interface-template brand
+  check for interface arms, `@@iterator` for a sequence,
+  `is_object() && !is_array()` for a record, `is_number()` for numeric arms, and
+  the buffer-source predicates below — and the arms are tried in declaration
+  order. The first arm with no test of its own is the fallback; declaring one
+  earlier cannot shadow a later arm of the same kind.
 - A buffer source is converted by its bytes, and it maps to `Vec<u8>` in *both*
   positions. Reading one always allocates: the bytes have to be copied out of
   the engine's own storage before the host may look at them, so a borrowed
@@ -269,15 +269,13 @@ of the JavaScript value:
   arm, so the spelling *is* the type and no typedef lookup happens. The
   shadowing is harmless because the two agree, and it is why `BufferSource`
   carries its own model variant whose conversions are written by hand.
-- The QuickJS glue does not use these conversions at all: it never names
-  `convert.rs`, and it hands a buffer source to `rquickjs` as the `Vec<u8>` the
-  type maps to. `rquickjs`'s own `FromJs`/`IntoJs` for `Vec<u8>` then reads and
-  writes a JavaScript `Array` of numbers, not a typed array or an
-  `ArrayBuffer`. The gap is real but dormant: it is a shape difference rather
-  than a compile error, the `quickjs` feature has no `rquickjs` dependency to
-  build against (its `cargo` feature is `quickjs = []`), and no `idl/`
-  declaration names a buffer source. A QuickJS host that needed one would need
-  the byte conversions written for it.
+- The QuickJS glue uses `quickjs_buffer_bytes` and `quickjs_buffer_value` in
+  the generated prelude. Input dispatch checks native buffer brands and copies
+  the selected view's byte range. DataView accessors and output constructors
+  are saved before page script runs, so replacing globals or shadowing view
+  properties does not change conversion. `BufferSource` and `ArrayBufferView`
+  results use a native `Uint8Array`. Shared buffers remain unavailable until
+  the QuickJS cross-runtime sharing hooks and isolation policy are implemented.
 - A union with a buffer source member carries its own test too, because an arm
   with none is the union's fallback: the shape is
   `typedef (BufferSource or USVString) BodyInit;`, and without the test the
@@ -290,9 +288,9 @@ of the JavaScript value:
   `[[ArrayBufferData]]` internal slot a shared buffer also has. That term does
   not soften the conversion, which still refuses a bare `SharedArrayBuffer` with
   a `TypeError`; it is what turns that refusal into a thrown exception instead
-  of a `"[object SharedArrayBuffer]"` body. The QuickJS arm is `is_object()`:
-  every buffer source is an object, and the feature has no `rquickjs` to check a
-  narrower predicate against. `idl/toy/PayloadBox.webidl` is the fixture for
+  of a `"[object SharedArrayBuffer]"` body. The QuickJS arm also checks native
+  buffer and view brands; it does not accept an ordinary object just because
+  its prototype resembles a buffer. `idl/toy/PayloadBox.webidl` is the fixture for
   the `BufferSource` arm; the twelve others are pinned by
   `every_buffer_union_arm_is_guarded_by_the_class_it_converts` rather than by a
   declaration.
@@ -443,12 +441,12 @@ Notes on the shape of the generated code:
 
 ### QuickJS glue (`rquickjs` 0.12)
 
-Verified against <https://docs.rs/rquickjs/0.12.2/rquickjs/> and listed in the
-doc comment of the generated class:
+The runtime pins the APIs documented at
+<https://docs.rs/rquickjs/0.12.2/rquickjs/>:
 
 - `rquickjs::class::{JsClass, Trace, Tracer, Readable}`, `rquickjs::JsLifetime`
-- `rquickjs::Class::{define, prototype, instance}`
-- `rquickjs::function::Constructor::new_class`
+- `rquickjs::Class::instance`
+- `rquickjs::function::Constructor::new_prototype`
 - `rquickjs::Object::{new, prop, set, set_prototype, into_value}`,
   `rquickjs::object::{Accessor, Property}`
 - `rquickjs::function::{Func, This, Opt, Rest}`
@@ -456,12 +454,26 @@ doc comment of the generated class:
 - `rquickjs::Exception::{throw_type, throw_range, throw_syntax}`
 - `rquickjs::{FromJs, IntoJs}`
 
-Each interface gets a `{Name}Class<T>` with a `Trace` impl, a `JsLifetime`
-impl (documented `unsafe`: the wrapper borrows no `'js` value), a `JsClass`
-impl whose `prototype` installs the members and links the parent prototype
-with `set_prototype`, and an `install_{snake}` that defines the constructor on
-the global. QuickJS has no fast path, so every member goes through the regular
-conversion.
+Every interface has an `install_{snake}` function that creates its native
+prototype, links the parent prototype, and installs accessors, methods and its
+constructor. Ordinary wrappers use `QuickJsHost`; interfaces with indexed or
+named special operations use the native `LegacyHost` exotic class. Both carry
+immutable interface ancestry separately from script-visible prototypes. An inherited
+method therefore accepts a derived wrapper while rejecting forged receivers.
+QuickJS has no V8 fast-call path; every member uses the regular conversion.
+
+Generated callbacks and handwritten globals enter `quickjs_callback_boundary`.
+Native panics set sticky runtime failure and throw an uncatchable error; both
+the outer callback and the interrupt handler observe that failure. A class
+finalizer catches native destructor panics and records generation-tagged dead
+wrappers without borrowing the DOM during collection. The runtime applies
+reclamation at safe points and releases all roots and minted document contexts
+before teardown.
+
+`cargo nextest run -p tenta-js-qjs` exercises the generated DOM bindings in a
+real engine. Indexed/named property hooks have focused collection and Storage
+coverage. Prototypes are currently installed eagerly; lazy interfaces, full
+overload resolution and the broader WebIDL conformance gates remain outstanding.
 
 ### Registry
 
@@ -896,56 +908,31 @@ attribute parser, the cookie-averse rule, and the "no own property left behind"
 regression), and `crates/tenta-browser/tests/cookie_js.rs` is the end-to-end
 half, where the cookie has to survive into a real request.
 
-### `Blob` and `File`: the first host-side brand check (P2 `d-4b`, `FormData`'s prerequisite)
+### `Blob` and `File`: the first interface-union brand check (P2 `d-4b`, `FormData`'s prerequisite)
 
 `idl/fileapi/Blob.webidl` declares `Blob`, `BlobPropertyBag`, `EndingType`, the
 `BlobPart` typedef, and `File : Blob` with `FilePropertyBag`. `idl/fileapi/` is a
 new entry in `tenta-js/build.rs`'s directory list, so this is the first
 declaration lowered from a directory the list did not already name (`idl/toy/`
 is the generator's own fixture and is not in it). `Blob` and `File`
-are also the first declarations whose *union arm* needs a check the generator does
-not emit. Both host records are new variants of
+are also the first declarations whose *union arm* needs an interface brand
+check. Both host records are new variants of
 `HostRecord`, so they follow the recipe in "JS-owned host objects and the promise
 seam" above: a variant, an `interface_name()` arm, a `host_pairs`
 arm, a `HostLink` arm, a `reclaim_host_record` arm, a `with_*` reader on
 `HostObject`, and the `has_wrapper` arm in `crates/tenta-js-v8/src/world.rs`.
 
 **Why the union needs a check at all.** `BlobPart` is `(BufferSource or Blob or
-USVString)`, and the generator's arm order is the declaration's. Two facts about
-the generated `from_v8` (`crates/tenta-idl/src/codegen/types.rs`) make the `Blob`
-arm a hole rather than a check:
+USVString)`, and the generator's arm order is the declaration's. Its V8
+conversion uses a cached `FunctionTemplate` with a receiver signature to test the `Blob` brand and
+then asks `WrapperWorld` for the receiver's native handle. The second check
+matters because a signature alone can accept a matching holder in the prototype
+chain, such as `Object.create(realBlob)`. A real `Blob` or derived `File` selects
+the interface arm; other platform wrappers, ordinary objects and prototype
+spoofs fall through to `USVString`. The host's `blob_bytes_of` record check
+remains as a defensive invariant.
 
-1. `union_test` lowers `Type::Interface(_)`, `Type::Object` and
-   `Type::Dictionary(_)` alike to `value.is_object()` — every object, not a brand
-   check. This is the same defect `Response.webidl`'s `URLSearchParams` paragraph
-   records.
-2. The V8 `WrapperWorld::handle` (`crates/tenta-js-v8/src/world.rs`) ignores the
-   interface name the prelude passes it. It answers with the host bits of any
-   object carrying a host pointer, and with the window's handle for the global
-   object, because *every* JS-owned wrapper shares `TAG_HOST`.
-
-So `handle_from_v8::<Blob>` succeeds for a `URL`, a `Headers`, a `Response`, a
-`TextDecoder`, an `XMLHttpRequest`, a node, an event and the window, and its
-bits point at a record of whichever kind that object really is. **The host
-performs the brand check on the record**, in `blob_bytes_of`
-(`crates/tenta-js/src/bindings/host.rs`): look the key up in `host_records` and
-require `HostRecord::Blob` or `HostRecord::File`. Anything else is a `TypeError`
-naming the argument. The tag test is not redundant with the record lookup — a
-window handle is the tag alone, so reading its key would ask for slab slot 0 and
-could append an unrelated record's bytes.
-
-The claim that `new Blob([{}])` and `new Blob([new Date()])` already throw, with
-no host-side check involved, is **half right**. `{}` and a `Date` carry no host
-pointer at all, so `unwrap_this::<HostObject>` fails on
-`internal_field_count() == 0` and
-the conversion throws before the host sees anything — that part is correct, and
-those two values need no brand check. But a *host-backed* wrapper is exactly
-where the conversion succeeds and the check is the only thing standing between a
-`Headers` and a `Handle<Blob>`, so the tests that matter are
-`new Blob([new URL("https://example.com/")])`, `new Blob([document.body])` and
-`new Blob([window])`, not `{}`.
-
-**Three deviations this slice records**, beside the members in
+**Two deviations this slice records**, beside the members in
 `idl/fileapi/Blob.webidl`:
 
 1. `BlobPropertyBag.endings` is refused **by name, by presence** — the same
@@ -959,9 +946,6 @@ where the conversion succeeds and the check is the only thing standing between a
    default to an `Option<T>`, so a default makes presence unobservable to the
    host and deviation 1 unimplementable. The host applies the standard's default
    itself. `type` keeps its `= ""`.
-3. A non-`Blob` object in `blobParts` throws where a browser takes the
-   `USVString` arm and produces `"[object Object]"` — the deliberately chosen
-   error direction, for the reason above.
 
 **One editorial defect in File API, read around rather than reproduced.** Both
 constructors guard the `type` normalization on `type` being non-empty and then
@@ -990,7 +974,7 @@ a supertrait: the generated `FileOps: BlobOps` bound is what makes
 installed after `Blob`, because `constructor.inherit` reads the parent template
 out of the isolate's template cache (`crates/tenta-idl/src/codegen/v8.rs`).
 
-**A fourth deviation, and it is the generator's rather than the declaration's.**
+**A third deviation, and it is the generator's rather than the declaration's.**
 An absent or explicitly `undefined` optional `sequence<>` argument lowers to
 `None`, but an explicit `null` does not: the generated argument check is
 `args.length() > 0 && !args.get(0).is_undefined()`, so `null` reaches
@@ -1090,7 +1074,8 @@ header quotes verbatim). The free functions `blob_source_of` and `entry_file`
 | `File` | given | a **new** `File`: bytes and `type` copied from the source, `name` = `filename`, `lastModified` **copied from the source** |
 | `Blob` (not a `File`) | absent | a **new** `File`: bytes and `type` copied, `name` = `"blob"`, `lastModified` = **now** |
 | `Blob` (not a `File`) | given | a **new** `File`: bytes and `type` copied, `name` = `filename`, `lastModified` = **now** |
-| any other object | either | `TypeError` (deviation 2) |
+| any other value | absent | the string produced by `ToString` |
+| non-`Blob` value | given | `TypeError` from the three-argument Blob overload |
 
 `lastModified` is a `File`-only attribute, so it is not "copied" on the `Blob`
 rows — it is minted, and `now_epoch_ms()` is the system clock, consistent with
@@ -1107,9 +1092,9 @@ it true there too. The empty-`Blob` row is pinned exactly as
 
 **The overloads, and the one departure from the standard's IDL text.** The
 generated names are `append_2`/`append_3` and `set_2`/`set_3`, and the
-dispatcher is `match args.length()` (`crates/tenta-idl/src/codegen/v8.rs`'s
-`overload_dispatch`) — arity alone, with an unrecognised count throwing
-`TypeError`. That is why the file declares the *value* parameter of the
+both backends use `codegen/mod.rs::overload_dispatch`: argument count selects
+the first declared matching arm, with excess arguments ignored by the longest
+finite signature and insufficient arguments rejected with `TypeError`. That is why the file declares the *value* parameter of the
 two-argument form as `(Blob or USVString)` instead of the standard's separate
 `USVString` and `Blob blobValue` overloads: WebIDL's own algorithm
 (<https://webidl.spec.whatwg.org/#es-overloads>) chooses between them on the
@@ -1118,19 +1103,13 @@ two-argument form as `(Blob or USVString)` instead of the standard's separate
 `append("file-1", file)` to the `USVString` overload and store
 `"[object File]"`. Four of `set-blob.any.js`'s six subtests fail under the
 standard's pair; the union declaration restores the standard's semantics for
-every input a browser distinguishes. The cost is deviation 2 below, and the
-fix, if the generator ever grows value-based overload resolution, is this file's
-own text.
+every input a browser distinguishes. If the generator grows value-based
+overload resolution, this file can return to the standard's overload text.
 
-**`FormDataEntryValue` is return-only, so the union brand-check trap does not
-bite.** `BlobPart` (§ above) and `XMLHttpRequestBodyInit` needed a check because
-a *wrong acceptance* on an argument produces a silently different object. Here
-the `File or USVString` union appears in `get`, `getAll` and the pair
-`iterable`, all return positions, where the host writes the arm itself; the
-argument positions use `Blob or USVString`, whose `Blob` arm is `is_object()`
-and is therefore a hole a `Blob` or a `FormData` or a node wrapper can fall
-through. `EntryValue` cannot represent a non-Blob, non-`File` object, and
-`blob_source_of` is what refuses one.
+`FormDataEntryValue` appears only in return positions, where the host chooses
+the `File` or `USVString` arm. The argument positions use `(Blob or USVString)`:
+generated interface-brand selection keeps real `Blob` and derived `File`
+wrappers on the interface arm and sends every other value through `ToString`.
 
 The deviations the declarations create are recorded in
 `idl/xhr/FormData.webidl`'s header and restated here for a reader who has only
@@ -1140,33 +1119,16 @@ this file:
    The form arm needs HTML's *constructing the entry list*, which walks a form's
    submittable elements; `HTMLFormElement` exists in this repository's IDL as a
    name only, with no `type`, `files` or `value` to read. `new FormData()` is
-   the standard's and is served. The refusal's *reach* is wider than the
-   declaration's, because `WrapperWorld::handle` ignores the interface name it
-   is handed: `new FormData(null)`, `new FormData("x")`, `new FormData({})` and
-   `new FormData(new Date())` all fail earlier, in `handle_from_v8`, with the
-   `TypeError` WebIDL's own argument conversion raises (and `constructor.any.js`
-   requires for `null`), but a *node wrapper* that the host does recognise —
-   `new FormData(document.body)` — reaches the host and is refused with the
-   `NotSupportedError` above where a browser raises a `TypeError`. Both throw;
-   the name differs. Pinned by `constructing_from_a_form_is_refused_by_name`,
-   which asserts the five names in that order.
-2. **A non-`Blob`, non-`File` object value throws where a browser stringifies.**
-   Same shape as `BlobPart`'s deviation 3, and the same rationale — a wrong
-   refusal says so, a wrong acceptance silently changes the object. Pinned by
-   `a_wrapper_backed_value_that_is_not_a_blob_is_refused`, which appends a
-   `URL`, a `Headers`, a node wrapper (`document.body`), `{}` and a `Date` and
-   asserts a `TypeError` for each: the first three carry a host pointer and are
-   refused by `blob_source_of`, the last two fail earlier in
-   `handle_from_v8`. A browser takes the `USVString` arm for all five and stores
-   `"[object URL]"`, `"[object Headers]"`, `"[object HTMLBodyElement]"`,
-   `"[object Object]"` and the date string.
-3. **A mutation during iteration is not observed: a pair iterator is a
+   the standard's and is served. Values without the `HTMLFormElement` brand,
+   including unrelated node wrappers, fail argument conversion with the
+   `TypeError` WebIDL requires.
+2. **A mutation during iteration is not observed: a pair iterator is a
    snapshot.** Shared with every landed pair `iterable` and recorded under
    "Notes on the shape of the generated code" above, with
    `wpt/checkout/xhr/formdata/iteration.any.js`'s three subtests named. Pinned
    by `iteration_views_a_snapshot_so_a_mutation_during_it_is_not_observed`,
    which a live-iterator slice has to come back and flip.
-4. **An entry's value can be collected while the `FormData` still holds it, so
+3. **An entry's value can be collected while the `FormData` still holds it, so
    a later read can mint a new wrapper for the same record.** A browser's entry
    list holds the `File` object, which keeps it uncollectable; here the entry
    holds the record's key and the record outlives its wrapper (that is what
@@ -1285,10 +1247,10 @@ Deviations, all recorded in `idl/dom/dom.webidl`:
    `XMLDocument` interface and no XML-specific document prototype, so the
    standard's `Object.getPrototypeOf(doc) === XMLDocument.prototype` cannot hold.
 2. **`createDocument`'s `qualifiedName` is `DOMString?`,** where the standard says
-   `[LegacyNullToEmptyString] DOMString`. The generator does not implement that
-   extended attribute; a nullable parameter is observationally the same, because
-   the standard's own step reads "if qualifiedName is the empty string" and the
-   WPT file decides with `qualifiedName === null || String(qualifiedName) === ""`.
+   `[LegacyNullToEmptyString] DOMString`. The generator supports that annotation;
+   this older nullable compatibility signature still needs alignment with its
+   host conversion. `null` takes the empty-name path, but explicit `undefined`
+   can differ from the standard conversion.
 3. **No adoption: a node cannot move between documents.** The third deviation is
    the one that reaches beyond `DOMImplementation`. Here a node's document *is*
    the arena the node lives in and a handle names that arena by its slot, so
@@ -1341,20 +1303,19 @@ operations, `Document.createAttribute`/`createAttributeNS`,
 `getElementsByTagNameNS` and the ASCII-whitespace rule
 `getElementsByClassName` splits on. The deviations and the deliberate gaps:
 
-- **`Attr` is not a `Node` here.** The DOM Standard makes `Attr : Node` with
-  `nodeType` 2. In this tree an attribute is a row of its element's packed
-  attribute list (`AttrName`/`AttrValue` inside `tenta_dom`'s arena) with no
-  arena slot, no id and no generation, so there is nothing for the `Node`
-  members to read and no `TAG_NODE` handle that could name one. `interface Attr`
-  in `idl/dom/dom.webidl` therefore carries the four `Node` members the WPT
-  attribute helpers read (`nodeType`, `nodeName`, `nodeValue`, `textContent`)
-  directly. `attr instanceof Node` is false.
-- **Two reads of one attribute are two objects.** There is no per-entry identity
-  to hang a `[SameObject]` rule on, so `element.attributes[0]` mints a fresh
-  `Attr` each time. Its members still read the element's storage, so a held
-  `Attr` follows a later `setAttribute` — only `===` between two reads is false.
-  `Element.attributes` itself *is* `[SameObject]`: it is a `TAG_NAMED_NODE_MAP`
-  handle derived from the element's `NodeRef`.
+- **`Attr : Node` uses a host record rather than an arena node.** Attribute
+  storage remains packed in each element. An attached Attr record names its
+  element and `(namespace, localName)` and pins that element while its wrapper
+  is live. The inherited Node operations that need an arena tree position
+  handle Attr explicitly. A value write keeps an existing attribute's prefix;
+  `setAttributeNode` replaces the attribute object and can change its prefix.
+  Removal detaches the same Attr object with its last value.
+- **Attached Attr identity is canonical within a binding world.**
+  `getAttributeNode`, `NamedNodeMap.item`, and its named getters reuse the
+  wrapper for the same element and `(namespace, localName)`. The weak index
+  is cleared when the wrapper is finalized or the attribute is detached.
+  `Element.attributes` remains `[SameObject]` via its separate
+  `TAG_NAMED_NODE_MAP` handle.
 - **Two name rules, not one.** `createElement`/`createElementNS` use XML's
   `Name` production as the WPT tables pin it (`Document-createElement.html`,
   `Document-createElementNS.js`): an ASCII letter, `_`, `:` or a non-ASCII
@@ -1365,18 +1326,24 @@ operations, `Document.createAttribute`/`createAttributeNS`,
   accepted, while `dom/nodes/processing-instruction-attributes.html` requires
   `$`, `_` and `a$b` to be accepted and `=`, `>` and `/` to be refused wherever
   they sit. No single first-character rule satisfies both tables.
-- **The plain name operations still match by `(no namespace, local name)`.**
-  `getAttributeNode`, `getAttributeNodeNS`, `getNamedItem` and `getNamedItemNS`
-  match by *qualified* name or by `(namespace, localName)` against the stored
-  list, but `getAttribute("xlink:href")` does not find a parsed `xlink:href`
-  attribute: the four plain operations build a `QualName` with no namespace and
-  the lowercased argument as the local name, and `tenta_dom` matches on the
-  whole `AttrName`. That is a pre-existing divergence, and now the only one left
-  on the attribute path.
+- **Plain name operations use the first matching qualified name.** The host
+  shares that lookup across Element and NamedNodeMap, applying ASCII lowercase
+  only for HTML-namespace elements in HTML documents. Writes to an existing
+  namespaced attribute preserve its namespace, prefix and Attr identity;
+  missing names create null-namespace attributes. Direct native mutations of a
+  shared `Document` outside the binding host do not yet synchronize held Attr
+  records with external attribute removals.
+- **Attr integration remains partial across document and range boundaries.**
+  Attaching an Attr from another document currently reports
+  `NotSupportedError` rather than adopting it. Live Range boundary methods
+  still resolve only arena-backed `TAG_NODE` handles, so a Node-typed Attr
+  endpoint does not yet receive the DOM Standard's Range behavior. QuickJS
+  indexed and named collection hooks now have focused real-engine coverage on
+  both backends; this does not establish full collection conformance.
 - **`getElementsByTagNameNS` returns a snapshot**, not the standard's live
   collection, exactly as `getElementsByTagName` already did, so a mutation after
-  the call is not visible through it. `HTMLCollection`'s own `[NewObject]`
-  declaration is what this matches.
+  the call is not visible through it. `[NewObject]` requires a fresh object;
+  this API's DOM algorithm separately requires that collection to remain live.
 
 Deliberately **not** taken in this slice, each with its reason:
 
@@ -1385,10 +1352,9 @@ Deliberately **not** taken in this slice, each with its reason:
   order — a microtask queue, an observation-target set and `takeRecords`'s
   interplay with it — that the host has no mechanism for. A stub whose callbacks
   never fire would be exactly the masking the working rules forbid.
-- `DOMParser` (41). Its reachable `dom/nodes` demand is
-  `processing-instruction-attributes.html`'s `application/xml` sources, which
-  needs an XML parser, and the engine has none. `parseFromString` for
-  `text/html` alone would not move the file.
+- `DOMParser` was absent at this historical checkpoint (41 subtests).
+  Native XML parsing and DOMParser/XMLSerializer bindings have since landed
+  with focused tests; the old count is not a current conformance result.
 - The `Attr` surface on `ProcessingInstruction` (`pi.setAttribute`,
   `pi.getAttribute`, `pi.hasAttributes`, `pi.toggleAttribute` — 90 subtests of
   `processing-instruction-attributes.html`). Those members belong to the WICG
@@ -1479,7 +1445,7 @@ from the model even when no generator acts on them.
 - `tests/codegen.rs` — golden files under `tests/golden/{toy,dom}/`, every
   generated file parsed with `syn` (`full`), a placeholder scan, determinism,
   the emitted file set, and the engine API items each glue file uses. Refresh
-  the golden files with `UPDATE_GOLDEN=1 cargo test -p tenta-idl`.
+  the golden files with `UPDATE_GOLDEN=1 cargo nextest run --locked -p tenta-idl --test codegen`.
 - `tests/compile.rs` — includes the golden prelude, types, `*Ops` traits and
   registry files of both fixtures into two test modules, implements
   `CounterOps` for a real host object and exercises the generated enums,
@@ -1543,9 +1509,9 @@ generated code:
 - `maplike` and `setlike` declarations (`Error::Unsupported`).
 - `async iterable` — parsed and stored in `Iterable::is_async`, but no async
   iterator prototype is generated.
-- The QuickJS glue generates no iterator members for either form of
-  `iterable<>`: `{name}_qjs.rs` installs the class and prototype plumbing and
-  nothing else. Only the V8 glue implements them.
+- QuickJS pair iterators currently enumerate a snapshot. Value iterators use
+  the native Array methods with generated indexed collection hooks; full
+  iterable conformance still needs separate validation.
 - An interface that declares the member `@@iterator` has to be identical to
   itself is not honoured. WebIDL defines `@@iterator` as the same function
   object as `values` (value form) or `entries` (pair form); when the interface
@@ -1557,15 +1523,13 @@ generated code:
   latent.
 - `FrozenArray` and `ObservableArray` are lowered like `sequence`; neither the
   freezing nor the change-notification semantics are generated.
-- The QuickJS arm of a union selects `sequence<T>` with `is_array()` rather
-  than with `@@iterator`, because `rquickjs`'s `Vec<T>: FromJs` reads an array
-  and has no iterator step of its own. The V8 arm probes `@@iterator` as the
-  spec requires.
-- Named property getters, setters and deleters are recorded
-  (`Interface::named_getter`, `special_operations`) but only the indexed
-  getter is installed as a V8 property handler.
-- `[LegacyNullToEmptyString]`, `[LegacyLenientThis]` and the other legacy
-  extended attributes are kept in the model but change no conversion.
+- The generator installs native indexed and named property hooks for interfaces
+  that declare special operations. `NamedNodeMap` and `HTMLCollection` declare
+  named getters, with focused tests for case rules, supported-name ordering,
+  unenumerable properties and ordinary own/prototype shadowing.
+- `[LegacyNullToEmptyString]` converts null to the empty string for annotated
+  DOMString attribute setters, operation arguments and dictionary members.
+  `[LegacyLenientThis]` and other unsupported legacy attributes remain model-only.
 - `TextEncoder.encodeInto` and its `TextEncoderEncodeIntoResult` dictionary are
   absent from `idl/encoding/TextEncoder.webidl`. The operation takes a
   `BufferSource` it *writes* into, and a buffer source maps to an owned `Vec<u8>`
@@ -1677,6 +1641,44 @@ generated code:
   `idl/fileapi/Blob.webidl`'s header beside the deviations the declarations
   create.
 
+## Native panic containment (V8)
+
+Generated constructors, methods, overload dispatchers, accessors (including
+static, `[Replaceable]` and `[PutForwards]` members), indexed getters and pair
+iterators run inside `catch_unwind` before returning through V8's C++ callback
+trampoline. The internal interface-brand probe is guarded too. Fast getters,
+setters and methods catch inside their `extern "C"` bodies; their ABI tables
+include a final `FastApiCallbackOptions` argument so recovery can terminate the
+current isolate without allocating V8 handles. Value iterators use V8's array
+intrinsics and introduce no Rust callback.
+
+A panic records the first callback name in an isolate slot allocated during
+template installation and requests uncatchable V8 termination. Primitive fast
+return values and the indexed handler's `kYes` are ABI placeholders during that
+termination. No slow fallback retries a possibly partial host mutation.
+`native_callback_failure(&v8::Isolate)` exposes the sticky marker: embedders
+must inspect it after every entry, even if a short `Script::run` returned a
+value before V8 consumed the termination interrupt, and discard the engine
+when it is set. `Engine` refuses later evaluation, and
+the page runtime reports a crash after the native entry has returned, through
+its existing page-task crash boundary. Deadline termination remains resumable.
+
+Conversions that temporarily remove the wrapper-world slot restore it before
+resuming the unwind, preserving teardown ownership. The first panic payload is
+retained until isolate teardown and dropped under another unwind guard; only a
+secondary payload from a panicking destructor is intentionally leaked, avoiding
+an unbounded chain of destructor panics. An already-active outer callback that
+also panics replaces the retained payload after guarded disposal of the older
+one. `AssertUnwindSafe` is justified by permanent engine poisoning, not a claim
+that partly mutated host state can be reused.
+
+`cargo nextest run -p tenta-idl --features v8 --test panic_v8` runs generated
+callback injection cases in subprocesses, including forced V8 optimization,
+unwind-time wrapper ownership and panic-payload destruction. The backend's
+`native_panic` tests exercise real DOM borrow panics through evaluation,
+microtasks and timers. This containment covers generated V8 glue; hand-written
+V8 callbacks, QuickJS and the other native dependencies need their own audit.
+
 ## References
 
 - WebIDL: <https://webidl.spec.whatwg.org/>
@@ -1685,3 +1687,26 @@ generated code:
 - `rquickjs` 0.12.2: <https://docs.rs/rquickjs/0.12.2/rquickjs/>
 - TentaBrowser spec: `docs/spec/05-javascript.md` §2–§3,
   `docs/spec/02-architecture.md` §2.1
+
+### Callback-scoped buffer references
+
+`[TentaBufferReferences]` is an internal operation annotation for native APIs
+that must preserve the caller's original `BufferSource` or `ArrayBufferView`
+identity. It changes only direct buffer arguments and a direct buffer return of
+that operation to `BufferSourceRef` or `ArrayBufferViewRef`; ordinary unannotated
+buffer conversions still copy bytes into `Vec<u8>`. The reference is an opaque
+world-value key owned by the generated callback's temporary stored-value lease.
+It is not a byte slice, a persistent root, or permission to keep a JS object in
+an asynchronous job. The backend bridge revalidates the native brand, backing
+and current span before metadata, copy or write access.
+
+The initial lowering accepts only required, non-nullable, non-variadic direct
+`BufferSource` and `ArrayBufferView` positions on named interface operations.
+Namespace operations and mixed annotated/unannotated overload groups are
+rejected in this slice. Other ordinary optional and variadic arguments keep
+their existing lowering.
+Optional, nested, named concrete-buffer and direct nullable forms fail model
+lowering. A `Promise<ArrayBuffer>` return stays an opaque Promise as before; it
+is not converted into a buffer reference. The separate Promise rejection policy
+is required before a WebCrypto `digest()` binding can be installed. No Crypto
+interface is exposed by this annotation package.

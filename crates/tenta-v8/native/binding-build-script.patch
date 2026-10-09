@@ -1,0 +1,36 @@
+--- a/build.rs
++++ b/build.rs
+@@ -45,7 +45,11 @@
+   Ok(resource_dir.to_string())
+ }
+ 
++mod artifact_guard;
++
+ fn main() {
++  let artifact =
++    artifact_guard::prepare().unwrap_or_else(|error| panic!("{error}"));
+   println!("cargo:rerun-if-changed=.gn");
+   println!("cargo:rerun-if-changed=BUILD.gn");
+   println!("cargo:rerun-if-changed=src/binding.cc");
+@@ -149,6 +153,9 @@
+   print_prebuilt_src_binding_path();
+ 
+   download_static_lib_binaries();
++  artifact
++    .verify_linked()
++    .unwrap_or_else(|error| panic!("{error}"));
+ }
+ 
+ fn acquire_lock() -> LockFile {
+@@ -962,7 +969,10 @@
+ }
+ 
+ fn static_lib_dir() -> PathBuf {
+-  build_dir().join("gn_out").join("obj")
++  // Each Cargo fingerprint must retain its own archive until rustc has linked.
++  // The upstream target/profile-wide native directory is shared across features.
++  let out = env::var_os("OUT_DIR").expect("OUT_DIR is required");
++  artifact_guard::library_directory(Path::new(&out))
+ }
+ 
+ fn build_dir() -> PathBuf {

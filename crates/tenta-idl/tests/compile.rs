@@ -22,8 +22,44 @@ mod toy_bindings {
     include!("golden/toy/timed_counter_register.rs");
     include!("golden/toy/byte_box_ops.rs");
     include!("golden/toy/byte_box_register.rs");
+    include!("golden/toy/buffer_reference_probe_ops.rs");
+    include!("golden/toy/buffer_reference_probe_register.rs");
     include!("golden/toy/payload_box_ops.rs");
     include!("golden/toy/payload_box_register.rs");
+
+    #[test]
+    fn buffer_write_sources_must_be_independent_of_the_whole_backing() {
+        let backing = [0_u8; 128];
+        let other = [0_u8; 8];
+        assert!(source_overlaps_backing(
+            &backing[0..8],
+            backing.as_ptr(),
+            backing.len(),
+        ));
+        assert!(source_overlaps_backing(
+            &backing[64..72],
+            backing.as_ptr(),
+            backing.len(),
+        ));
+        assert!(!source_overlaps_backing(
+            &other,
+            backing.as_ptr(),
+            backing.len(),
+        ));
+        assert!(!source_overlaps_backing(
+            &backing[0..0],
+            backing.as_ptr(),
+            backing.len(),
+        ));
+    }
+
+    #[test]
+    fn buffer_lease_ids_never_wrap_or_repeat() {
+        let counter = std::sync::atomic::AtomicU64::new(u64::MAX - 1);
+        assert_eq!(next_buffer_lease_id_from(&counter), Some(u64::MAX));
+        assert_eq!(next_buffer_lease_id_from(&counter), None);
+        assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), u64::MAX);
+    }
 }
 
 #[allow(dead_code)]
@@ -257,4 +293,19 @@ fn the_registry_receives_the_interface_description() {
     assert_eq!(node.constants.len(), 18);
     assert_eq!(node.enumeration_order.len(), 65);
     assert_eq!(node.exposure, ["Window"]);
+}
+
+#[test]
+fn generated_numeric_helpers_enforce_restricted_ranges_and_preserve_signed_zero() {
+    use toy_bindings::{restricted_f32, restricted_f64};
+
+    for number in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(restricted_f32(number).is_err());
+        assert!(restricted_f64(number).is_err());
+    }
+    assert!(restricted_f32(1e40).is_err());
+    assert_eq!(restricted_f32(1.5).unwrap(), 1.5);
+    assert_eq!(restricted_f64(1e40).unwrap(), 1e40);
+    assert!(restricted_f32(-0.0).unwrap().is_sign_negative());
+    assert!(restricted_f64(-0.0).unwrap().is_sign_negative());
 }

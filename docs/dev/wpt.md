@@ -76,8 +76,9 @@ JSON contract between `run.py` and a driver is documented on `Driver` in
 ## The `tentabrowser` product
 
 `--product tentabrowser` runs a Rust binary in the crate this repository builds:
-`tenta-wpt-driver` is a `[[bin]]` of `tenta-browser`, gated on that package's
-`v8` feature. `run.py` writes `wpt/results/.plan.json`, runs
+`tenta-wpt-driver` is a `[[bin]]` of `tenta-browser`, gated on its `wpt-driver`
+feature, which either `v8` or `quickjs` enables. The transport feature alone
+does not supply an engine. `run.py` writes `wpt/results/.plan.json`, runs
 `tenta-wpt-driver <plan.json> <results.json>` and reads the result file back —
 the same shape as the Chromium driver, and no `cargo run` in the loop.
 
@@ -89,8 +90,10 @@ python3 wpt/run.py run --product tentabrowser --dir dom/nodes
 python3 wpt/run.py run --product tentabrowser --dir dom/nodes --driver target/debug/tenta-wpt-driver
 ```
 
-The driver takes `--features v8` on the `tenta-browser` line only; it is the
-only place JavaScript is needed in this repository.
+Build with `--features v8,quickjs` to measure both engines using the same
+driver. Product `tentabrowser` explicitly selects V8; `tentabrowser-qjs`
+selects QuickJS. A missing backend fails instead of falling back. Results and
+expectations are separate per product, and each report records its backend.
 
 What it does, per test:
 

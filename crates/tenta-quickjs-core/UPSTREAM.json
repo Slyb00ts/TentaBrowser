@@ -1,0 +1,7 @@
+{
+  "upstream_package": "rquickjs-core",
+  "upstream_version": "0.12.2",
+  "upstream_git": "635f9322ccc875e3f9851e7f75ec538cf3274fd5",
+  "upstream_crate_checksum": "16e4f499ac5b943d97ee6dbc44f23c2c10426f420f7d2f1793d6318911b6608c",
+  "binding_license_source": "rquickjs 0.12.2 facade archive, same upstream revision"
+}

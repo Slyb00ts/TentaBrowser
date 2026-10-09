@@ -34,9 +34,8 @@ use tenta_js_v8::Engine;
 
 /// A document with `<html><body><p></p></body></html>`.
 ///
-/// The `<body>` exists for the constructor's refusal and the brand check: a node
-/// wrapper is the shape that reaches a `value.is_object()` arm with a host
-/// pointer attached.
+/// The `<body>` provides a node wrapper for the constructor and union brand
+/// checks.
 fn document() -> Rc<RefCell<Document>> {
     let mut d = Document::new();
     let html = d.create_html_element(atoms::HTML);
@@ -60,8 +59,8 @@ fn eval(source: &str) -> String {
 /// Runs each of the `run`s in `source` and collects what it returned or threw.
 ///
 /// The error half reads `e.name` rather than `e.constructor.name`, because a
-/// `DOMException` reports its own name there and its class would hide which
-/// refusal it was — `NotSupportedError` and `TypeError` are both reachable below.
+/// `DOMException` reports its own name there and its class would hide the
+/// specific refusal.
 fn caught(source: &str) -> String {
     eval(&format!(
         r#"
@@ -118,14 +117,10 @@ fn form_data_is_installed_and_its_constructor_rejects_wrong_types() {
 #[test]
 fn constructing_from_a_form_is_refused_by_name() {
     // `wpt/checkout/xhr/formdata/constructor.any.js`'s "Constructors should
-    // throw a type error": `null` and a string are converted before the host is
-    // reached, so they are `TypeError`s here exactly as they are in a browser —
-    // neither carries a host pointer for `WrapperWorld::handle` to answer with.
-    //
-    // The third case is this declaration's deviation 1: a node wrapper *does*
-    // carry one, and the generated conversion is name-blind, so `document.body`
-    // reaches the host and is refused with the `NotSupportedError` that stands
-    // for HTML's *constructing the entry list*. A browser raises a `TypeError`.
+    // throw a type error": only an actual `HTMLFormElement` may select the
+    // interface argument. This slice does not install that interface, so null,
+    // primitives, ordinary objects and unrelated node wrappers all fail during
+    // argument conversion.
     assert_eq!(
         caught(
             r#"
@@ -136,7 +131,7 @@ fn constructing_from_a_form_is_refused_by_name() {
             results.push(attempt(() => new FormData(document.body).has('x')));
             "#
         ),
-        "ok:false|threw:TypeError|threw:TypeError|threw:TypeError|threw:NotSupportedError"
+        "ok:false|threw:TypeError|threw:TypeError|threw:TypeError|threw:TypeError"
     );
 }
 
@@ -212,7 +207,7 @@ fn a_string_value_is_stringified_from_undefined_and_null() {
 }
 
 // ---------------------------------------------------------------------------
-// Values: identity, minting and the brand check
+// Values: identity, minting and union brands
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -317,44 +312,37 @@ fn a_filename_mints_a_file_copying_the_sources_last_modified() {
 }
 
 #[test]
-fn a_wrapper_backed_value_that_is_not_a_blob_is_refused() {
-    // This declaration's deviation 2, and the reason the host runs its own brand
-    // check at all. The union's `Blob` arm is lowered to `value.is_object()` —
-    // *every* object, not a brand check — and `WrapperWorld::handle` ignores the
-    // interface name it is handed, so a `URL`, a `Headers` or a node wrapper
-    // converts successfully and arrives at `blob_source_of` as bits pointing at
-    // a record of another kind. The host refuses all three, and refuses `{}` and
-    // a `Date` too (those never reach it: they carry no host pointer, so
-    // `handle_from_v8` fails first).
-    //
-    // A browser takes the `USVString` arm for every one of the five and stores
-    // `"[object URL]"`, `"[object Headers]"`, `"[object HTMLBodyElement]"`,
-    // `"[object Object]"` and the date string. Refusing is the deliberate
-    // direction: a wrong acceptance gives the page a silently different value,
-    // and the union's arm order leaves no room for the string fallback to
-    // rescue the object case.
+fn objects_without_the_blob_brand_use_the_string_arm() {
+    // The `(Blob or USVString)` conversion selects its interface arm only for
+    // actual Blob wrappers. Other platform wrappers and ordinary objects are
+    // converted to strings before `append` or `set` stores the entry.
     assert_eq!(
-        caught(
+        eval(
             r#"
-            const refused = value => attempt(() => {
-                const fd = new FormData();
-                fd.append('k', value);
-                return fd.get('k');
-            });
-            results.push(refused(new URL('https://example.com/')));
-            results.push(refused(new Headers()));
-            results.push(refused(document.body));
-            results.push(refused({}));
-            results.push(refused(new Date()));
-            results.push(attempt(() => {
-                const fd = new FormData();
-                fd.set('k', new URL('https://example.com/'));
-                return fd.get('k');
-            }));
+            const values = [
+                new URL('https://example.com/'),
+                new Headers(),
+                document.body,
+                {},
+                new Date(0),
+            ];
+            const expected = values.map(value => String(value));
+            const fd = new FormData();
+            values.forEach((value, index) => fd.append(String(index), value));
+            fd.set('set', values[0]);
+            const actual = values.map((_, index) => fd.get(String(index)));
+            [
+                actual.every((value, index) => value === expected[index]),
+                actual[0],
+                actual[1],
+                actual[2],
+                actual[3],
+                fd.get('set'),
+            ].join('|');
             "#
         ),
-        "threw:TypeError|threw:TypeError|threw:TypeError|threw:TypeError|threw:TypeError|\
-         threw:TypeError"
+        "true|https://example.com/|[object Headers]|[object HTMLElement]|\
+         [object Object]|https://example.com/"
     );
 }
 

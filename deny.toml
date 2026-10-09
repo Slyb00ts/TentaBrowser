@@ -6,6 +6,13 @@ all-features = false
 [advisories]
 version = 2
 yanked = "deny"
+unused-ignored-advisory = "deny"
+# Reviewed 2026-09-23: an informational maintenance advisory for the compile-time
+# macro required by rusty_v8. See docs/dev/dependency-audits.md; remove this
+# exception when V8 stops depending on paste, and review on every V8 upgrade.
+ignore = [
+    { id = "RUSTSEC-2024-0436", reason = "v8 152.2.0 requires paste 1.0.15; INFO Unmaintained with no patched release; scoped review in docs/dev/dependency-audits.md" },
+]
 
 [licenses]
 version = 2
@@ -36,11 +43,15 @@ wildcards = "deny"
 allow-wildcard-paths = true
 # Exactly one libcrypto per process: BoringSSL through `boring-sys`.
 deny = [
+    { crate = "v8", reason = "use tenta-v8 for the matching reviewed native WebIDL property hooks" },
     { crate = "aws-lc-sys", reason = "second BoringSSL fork; the process links exactly one libcrypto (03-network.md §1.1)" },
     { crate = "aws-lc-rs", reason = "see aws-lc-sys" },
     { crate = "openssl-sys", reason = "second libcrypto (03-network.md §1.1)" },
     { crate = "openssl", reason = "see openssl-sys" },
     { crate = "native-tls", reason = "pulls in the platform or OpenSSL TLS stack" },
+    { crate = "rquickjs", reason = "use the audited tenta-quickjs-core dependency alias; one native QuickJS route" },
+    { crate = "rquickjs-core", reason = "use tenta-quickjs-core for the required native WebIDL property hooks" },
+    { crate = "rquickjs-sys", reason = "use tenta-quickjs-sys; the process must not link another QuickJS build" },
 ]
 
 [sources]

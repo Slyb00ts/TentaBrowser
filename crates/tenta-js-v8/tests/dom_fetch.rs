@@ -58,8 +58,8 @@ fn document() -> Rc<RefCell<Document>> {
 
 /// A driver that records what it was asked for and answers nothing on its own.
 ///
-/// `fail_next` makes the *next* `start` refuse, which is how the tests tell a
-/// driver refusal (a rejection) apart from a `fetch` that threw.
+/// `fail_next` makes the *next* `start` refuse, so tests can distinguish a
+/// driver rejection from an argument-conversion rejection before dispatch.
 #[derive(Default)]
 struct Recorder {
     requests: RefCell<Vec<FetchRequest>>,
@@ -143,25 +143,6 @@ fn eval(engine: &mut Engine, source: &str) -> String {
     engine
         .evaluate(source)
         .unwrap_or_else(|error| panic!("`{source}` should evaluate: {error}"))
-}
-
-/// Runs `source`, whose `run` may throw, and collects the constructor name of
-/// whatever it throws.
-fn caught(engine: &mut Engine, source: &str) -> String {
-    eval(
-        engine,
-        &format!(
-            r#"
-            const attempt = run => {{
-                try {{ run(); return 'no throw'; }}
-                catch (e) {{ return e.constructor.name + ':' + e.name; }}
-            }};
-            const results = [];
-            {source}
-            results.join('|');
-            "#
-        ),
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -636,29 +617,14 @@ fn the_served_members_reach_the_driver_and_a_refusal_does_not() {
     );
     drop(requests);
 
-    // A `try`/`catch` is the only thing that can observe a *throw*, and the
-    // message names the member, so a page's own logging says which one.
+    // Both conversion failures return rejected promises before the driver runs.
     assert_eq!(
-        caught(
-            &mut engine,
-            r#"
-            results.push(attempt(() => fetch('/a', { mode: 'cors' })));
-            // A non-object second argument is not a `RequestInit` at all, so it
-            // is refused for the other reason.
-            results.push(attempt(() => fetch('/a', 1)));
-            "#,
-        ),
-        "TypeError:TypeError|TypeError:TypeError",
-        "both are throws, and neither returned a promise"
+        rejected(&mut engine, "fetch('/a', { mode: 'cors' })"),
+        "TypeError: Failed to execute 'fetch': the RequestInit member 'mode' is not implemented"
     );
     assert_eq!(
-        eval(
-            &mut engine,
-            r#"
-            try { fetch('/a', { mode: 'cors' }); } catch (e) { e.message; }
-            "#
-        ),
-        "Failed to execute 'fetch': the RequestInit member 'mode' is not implemented",
+        rejected(&mut engine, "fetch('/a', 1)"),
+        "TypeError: Failed to execute 'fetch': the provided value is not of type 'RequestInit'"
     );
     assert_eq!(
         recorder.requests.borrow().len(),
@@ -860,15 +826,10 @@ fn a_response_kept_by_script_survives_the_sweep() {
 // normalises to, whether a body is allowed on a `GET` — are asserted where they
 // live, engine-independently, in `crates/tenta-js/src/bindings/mod.rs`'s
 // `request_init` module. What can only be observed with an isolate is the
-// boundary: the synchronous throw, the ignored undeclared key, and the
+// boundary: the conversion rejection, the ignored undeclared key, and the
 // presence test for each member a page can name.
 
-/// The `name: message` pair of the `TypeError` `call` throws, or `"no throw"`.
-///
-/// `fetch`'s argument conversion is the one half of the call that throws rather
-/// than rejects, so a `try`/`catch` is the only thing that can observe it — and
-/// what it observes is the message, which is where this engine names the member
-/// it refused.
+/// Whether `call` throws synchronously, independently of its Promise result.
 fn threw(engine: &mut Engine, call: &str) -> String {
     eval(
         engine,
@@ -901,41 +862,62 @@ fn only_request(recorder: &Recorder) -> FetchRequest {
     requests[0].clone()
 }
 
-/// A non-object second argument is a `TypeError` thrown **before** the promise
-/// exists, and the promise is what makes that observable: a call that rejected
-/// would have returned one, so the returned value is `undefined`.
-///
-/// The message is WebIDL's own for a dictionary conversion. It is kept even
-/// though the generated conversion produces a different one, because it is the
-/// text a browser puts on the same failure and the text a page's error handler
-/// reads (`crates/tenta-js-v8/src/host.rs::request_init`).
+/// A non-object second argument rejects the returned promise with WebIDL's
+/// dictionary TypeError and never reaches the driver.
 #[test]
-fn an_initializer_that_is_not_an_object_throws_and_returns_nothing() {
+fn an_initializer_that_is_not_an_object_rejects_and_returns_a_promise() {
     let (mut engine, recorder) = engine();
 
     assert_eq!(
-        threw(&mut engine, "fetch('/x', 3)"),
+        rejected(&mut engine, "fetch('/x', 3)"),
         "TypeError: Failed to execute 'fetch': the provided value is not of type 'RequestInit'"
     );
-    // A call that threw returned no value at all, so there is no promise for a
-    // page to attach a rejection to. Asserting `typeof` rather than "it threw"
-    // is what makes this non-vacuous: if the engine made the promise first and
-    // rejected it — which is what the standard does, by invoking the `Request`
-    // constructor inside `fetch`'s steps — this would read `object`.
     assert_eq!(
         eval(
             &mut engine,
-            "(function () {
-               try { return typeof fetch('/x', 'POST'); } catch (e) { return 'threw'; }
-             })()"
+            "const result = fetch('/x', 'POST'); result.catch(() => {}); typeof result"
         ),
-        "threw",
-        "the call returned no promise"
+        "object",
+        "the call returned a Promise"
     );
     assert_eq!(
         recorder.requests.borrow().len(),
         0,
         "nothing reached the driver"
+    );
+}
+
+/// A page-thrown argument conversion rejects with that exact value, before
+/// any native request or resolver reaches the driver.
+#[test]
+fn throwing_input_and_initializer_getters_reject_with_the_original_value() {
+    let (mut engine, recorder) = engine();
+    assert_eq!(
+        eval(
+            &mut engine,
+            r#"
+            const inputMarker = { error: 'input' };
+            const initMarker = { error: 'init' };
+            globalThis.inputSame = false;
+            globalThis.initSame = false;
+            const input = fetch({ [Symbol.toPrimitive]() { throw inputMarker; } });
+            const init = fetch('/x', { get method() { throw initMarker; } });
+            input.catch(error => { globalThis.inputSame = error === inputMarker; });
+            init.catch(error => { globalThis.initSame = error === initMarker; });
+            [input instanceof Promise, init instanceof Promise].join('|');
+            "#,
+        ),
+        "true|true"
+    );
+    engine.run_microtasks();
+    assert_eq!(
+        eval(&mut engine, "[inputSame, initSame].join('|')"),
+        "true|true"
+    );
+    assert_eq!(
+        recorder.requests.borrow().len(),
+        0,
+        "argument conversion never starts a request"
     );
 }
 
@@ -993,7 +975,7 @@ fn every_unserved_member_is_refused_by_name() {
         ("window", "null"),
     ] {
         assert_eq!(
-            threw(
+            rejected(
                 &mut engine,
                 &format!("fetch('/x', {{{member}: {literal}}})")
             ),

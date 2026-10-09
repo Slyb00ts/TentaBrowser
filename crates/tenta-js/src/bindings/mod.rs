@@ -1,5 +1,5 @@
 //! DOM binding glue generated from `idl/dom`, `idl/url`, `idl/fetch`,
-//! `idl/encoding` and `idl/xhr` by `tenta-idl` (see `build.rs`).
+//! `idl/encoding`, `idl/xhr` and `idl/cssom` by `tenta-idl` (see `build.rs`).
 //!
 //! The engine-independent output (`prelude.rs`, `types.rs`, the `*Ops` traits
 //! and the `register_*` functions) is always compiled. The V8 glue (`*_v8.rs`)
@@ -44,7 +44,11 @@ include!(concat!(env!("OUT_DIR"), "/character_data_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/custom_event_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/ui_event_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/composition_event_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/focus_event_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/keyboard_event_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/mouse_event_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/wheel_event_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/progress_event_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/htmli_frame_element_ops.rs"));
@@ -56,14 +60,33 @@ include!(concat!(env!("OUT_DIR"), "/comment_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/document_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/document_type_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/processing_instruction_ops.rs"));
+// `CDATASection : Text` and the three range interfaces, which root at
+// `Object`. Their order here is the order the file lists interfaces in, not an
+// install order: `crates/tenta-js-v8/src/lib.rs` installs parents first.
+include!(concat!(env!("OUT_DIR"), "/cdata_section_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/abstract_range_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/range_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/static_range_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/dom_implementation_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/dom_parser_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/xml_serializer_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_collection_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_list_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/named_node_map_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/attr_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/dom_token_list_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/style_sheet_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_style_sheet_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_rule_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_grouping_rule_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_style_rule_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_rule_list_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_style_declaration_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_style_properties_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/storage_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/crypto_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_div_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_span_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_paragraph_element_ops.rs"));
@@ -97,7 +120,11 @@ include!(concat!(env!("OUT_DIR"), "/character_data_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/event_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/custom_event_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/ui_event_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/composition_event_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/focus_event_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/keyboard_event_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/mouse_event_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/wheel_event_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/progress_event_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/htmli_frame_element_register.rs"));
@@ -116,16 +143,31 @@ include!(concat!(
     "/processing_instruction_register.rs"
 ));
 include!(concat!(env!("OUT_DIR"), "/dom_implementation_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/dom_parser_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/xml_serializer_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_collection_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_list_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/named_node_map_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/attr_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/dom_token_list_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/style_sheet_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_style_sheet_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_rule_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_grouping_rule_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_style_rule_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_rule_list_register.rs"));
 include!(concat!(
     env!("OUT_DIR"),
     "/css_style_declaration_register.rs"
 ));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/css_style_properties_register.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/storage_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/crypto_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_div_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_span_element_register.rs"));
 include!(concat!(
@@ -147,6 +189,10 @@ include!(concat!(env!("OUT_DIR"), "/html_option_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_script_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/cdata_section_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/abstract_range_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/range_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/static_range_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/url_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/url_search_params_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/headers_register.rs"));
@@ -176,7 +222,15 @@ include!(concat!(env!("OUT_DIR"), "/custom_event_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/ui_event_v8.rs"));
 #[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/composition_event_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/focus_event_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/keyboard_event_v8.rs"));
+#[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/mouse_event_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/wheel_event_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/progress_event_v8.rs"));
 #[cfg(feature = "v8")]
@@ -202,6 +256,10 @@ include!(concat!(env!("OUT_DIR"), "/processing_instruction_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/dom_implementation_v8.rs"));
 #[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/dom_parser_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/xml_serializer_v8.rs"));
+#[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/element_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/html_collection_v8.rs"));
@@ -214,7 +272,27 @@ include!(concat!(env!("OUT_DIR"), "/attr_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/dom_token_list_v8.rs"));
 #[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/style_sheet_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_style_sheet_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_grouping_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_style_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_rule_list_v8.rs"));
+#[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/css_style_declaration_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_style_properties_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/storage_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/crypto_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/html_div_element_v8.rs"));
 #[cfg(feature = "v8")]
@@ -246,6 +324,14 @@ include!(concat!(env!("OUT_DIR"), "/node_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/text_v8.rs"));
 #[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/cdata_section_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/abstract_range_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/range_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/static_range_v8.rs"));
+#[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/url_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/url_search_params_v8.rs"));
@@ -274,6 +360,159 @@ include!(concat!(env!("OUT_DIR"), "/blob_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/file_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/form_data_v8.rs"));
+
+/// Generated QuickJS installers, separate from identically named V8 installers.
+#[cfg(feature = "quickjs")]
+pub mod quickjs {
+    use super::*;
+    use rquickjs::FromJs;
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/character_data_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/event_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/custom_event_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/ui_event_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/composition_event_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/focus_event_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/keyboard_event_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/mouse_event_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/wheel_event_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/progress_event_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/htmli_frame_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/svg_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/document_fragment_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_template_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/event_target_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/comment_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/document_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/document_type_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/processing_instruction_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/dom_implementation_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/dom_parser_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/xml_serializer_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_collection_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/node_list_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/named_node_map_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/attr_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/dom_token_list_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/style_sheet_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_style_sheet_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_grouping_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_style_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_rule_list_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_style_declaration_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_style_properties_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/storage_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/crypto_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_div_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_span_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_paragraph_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_anchor_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_image_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_label_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_form_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_input_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_button_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_select_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_text_area_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_option_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_script_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/node_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/text_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/cdata_section_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/abstract_range_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/range_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/static_range_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/url_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/url_search_params_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/headers_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/abort_signal_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/abort_controller_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/text_decoder_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/text_encoder_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/response_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/xml_http_request_event_target_qjs.rs"
+    ));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/xml_http_request_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/blob_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/file_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/form_data_qjs.rs"));
+}
 
 pub mod host;
 
@@ -488,17 +727,21 @@ mod prelude_helpers {
 
             v8::tc_scope!(let tc, scope);
             let receiver = v8::undefined(tc).into();
-            let message = match call_js_function(tc, boom, receiver, &[]) {
-                Ok(_) => panic!("the call throws"),
-                Err(error) => {
-                    assert_eq!(error.kind(), JsErrorKind::Type);
-                    error.message().to_owned()
-                }
-            };
-            assert!(message.contains("boom"), "unexpected message: {message}");
+            let error =
+                call_js_function(tc, boom, receiver, &[]).expect_err("the page function throws");
+            assert_eq!(error.kind(), JsErrorKind::Type);
             assert!(
                 tc.has_caught(),
                 "the exception never reached the enclosing `TryCatch`"
+            );
+            let thrown = tc.exception().expect("the original exception is retained");
+            let message = thrown
+                .to_string(tc)
+                .expect("RangeError can be stringified")
+                .to_rust_string_lossy(tc);
+            assert!(
+                message.contains("RangeError: boom"),
+                "unexpected exception: {message}"
             );
         });
     }
@@ -512,15 +755,14 @@ mod prelude_helpers {
         with_context(|scope| {
             eval(scope, "globalThis.__set = new Set(['a', 'b']);");
             let set = global(scope, "__set");
-            let items = sequence_from_v8(scope, set, |scope, item| Ok(string_from_v8(scope, item)))
+            let items = sequence_from_v8(scope, set, string_from_v8)
                 .expect("a `Set` is iterable, so it is a sequence");
             assert_eq!(items, ["a", "b"]);
 
             eval(scope, "globalThis.__items = ['x'];");
             let array = global(scope, "__items");
             let items =
-                sequence_from_v8(scope, array, |scope, item| Ok(string_from_v8(scope, item)))
-                    .expect("an array is a sequence");
+                sequence_from_v8(scope, array, string_from_v8).expect("an array is a sequence");
             assert_eq!(items, ["x"]);
         });
     }
@@ -532,9 +774,8 @@ mod prelude_helpers {
         with_context(|scope| {
             eval(scope, "globalThis.__plain = { a: '1' };");
             let plain = global(scope, "__plain");
-            let error =
-                sequence_from_v8(scope, plain, |scope, item| Ok(string_from_v8(scope, item)))
-                    .expect_err("an object without `@@iterator` is not a sequence");
+            let error = sequence_from_v8(scope, plain, string_from_v8)
+                .expect_err("an object without `@@iterator` is not a sequence");
             assert_eq!(error.kind(), JsErrorKind::Type);
 
             // A primitive string *is* iterable in JavaScript, but WebIDL's
@@ -543,9 +784,8 @@ mod prelude_helpers {
             let value = v8_string(scope, "abc")
                 .expect("the text fits a V8 string")
                 .into();
-            let error =
-                sequence_from_v8(scope, value, |scope, item| Ok(string_from_v8(scope, item)))
-                    .expect_err("a primitive is not a sequence");
+            let error = sequence_from_v8(scope, value, string_from_v8)
+                .expect_err("a primitive is not a sequence");
             assert_eq!(error.kind(), JsErrorKind::Type);
         });
     }
@@ -571,13 +811,8 @@ mod prelude_helpers {
                  __inherited.own = 'o';",
             );
             let source = global(scope, "__source");
-            let entries = record_from_v8(
-                scope,
-                source,
-                |scope, key| Ok::<String, JsError>(string_from_v8(scope, key)),
-                |scope, item| Ok(string_from_v8(scope, item)),
-            )
-            .expect("the source is a record");
+            let entries = record_from_v8(scope, source, string_from_v8, string_from_v8)
+                .expect("the source is a record");
             assert_eq!(
                 entries,
                 [
@@ -588,13 +823,8 @@ mod prelude_helpers {
             );
 
             let source = global(scope, "__numbered");
-            let entries = record_from_v8(
-                scope,
-                source,
-                |scope, key| Ok::<String, JsError>(string_from_v8(scope, key)),
-                |scope, item| Ok(string_from_v8(scope, item)),
-            )
-            .expect("the source is a record");
+            let entries = record_from_v8(scope, source, string_from_v8, string_from_v8)
+                .expect("the source is a record");
             assert_eq!(
                 entries,
                 [
@@ -605,13 +835,8 @@ mod prelude_helpers {
             );
 
             let source = global(scope, "__inherited");
-            let entries = record_from_v8(
-                scope,
-                source,
-                |scope, key| Ok::<String, JsError>(string_from_v8(scope, key)),
-                |scope, item| Ok(string_from_v8(scope, item)),
-            )
-            .expect("the source is a record");
+            let entries = record_from_v8(scope, source, string_from_v8, string_from_v8)
+                .expect("the source is a record");
             assert_eq!(
                 entries,
                 [("own".to_string(), "o".to_string())],
@@ -662,13 +887,8 @@ mod prelude_helpers {
                    });",
             );
             let source = global(scope, "__trap");
-            let error = record_from_v8(
-                scope,
-                source,
-                |scope, key| Ok::<String, JsError>(string_from_v8(scope, key)),
-                |scope, item| Ok(string_from_v8(scope, item)),
-            )
-            .expect_err("an abrupt descriptor read fails the conversion");
+            let error = record_from_v8(scope, source, string_from_v8, string_from_v8)
+                .expect_err("an abrupt descriptor read fails the conversion");
             assert_eq!(error.kind(), JsErrorKind::Type);
         });
     }
@@ -696,7 +916,7 @@ mod prelude_helpers {
 
             let source = global(scope, "__bytes");
             let entries = record_from_v8(scope, source, byte_string_from_v8, |scope, item| {
-                Ok(string_from_v8(scope, item))
+                string_from_v8(scope, item)
             })
             .expect("a Latin-1 key is a valid `ByteString`");
             assert_eq!(
@@ -707,7 +927,7 @@ mod prelude_helpers {
 
             let source = global(scope, "__inherited_bytes");
             let entries = record_from_v8(scope, source, byte_string_from_v8, |scope, item| {
-                Ok(string_from_v8(scope, item))
+                string_from_v8(scope, item)
             })
             .expect("the own key is a valid `ByteString`");
             assert_eq!(
@@ -718,7 +938,7 @@ mod prelude_helpers {
 
             let source = global(scope, "__wide");
             let error = record_from_v8(scope, source, byte_string_from_v8, |scope, item| {
-                Ok(string_from_v8(scope, item))
+                string_from_v8(scope, item)
             })
             .expect_err("a code unit above `0xFF` is not a `ByteString` key");
             assert_eq!(error.kind(), JsErrorKind::Type);
@@ -796,9 +1016,8 @@ mod prelude_helpers {
                    };",
             );
             let source = global(scope, "__iter");
-            let error =
-                sequence_from_v8(scope, source, |scope, item| Ok(string_from_v8(scope, item)))
-                    .expect_err("an abrupt `done` read fails the conversion");
+            let error = sequence_from_v8(scope, source, string_from_v8)
+                .expect_err("an abrupt `done` read fails the conversion");
             assert_eq!(error.kind(), JsErrorKind::Type);
         });
     }
@@ -1156,7 +1375,12 @@ mod prelude_helpers {
     fn host_realm() -> Realm {
         let document = Rc::new(RefCell::new(Document::new()));
         let clock = SharedClock::new(Clock::virtual_at(MonoTime::ZERO));
-        let context: Realm = HostContext::new(document, clock, tenta_net::CookieJar::new());
+        let context: Realm = HostContext::new(
+            document,
+            clock,
+            tenta_net::CookieJar::new(),
+            crate::storage::PageStorage::isolated(),
+        );
         context
     }
 
@@ -1587,6 +1811,26 @@ mod prelude_helpers {
     }
 
     impl ScriptHost for RecordingHost {
+        fn array_buffer_view_info(
+            &self,
+            _: crate::bindings::ArrayBufferViewRef,
+        ) -> Result<crate::bindings::BufferMetadata, JsError> {
+            unreachable!("this test never reads a native buffer")
+        }
+        fn write_array_buffer_view(
+            &self,
+            _: crate::bindings::ArrayBufferViewRef,
+            _: &[u8],
+        ) -> Result<crate::bindings::BufferMetadata, JsError> {
+            unreachable!("this test never writes a native buffer")
+        }
+        fn check_native_buffer_work(&self) -> Result<(), JsError> {
+            unreachable!("this test never performs native buffer work")
+        }
+        fn native_buffer_memory_failure(&self) -> JsError {
+            unreachable!("this test never exhausts a native buffer budget")
+        }
+
         fn invoke_listener(
             &self,
             _callback: CallbackRef,
@@ -1597,6 +1841,10 @@ mod prelude_helpers {
         }
 
         fn release_value(&self, _bits: u64) {}
+
+        fn retain_existing_target(&self, _handle: u64) -> Result<Option<u64>, JsError> {
+            unreachable!("the Body settlement test has no EventTarget wrapper")
+        }
 
         fn build_value(&self, _value: HostValue<'_>) -> Option<u64> {
             unreachable!("the settlement is recorded rather than built");

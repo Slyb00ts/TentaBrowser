@@ -12,7 +12,7 @@ use http::{Request as HttpRequest, Response as HttpResponse};
 use tenta_h2::client::{self, ResponseFuture, SendRequest};
 use tenta_h2::{RecvStream, SendStream};
 
-use crate::error::{ErrorName, NetError};
+use crate::error::{ErrorName, NetError, ReplayHint};
 use crate::profile::Profile;
 use crate::stream::NetStream;
 
@@ -47,7 +47,7 @@ impl H2Handle {
             .clone()
             .ready()
             .await
-            .map_err(|err| h2_error(&err))?;
+            .map_err(|err| h2_error(&err).mark_unsent_if_unknown())?;
         let (response, send_stream) = sender
             .send_request(request, end_of_stream)
             .map_err(|err| h2_error(&err))?;
@@ -134,17 +134,32 @@ pub fn h2_error(err: &tenta_h2::Error) -> NetError {
     }
     // Distinguish GOAWAY (connection-level) from stream-level errors.
     if err.is_go_away() {
+        let hint = if err.is_remote() {
+            ReplayHint::H2GoAway
+        } else {
+            ReplayHint::None
+        };
         return NetError::new(
             ErrorName::Http2ProtocolError,
             format!("connection error received: {err}"),
-        );
+        )
+        .with_replay_hint(hint);
     }
     if err.is_reset() {
+        // REFUSED_STREAM from the remote peer guarantees that this stream was
+        // not processed (RFC 9113 section 8.7), including for a POST. Keep
+        // that guarantee as a typed hint instead of parsing the error text.
+        let hint = if err.is_remote() && err.reason() == Some(tenta_h2::Reason::REFUSED_STREAM) {
+            ReplayHint::H2RefusedStream
+        } else {
+            ReplayHint::None
+        };
         // Stream-level error; connection is still valid.
         return NetError::new(
             ErrorName::Http2ProtocolError,
             format!("stream reset: {err}"),
-        );
+        )
+        .with_replay_hint(hint);
     }
     NetError::new(ErrorName::Http2ProtocolError, err.to_string())
 }

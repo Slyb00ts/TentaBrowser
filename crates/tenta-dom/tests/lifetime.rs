@@ -149,7 +149,8 @@ fn wrappers_keep_a_subtree_and_clearing_one_releases_it() {
             child,
         })
         .expect("append");
-    document.set_has_wrapper(child, true);
+    let wrapped = document.node_ref(child);
+    document.retain_wrapper(wrapped).expect("live node wrapper");
 
     assert_eq!(document.sweep_detached().roots_kept, 1);
     // The second sweep uses the cached keep bit.
@@ -157,12 +158,69 @@ fn wrappers_keep_a_subtree_and_clearing_one_releases_it() {
     assert_eq!(cached.roots_cached, 1);
     assert_eq!(cached.roots_kept, 1);
 
-    document.set_has_wrapper(child, false);
+    assert!(document.release_wrapper(wrapped));
     let stats = document.sweep_detached();
     assert_eq!(
         stats.nodes_freed, 2,
         "clearing the wrapper invalidates the keep bit"
     );
+}
+
+#[test]
+fn independent_wrapper_claims_release_only_their_own_ownership() {
+    let mut document = Document::new();
+    let root = detached_element(&mut document);
+    let child = detached_element(&mut document);
+    document
+        .mutate(Mutation::Append {
+            parent: root,
+            child,
+        })
+        .unwrap();
+    let node = document.node_ref(child);
+    document.retain_wrapper(node).unwrap();
+    let single = document.memory_report();
+    for _ in 0..3 {
+        document.retain_wrapper(node).unwrap();
+    }
+    assert_eq!(document.wrapper_count(child), 4);
+    assert!(document.memory_report().indexes > single.indexes);
+    assert_eq!(
+        document.handle_count(child),
+        0,
+        "JS claims are not Rust roots"
+    );
+    assert_eq!(document.subtree_retention(root), (false, 4));
+    assert_eq!(document.sweep_detached().nodes_freed, 0);
+    for expected in (1..4).rev() {
+        assert!(document.release_wrapper(node));
+        assert_eq!(document.wrapper_count(child), expected);
+        assert_eq!(document.sweep_detached().nodes_freed, 0);
+    }
+    assert!(document.release_wrapper(node));
+    assert_eq!(document.sweep_detached().nodes_freed, 2);
+    assert!(!document.release_wrapper(node));
+}
+
+#[test]
+fn stale_wrapper_claims_cannot_acquire_or_release_a_reused_slot() {
+    let mut document = Document::new();
+    let old = detached_element(&mut document);
+    let stale = document.node_ref(old);
+    document.retain_wrapper(stale).unwrap();
+    document.release_wrapper(stale);
+    assert_eq!(document.sweep_detached().nodes_freed, 1);
+    let new = detached_element(&mut document);
+    assert_eq!(old, new);
+    let current = document.node_ref(new);
+    assert_ne!(stale.generation, current.generation);
+    document.retain_wrapper(current).unwrap();
+    assert!(document.retain_wrapper(stale).is_err());
+    assert!(!document.release_wrapper(stale));
+    assert_eq!(document.wrapper_count(new), 1);
+    assert_eq!(document.sweep_detached().nodes_freed, 0);
+    document.release_wrapper(current);
+    assert_eq!(document.sweep_detached().nodes_freed, 1);
 }
 
 #[test]

@@ -430,8 +430,8 @@ fn push_xml_children(document: &Document, stack: &mut Vec<XmlStep>, node: NodeId
 /// Serialises `node` and its subtree as XML.
 ///
 /// Namespaces are declared where they enter scope and nowhere else, element
-/// prefixes are preserved, and empty elements are written self-closing, so
-/// `tenta_html::xml::Parser` reads back the tree it was given.
+/// prefixes are preserved, and empty non-HTML elements are written
+/// self-closing, so `tenta_html::xml::Parser` reads back the tree it was given.
 pub fn serialize_xml(document: &Document, node: NodeId) -> String {
     let mut out = String::new();
     let mut scopes = NsScopes::default();
@@ -520,7 +520,17 @@ pub fn serialize_xml(document: &Document, node: NodeId) -> String {
                         out.push_str(&body);
                         out.push_str(&attributes);
                         if !document.first_child(current).is_some() {
-                            out.push_str("/>");
+                            // XML serialization keeps HTML-namespace elements
+                            // explicitly paired, even when empty. `<script/>`
+                            // and `<div/>` would not round-trip through an
+                            // HTML parser with their original tree shape.
+                            if ns == Some(atoms::NS_HTML) {
+                                out.push_str("></");
+                                write_xml_name(&mut out, prefix, local);
+                                out.push('>');
+                            } else {
+                                out.push_str("/>");
+                            }
                             scopes.truncate(scope);
                             continue;
                         }

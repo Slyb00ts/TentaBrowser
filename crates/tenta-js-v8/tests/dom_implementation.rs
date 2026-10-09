@@ -358,10 +358,9 @@ fn create_document_builds_a_document_with_its_root_element() {
             ].join('|');
         "#,
         ),
-        // `tagName` is the ASCII-uppercased qualified name because the element
-        // is in the HTML namespace, which is what makes it an HTML element;
-        // `localName` is the name as given.
-        "9|ROOT|root|http://www.w3.org/1999/xhtml|false|true||about:blank|application/xhtml+xml|true"
+        // `createDocument` returns an XML document. Even an element in the
+        // HTML namespace keeps its qualified name's case in an XML document.
+        "9|root|root|http://www.w3.org/1999/xhtml|false|true||about:blank|application/xhtml+xml|true"
     );
 }
 

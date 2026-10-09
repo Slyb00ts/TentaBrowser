@@ -1,0 +1,1428 @@
+--- a/crates/tenta-quickjs-core/Cargo.toml
++++ b/crates/tenta-quickjs-core/Cargo.toml
+@@ -10,8 +10,9 @@
+ # See Cargo.toml.orig for the original contents.
+ 
+ [package]
++publish = false
+ edition = "2021"
+-name = "rquickjs-core"
++name = "tenta-quickjs-core"
+ version = "0.12.2"
+ authors = [
+     "Mees Delzenne <mees.delzenne@gmail.com>",
+@@ -142,7 +143,9 @@
+ default-features = false
+ 
+ [dependencies.rquickjs-sys]
+-version = "0.12.2"
++package = "tenta-quickjs-sys"
++path = "../tenta-quickjs-sys"
++version = "=0.12.2"
+ default-features = false
+ 
+ [dev-dependencies.approx]
+--- a/crates/tenta-quickjs-core/LICENSE
++++ b/crates/tenta-quickjs-core/LICENSE
+@@ -0,0 +1,22 @@
++MIT License
++
++Copyright (c) 2020 Mees Delzenne
++Copyright (c) 2025 Rquickjs Contributors
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+--- a/crates/tenta-quickjs-core/src/class/ffi.rs
++++ b/crates/tenta-quickjs-core/src/class/ffi.rs
+@@ -1,5 +1,7 @@
+-use super::{JsClass, Tracer};
+-use crate::{class::JsCell, function::Params, qjs, runtime::opaque::Opaque, Atom, Ctx, Value};
++use super::{DefinePropertyDescriptor, JsClass, Tracer};
++use crate::{
++    class::JsCell, function::Params, qjs, runtime::opaque::Opaque, Atom, Ctx, Object, Value,
++};
+ use alloc::boxed::Box;
+ use core::{any::TypeId, mem, panic::AssertUnwindSafe, ptr::NonNull};
+ 
+@@ -89,11 +91,14 @@
+     atom: qjs::JSAtom,
+     receiver: qjs::JSValueConst,
+ ) -> qjs::JSValue {
+-    let rt = qjs::JS_GetRuntime(ctx);
+-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+-    let ptr = qjs::JS_GetOpaque(obj, id);
+-    let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
+-    (ptr.as_ref().v_table.get_property)(ptr, ctx, obj, atom, receiver)
++    let context = Ctx::from_ptr(ctx);
++    context.handle_panic(AssertUnwindSafe(|| {
++        let rt = qjs::JS_GetRuntime(ctx);
++        let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
++        let ptr = qjs::JS_GetOpaque(obj, id);
++        let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
++        (ptr.as_ref().v_table.get_property)(ptr, ctx, obj, atom, receiver)
++    }))
+ }
+ 
+ /// FFI exotic set_property function for classes with exotic behavior.
+@@ -105,11 +110,14 @@
+     receiver: qjs::JSValueConst,
+     flags: qjs::c_int,
+ ) -> qjs::c_int {
+-    let rt = qjs::JS_GetRuntime(ctx);
+-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+-    let ptr = qjs::JS_GetOpaque(obj, id);
+-    let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
+-    (ptr.as_ref().v_table.set_property)(ptr, ctx, obj, atom, receiver, value, flags)
++    let context = Ctx::from_ptr(ctx);
++    context.handle_panic_exotic(AssertUnwindSafe(|| {
++        let rt = qjs::JS_GetRuntime(ctx);
++        let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
++        let ptr = qjs::JS_GetOpaque(obj, id);
++        let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
++        (ptr.as_ref().v_table.set_property)(ptr, ctx, obj, atom, receiver, value, flags)
++    }))
+ }
+ 
+ /// FFI exotic has_property function for classes with exotic behavior.
+@@ -118,11 +126,14 @@
+     obj: qjs::JSValueConst,
+     atom: qjs::JSAtom,
+ ) -> qjs::c_int {
+-    let rt = qjs::JS_GetRuntime(ctx);
+-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+-    let ptr = qjs::JS_GetOpaque(obj, id);
+-    let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
+-    (ptr.as_ref().v_table.has_property)(ptr, ctx, obj, atom)
++    let context = Ctx::from_ptr(ctx);
++    context.handle_panic_exotic(AssertUnwindSafe(|| {
++        let rt = qjs::JS_GetRuntime(ctx);
++        let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
++        let ptr = qjs::JS_GetOpaque(obj, id);
++        let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
++        (ptr.as_ref().v_table.has_property)(ptr, ctx, obj, atom)
++    }))
+ }
+ 
+ /// FFI exotic delete_property function for classes with exotic behavior.
+@@ -131,11 +142,14 @@
+     obj: qjs::JSValueConst,
+     prop: qjs::JSAtom,
+ ) -> qjs::c_int {
+-    let rt = qjs::JS_GetRuntime(ctx);
+-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+-    let ptr = qjs::JS_GetOpaque(obj, id);
+-    let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
+-    (ptr.as_ref().v_table.delete_property)(ptr, ctx, obj, prop)
++    let context = Ctx::from_ptr(ctx);
++    context.handle_panic_exotic(AssertUnwindSafe(|| {
++        let rt = qjs::JS_GetRuntime(ctx);
++        let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
++        let ptr = qjs::JS_GetOpaque(obj, id);
++        let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
++        (ptr.as_ref().v_table.delete_property)(ptr, ctx, obj, prop)
++    }))
+ }
+ 
+ /// FFI exotic get_own_property function for classes with exotic behavior.
+@@ -145,11 +159,14 @@
+     obj: qjs::JSValueConst,
+     prop: qjs::JSAtom,
+ ) -> qjs::c_int {
+-    let rt = qjs::JS_GetRuntime(ctx);
+-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+-    let ptr = qjs::JS_GetOpaque(obj, id);
+-    let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
+-    (ptr.as_ref().v_table.get_own_property)(ptr, ctx, desc, obj, prop)
++    let context = Ctx::from_ptr(ctx);
++    context.handle_panic_exotic(AssertUnwindSafe(|| {
++        let rt = qjs::JS_GetRuntime(ctx);
++        let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
++        let ptr = qjs::JS_GetOpaque(obj, id);
++        let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
++        (ptr.as_ref().v_table.get_own_property)(ptr, ctx, desc, obj, prop)
++    }))
+ }
+ 
+ /// FFI exotic get_own_property_names function for classes with exotic behavior.
+@@ -159,11 +176,51 @@
+     plen: *mut u32,
+     obj: qjs::JSValueConst,
+ ) -> qjs::c_int {
+-    let rt = qjs::JS_GetRuntime(ctx);
+-    let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
+-    let ptr = qjs::JS_GetOpaque(obj, id);
+-    let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
+-    (ptr.as_ref().v_table.get_own_property_names)(ptr, ctx, ptab, plen, obj)
++    let context = Ctx::from_ptr(ctx);
++    context.handle_panic_exotic(AssertUnwindSafe(|| {
++        let rt = qjs::JS_GetRuntime(ctx);
++        let id = Opaque::from_runtime_ptr(rt).get_exotic_id();
++        let ptr = qjs::JS_GetOpaque(obj, id);
++        let ptr = NonNull::new(ptr).unwrap().cast::<ClassCell<()>>();
++        (ptr.as_ref().v_table.get_own_property_names)(ptr, ctx, ptab, plen, obj)
++    }))
++}
++
++/// The full new native boundary, including the class lookup, is guarded.
++pub(crate) unsafe extern "C" fn exotic_define_own_property(
++    ctx: *mut qjs::JSContext,
++    obj: qjs::JSValueConst,
++    prop: qjs::JSAtom,
++    value: qjs::JSValueConst,
++    getter: qjs::JSValueConst,
++    setter: qjs::JSValueConst,
++    flags: qjs::c_int,
++) -> qjs::c_int {
++    let context = Ctx::from_ptr(ctx);
++    context.handle_panic_exotic(AssertUnwindSafe(|| {
++        let id = Opaque::from_runtime_ptr(qjs::JS_GetRuntime(ctx)).get_exotic_id();
++        let ptr = NonNull::new(qjs::JS_GetOpaque(obj, id))
++            .unwrap()
++            .cast::<ClassCell<()>>();
++        (ptr.as_ref().v_table.define_own_property)(
++            ptr, ctx, obj, prop, value, getter, setter, flags,
++        )
++    }))
++}
++
++/// The full new native boundary, including the class lookup, is guarded.
++pub(crate) unsafe extern "C" fn exotic_can_prevent_extensions(
++    ctx: *mut qjs::JSContext,
++    obj: qjs::JSValueConst,
++) -> qjs::c_int {
++    let context = Ctx::from_ptr(ctx);
++    context.handle_panic_exotic(AssertUnwindSafe(|| {
++        let id = Opaque::from_runtime_ptr(qjs::JS_GetRuntime(ctx)).get_exotic_id();
++        let ptr = NonNull::new(qjs::JS_GetOpaque(obj, id))
++            .unwrap()
++            .cast::<ClassCell<()>>();
++        (ptr.as_ref().v_table.can_prevent_extensions)(ptr, ctx, obj)
++    }))
+ }
+ 
+ pub(crate) type FinalizerFunc = unsafe fn(this: NonNull<ClassCell<()>>);
+@@ -228,6 +285,22 @@
+ ) -> qjs::c_int;
+ 
+ pub(crate) type TypeIdFn = fn() -> TypeId;
++
++type DefineOwnPropertyFunc = unsafe fn(
++    this: NonNull<ClassCell<()>>,
++    ctx: *mut qjs::JSContext,
++    obj: qjs::JSValueConst,
++    prop: qjs::JSAtom,
++    value: qjs::JSValueConst,
++    getter: qjs::JSValueConst,
++    setter: qjs::JSValueConst,
++    flags: qjs::c_int,
++) -> qjs::c_int;
++type CanPreventExtensionsFunc = unsafe fn(
++    this: NonNull<ClassCell<()>>,
++    ctx: *mut qjs::JSContext,
++    obj: qjs::JSValueConst,
++) -> qjs::c_int;
+ 
+ pub(crate) struct VTable {
+     id_fn: TypeIdFn,
+@@ -240,6 +313,8 @@
+     delete_property: DeletePropertyFunc,
+     get_own_property: GetOwnPropertyFunc,
+     get_own_property_names: GetOwnPropertyNamesFunc,
++    define_own_property: DefineOwnPropertyFunc,
++    can_prevent_extensions: CanPreventExtensionsFunc,
+ }
+ 
+ impl VTable {
+@@ -281,17 +356,18 @@
+     unsafe fn get_property_impl<'js, C: JsClass<'js>>(
+         this_ptr: NonNull<ClassCell<()>>,
+         ctx: *mut qjs::JSContext,
+-        _obj: qjs::JSValueConst,
++        obj: qjs::JSValueConst,
+         atom: qjs::JSAtom,
+         receiver: qjs::JSValueConst,
+     ) -> qjs::JSValue {
+         let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
+         let ctx = Ctx::from_ptr(ctx);
++        let object = Object::from_js_value_const(ctx.clone(), obj);
+         let atom = Atom::from_atom_val_dup(ctx.clone(), atom);
+         let receiver = Value::from_js_value_const(ctx.clone(), receiver);
+ 
+         ctx.handle_panic(AssertUnwindSafe(|| {
+-            C::exotic_get_property(&this_ptr.as_ref().data, &ctx, atom, receiver)
++            C::exotic_get_property(&this_ptr.as_ref().data, &ctx, object, atom, receiver)
+                 .map(Value::into_js_value)
+                 .unwrap_or_else(|e| e.throw(&ctx))
+         }))
+@@ -300,20 +376,58 @@
+     unsafe fn set_property_impl<'js, C: JsClass<'js>>(
+         this_ptr: NonNull<ClassCell<()>>,
+         ctx: *mut qjs::JSContext,
+-        _obj: qjs::JSValueConst,
++        obj: qjs::JSValueConst,
+         atom: qjs::JSAtom,
+         receiver: qjs::JSValueConst,
+         value: qjs::JSValue,
+-        _flags: qjs::c_int,
++        flags: qjs::c_int,
+     ) -> qjs::c_int {
+         let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
+         let ctx = Ctx::from_ptr(ctx);
++        let object = Object::from_js_value_const(ctx.clone(), obj);
+         let atom = Atom::from_atom_val_dup(ctx.clone(), atom);
+         let receiver = Value::from_js_value_const(ctx.clone(), receiver);
+-        let value = Value::from_js_value(ctx.clone(), value);
++        // QuickJS frees its owned assignment value after invoking the exotic
++        // callback. This callback borrows it and must retain its own reference.
++        let value = Value::from_js_value_const(ctx.clone(), value);
+ 
+         ctx.handle_panic_exotic(AssertUnwindSafe(|| {
+-            match C::exotic_set_property(&this_ptr.as_ref().data, &ctx, atom, receiver, value) {
++            match C::exotic_set_property(
++                &this_ptr.as_ref().data,
++                &ctx,
++                object,
++                atom,
++                receiver,
++                value,
++            ) {
++                Ok(v) => {
++                    if v {
++                        1
++                    } else {
++                        qjs::JS_RejectPropertyChange(ctx.as_ptr(), flags)
++                    }
++                }
++                Err(e) => {
++                    e.throw(&ctx);
++                    -1
++                }
++            }
++        }))
++    }
++
++    unsafe fn has_property_impl<'js, C: JsClass<'js>>(
++        this_ptr: NonNull<ClassCell<()>>,
++        ctx: *mut qjs::JSContext,
++        obj: qjs::JSValueConst,
++        atom: qjs::JSAtom,
++    ) -> qjs::c_int {
++        let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
++        let ctx = Ctx::from_ptr(ctx);
++        let object = Object::from_js_value_const(ctx.clone(), obj);
++        let atom = Atom::from_atom_val_dup(ctx.clone(), atom);
++
++        ctx.handle_panic_exotic(AssertUnwindSafe(|| {
++            match C::exotic_has_property(&this_ptr.as_ref().data, &ctx, object, atom) {
+                 Ok(v) => {
+                     if v {
+                         1
+@@ -329,18 +443,19 @@
+         }))
+     }
+ 
+-    unsafe fn has_property_impl<'js, C: JsClass<'js>>(
++    unsafe fn delete_property_impl<'js, C: JsClass<'js>>(
+         this_ptr: NonNull<ClassCell<()>>,
+         ctx: *mut qjs::JSContext,
+-        _obj: qjs::JSValueConst,
++        obj: qjs::JSValueConst,
+         atom: qjs::JSAtom,
+     ) -> qjs::c_int {
+         let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
+         let ctx = Ctx::from_ptr(ctx);
++        let object = Object::from_js_value_const(ctx.clone(), obj);
+         let atom = Atom::from_atom_val_dup(ctx.clone(), atom);
+ 
+         ctx.handle_panic_exotic(AssertUnwindSafe(|| {
+-            match C::exotic_has_property(&this_ptr.as_ref().data, &ctx, atom) {
++            match C::exotic_delete_property(&this_ptr.as_ref().data, &ctx, object, atom) {
+                 Ok(v) => {
+                     if v {
+                         1
+@@ -356,46 +471,20 @@
+         }))
+     }
+ 
+-    unsafe fn delete_property_impl<'js, C: JsClass<'js>>(
+-        this_ptr: NonNull<ClassCell<()>>,
+-        ctx: *mut qjs::JSContext,
+-        _obj: qjs::JSValueConst,
+-        atom: qjs::JSAtom,
+-    ) -> qjs::c_int {
+-        let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
+-        let ctx = Ctx::from_ptr(ctx);
+-        let atom = Atom::from_atom_val_dup(ctx.clone(), atom);
+-
+-        ctx.handle_panic_exotic(AssertUnwindSafe(|| {
+-            match C::exotic_delete_property(&this_ptr.as_ref().data, &ctx, atom) {
+-                Ok(v) => {
+-                    if v {
+-                        1
+-                    } else {
+-                        0
+-                    }
+-                }
+-                Err(e) => {
+-                    e.throw(&ctx);
+-                    -1
+-                }
+-            }
+-        }))
+-    }
+-
+     unsafe fn get_own_property_impl<'js, C: JsClass<'js>>(
+         this_ptr: NonNull<ClassCell<()>>,
+         ctx: *mut qjs::JSContext,
+         desc: *mut qjs::JSPropertyDescriptor,
+-        _obj: qjs::JSValueConst,
++        obj: qjs::JSValueConst,
+         prop: qjs::JSAtom,
+     ) -> qjs::c_int {
+         let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
+         let ctx = Ctx::from_ptr(ctx);
++        let object = Object::from_js_value_const(ctx.clone(), obj);
+         let atom = Atom::from_atom_val_dup(ctx.clone(), prop);
+ 
+         ctx.handle_panic_exotic(AssertUnwindSafe(|| {
+-            match C::exotic_get_own_property(&this_ptr.as_ref().data, &ctx, atom) {
++            match C::exotic_get_own_property(&this_ptr.as_ref().data, &ctx, object, atom) {
+                 Ok(Some(property)) => {
+                     if !desc.is_null() {
+                         let mut flags: qjs::c_int = 0;
+@@ -436,21 +525,33 @@
+         ctx: *mut qjs::JSContext,
+         ptab: *mut *mut qjs::JSPropertyEnum,
+         plen: *mut u32,
+-        _obj: qjs::JSValueConst,
++        obj: qjs::JSValueConst,
+     ) -> qjs::c_int {
+         let this_ptr = this_ptr.cast::<ClassCell<JsCell<C>>>();
+         let ctx = Ctx::from_ptr(ctx);
++        let object = Object::from_js_value_const(ctx.clone(), obj);
+ 
+         ctx.handle_panic_exotic(AssertUnwindSafe(|| {
+-            match C::exotic_get_own_property_names(&this_ptr.as_ref().data, &ctx) {
++            match C::exotic_get_own_property_names(&this_ptr.as_ref().data, &ctx, object) {
+                 Ok(names) => {
+                     let len = names.len();
+-                    let size = mem::size_of::<qjs::JSPropertyEnum>()
+-                        .checked_mul(len)
+-                        .unwrap_or(0);
++                    // js_malloc(ctx, 0) may return null and install an OOM
++                    // exception even though an empty enumeration succeeded.
++                    if len == 0 {
++                        *ptab = core::ptr::null_mut();
++                        *plen = 0;
++                        return 0;
++                    }
++                    let Some((len_u32, size)) = u32::try_from(len)
++                        .ok()
++                        .zip(mem::size_of::<qjs::JSPropertyEnum>().checked_mul(len))
++                    else {
++                        qjs::JS_ThrowOutOfMemory(ctx.as_ptr());
++                        return -1;
++                    };
+                     let tab = qjs::js_malloc(ctx.as_ptr(), size as qjs::size_t)
+                         as *mut qjs::JSPropertyEnum;
+-                    if tab.is_null() && len > 0 {
++                    if tab.is_null() {
+                         return -1;
+                     }
+                     for (i, name) in names.into_iter().enumerate() {
+@@ -460,7 +561,7 @@
+                         (*entry).atom = qjs::JS_DupAtom(ctx.as_ptr(), name.atom.atom);
+                     }
+                     *ptab = tab;
+-                    *plen = len as u32;
++                    *plen = len_u32;
+                     0 // success
+                 }
+                 Err(e) => {
+@@ -469,6 +570,77 @@
+                 }
+             }
+         }))
++    }
++
++    // Mirrors QuickJS's native define-property ABI without changing ownership.
++    #[allow(clippy::too_many_arguments)]
++    unsafe fn define_own_property_impl<'js, C: JsClass<'js>>(
++        this: NonNull<ClassCell<()>>,
++        raw_ctx: *mut qjs::JSContext,
++        object: qjs::JSValueConst,
++        prop: qjs::JSAtom,
++        value: qjs::JSValueConst,
++        getter: qjs::JSValueConst,
++        setter: qjs::JSValueConst,
++        flags: qjs::c_int,
++    ) -> qjs::c_int {
++        let this = this.cast::<ClassCell<JsCell<C>>>();
++        let ctx = Ctx::from_ptr(raw_ctx);
++        let atom = Atom::from_atom_val_dup(ctx.clone(), prop);
++        let object_value = Object::from_js_value_const(ctx.clone(), object);
++        let has = |flag: u32| flags & flag as qjs::c_int != 0;
++        let descriptor = DefinePropertyDescriptor {
++            value: has(qjs::JS_PROP_HAS_VALUE)
++                .then(|| Value::from_js_value_const(ctx.clone(), value)),
++            getter: has(qjs::JS_PROP_HAS_GET)
++                .then(|| Value::from_js_value_const(ctx.clone(), getter)),
++            setter: has(qjs::JS_PROP_HAS_SET)
++                .then(|| Value::from_js_value_const(ctx.clone(), setter)),
++            configurable: has(qjs::JS_PROP_HAS_CONFIGURABLE)
++                .then(|| has(qjs::JS_PROP_CONFIGURABLE)),
++            enumerable: has(qjs::JS_PROP_HAS_ENUMERABLE).then(|| has(qjs::JS_PROP_ENUMERABLE)),
++            writable: has(qjs::JS_PROP_HAS_WRITABLE).then(|| has(qjs::JS_PROP_WRITABLE)),
++        };
++        match C::exotic_define_own_property(
++            &this.as_ref().data,
++            &ctx,
++            object_value,
++            atom,
++            descriptor,
++        ) {
++            Ok(Some(true)) => 1,
++            Ok(Some(false)) => qjs::JS_RejectPropertyChange(raw_ctx, flags),
++            Ok(None) => qjs::JS_DefineProperty(
++                raw_ctx,
++                object,
++                prop,
++                value,
++                getter,
++                setter,
++                flags | qjs::JS_PROP_NO_EXOTIC as qjs::c_int,
++            ),
++            Err(error) => {
++                error.throw(&ctx);
++                -1
++            }
++        }
++    }
++
++    unsafe fn can_prevent_extensions_impl<'js, C: JsClass<'js>>(
++        this: NonNull<ClassCell<()>>,
++        raw_ctx: *mut qjs::JSContext,
++        object: qjs::JSValueConst,
++    ) -> qjs::c_int {
++        let this = this.cast::<ClassCell<JsCell<C>>>();
++        let ctx = Ctx::from_ptr(raw_ctx);
++        let object = Object::from_js_value_const(ctx.clone(), object);
++        match C::exotic_can_prevent_extensions(&this.as_ref().data, &ctx, object) {
++            Ok(allowed) => allowed as qjs::c_int,
++            Err(error) => {
++                error.throw(&ctx);
++                -1
++            }
++        }
+     }
+ 
+     pub fn get<'js, C: JsClass<'js>>() -> &'static VTable {
+@@ -488,6 +660,8 @@
+                 delete_property: VTable::delete_property_impl::<C>,
+                 get_own_property: VTable::get_own_property_impl::<C>,
+                 get_own_property_names: VTable::get_own_property_names_impl::<C>,
++                define_own_property: VTable::define_own_property_impl::<C>,
++                can_prevent_extensions: VTable::can_prevent_extensions_impl::<C>,
+             };
+         }
+         &<C as HasVTable>::VTABLE
+--- a/crates/tenta-quickjs-core/src/class/tenta_exotic_tests.rs
++++ b/crates/tenta-quickjs-core/src/class/tenta_exotic_tests.rs
+@@ -0,0 +1,458 @@
++//! Behavioral tests for the minimal TentaBrowser native property extensions.
++
++use super::{
++    ClassKind, DefinePropertyDescriptor, JsCell, JsClass, PropertyDescriptor, PropertyName, Trace,
++    Tracer, Writable,
++};
++use crate::{
++    value::Constructor, Atom, Class, Context, Ctx, JsLifetime, Object, Result, Runtime, Value,
++};
++use std::panic::{catch_unwind, AssertUnwindSafe};
++
++#[derive(Debug, PartialEq, Eq)]
++struct SeenDescriptor {
++    value: bool,
++    getter: bool,
++    setter: bool,
++    configurable: Option<bool>,
++    enumerable: Option<bool>,
++    writable: Option<bool>,
++}
++
++struct Probe<'js> {
++    value: Value<'js>,
++    seen: Option<SeenDescriptor>,
++    panic_on_prevent: bool,
++}
++
++impl<'js> Trace<'js> for Probe<'js> {
++    fn trace<'a>(&self, tracer: Tracer<'a, 'js>) {
++        self.value.trace(tracer);
++    }
++}
++
++// The only lifetime-bearing field is the traced JavaScript value.
++unsafe impl<'js> JsLifetime<'js> for Probe<'js> {
++    type Changed<'to> = Probe<'to>;
++}
++
++impl<'js> JsClass<'js> for Probe<'js> {
++    const NAME: &'static str = "NativePropertyProbe";
++    const KIND: ClassKind = ClassKind::Exotic;
++    type Mutable = Writable;
++
++    fn constructor(_ctx: &Ctx<'js>) -> Result<Option<Constructor<'js>>> {
++        Ok(None)
++    }
++
++    fn exotic_get_property(
++        this: &JsCell<'js, Self>,
++        ctx: &Ctx<'js>,
++        object: Object<'js>,
++        atom: Atom<'js>,
++        receiver: Value<'js>,
++    ) -> Result<Value<'js>> {
++        Ok(if atom.to_string()? == "object" {
++            object.into_value()
++        } else if atom.to_string()? == "receiver" {
++            receiver
++        } else if atom.to_string()? == "virtual" {
++            this.borrow().value.clone()
++        } else {
++            Value::new_undefined(ctx.clone())
++        })
++    }
++
++    fn exotic_set_property(
++        this: &JsCell<'js, Self>,
++        _ctx: &Ctx<'js>,
++        _object: Object<'js>,
++        atom: Atom<'js>,
++        receiver: Value<'js>,
++        value: Value<'js>,
++    ) -> Result<bool> {
++        if atom.to_string()? == "receiver" {
++            this.borrow_mut().value = receiver;
++            return Ok(true);
++        }
++        if atom.to_string()? != "virtual" {
++            return Ok(false);
++        }
++        this.borrow_mut().value = value;
++        Ok(true)
++    }
++
++    fn exotic_get_own_property(
++        this: &JsCell<'js, Self>,
++        _ctx: &Ctx<'js>,
++        _object: Object<'js>,
++        atom: Atom<'js>,
++    ) -> Result<Option<PropertyDescriptor<'js>>> {
++        Ok((atom.to_string()? == "virtual")
++            .then(|| PropertyDescriptor::new_value(this.borrow().value.clone(), true, true, true)))
++    }
++
++    fn exotic_get_own_property_names(
++        _this: &JsCell<'js, Self>,
++        ctx: &Ctx<'js>,
++        _object: crate::Object<'js>,
++    ) -> Result<Vec<PropertyName<'js>>> {
++        Ok(vec![PropertyName {
++            atom: Atom::from_str(ctx.clone(), "virtual")?,
++            is_enumerable: true,
++        }])
++    }
++
++    fn exotic_define_own_property(
++        this: &JsCell<'js, Self>,
++        _ctx: &Ctx<'js>,
++        _object: Object<'js>,
++        atom: Atom<'js>,
++        descriptor: DefinePropertyDescriptor<'js>,
++    ) -> Result<Option<bool>> {
++        match atom.to_string()?.as_str() {
++            "panic" => panic!("native define hook panic"),
++            "reject" => Ok(Some(false)),
++            "virtual" | "inspect" => {
++                let mut state = this.borrow_mut();
++                state.seen = Some(SeenDescriptor {
++                    value: descriptor.value.is_some(),
++                    getter: descriptor.getter.is_some(),
++                    setter: descriptor.setter.is_some(),
++                    configurable: descriptor.configurable,
++                    enumerable: descriptor.enumerable,
++                    writable: descriptor.writable,
++                });
++                if let Some(value) = descriptor.value {
++                    state.value = value;
++                }
++                Ok(Some(true))
++            }
++            _ => Ok(None),
++        }
++    }
++
++    fn exotic_can_prevent_extensions(
++        this: &JsCell<'js, Self>,
++        _ctx: &Ctx<'js>,
++        _object: Object<'js>,
++    ) -> Result<bool> {
++        assert!(!this.borrow().panic_on_prevent, "native prevent hook panic");
++        Ok(false)
++    }
++}
++
++struct DefaultExotic;
++
++impl<'js> Trace<'js> for DefaultExotic {
++    fn trace<'a>(&self, _tracer: Tracer<'a, 'js>) {}
++}
++
++// This class carries no JavaScript references.
++unsafe impl<'js> JsLifetime<'js> for DefaultExotic {
++    type Changed<'to> = DefaultExotic;
++}
++
++impl<'js> JsClass<'js> for DefaultExotic {
++    const NAME: &'static str = "DefaultExotic";
++    const KIND: ClassKind = ClassKind::Exotic;
++    type Mutable = Writable;
++
++    fn constructor(_ctx: &Ctx<'js>) -> Result<Option<Constructor<'js>>> {
++        Ok(None)
++    }
++}
++
++fn install<'js>(ctx: &Ctx<'js>, panic_on_prevent: bool) -> Class<'js, Probe<'js>> {
++    let class = Class::instance(
++        ctx.clone(),
++        Probe {
++            value: Value::new_undefined(ctx.clone()),
++            seen: None,
++            panic_on_prevent,
++        },
++    )
++    .unwrap();
++    ctx.globals().set("native", class.clone()).unwrap();
++    ctx.eval::<(), _>(
++        "globalThis.check = (ok) => { if (!ok) throw new Error('native hook assertion'); }",
++    )
++    .unwrap();
++    class
++}
++
++#[test]
++fn native_define_accepts_nonconfigurable_virtual_property() {
++    let runtime = Runtime::new().unwrap();
++    let context = Context::full(&runtime).unwrap();
++    context.with(|ctx| {
++        install(&ctx, false);
++        ctx.eval::<(), _>(
++            r#"
++            check(Reflect.defineProperty(native, 'virtual', {value: 'first', configurable: false}));
++            let first = Object.getOwnPropertyDescriptor(native, 'virtual');
++            check(first.value === 'first' && first.configurable && first.writable && first.enumerable);
++            check(Object.defineProperty(native, 'virtual', {value: 'second', configurable: false}) === native);
++            check(native.virtual === 'second');
++            Object.defineProperty(native, 'ordinary', {value: 17, configurable: false});
++            let ordinary = Object.getOwnPropertyDescriptor(native, 'ordinary');
++            check(ordinary.value === 17 && !ordinary.configurable && !ordinary.writable);
++            check(!Reflect.defineProperty(native, 'ordinary', {value: 18}));
++            check(Object.keys(native).join(',') === 'virtual');
++            "#,
++        )
++        .unwrap();
++    });
++}
++
++#[test]
++fn native_define_preserves_absent_descriptor_fields() {
++    let runtime = Runtime::new().unwrap();
++    let context = Context::full(&runtime).unwrap();
++    context.with(|ctx| {
++        let class = install(&ctx, false);
++        ctx.eval::<(), _>("Object.defineProperty(native, 'inspect', {})")
++            .unwrap();
++        assert_eq!(
++            class.borrow().seen,
++            Some(SeenDescriptor {
++                value: false,
++                getter: false,
++                setter: false,
++                configurable: None,
++                enumerable: None,
++                writable: None,
++            })
++        );
++        ctx.eval::<(), _>(
++            "Object.defineProperty(native, 'inspect', {value: undefined, writable: false, enumerable: true, configurable: false})",
++        )
++        .unwrap();
++        assert_eq!(
++            class.borrow().seen,
++            Some(SeenDescriptor {
++                value: true,
++                getter: false,
++                setter: false,
++                configurable: Some(false),
++                enumerable: Some(true),
++                writable: Some(false),
++            })
++        );
++        ctx.eval::<(), _>(
++            "Object.defineProperty(native, 'inspect', {get: undefined, set: undefined})",
++        )
++        .unwrap();
++        assert_eq!(
++            class.borrow().seen,
++            Some(SeenDescriptor {
++                value: false,
++                getter: true,
++                setter: true,
++                configurable: None,
++                enumerable: None,
++                writable: None,
++            })
++        );
++    });
++}
++
++#[test]
++fn native_prevent_extensions_refuses_without_changing_ordinary_objects() {
++    let runtime = Runtime::new().unwrap();
++    let context = Context::full(&runtime).unwrap();
++    context.with(|ctx| {
++        install(&ctx, false);
++        ctx.globals()
++            .set(
++                "defaultExotic",
++                Class::instance(ctx.clone(), DefaultExotic).unwrap(),
++            )
++            .unwrap();
++        ctx.eval::<(), _>(
++            r#"
++            check(Reflect.preventExtensions(native) === false);
++            check(Object.isExtensible(native));
++            for (let operation of [Object.preventExtensions, Object.seal, Object.freeze]) {
++                let failed = false;
++                try { operation(native); } catch (error) { failed = error instanceof TypeError; }
++                check(failed && Object.isExtensible(native));
++            }
++            let ordinary = {};
++            check(Reflect.preventExtensions(ordinary) && !Object.isExtensible(ordinary));
++            check(Reflect.preventExtensions(defaultExotic) && !Object.isExtensible(defaultExotic));
++            check(!Reflect.defineProperty(defaultExotic, 'new', {value: 1}));
++            "#,
++        )
++        .unwrap();
++    });
++}
++
++#[test]
++fn native_property_refusal_preserves_strict_and_reflect_semantics() {
++    let runtime = Runtime::new().unwrap();
++    let context = Context::full(&runtime).unwrap();
++    context.with(|ctx| {
++        install(&ctx, false);
++        ctx.eval::<(), _>(
++            r#"
++            Function('native', 'native.reject = 1')(native);
++            check(Reflect.set(native, 'reject', 2) === false);
++            check(Reflect.defineProperty(native, 'reject', {value: 3}) === false);
++            for (let operation of [
++                () => { 'use strict'; native.reject = 4; },
++                () => Object.defineProperty(native, 'reject', {value: 5}),
++            ]) {
++                let failed = false;
++                try { operation(); } catch (error) { failed = error instanceof TypeError; }
++                check(failed);
++            }
++            "#,
++        )
++        .unwrap();
++    });
++}
++
++#[test]
++fn native_setter_retains_borrowed_objects_and_strings_through_gc() {
++    // Nextest isolates this ownership regression in its own process because
++    // freeing a borrowed value can also abort during runtime teardown.
++    let runtime = Runtime::new().unwrap();
++    let context = Context::full(&runtime).unwrap();
++    context.with(|ctx| {
++        install(&ctx, false);
++        ctx.eval::<(), _>(
++            r#"
++            globalThis.kept = [];
++            for (let index = 0; index < 512; index++) {
++                let object = {index, text: 'value:'.repeat(128) + index};
++                native.virtual = object;
++                check(native.virtual === object && object.index === index);
++                kept.push(object);
++                native.virtual = object.text;
++                check(native.virtual === object.text);
++                check(Reflect.set(native, 'virtual', object));
++            }
++            "#,
++        )
++        .unwrap();
++    });
++    runtime.run_gc();
++    context.with(|ctx| {
++        ctx.eval::<(), _>(
++            r#"
++            for (let index = 0; index < kept.length; index++) {
++                check(kept[index].index === index);
++                check(kept[index].text === 'value:'.repeat(128) + index);
++            }
++            check(native.virtual === kept[511]);
++            delete globalThis.kept;
++            delete globalThis.native;
++            "#,
++        )
++        .unwrap();
++    });
++    runtime.run_gc();
++}
++
++#[test]
++fn native_define_panic_returns_to_rust_without_crossing_c() {
++    assert_native_panic("Reflect.defineProperty(native, 'panic', {value: 1})", false);
++}
++
++#[test]
++fn native_prevent_panic_returns_to_rust_without_crossing_c() {
++    assert_native_panic("Reflect.preventExtensions(native)", true);
++}
++
++fn assert_native_panic(script: &str, panic_on_prevent: bool) {
++    let runtime = Runtime::new().unwrap();
++    let context = Context::full(&runtime).unwrap();
++    context.with(|ctx| {
++        install(&ctx, panic_on_prevent);
++    });
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        context.with(|ctx| ctx.eval::<(), _>(script).unwrap());
++    }));
++    assert!(
++        result.is_err(),
++        "the panic must resume only after the C call returns"
++    );
++    context.with(|ctx| {
++        let _ = ctx.catch();
++        assert_eq!(ctx.eval::<i32, _>("21 * 2").unwrap(), 42);
++        ctx.globals().remove("native").unwrap();
++    });
++    runtime.run_gc();
++}
++
++#[test]
++fn native_hook_object_is_distinct_from_derived_receiver() {
++    let runtime = Runtime::new().unwrap();
++    let context = Context::full(&runtime).unwrap();
++    context.with(|ctx| {
++        install(&ctx, false);
++        ctx.eval::<(), _>(r#"
++            const receiver = {};
++            const derived = Object.create(native);
++            if (Reflect.get(native, "object", receiver) !== native) throw Error("original object lost");
++            if (Reflect.get(native, "receiver", receiver) !== receiver) throw Error("explicit receiver lost");
++            if (derived.object !== native || derived.receiver !== derived) throw Error("inherited receiver lost");
++            if (!Reflect.set(native, "receiver", 1, receiver) || native.virtual !== receiver) throw Error("setter receiver lost");
++            native.virtual = null;
++        "#).unwrap();
++    });
++    runtime.run_gc();
++}
++
++#[test]
++fn native_property_keys_preserve_symbol_identity() {
++    let runtime = Runtime::new().unwrap();
++    let context = Context::full(&runtime).unwrap();
++    context.with(|ctx| {
++        let symbol: Value = ctx.eval("Symbol('private expando')").unwrap();
++        let atom = Atom::from_value(ctx.clone(), &symbol).unwrap();
++        assert_eq!(atom.to_property_key().unwrap(), symbol);
++        assert_eq!(
++            Atom::from_u32(ctx.clone(), 42)
++                .unwrap()
++                .to_property_key()
++                .unwrap()
++                .as_string()
++                .unwrap()
++                .to_string()
++                .unwrap(),
++            "42"
++        );
++    });
++}
++
++#[test]
++fn native_class_predicate_does_not_throw_on_another_class_kind() {
++    let runtime = Runtime::new().unwrap();
++    let context = Context::full(&runtime).unwrap();
++    context.with(|ctx| {
++        let ordinary = Object::new(ctx.clone()).unwrap();
++        assert!(!ordinary.instance_of::<Probe>());
++        assert!(ordinary.as_class::<Probe>().is_none());
++        // SAFETY: the test owns the context on its runtime thread.
++        assert!(!unsafe { crate::qjs::JS_HasException(ctx.as_raw().as_ptr()) });
++        assert_eq!(ctx.eval::<i32, _>("21 * 2").unwrap(), 42);
++    });
++}
++
++#[test]
++fn native_empty_property_enumeration_does_not_leave_an_oom_exception() {
++    let runtime = Runtime::new().unwrap();
++    let context = Context::full(&runtime).unwrap();
++    context.with(|ctx| {
++        let object = Class::instance(ctx.clone(), DefaultExotic).unwrap();
++        ctx.globals().set("empty", object).unwrap();
++        assert!(ctx
++            .eval::<bool, _>(
++                "Object.keys(empty).length === 0 && Reflect.ownKeys(empty).length === 0"
++            )
++            .unwrap());
++        assert!(!unsafe { crate::qjs::JS_HasException(ctx.as_ptr()) });
++    });
++}
+--- a/crates/tenta-quickjs-core/src/class.rs
++++ b/crates/tenta-quickjs-core/src/class.rs
+@@ -83,6 +83,24 @@
+     pub is_enumerable: bool,
+ }
+ 
++/// A partial descriptor supplied to an exotic [[DefineOwnProperty]] hook.
++/// Missing fields remain missing, rather than being completed to false or
++/// undefined, because WebIDL distinguishes generic and data descriptors.
++pub struct DefinePropertyDescriptor<'js> {
++    /// The data value, when explicitly supplied.
++    pub value: Option<Value<'js>>,
++    /// The getter value, including an explicitly supplied undefined.
++    pub getter: Option<Value<'js>>,
++    /// The setter value, including an explicitly supplied undefined.
++    pub setter: Option<Value<'js>>,
++    /// The configurable attribute, when explicitly supplied.
++    pub configurable: Option<bool>,
++    /// The enumerable attribute, when explicitly supplied.
++    pub enumerable: Option<bool>,
++    /// The writable attribute, when explicitly supplied.
++    pub writable: Option<bool>,
++}
++
+ /// The trait which allows Rust types to be used from JavaScript.
+ pub trait JsClass<'js>: Trace<'js> + JsLifetime<'js> + Sized {
+     /// The name the constructor has in JavaScript
+@@ -115,6 +133,7 @@
+     fn exotic_get_property(
+         this: &JsCell<'js, Self>,
+         ctx: &Ctx<'js>,
++        _object: Object<'js>,
+         _atom: Atom<'js>,
+         _receiver: Value<'js>,
+     ) -> Result<Value<'js>> {
+@@ -126,6 +145,7 @@
+     fn exotic_set_property(
+         this: &JsCell<'js, Self>,
+         _ctx: &Ctx<'js>,
++        _object: Object<'js>,
+         _atom: Atom<'js>,
+         _receiver: Value<'js>,
+         _value: Value<'js>,
+@@ -138,6 +158,7 @@
+     fn exotic_delete_property(
+         this: &JsCell<'js, Self>,
+         _ctx: &Ctx<'js>,
++        _object: Object<'js>,
+         _atom: Atom<'js>,
+     ) -> Result<bool> {
+         let _ = this;
+@@ -148,6 +169,7 @@
+     fn exotic_has_property(
+         this: &JsCell<'js, Self>,
+         _ctx: &Ctx<'js>,
++        _object: Object<'js>,
+         _atom: Atom<'js>,
+     ) -> Result<bool> {
+         let _ = this;
+@@ -160,6 +182,7 @@
+     fn exotic_get_own_property(
+         this: &JsCell<'js, Self>,
+         _ctx: &Ctx<'js>,
++        _object: Object<'js>,
+         _atom: Atom<'js>,
+     ) -> Result<Option<PropertyDescriptor<'js>>> {
+         let _ = this;
+@@ -172,11 +195,38 @@
+     fn exotic_get_own_property_names(
+         this: &JsCell<'js, Self>,
+         _ctx: &Ctx<'js>,
++        _object: Object<'js>,
+     ) -> Result<Vec<PropertyName<'js>>> {
+         let _ = this;
+         Ok(Vec::new())
+     }
+-}
++
++    /// Handles defining an own property on an exotic class. `None` delegates
++    /// to the ordinary object definition; `Some(false)` rejects the change
++    /// using the caller's throwing/Reflect semantics.
++    fn exotic_define_own_property(
++        _this: &JsCell<'js, Self>,
++        _ctx: &Ctx<'js>,
++        _object: Object<'js>,
++        _atom: Atom<'js>,
++        _descriptor: DefinePropertyDescriptor<'js>,
++    ) -> Result<Option<bool>> {
++        Ok(None)
++    }
++
++    /// Allows or refuses the ordinary transition to non-extensibility. Legacy
++    /// platform objects return false; unmodified exotic classes allow it.
++    fn exotic_can_prevent_extensions(
++        _this: &JsCell<'js, Self>,
++        _ctx: &Ctx<'js>,
++        _object: Object<'js>,
++    ) -> Result<bool> {
++        Ok(true)
++    }
++}
++
++#[cfg(test)]
++mod tenta_exotic_tests;
+ 
+ /// A object which is instance of a Rust class.
+ #[repr(transparent)]
+@@ -392,10 +442,9 @@
+             return false;
+         };
+ 
+-        // This checks if the class is of the right class id.
+-        let Some(x) = NonNull::new(unsafe {
+-            qjs::JS_GetOpaque2(self.0.ctx.as_ptr(), self.0.as_js_value(), id)
+-        }) else {
++        // A failed type predicate must not leave a JavaScript exception. The
++        // class id check is the same as GetOpaque2, without its throwing path.
++        let Some(x) = NonNull::new(unsafe { qjs::JS_GetOpaque(self.0.as_js_value(), id) }) else {
+             return false;
+         };
+ 
+@@ -824,6 +873,7 @@
+             fn exotic_get_property(
+                 this: &crate::class::JsCell<'js, Self>,
+                 ctx: &crate::Ctx<'js>,
++                _object: crate::Object<'js>,
+                 atom: crate::Atom<'js>,
+                 _receiver: crate::Value<'js>,
+             ) -> crate::Result<crate::Value<'js>> {
+@@ -888,6 +938,7 @@
+             fn exotic_has_property(
+                 this: &super::JsCell<'js, Self>,
+                 _ctx: &crate::Ctx<'js>,
++                _object: crate::Object<'js>,
+                 atom: crate::Atom<'js>,
+             ) -> crate::Result<bool> {
+                 let _ = this;
+@@ -932,6 +983,7 @@
+             fn exotic_get_property(
+                 this: &crate::class::JsCell<'js, Self>,
+                 ctx: &crate::Ctx<'js>,
++                _object: crate::Object<'js>,
+                 atom: crate::Atom<'js>,
+                 _receiver: crate::Value<'js>,
+             ) -> crate::Result<crate::Value<'js>> {
+@@ -970,6 +1022,7 @@
+             fn exotic_set_property(
+                 this: &super::JsCell<'js, Self>,
+                 ctx: &crate::Ctx<'js>,
++                _object: crate::Object<'js>,
+                 atom: crate::Atom<'js>,
+                 _receiver: crate::Value<'js>,
+                 _value: crate::Value<'js>,
+@@ -992,6 +1045,7 @@
+             fn exotic_has_property(
+                 this: &super::JsCell<'js, Self>,
+                 _ctx: &crate::Ctx<'js>,
++                _object: crate::Object<'js>,
+                 atom: crate::Atom<'js>,
+             ) -> crate::Result<bool> {
+                 let _ = this;
+@@ -1009,6 +1063,7 @@
+             fn exotic_delete_property(
+                 _this: &super::JsCell<'js, Self>,
+                 ctx: &crate::Ctx<'js>,
++                _object: crate::Object<'js>,
+                 _atom: crate::Atom<'js>,
+             ) -> crate::Result<bool> {
+                 let err_val = crate::String::from_str(ctx.clone(), "Properties cannot be deleted")?
+@@ -1019,6 +1074,7 @@
+             fn exotic_get_own_property(
+                 this: &super::JsCell<'js, Self>,
+                 ctx: &crate::Ctx<'js>,
++                _object: crate::Object<'js>,
+                 atom: crate::Atom<'js>,
+             ) -> crate::Result<Option<super::PropertyDescriptor<'js>>> {
+                 let name = atom.to_string()?;
+@@ -1039,6 +1095,7 @@
+             fn exotic_get_own_property_names(
+                 _this: &super::JsCell<'js, Self>,
+                 ctx: &crate::Ctx<'js>,
++                _object: crate::Object<'js>,
+             ) -> crate::Result<Vec<super::PropertyName<'js>>> {
+                 Ok(vec![
+                     super::PropertyName {
+--- a/crates/tenta-quickjs-core/src/context/ctx.rs
++++ b/crates/tenta-quickjs-core/src/context/ctx.rs
+@@ -456,7 +456,8 @@
+         let stack_level = core::ffi::c_int::try_from(stack_level).unwrap();
+         let atom = unsafe { qjs::JS_GetScriptOrModuleName(self.as_ptr(), stack_level) };
+         #[allow(clippy::useless_conversion)] //needed for multi platform binding support
+-        if qjs::__JS_ATOM_NULL == atom.try_into().unwrap() {
++        let null_atom: qjs::JSAtom = qjs::__JS_ATOM_NULL.try_into().unwrap();
++        if null_atom == atom {
+             unsafe { qjs::JS_FreeAtom(self.as_ptr(), atom) };
+             return None;
+         }
+--- a/crates/tenta-quickjs-core/src/runtime/exotic.rs
++++ b/crates/tenta-quickjs-core/src/runtime/exotic.rs
+@@ -11,7 +11,7 @@
+             get_own_property: Some(crate::class::ffi::exotic_get_own_property),
+             get_own_property_names: Some(crate::class::ffi::exotic_get_own_property_names),
+             delete_property: Some(crate::class::ffi::exotic_delete_property),
+-            define_own_property: None, // TODO: Implement
++            define_own_property: Some(crate::class::ffi::exotic_define_own_property),
+             has_property: Some(crate::class::ffi::exotic_has_property),
+             set_property: Some(crate::class::ffi::exotic_set_property),
+             get_property: Some(crate::class::ffi::exotic_get_property),
+--- a/crates/tenta-quickjs-core/src/runtime/opaque.rs
++++ b/crates/tenta-quickjs-core/src/runtime/opaque.rs
+@@ -137,6 +137,13 @@
+         };
+ 
+         if 0 != qjs::JS_NewClass(rt, self.exotic_class_id, &class_def) {
++            return Err(Error::Unknown);
++        }
++        if 0 != qjs::JS_SetClassCanPreventExtensions(
++            rt,
++            self.exotic_class_id,
++            Some(class::ffi::exotic_can_prevent_extensions),
++        ) {
+             return Err(Error::Unknown);
+         }
+ 
+--- a/crates/tenta-quickjs-core/src/value/atom.rs
++++ b/crates/tenta-quickjs-core/src/value/atom.rs
+@@ -142,6 +142,19 @@
+         self.to_js_string().map(|String(value)| value)
+     }
+ 
++    /// Returns the property key, preserving a symbol atom's identity.
++    /// Unlike `to_js_string`, this never converts a symbol to its description.
++    pub fn to_property_key(&self) -> Result<Value<'js>> {
++        // SAFETY: this atom is retained in its live context. QuickJS returns
++        // one owned value, checked before transferring it into the Rust value.
++        unsafe {
++            let value = self
++                .ctx
++                .handle_exception(qjs::JS_AtomToValue(self.ctx.as_ptr(), self.atom))?;
++            Ok(Value::from_js_value(self.ctx.clone(), value))
++        }
++    }
++
+     pub(crate) unsafe fn from_atom_val(ctx: Ctx<'js>, val: qjs::JSAtom) -> Self {
+         Atom { atom: val, ctx }
+     }
+--- a/crates/tenta-quickjs-core/src/value/convert/into.rs
++++ b/crates/tenta-quickjs-core/src/value/convert/into.rs
+@@ -583,7 +583,7 @@
+             let globs = ctx.globals();
+             globs.set("ts", ts.into_js(&ctx).unwrap()).unwrap();
+             let res: i64 = ctx.eval("ts.getTime()").unwrap();
+-            assert_eq!(millis, res as _);
++            assert_eq!(millis, res as u128);
+         });
+ 
+         // wasm32-wasip1 and wasm32-wasip2 do not support SystemTime before the Unix epoch.
+@@ -600,7 +600,7 @@
+                 let globs = ctx.globals();
+                 globs.set("ts", ts.into_js(&ctx).unwrap()).unwrap();
+                 let res: i64 = ctx.eval("ts.getTime()").unwrap();
+-                assert_eq!(-(millis as i64), res as _);
++                assert_eq!(-(millis as i64), res);
+             });
+         }
+     }
+--- a/crates/tenta-quickjs-sys/Cargo.toml
++++ b/crates/tenta-quickjs-sys/Cargo.toml
+@@ -10,8 +10,9 @@
+ # See Cargo.toml.orig for the original contents.
+ 
+ [package]
++publish = false
+ edition = "2021"
+-name = "rquickjs-sys"
++name = "tenta-quickjs-sys"
+ version = "0.12.2"
+ authors = ["Mees Delzenne <mees.delzenne@gmail.com>"]
+ build = "build.rs"
+--- a/crates/tenta-quickjs-sys/LICENSE
++++ b/crates/tenta-quickjs-sys/LICENSE
+@@ -0,0 +1,22 @@
++MIT License
++
++Copyright (c) 2020 Mees Delzenne
++Copyright (c) 2025 Rquickjs Contributors
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+--- a/crates/tenta-quickjs-sys/build.rs
++++ b/crates/tenta-quickjs-sys/build.rs
+@@ -352,6 +352,10 @@
+         .allowlist_function("__JS.*")
+         .allowlist_var("JS.*")
+         .opaque_type("FILE")
++        // These scalar extension declarations are shared with bundled bindings.
++        .blocklist_type("JSClassCanPreventExtensions")
++        .blocklist_function("JS_SetClassCanPreventExtensions")
++        .blocklist_function("JS_RejectPropertyChange")
+         .blocklist_type("FILE")
+         .blocklist_function("JS_DumpMemoryUsage");
+ 
+--- a/crates/tenta-quickjs-sys/quickjs/quickjs.c
++++ b/crates/tenta-quickjs-sys/quickjs/quickjs.c
+@@ -364,6 +364,7 @@
+     JSClassCall *call;
+     /* pointers for exotic behavior, can be NULL if none are present */
+     const JSClassExoticMethods *exotic;
++    JSClassCanPreventExtensions *can_prevent_extensions;
+ };
+ 
+ typedef struct JSStackFrame {
+@@ -3869,6 +3870,7 @@
+     cl->gc_mark = class_def->gc_mark;
+     cl->call = class_def->call;
+     cl->exotic = class_def->exotic;
++    cl->can_prevent_extensions = NULL;
+     return 0;
+ }
+ 
+@@ -3888,6 +3890,15 @@
+     ret = JS_NewClass1(rt, class_id, class_def, name);
+     JS_FreeAtomRT(rt, name);
+     return ret;
++}
++
++int JS_SetClassCanPreventExtensions(JSRuntime *rt, JSClassID class_id,
++                                    JSClassCanPreventExtensions *callback)
++{
++    if (!JS_IsRegisteredClass(rt, class_id))
++        return -1;
++    rt->class_array[class_id].can_prevent_extensions = callback;
++    return 0;
+ }
+ 
+ static inline JSValue js_empty_string(JSRuntime *rt)
+@@ -8092,6 +8103,11 @@
+     }
+ }
+ 
++int JS_RejectPropertyChange(JSContext *ctx, int flags)
++{
++    return JS_ThrowTypeErrorOrFalse(ctx, flags, "native property operation refused");
++}
++
+ #if defined(__GNUC__) || defined(__clang__)
+ #pragma GCC diagnostic push
+ #pragma GCC diagnostic ignored "-Wformat-nonliteral"
+@@ -9432,6 +9448,13 @@
+     p = JS_VALUE_GET_OBJ(obj);
+     if (unlikely(p->class_id == JS_CLASS_PROXY))
+         return js_proxy_preventExtensions(ctx, obj);
++    JSClassCanPreventExtensions *callback =
++        ctx->rt->class_array[p->class_id].can_prevent_extensions;
++    if (callback) {
++        int ret = callback(ctx, obj);
++        if (ret <= 0)
++            return ret;
++    }
+     p->extensible = false;
+     return true;
+ }
+--- a/crates/tenta-quickjs-sys/quickjs/quickjs.h
++++ b/crates/tenta-quickjs-sys/quickjs/quickjs.h
+@@ -690,6 +690,15 @@
+ JS_EXTERN JSClassID JS_GetClassID(JSValueConst v);
+ JS_EXTERN int JS_NewClass(JSRuntime *rt, JSClassID class_id, const JSClassDef *class_def);
+ JS_EXTERN bool JS_IsRegisteredClass(JSRuntime *rt, JSClassID class_id);
++/* Optional host-class policy for [[PreventExtensions]]. Return -1 with a
++   pending exception, 0 to refuse, or 1 to allow the ordinary transition.
++   The callback runs on the owning runtime thread and must not unwind. */
++typedef int JSClassCanPreventExtensions(JSContext *ctx, JSValueConst obj);
++JS_EXTERN int JS_SetClassCanPreventExtensions(JSRuntime *rt, JSClassID class_id,
++                                             JSClassCanPreventExtensions *callback);
++/* Returns false, or throws TypeError when the property operation's flags
++   require it (including strict-mode assignment). */
++JS_EXTERN int JS_RejectPropertyChange(JSContext *ctx, int flags);
+ /* Returns the class name or JS_ATOM_NULL if `id` is not a registered class. Must be freed with JS_FreeAtom. */
+ JS_EXTERN JSAtom JS_GetClassName(JSRuntime *rt, JSClassID class_id);
+ 
+--- a/crates/tenta-quickjs-sys/src/lib.rs
++++ b/crates/tenta-quickjs-sys/src/lib.rs
+@@ -25,3 +25,26 @@
+ include!("inlines/ptr_32_nan_boxing.rs");
+ 
+ include!("inlines/common.rs");
++
++// The extension adds no fields to public ABI structs. Its scalar ABI is
++// shared by bundled and generated bindings (the latter blocklist these names).
++mod host_extensions {
++    use super::{JSClassID, JSContext, JSRuntime, JSValueConst};
++
++    pub type JSClassCanPreventExtensions =
++        Option<unsafe extern "C" fn(ctx: *mut JSContext, obj: JSValueConst) -> core::ffi::c_int>;
++
++    unsafe extern "C" {
++        pub fn JS_SetClassCanPreventExtensions(
++            rt: *mut JSRuntime,
++            class_id: JSClassID,
++            callback: JSClassCanPreventExtensions,
++        ) -> core::ffi::c_int;
++        pub fn JS_RejectPropertyChange(
++            ctx: *mut JSContext,
++            flags: core::ffi::c_int,
++        ) -> core::ffi::c_int;
++    }
++}
++
++pub use host_extensions::*;

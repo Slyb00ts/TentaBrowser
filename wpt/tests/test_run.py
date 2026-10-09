@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 RUN_PY = Path(__file__).resolve().parent.parent / "run.py"
@@ -76,13 +78,13 @@ def report(tests, **overrides):
     """A synthetic `wpt/results/<product>/<dir>.json`."""
     document = {
         "product": PRODUCT,
-        "browser": {"name": PRODUCT, "version": "0.0.0"},
+        "browser": {"name": PRODUCT, "version": "0.0.0", "backend": "v8"},
         "wpt_commit": "b89af32bc8f42d678f444eb0703bca015ddcf240",
         "directory": DIRECTORY,
         "started": "2026-09-21T00:00:00Z",
         "duration_s": 1.0,
         "summary": wptrun.summarize(tests),
-        "driver": {"path": "/tmp/tenta-wpt-driver", "sha256": "a" * 64},
+        "driver": {"path": "/tmp/tenta-wpt-driver", "sha256": "a" * 64, "backend": "v8"},
         "plan_digest": "b" * 64,
         "truncated": False,
         "timeout_s": 10,
@@ -92,6 +94,62 @@ def report(tests, **overrides):
     }
     document.update(overrides)
     return document
+
+
+class BackendSelectionTestCase(unittest.TestCase):
+    def test_products_keep_separate_results_and_expectations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = wptrun.Paths(Path(temporary) / "expectations", Path(temporary) / "results")
+            self.assertNotEqual(paths.ledger("tentabrowser"), paths.ledger("tentabrowser-qjs"))
+            self.assertNotEqual(paths.results_file("tentabrowser", "dom/nodes"),
+                                paths.results_file("tentabrowser-qjs", "dom/nodes"))
+        parsed = wptrun.build_parser().parse_args(
+            ["run", "--dir", "dom/nodes", "--product", "tentabrowser-qjs"])
+        with mock.patch.object(wptrun, "resolve_driver", return_value=Path("/driver")):
+            self.assertEqual(wptrun.make_driver(parsed).backend, "quickjs")
+
+    def test_misfiled_and_unlabelled_reports_cannot_generate_or_promote(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = wptrun.Paths(Path(temporary) / "expectations", Path(temporary) / "results")
+            product = "tentabrowser-qjs"
+            candidate = paths.candidate_dir(product, DIRECTORY)
+            candidate.mkdir(parents=True)
+            sentinel = candidate / "keep.txt"
+            sentinel.write_text("keep existing review")
+            invalid = [
+                (product, report([])),
+                (product, report([], product=product)),
+                (product, report([], product=product, browser={"backend": "quickjs"}, driver={})),
+                (PRODUCT, report([], browser={}, driver={})),
+            ]
+            for selected, document in invalid:
+                with self.subTest(document=document):
+                    self.assertTrue(wptrun.comparability(selected, DIRECTORY, document,
+                                                         paths=paths, baseline={}))
+                    with self.assertRaises(wptrun.ToolError):
+                        wptrun.generate_candidate(selected, DIRECTORY, document, paths=paths)
+                    result = wptrun.promote(selected, DIRECTORY, document, paths=paths)
+                    self.assertEqual(result.exit_code, wptrun.EXIT_REFUSED)
+                    self.assertFalse(paths.baseline(selected).exists())
+                    self.assertEqual(sentinel.read_text(), "keep existing review")
+
+    def test_plan_selects_backend_and_rejects_mismatched_driver_results(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            driver = wptrun.TentaBrowserDriver(Path("/driver"), "quickjs")
+            def invoke(command, **kwargs):
+                selected = json.loads(Path(command[1]).read_text())
+                self.assertEqual(selected["backend"], "quickjs")
+                Path(command[2]).write_text(json.dumps({
+                    "browser": {"backend": returned_backend}, "tests": []}))
+            with mock.patch.object(wptrun, "RESULTS", directory), \
+                 mock.patch.object(wptrun.subprocess, "run", side_effect=invoke):
+                returned_backend = "quickjs"
+                self.assertEqual(driver.run({"tests": []})["tests"], [])
+                for returned_backend in ("v8", None):
+                    with self.subTest(returned_backend=returned_backend):
+                        with self.assertRaises(wptrun.ToolError):
+                            driver.run({"tests": []})
 
 
 class RoundTripTestCase(unittest.TestCase):

@@ -24,7 +24,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use tenta_js::bindings::{Event, EventTarget, Handle, handle_to_v8, value_to_v8};
+use tenta_js::bindings::host::encode_window;
+use tenta_js::bindings::{Event, EventTarget, Handle, JsError, handle_to_v8, value_to_v8};
 use tenta_js::dom::events::{CallbackRef, HostValue, PromiseOutcome, PromiseRef, ScriptHost};
 use tenta_js::fetch::FetchStartError;
 use tenta_js::xhr::{XhrHandle, XhrRequest};
@@ -212,6 +213,36 @@ pub(crate) fn construct_global<'s>(
 }
 
 impl ScriptHost for V8ScriptHost {
+    fn array_buffer_view_info(
+        &self,
+        view: tenta_js::bindings::ArrayBufferViewRef,
+    ) -> Result<tenta_js::bindings::BufferMetadata, JsError> {
+        self.with_context(|scope| tenta_js::bindings::v8_array_buffer_view_info(scope, view))
+    }
+
+    fn write_array_buffer_view(
+        &self,
+        view: tenta_js::bindings::ArrayBufferViewRef,
+        bytes: &[u8],
+    ) -> Result<tenta_js::bindings::BufferMetadata, JsError> {
+        self.with_context(|scope| {
+            tenta_js::bindings::v8_write_array_buffer_view(scope, view, bytes)
+        })
+    }
+
+    fn check_native_buffer_work(&self) -> Result<(), JsError> {
+        self.with_context(|scope| tenta_js::bindings::v8_check_native_buffer_work(scope))
+    }
+
+    fn native_buffer_memory_failure(&self) -> JsError {
+        // The installed callback's admission cell carries this sticky failure
+        // to the registered slow-callback termination tail.
+        self.with_context(|scope| {
+            let _ = tenta_js::bindings::v8_check_native_buffer_work(scope);
+        });
+        tenta_js::bindings::pending_js_exception_error()
+    }
+
     fn invoke_listener(&self, callback: CallbackRef, current_target: u64, event: u64) -> bool {
         // Whether this dispatch originated outside running script has to be read
         // *before* the listener is entered, because entering it makes the depth
@@ -289,6 +320,36 @@ impl ScriptHost for V8ScriptHost {
 
     fn release_value(&self, bits: u64) {
         self.state.borrow_mut().release_value(bits);
+    }
+
+    fn retain_existing_target(&self, handle: u64) -> Result<Option<u64>, JsError> {
+        self.with_context(|scope| {
+            if tenta_js::bindings::native_callback_failure(scope).is_some() {
+                return Err(tenta_js::bindings::v8_pending_exception_error());
+            }
+            if handle == encode_window() {
+                return Ok(None);
+            }
+            let Some(wrapper) = ({ self.state.borrow().existing_wrapper(scope, handle) }) else {
+                // Conversion still owns the source Local. A missing exact weak
+                // wrapper is native cache corruption, not a catchable page error.
+                tenta_js::bindings::poison_native_callback(
+                    scope,
+                    "relatedTarget wrapper retention",
+                );
+                return Err(tenta_js::bindings::v8_pending_exception_error());
+            };
+            if tenta_js::bindings::native_callback_failure(scope).is_some() {
+                return Err(tenta_js::bindings::v8_pending_exception_error());
+            }
+            let bits = self.state.borrow_mut().store_value(scope, wrapper.into());
+            if tenta_js::bindings::native_callback_failure(scope).is_some() {
+                // The newly stored root is retained by the poisoned world until
+                // teardown; publishing an EventRecord now would be unsafe.
+                return Err(tenta_js::bindings::v8_pending_exception_error());
+            }
+            Ok(Some(bits))
+        })
     }
 
     fn build_value(&self, value: HostValue<'_>) -> Option<u64> {

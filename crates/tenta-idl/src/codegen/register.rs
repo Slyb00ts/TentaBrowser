@@ -16,15 +16,8 @@ pub fn interface_register(_model: &Model, interface: &Interface) -> String {
         Some(parent) => format!("Some(\"{parent}\")"),
         None => "None".to_string(),
     };
-    let constructor_length = match interface.constructors.first() {
-        Some(constructor) => format!(
-            "Some({})",
-            constructor
-                .arguments
-                .iter()
-                .filter(|a| !a.optional && !a.variadic)
-                .count()
-        ),
+    let constructor_length = match interface.constructor_length() {
+        Some(length) => format!("Some({length})"),
         None => "None".to_string(),
     };
     let iterable = match &interface.iterable {

@@ -124,6 +124,26 @@ impl MockHost {
 }
 
 impl ScriptHost for MockHost {
+    fn array_buffer_view_info(
+        &self,
+        _: crate::bindings::ArrayBufferViewRef,
+    ) -> Result<crate::bindings::BufferMetadata, JsError> {
+        unreachable!("this test never reads a native buffer")
+    }
+    fn write_array_buffer_view(
+        &self,
+        _: crate::bindings::ArrayBufferViewRef,
+        _: &[u8],
+    ) -> Result<crate::bindings::BufferMetadata, JsError> {
+        unreachable!("this test never writes a native buffer")
+    }
+    fn check_native_buffer_work(&self) -> Result<(), JsError> {
+        unreachable!("this test never performs native buffer work")
+    }
+    fn native_buffer_memory_failure(&self) -> JsError {
+        unreachable!("this test never exhausts a native buffer budget")
+    }
+
     fn invoke_listener(&self, callback: CallbackRef, current_target: u64, event: u64) -> bool {
         let ctx = self
             .ctx
@@ -198,6 +218,10 @@ impl ScriptHost for MockHost {
 
     fn release_value(&self, bits: u64) {
         self.released.borrow_mut().push(bits);
+    }
+
+    fn retain_existing_target(&self, _handle: u64) -> Result<Option<u64>, JsError> {
+        Err(JsError::type_error("MockHost cannot retain a JS wrapper"))
     }
 
     fn build_value(&self, value: HostValue<'_>) -> Option<u64> {
@@ -299,6 +323,7 @@ fn fixture() -> Fixture {
         Rc::new(RefCell::new(document)),
         clock,
         tenta_net::CookieJar::new(),
+        crate::storage::PageStorage::isolated(),
     );
     let mock = MockHost::new();
     *mock.ctx.borrow_mut() = Rc::downgrade(&ctx);
@@ -340,24 +365,77 @@ fn add(ctx: &HostContext, target: NodeRef, type_: &str, cb: u64, capture: bool) 
 #[test]
 fn each_event_kind_reports_its_interface_name() {
     let mouse = EventKind::Mouse {
+        view: None,
         detail: 0,
+        which: 0,
         screen_x: 0,
         screen_y: 0,
         client_x: 0,
         client_y: 0,
-        ctrl: false,
-        shift: false,
-        alt: false,
-        meta: false,
+        modifiers: 0,
         button: 0,
         buttons: 0,
         related_target: None,
+        related_value: None,
+        wheel: None,
     };
+    let mut wheel = mouse.clone();
+    if let EventKind::Mouse { wheel, .. } = &mut wheel {
+        *wheel = Some(Box::new(super::WheelDelta {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            mode: 0,
+        }));
+    }
     let cases = [
         (EventKind::Plain, "Event"),
         (EventKind::Custom { detail: None }, "CustomEvent"),
-        (EventKind::Ui { detail: 0 }, "UIEvent"),
+        (
+            EventKind::Ui {
+                view: None,
+                detail: 0,
+                which: 0,
+            },
+            "UIEvent",
+        ),
+        (
+            EventKind::Composition {
+                view: None,
+                detail: 0,
+                which: 0,
+                data: String::new(),
+            },
+            "CompositionEvent",
+        ),
+        (
+            EventKind::Keyboard {
+                view: None,
+                detail: 0,
+                which: 0,
+                key: String::new(),
+                code: String::new(),
+                location: 0,
+                modifiers: 0,
+                repeat: false,
+                is_composing: false,
+                char_code: 0,
+                key_code: 0,
+            },
+            "KeyboardEvent",
+        ),
+        (
+            EventKind::Focus {
+                view: None,
+                detail: 0,
+                which: 0,
+                related_target: None,
+                related_value: None,
+            },
+            "FocusEvent",
+        ),
         (mouse, "MouseEvent"),
+        (wheel, "WheelEvent"),
         (
             EventKind::Progress {
                 length_computable: false,

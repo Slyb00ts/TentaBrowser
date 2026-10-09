@@ -25,7 +25,7 @@
 /// - `v8::ReturnValue::{set, set_bool, set_int32, set_uint32, set_double,
 ///   set_null, set_undefined}`
 /// - `v8::fast_api::{CFunction, CFunctionInfo, CTypeInfo, Flags,
-///   Int64Representation, Type, FastApiOneByteString}`
+///   Int64Representation, Type, FastApiOneByteString, FastApiCallbackOptions}`
 /// - `v8::Local<v8::Object>::{get_aligned_pointer_from_internal_field,
 ///   set_aligned_pointer_in_internal_field, get, set, create_data_property,
 ///   internal_field_count}` (through the prelude helpers)
@@ -43,7 +43,8 @@ pub fn install_event_target<T: EventTargetOps + EventTargetConstructor + 'static
     global_template: v8::Local<'_, v8::ObjectTemplate>,
     registry: &mut dyn InterfaceRegistry,
 ) -> Result<v8::Global<v8::FunctionTemplate>, JsError> {
-    let constructor = v8::FunctionTemplate::builder(construct_event_target::<T>).build(scope);
+    install_native_callback_state(scope);
+    let constructor = v8::FunctionTemplate::builder(construct_event_target::<T>).length(0).build(scope);
     let class_name = v8_string(scope, "EventTarget")?;
     constructor.set_class_name(class_name);
     let signature = v8::Signature::new(scope, constructor);
@@ -91,8 +92,22 @@ pub fn install_event_target<T: EventTargetOps + EventTargetConstructor + 'static
     Ok(v8::Global::new(scope.as_ref(), constructor))
 }
 
-/// The `EventTarget` constructor.
 fn construct_event_target<'s, T: EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        v8_begin_stored_value_lease(scope);
+        body_construct_event_target::<T>(scope, args, rv);
+        v8_end_stored_value_lease(scope);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "construct_event_target", (), call) };
+}
+
+/// The `EventTarget` constructor.
+fn body_construct_event_target<'s, T: EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -111,8 +126,20 @@ fn construct_event_target<'s, T: EventTargetOps + EventTargetConstructor + 'stat
             return;
         }
     };
+    match v8_before_constructor_host(scope) {
+        Ok(()) => {},
+        Err(V8AdmissionError::Throw(error)) => {
+            throw_js_error(scope, &error);
+            return;
+        },
+        Err(V8AdmissionError::Terminated) => {
+            scope.terminate_execution();
+            return;
+        },
+    }
     match <T as EventTargetConstructor>::construct(&realm) {
         Ok(host) => {
+            v8_transfer_stored_value_lease(scope);
             let this = args.this();
             if let Err(error) = adopt_host(scope, "EventTarget", this, host) {
                 throw_js_error(scope, &error);
@@ -124,8 +151,22 @@ fn construct_event_target<'s, T: EventTargetOps + EventTargetConstructor + 'stat
     }
 }
 
-/// `EventTarget.addEventListener`.
 fn call_event_target_add_event_listener<'s, T: EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        v8_begin_stored_value_lease(scope);
+        body_call_event_target_add_event_listener::<T>(scope, args, rv);
+        v8_end_stored_value_lease(scope);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_event_target_add_event_listener", (), call) };
+}
+
+/// `EventTarget.addEventListener`.
+fn body_call_event_target_add_event_listener<'s, T: EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -150,7 +191,7 @@ fn call_event_target_add_event_listener<'s, T: EventTargetOps + EventTargetConst
     };
     let r#type = {
         let raw = args.get(0);
-        match Ok::<String, JsError>(string_from_v8(scope, raw)) {
+        match string_from_v8(scope, raw) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -187,12 +228,28 @@ fn call_event_target_add_event_listener<'s, T: EventTargetOps + EventTargetConst
             return;
         }
     };
+    if native_callback_failure(scope).is_some() { return; }
+    v8_transfer_stored_value_lease(scope);
     let () = value;
     rv.set_undefined();
 }
 
-/// `EventTarget.removeEventListener`.
 fn call_event_target_remove_event_listener<'s, T: EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        v8_begin_stored_value_lease(scope);
+        body_call_event_target_remove_event_listener::<T>(scope, args, rv);
+        v8_end_stored_value_lease(scope);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_event_target_remove_event_listener", (), call) };
+}
+
+/// `EventTarget.removeEventListener`.
+fn body_call_event_target_remove_event_listener<'s, T: EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -217,7 +274,7 @@ fn call_event_target_remove_event_listener<'s, T: EventTargetOps + EventTargetCo
     };
     let r#type = {
         let raw = args.get(0);
-        match Ok::<String, JsError>(string_from_v8(scope, raw)) {
+        match string_from_v8(scope, raw) {
             Ok(value) => value,
             Err(error) => {
                 throw_js_error(scope, &error);
@@ -254,12 +311,26 @@ fn call_event_target_remove_event_listener<'s, T: EventTargetOps + EventTargetCo
             return;
         }
     };
+    if native_callback_failure(scope).is_some() { return; }
+    v8_transfer_stored_value_lease(scope);
     let () = value;
     rv.set_undefined();
 }
 
-/// `EventTarget.dispatchEvent`.
 fn call_event_target_dispatch_event<'s, T: EventTargetOps + EventTargetConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_event_target_dispatch_event::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_event_target_dispatch_event", (), call) };
+}
+
+/// `EventTarget.dispatchEvent`.
+fn body_call_event_target_dispatch_event<'s, T: EventTargetOps + EventTargetConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,

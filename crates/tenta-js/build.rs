@@ -1,5 +1,7 @@
 //! Generates the DOM binding glue from `idl/dom`, `idl/url`, `idl/fetch`,
-//! `idl/encoding`, `idl/xhr` and `idl/fileapi` with `tenta-idl`.
+//! `idl/encoding`, `idl/xhr`, `idl/fileapi`, `idl/domparsing`, `idl/cssom`
+//! and `idl/webstorage`
+//! with `tenta-idl`.
 //!
 //! The generator emits engine-independent output (`prelude.rs`, `types.rs`,
 //! `*_ops.rs`, `*_register.rs`) plus per-engine glue (`*_v8.rs`, `*_qjs.rs`).
@@ -23,6 +25,10 @@ fn main() {
         idl_root.join("encoding"),
         idl_root.join("xhr"),
         idl_root.join("fileapi"),
+        idl_root.join("domparsing"),
+        idl_root.join("cssom"),
+        idl_root.join("webstorage"),
+        idl_root.join("webcrypto"),
     ];
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 

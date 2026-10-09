@@ -9,16 +9,32 @@
 //! generational [`tenta_core::NodeRef`] so a wrapper kept across a sweep fails
 //! the handle validation instead of aliasing a recycled slot.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::rc::{Rc, Weak};
+use std::sync::Arc;
 use std::time::SystemTime;
 
+mod crypto;
+#[cfg(any(feature = "v8", feature = "quickjs"))]
+pub mod cssom;
+pub mod storage;
+
 use tenta_core::atom::atoms;
-use tenta_core::{Atom, NodeId, NodeRef, Origin};
+use tenta_core::{
+    Atom, NativeMemoryBudget, NativeMemoryComponent, NativeMemoryReservation, NodeId, NodeRef,
+    Origin,
+};
+#[cfg(any(feature = "v8", feature = "quickjs"))]
+use tenta_css::{CssDeclarationBlock, supports_condition, supports_property};
 use tenta_dom::arena::AttrName;
-use tenta_dom::{Document, Mutation, NodeKind};
-use tenta_html::{ElementFlags, QualName, QuirksMode};
+use tenta_dom::{
+    Document, LiveRangeId, Mutation, NodeHandle, NodeKind, ObserverAgent, ObserverAttachment,
+    RangeBoundary, ReadyState, ReplaceAllWith, SharedObserverAgent,
+};
+use tenta_html::xml::{Parser as XmlParser, XmlOptions};
+use tenta_html::{ElementFlags, Parser as HtmlParser, ParserOptions, QualName, QuirksMode};
 use tenta_net::policy::cookies::{CookieJar, SameSiteContext, Site};
 use url::Url;
 
@@ -27,38 +43,46 @@ use url::Url;
 // this code.
 use super::SequenceOfSequenceOfUsvStringOrRecordOfUsvStringToUsvStringOrUsvString as ParamsInit;
 use super::{
-    AbortControllerConstructor, AbortControllerOps, AbortSignal, AbortSignalOps,
+    AbortControllerConstructor, AbortControllerOps, AbortSignal, AbortSignalOps, AbstractRangeOps,
     AddEventListenerOptionsOrBoolean, AnyValue, Attr, AttrOps, Blob, BlobConstructor, BlobOps,
-    BlobOrUsvString, BlobPart, BlobPropertyBag, BufferSourceOrUsvString, CSSStyleDeclaration,
-    CSSStyleDeclarationOps, Callback, CharacterDataOps, Comment, CommentOps,
-    CustomEventConstructor, CustomEventInit, CustomEventOps, DOMImplementation,
-    DOMImplementationOps, DOMTokenList, DOMTokenListOps, DocumentFragment, DocumentFragmentOps,
-    DocumentOps, DocumentType, DocumentTypeOps, Element, ElementOps, EndingType, Event,
-    EventConstructor, EventInit, EventListener, EventListenerOptionsOrBoolean, EventOps,
-    EventTarget, EventTargetOps, FileConstructor, FileOps, FileOrUsvString, FilePropertyBag,
-    FormDataConstructor, FormDataOps, HTMLAnchorElementOps, HTMLButtonElementOps, HTMLCollection,
-    HTMLCollectionOps, HTMLDivElementOps, HTMLElement, HTMLElementOps, HTMLFormElement,
-    HTMLFormElementOps, HTMLIFrameElementOps, HTMLImageElementOps, HTMLInputElementOps,
-    HTMLLabelElementOps, HTMLOptionElementOps, HTMLParagraphElementOps, HTMLScriptElementOps,
-    HTMLSelectElementOps, HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps,
-    Handle, Headers, HeadersConstructor, HeadersInit, HeadersOps, IterableEntries, JsError,
+    BlobOrUsvString, BlobPart, BlobPropertyBag, BufferSourceOrUsvString, CDATASection,
+    CDATASectionOps, CSSStyleProperties, Callback, CharacterDataOps, Comment, CommentOps,
+    CompositionEventConstructor, CompositionEventInit, CompositionEventOps, CustomEventConstructor,
+    CustomEventInit, CustomEventOps, DOMImplementation, DOMImplementationOps, DOMParserConstructor,
+    DOMParserOps, DOMParserSupportedType, DOMTokenList, DOMTokenListOps, DocumentConstructor,
+    DocumentFragment, DocumentFragmentOps, DocumentOps, DocumentType, DocumentTypeOps, Element,
+    ElementOps, EndingType, Event, EventConstructor, EventInit, EventListener,
+    EventListenerOptionsOrBoolean, EventOps, EventTarget, EventTargetConstructor, EventTargetOps,
+    FileConstructor, FileOps, FileOrUsvString, FilePropertyBag, FocusEventConstructor,
+    FocusEventInit, FocusEventOps, FormDataConstructor, FormDataOps, HTMLAnchorElementOps,
+    HTMLButtonElementOps, HTMLCollection, HTMLCollectionOps, HTMLDivElementOps, HTMLElement,
+    HTMLElementOps, HTMLFormElement, HTMLFormElementOps, HTMLIFrameElementOps, HTMLImageElementOps,
+    HTMLInputElementOps, HTMLLabelElementOps, HTMLOptionElementOps, HTMLParagraphElementOps,
+    HTMLScriptElementOps, HTMLSelectElementOps, HTMLSpanElementOps, HTMLTemplateElementOps,
+    HTMLTextAreaElementOps, Handle, Headers, HeadersConstructor, HeadersInit, HeadersOps,
+    IterableEntries, JsError, KeyboardEventConstructor, KeyboardEventInit, KeyboardEventOps,
     MouseEventConstructor, MouseEventInit, MouseEventOps, NamedNodeMap, NamedNodeMapOps, Node,
-    NodeList, NodeListOps, NodeOps, ProcessingInstruction, ProcessingInstructionOps,
-    ProgressEventConstructor, ProgressEventInit, ProgressEventOps, Promise, Realm, RequestInit,
-    ResponseConstructor, ResponseInit, ResponseOps, ResponseType, SVGElementOps, Text,
-    TextDecodeOptions, TextDecoderConstructor, TextDecoderOps, TextDecoderOptions,
-    TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
-    URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
-    WindowProxy, XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps, XMLHttpRequestOps,
-    XMLHttpRequestResponseType,
+    NodeList, NodeListOps, NodeOps, NodeOrDomString, ProcessingInstruction,
+    ProcessingInstructionOps, ProgressEventConstructor, ProgressEventInit, ProgressEventOps,
+    Promise, Range, RangeConstructor, RangeOps, Realm, RequestInit, ResponseConstructor,
+    ResponseInit, ResponseOps, ResponseType, SVGElementOps, StaticRangeConstructor,
+    StaticRangeInit, StaticRangeOps, Text, TextDecodeOptions, TextDecoderConstructor,
+    TextDecoderOps, TextDecoderOptions, TextEncoderConstructor, TextEncoderOps, TextOps,
+    UIEventConstructor, UIEventInit, UIEventOps, URLConstructor, URLOps, URLSearchParams,
+    URLSearchParamsConstructor, URLSearchParamsOps, WheelEventConstructor, WheelEventInit,
+    WheelEventOps, Window, WindowProxy, XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps,
+    XMLHttpRequestOps, XMLHttpRequestResponseType, XMLSerializerConstructor, XMLSerializerOps,
 };
+#[cfg(any(feature = "v8", feature = "quickjs"))]
+use super::{CSSOps, CSSStyleDeclarationOps};
 use crate::dom::events::{
     CallbackRef, DispatchTarget, EventHandlerName, EventKey, EventKind, EventRecord, EventSlab,
     GenKey, GenSlab, HostValue, ListenerId, ListenerTable, PromiseOutcome, ScriptHost, TargetKey,
-    dispatch, dispatch_at,
+    dispatch, dispatch_at, dispatch_at_from,
 };
 use crate::event_loop::SharedClock;
 use crate::fetch::{FetchOutcome, FetchRequest, FetchStartError, FetchedResponse, header_pairs};
+use crate::storage::PageStorage;
 use crate::xhr::{XhrHandle, XhrRequest};
 
 /// A document shared between the host objects of one world and the engine that
@@ -93,31 +117,74 @@ pub struct SnapshotKey {
 /// One slot in the snapshot slab.
 struct Slot {
     generation: u16,
-    nodes: Option<Vec<NodeRef>>,
+    entry: Option<SnapshotEntry>,
+}
+
+/// A snapshot owns each result as a native handle, even when script has never
+/// asked for that result's wrapper. A detached result keeps its entire root
+/// alive until the snapshot wrapper is finalized.
+struct SnapshotEntry {
+    nodes: Vec<NodeRef>,
+    _pins: SnapshotPins,
+}
+
+/// Releasing a `NodeHandle` requires its document, not just dropping the value.
+/// This guard also rolls back partial insertion if a later pin fails or unwinds.
+struct SnapshotPins {
+    document: SharedDocument,
+    handles: Vec<NodeHandle>,
+}
+
+impl Drop for SnapshotPins {
+    fn drop(&mut self) {
+        if self.handles.is_empty() {
+            return;
+        }
+        let mut document = self.document.borrow_mut();
+        for handle in self.handles.drain(..) {
+            document.release(handle);
+        }
+    }
 }
 
 /// A slab backing static snapshot collections (querySelectorAll, getElementsByTagName, etc.).
 /// Reuses slots via a free list, with generation counters to detect stale snapshot keys.
 ///
-/// NOTE: Like [`NodeRef`], the 16-bit generation counter wraps; a snapshot key older than
-/// ~65k reuses of the same slot can theoretically alias a new snapshot. This matches the
-/// node-handle TODO and is acceptable for this phase.
+/// An exhausted 16-bit identity is retired permanently, so a weak cached
+/// snapshot key cannot alias a later collection after repeated slot reuse.
 pub struct SnapshotSlab {
+    document: SharedDocument,
     slots: Vec<Slot>,
     free: Vec<u32>,
 }
 
 impl SnapshotSlab {
     /// Creates a new empty snapshot slab.
-    pub fn new() -> Self {
+    pub fn new(document: SharedDocument) -> Self {
         Self {
+            document,
             slots: Vec::new(),
             free: Vec::new(),
         }
     }
 
-    /// Inserts a new snapshot, reusing a free slot if available.
-    pub fn insert(&mut self, nodes: Vec<NodeRef>) -> SnapshotKey {
+    /// Pins all result nodes before publishing a new snapshot key. A failed pin
+    /// releases earlier pins and leaves the slab unchanged.
+    pub fn insert(&mut self, nodes: Vec<NodeRef>) -> Result<SnapshotKey, JsError> {
+        let mut pins = SnapshotPins {
+            document: self.document.clone(),
+            handles: Vec::with_capacity(nodes.len()),
+        };
+        for reference in &nodes {
+            let handle = {
+                let mut document = self.document.borrow_mut();
+                let id = document
+                    .resolve(*reference)
+                    .map_err(|e| mutation_error(&e))?;
+                document.handle(id).map_err(|e| mutation_error(&e))?
+            };
+            pins.handles.push(handle);
+        }
         let (index, slot) = if let Some(index) = self.free.pop() {
             let slot = &mut self.slots[index as usize];
             (index, slot)
@@ -125,13 +192,13 @@ impl SnapshotSlab {
             let index = self.slots.len() as u32;
             self.slots.push(Slot {
                 generation: 0,
-                nodes: None,
+                entry: None,
             });
             (index, &mut self.slots[index as usize])
         };
         let generation = slot.generation;
-        slot.nodes = Some(nodes);
-        SnapshotKey { index, generation }
+        slot.entry = Some(SnapshotEntry { nodes, _pins: pins });
+        Ok(SnapshotKey { index, generation })
     }
 
     /// Retrieves the nodes for a snapshot key, returning None if the key is stale or out of range.
@@ -140,10 +207,11 @@ impl SnapshotSlab {
         if slot.generation != key.generation {
             return None;
         }
-        slot.nodes.as_deref()
+        slot.entry.as_ref().map(|entry| entry.nodes.as_slice())
     }
 
-    /// Marks a snapshot as dead: bumps the generation, clears nodes, and returns the slot to the free list.
+    /// Marks a snapshot as dead and releases its pins. The slot is reusable
+    /// only while its generation can advance without repeating an old key.
     pub fn remove(&mut self, key: SnapshotKey) {
         let slot = match self.slots.get_mut(key.index as usize) {
             Some(s) => s,
@@ -152,21 +220,14 @@ impl SnapshotSlab {
         if slot.generation != key.generation {
             return; // Already reused.
         }
-        slot.generation = slot.generation.wrapping_add(1);
-        slot.nodes = None;
-        self.free.push(key.index);
-    }
-
-    /// Clears all snapshots and the free list.
-    pub fn clear(&mut self) {
-        self.slots.clear();
-        self.free.clear();
-    }
-}
-
-impl Default for SnapshotSlab {
-    fn default() -> Self {
-        Self::new()
+        let Some(entry) = slot.entry.take() else {
+            return;
+        };
+        if let Some(next) = slot.generation.checked_add(1) {
+            slot.generation = next;
+            self.free.push(key.index);
+        }
+        drop(entry);
     }
 }
 
@@ -193,8 +254,10 @@ pub type HostKey = GenKey;
 /// ([`reclaim_host_record`]).
 pub type HostSlab = GenSlab<HostRecord>;
 
-/// The state behind one JS-owned host object that is not a node.
+/// The state behind one JS-owned host object without an arena node slot.
 pub enum HostRecord {
+    /// A standalone EventTarget; listeners use its exact generational key.
+    EventTarget,
     /// A `URL`.
     Url(UrlRecord),
     /// A `URLSearchParams`.
@@ -211,6 +274,10 @@ pub enum HostRecord {
     TextDecoder(TextDecoderRecord),
     /// A `TextEncoder`, which has no state at all.
     TextEncoder,
+    /// A `DOMParser`, whose context supplies the parsed document's URL and world.
+    DomParser,
+    /// An `XMLSerializer`, which has no state of its own.
+    XmlSerializer,
     /// An `XMLHttpRequest`.
     Xhr(XhrRecord),
     /// A `Blob`.
@@ -231,20 +298,43 @@ pub enum HostRecord {
     Implementation,
     /// One entry of an element's attribute list — an `Attr`.
     ///
-    /// It is a host record rather than a tag anchored to an element, because an
-    /// attribute is named by more than its element: the record carries the
-    /// element *and* the attribute's qualified name, and a handle's node field
-    /// has room for neither both. Its own wrapper is its only owner, so the
-    /// world frees it by finalizer like a `Blob`.
+    /// It is a host record rather than an arena node: the record carries the
+    /// element and attribute name while its wrapper uses the Node prototype.
     Attr(AttrRecord),
+    /// A `Range`.
+    ///
+    /// It is a host record for the reason an `Attr` is: a range names *two*
+    /// nodes, and a handle's node field has room for one. It spends no tag —
+    /// it shares [`TAG_HOST`] and is named by this variant — which is what
+    /// keeps the handle's four tag bits available for the classes no record
+    /// can multiplex (`ShadowRoot`, `MutationObserver`, `XMLDocument`).
+    Range(RangeRecord),
+    /// A `StaticRange`, whose four members are copied at construction and
+    /// never re-derived from the tree.
+    StaticRange(StaticRangeRecord),
+    /// A constructed sheet, shared with live rule and declaration wrappers.
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    CssSheet(Rc<cssom::CssSheetState>),
+    /// A live top-level or child rule list for one constructed sheet.
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    CssRuleList(cssom::CssRuleListRecord),
+    /// A concrete CSSStyleRule in a constructed sheet.
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    CssStyleRule(cssom::CssRuleRecord),
+    /// The live declaration block of a concrete CSSStyleRule.
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    CssRuleStyle(cssom::CssRuleRecord),
+    /// One Window's live local or session storage view.
+    Storage(storage::StorageRecord),
+    /// The per-Window Web Crypto object; it has no native graph edges.
+    Crypto,
 }
 
 /// The state behind one `Attr`.
 ///
-/// An `Attr` is *not* a node in this tree (see `idl/dom/dom.webidl`'s `Attr`
-/// deviation note): an attribute lives inside its element's packed attribute
-/// list, with no arena slot and no id. This record is therefore the smallest
-/// thing that can name one — the element, when there is one, and the name.
+/// An `Attr` is a Node in WebIDL but has no arena slot: an attribute lives in
+/// its element's packed attribute list. The host record gives it stable wrapper
+/// identity and the inherited Node surface without adding an arena node.
 ///
 /// An attribute the page built with `createAttribute` has no element until it is
 /// attached, so [`Self::value`] is the record's own state until then and the
@@ -260,6 +350,46 @@ pub struct AttrRecord {
     /// The value a *detached* attribute carries. It is ignored — and never
     /// written — while `element` is set.
     pub detached_value: String,
+    /// Keeps an attached Attr's owner element alive while this record exists.
+    owner_pin: Option<AttrOwnerPin>,
+    /// The per-Attr empty child list, cached for Node.childNodes [SameObject].
+    child_nodes: Option<SnapshotKey>,
+}
+
+/// An attached attribute's lookup identity ignores its prefix. A value write
+/// preserves the old prefix; replacing the whole Attr detaches the old record.
+type AttrIdentity = (NodeRef, Atom, Atom);
+
+fn attr_identity(element: NodeRef, name: QualName) -> AttrIdentity {
+    (element, name.ns, name.local)
+}
+
+/// A strong owner-element reference. The document's handle count, rather than
+/// HAS_WRAPPER, supports simultaneous element and Attr wrappers correctly.
+struct AttrOwnerPin {
+    doc: SharedDocument,
+    handle: Option<NodeHandle>,
+}
+
+impl AttrOwnerPin {
+    fn new(doc: SharedDocument, element: NodeId) -> Result<Self, JsError> {
+        let handle = doc
+            .borrow_mut()
+            .handle(element)
+            .map_err(|e| mutation_error(&e))?;
+        Ok(Self {
+            doc,
+            handle: Some(handle),
+        })
+    }
+}
+
+impl Drop for AttrOwnerPin {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            self.doc.borrow_mut().release(handle);
+        }
+    }
 }
 
 impl AttrRecord {
@@ -269,6 +399,8 @@ impl AttrRecord {
             element: None,
             name,
             detached_value: String::new(),
+            owner_pin: None,
+            child_nodes: None,
         }
     }
 
@@ -286,6 +418,7 @@ impl HostRecord {
     /// handle and there is no room for one per class.
     pub fn interface_name(&self) -> &'static str {
         match self {
+            HostRecord::EventTarget => "EventTarget",
             HostRecord::Url(_) => "URL",
             HostRecord::Params(_) => "URLSearchParams",
             HostRecord::Headers(_) => "Headers",
@@ -294,14 +427,138 @@ impl HostRecord {
             HostRecord::Response(_) => "Response",
             HostRecord::TextDecoder(_) => "TextDecoder",
             HostRecord::TextEncoder => "TextEncoder",
+            HostRecord::DomParser => "DOMParser",
+            HostRecord::XmlSerializer => "XMLSerializer",
             HostRecord::Xhr(_) => "XMLHttpRequest",
             HostRecord::Blob(_) => "Blob",
             HostRecord::File(_) => "File",
             HostRecord::FormData(_) => "FormData",
             HostRecord::Implementation => "DOMImplementation",
             HostRecord::Attr(_) => "Attr",
+            HostRecord::Range(_) => "Range",
+            HostRecord::StaticRange(_) => "StaticRange",
+            #[cfg(any(feature = "v8", feature = "quickjs"))]
+            HostRecord::CssSheet(_) => "CSSStyleSheet",
+            #[cfg(any(feature = "v8", feature = "quickjs"))]
+            HostRecord::CssRuleList(_) => "CSSRuleList",
+            #[cfg(any(feature = "v8", feature = "quickjs"))]
+            HostRecord::CssStyleRule(_) => "CSSStyleRule",
+            #[cfg(any(feature = "v8", feature = "quickjs"))]
+            HostRecord::CssRuleStyle(_) => "CSSStyleProperties",
+            HostRecord::Storage(_) => "Storage",
+            HostRecord::Crypto => "Crypto",
         }
     }
+}
+
+/// One boundary point of a `Range`: a node and an offset into it.
+///
+/// The node is held as the *encoded handle bits*, not as a `NodeRef`, and that
+/// is the whole reason a range can name nodes of a document other than the one
+/// its own wrapper belongs to — `dom/common.js` builds ranges over
+/// `foreignDoc`'s and `xmlDoc`'s nodes, and `xmlDoc` is a document a
+/// `DOMImplementation` minted into a slot of its own. The bits carry that slot,
+/// so resolving a point goes through the same [`HostObject::anchor_of`] every
+/// other cross-document read goes through, with the same staleness check.
+///
+/// The offset is a `u32` because `unsigned long` is; the standard's
+/// `IndexSizeError` is raised by the callers that validate it, not here.
+#[derive(Clone, Copy, Debug)]
+pub struct RangePoint {
+    /// The encoded `TAG_NODE` handle of the node this point names.
+    pub node: u64,
+    /// The offset into `node`.
+    pub offset: u32,
+}
+
+/// A live range registered in its endpoint document. The document owns its
+/// boundary points and counted node handles; the host owns the registration.
+/// Holding the document, rather than its context, creates no slab ownership cycle.
+pub struct RangeRecord {
+    doc: SharedDocument,
+    slot: u16,
+    registration: LiveRangeId,
+}
+
+impl RangeRecord {
+    fn new(ctx: &SharedContext, start: RangePoint, end: RangePoint) -> Result<Self, JsError> {
+        let (doc, start_node) = resolve_node_handle(ctx, start.node)?;
+        let (end_doc, end_node) = resolve_node_handle(ctx, end.node)?;
+        if !Rc::ptr_eq(&doc, &end_doc) {
+            return Err(wrong_document());
+        }
+        let registration = {
+            let mut document = doc.borrow_mut();
+            let start = RangeBoundary {
+                node: document.node_ref(start_node),
+                offset: start.offset,
+            };
+            let end = RangeBoundary {
+                node: document.node_ref(end_node),
+                offset: end.offset,
+            };
+            document
+                .register_live_range(start, end)
+                .map_err(|error| mutation_error(&error))?
+        };
+        Ok(Self {
+            doc,
+            slot: decode(start.node).slot,
+            registration,
+        })
+    }
+
+    fn points(&self) -> Option<(RangePoint, RangePoint)> {
+        let [start, end] = self.doc.borrow().live_range_points(self.registration)?;
+        let point = |point: RangeBoundary| RangePoint {
+            node: encode_node(self.slot, point.node),
+            offset: point.offset,
+        };
+        Some((point(start), point(end)))
+    }
+}
+
+impl Drop for RangeRecord {
+    fn drop(&mut self) {
+        self.doc.borrow_mut().release_live_range(self.registration);
+    }
+}
+
+/// A retained endpoint of a static range. Its document can differ from the
+/// other endpoint's, and neither the node nor the offset tracks mutations.
+struct StaticRangePoint {
+    point: RangePoint,
+    doc: SharedDocument,
+    handle: Option<NodeHandle>,
+}
+
+impl StaticRangePoint {
+    fn new(ctx: &SharedContext, point: RangePoint) -> Result<Self, JsError> {
+        let (doc, node) = resolve_node_handle(ctx, point.node)?;
+        let handle = doc
+            .borrow_mut()
+            .handle(node)
+            .map_err(|error| mutation_error(&error))?;
+        Ok(Self {
+            point,
+            doc,
+            handle: Some(handle),
+        })
+    }
+}
+
+impl Drop for StaticRangePoint {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            self.doc.borrow_mut().release(handle);
+        }
+    }
+}
+
+/// Immutable endpoints, retained until the static range's wrapper is reclaimed.
+pub struct StaticRangeRecord {
+    start: StaticRangePoint,
+    end: StaticRangePoint,
 }
 
 /// A `URL` record.
@@ -1133,18 +1390,16 @@ fn decode_bytes(
 /// the right arena and never aliases a node id of the page's.
 ///
 /// The set is shared by every context of the world (`Rc`), so a minted
-/// document's own implementation can mint the next one. Two ownership rules
-/// keep that sharing from becoming a reference cycle:
+/// document's own implementation can mint the next one. The engine drains
+/// minted contexts at teardown to break their ownership cycle with this set:
 ///
 ///  - Slot 0 is held **weakly**. The engine and the wrapper world own the page's
 ///    context strongly and outlive the set, so the set must not be a second
 ///    owner of it — and it cannot be, because `Rc::new_cyclic` hands the context
 ///    its own `Weak` before the `Rc` exists.
-///  - Slots 1 and up are held **strongly**, and nothing holds the slot-0
-///    context back through them: a minted context's only pointer to the rest of
-///    the world is this shared set, which the page's context also owns. So the
-///    graph is a tree rooted at the page's context's `Rc<DocumentSet>`, with no
-///    back edge.
+///  - Slots 1 and up are held **strongly**. Each minted context also owns this
+///    set, so the engine must drain records and call [`DocumentSet::clear_minted`]
+///    after disposing its wrapper world.
 ///
 /// A minted context is therefore retained for the life of the world, even after
 /// script drops every reference to its document. That is a bounded retention —
@@ -1159,9 +1414,176 @@ fn decode_bytes(
 pub struct DocumentSet {
     root: RefCell<Weak<HostContext>>,
     minted: RefCell<Vec<SharedContext>>,
+    observer_agent: SharedObserverAgent,
+    observer_phase: Cell<ObserverInstallPhase>,
+    native_memory: NativeMemoryBudget,
+    minted_charge: RefCell<NativeMemoryReservation>,
+    charged_minted_capacity: Cell<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ObserverInstallPhase {
+    NeverInstalled,
+    Installed,
+    Closed,
+}
+
+struct ObserverContextState {
+    agent: SharedObserverAgent,
+    attachment: Option<Rc<ObserverAttachment>>,
+    phase: ObserverInstallPhase,
 }
 
 impl DocumentSet {
+    fn memory_error(&self) -> JsError {
+        match self.native_memory.first_failure() {
+            Some(failure) => JsError::type_error(format!(
+                "native page memory failure ({}, {:?})",
+                failure.component.name(),
+                failure.cause
+            )),
+            None => JsError::type_error("native observer allocation failed"),
+        }
+    }
+
+    fn attachment_for(&self, document: &SharedDocument) -> Option<Rc<ObserverAttachment>> {
+        if let Some(root) = self.root.borrow().upgrade()
+            && Rc::ptr_eq(&root.doc, document)
+        {
+            return root.observer_attachment.borrow().clone();
+        }
+        self.minted.borrow().iter().find_map(|context| {
+            Rc::ptr_eq(&context.doc, document)
+                .then(|| context.observer_attachment.borrow().clone())
+                .flatten()
+        })
+    }
+
+    fn attach_context(&self, context: &SharedContext) -> Result<(), JsError> {
+        if let Some(existing) = self.attachment_for(&context.doc) {
+            *context.observer_attachment.borrow_mut() = Some(existing);
+            return Ok(());
+        }
+        let mut document = context
+            .doc
+            .try_borrow_mut()
+            .map_err(|_| JsError::type_error("observer Document is already borrowed"))?;
+        let attached = if context.slot == 0 {
+            document.attach_root_observer_agent_owned(Arc::clone(&self.observer_agent))
+        } else {
+            document.attach_observer_agent_owned(Arc::clone(&self.observer_agent))
+        }
+        .map_err(|error| mutation_error(&error))?;
+        *context.observer_attachment.borrow_mut() = Some(Rc::new(attached));
+        Ok(())
+    }
+
+    /// Bind the fixed root and every already-minted distinct Document before
+    /// the engine publishes its script world. Direct HostContext users may
+    /// mint children before this call; aliases share the first attachment.
+    pub fn install_observer_world(&self) -> Result<(), JsError> {
+        match self.observer_phase.get() {
+            ObserverInstallPhase::Installed => return Ok(()),
+            ObserverInstallPhase::Closed => {
+                return Err(JsError::type_error("observer world has closed"));
+            }
+            ObserverInstallPhase::NeverInstalled => {}
+        }
+        let root = self
+            .root
+            .borrow()
+            .upgrade()
+            .ok_or_else(|| JsError::type_error("observer root context is unavailable"))?;
+        let existing_capacity = self.minted.borrow().capacity();
+        let existing_bytes = existing_capacity
+            .checked_mul(std::mem::size_of::<SharedContext>())
+            .ok_or_else(document_slots_exhausted)?;
+        if !self.minted_charge.borrow_mut().charge(existing_bytes) {
+            self.retire_observers();
+            return Err(self.memory_error());
+        }
+        self.charged_minted_capacity.set(existing_capacity);
+        if let Err(error) = self.attach_context(&root) {
+            self.retire_observers();
+            return Err(error);
+        }
+        let mut index = 0;
+        loop {
+            let next = self.minted.borrow().get(index).cloned();
+            let Some(context) = next else { break };
+            if let Err(error) = self.attach_context(&context) {
+                self.retire_observers();
+                return Err(error);
+            }
+            index += 1;
+        }
+        self.observer_phase.set(ObserverInstallPhase::Installed);
+        Ok(())
+    }
+
+    /// Close native entry and retire every registration without borrowing a
+    /// Document. Native pins remain on the stable nodes until a later mutable
+    /// Document seam or Document destruction drains them.
+    pub fn retire_observers(&self) {
+        if self.observer_phase.replace(ObserverInstallPhase::Closed) == ObserverInstallPhase::Closed
+        {
+            return;
+        }
+        let teardown = self.observer_agent.lock().begin_teardown_if_needed();
+        if let Some(root) = self.root.borrow().upgrade()
+            && let Some(attachment) = root.observer_attachment.borrow().as_ref()
+        {
+            attachment.retire();
+        }
+        for context in self.minted.borrow().iter() {
+            if let Some(attachment) = context.observer_attachment.borrow().as_ref() {
+                attachment.retire();
+            }
+        }
+        drop(teardown);
+    }
+
+    fn reserve_minted_slot(&self) -> Result<(), JsError> {
+        let minted = self.minted.borrow();
+        if minted.len() < minted.capacity() {
+            return Ok(());
+        }
+        let needed = minted
+            .len()
+            .checked_add(1)
+            .ok_or_else(document_slots_exhausted)?;
+        let target = needed.max(minted.capacity().saturating_mul(2)).max(4);
+        if self.observer_phase.get() == ObserverInstallPhase::Installed {
+            let extra = target
+                .checked_sub(self.charged_minted_capacity.get())
+                .and_then(|count| count.checked_mul(std::mem::size_of::<SharedContext>()))
+                .ok_or_else(document_slots_exhausted)?;
+            if !self.minted_charge.borrow_mut().charge(extra) {
+                return Err(self.memory_error());
+            }
+            self.charged_minted_capacity.set(target);
+        }
+        drop(minted);
+        let mut minted = self.minted.borrow_mut();
+        let additional = target - minted.len();
+        if minted.try_reserve_exact(additional).is_err() {
+            self.minted_charge.borrow().fail_allocation();
+            return Err(self.memory_error());
+        }
+        if self.observer_phase.get() == ObserverInstallPhase::Installed
+            && minted.capacity() > self.charged_minted_capacity.get()
+        {
+            let extra = (minted.capacity() - self.charged_minted_capacity.get())
+                .checked_mul(std::mem::size_of::<SharedContext>())
+                .ok_or_else(document_slots_exhausted)?;
+            if !self.minted_charge.borrow_mut().charge(extra) {
+                return Err(self.memory_error());
+            }
+            self.charged_minted_capacity.set(minted.capacity());
+        }
+        Ok(())
+    }
+
     /// The context for `slot`, or `None` when no document holds it — a handle
     /// whose slot was never minted, or whose page context has been torn down.
     pub fn get(&self, slot: u16) -> Option<SharedContext> {
@@ -1201,6 +1623,20 @@ impl DocumentSet {
     fn install(&self, ctx: SharedContext) {
         self.minted.borrow_mut().push(ctx);
     }
+
+    /// Releases the minted contexts after their engine has drained wrappers,
+    /// host records and script handles. This breaks the shared set/context
+    /// ownership cycle at world teardown.
+    pub fn clear_minted(&self) {
+        self.retire_observers();
+        let contexts = std::mem::take(&mut *self.minted.borrow_mut());
+        drop(contexts);
+        let fresh = self
+            .native_memory
+            .begin(NativeMemoryComponent::MutationObserver);
+        drop(self.minted_charge.replace(fresh));
+        self.charged_minted_capacity.set(0);
+    }
 }
 
 /// The shared host context: document, snapshots, event state and the script
@@ -1215,6 +1651,9 @@ pub struct HostContext {
     /// Every document context of this world, this one included. See
     /// [`DocumentSet`] for the ownership rules.
     pub documents: Rc<DocumentSet>,
+    /// Shared by every same-world alias of this exact Document. Dropping one
+    /// alias cannot retire the native registration while another survives.
+    observer_attachment: RefCell<Option<Rc<ObserverAttachment>>>,
     /// The snapshot slab for static collections.
     pub snapshots: RefCell<SnapshotSlab>,
     /// The event listeners registered on this world's nodes.
@@ -1238,6 +1677,9 @@ pub struct HostContext {
     /// except for the URL/query and controller/signal pairs, where one record
     /// keeps the other alive (see [`reclaim_host_record`]).
     pub host_records: RefCell<HostSlab>,
+    /// Weak keys for attached Attr records. The wrapper's finalizer removes a
+    /// key; the map itself does not keep the record or its owner element alive.
+    attr_index: RefCell<HashMap<AttrIdentity, HostKey>>,
     /// The engine's callback boundary, installed at `Engine::build` and cleared
     /// at teardown. `None` before installation and after teardown.
     pub script: RefCell<Option<Rc<dyn ScriptHost>>>,
@@ -1257,6 +1699,15 @@ pub struct HostContext {
     /// sent on the next request, which is the whole point of the member. The
     /// jar's policy is the context's policy, not the world's.
     pub cookies: CookieJar,
+    /// The page's local and session storage view, shared with minted documents.
+    pub storage: PageStorage,
+    /// Page-owned native accounting, shared with every minted document context.
+    pub native_memory: NativeMemoryBudget,
+    /// Weak canonical record keys for this Window's local and session areas.
+    /// Finalization clears the matching key; the area state lives in storage.
+    storage_keys: RefCell<[Option<HostKey>; 2]>,
+    /// Weak canonical key for this Window's Crypto wrapper.
+    crypto_key: RefCell<Option<HostKey>>,
     /// The key of this document's `DOMImplementation` record, once script has
     /// asked for `document.implementation`.
     ///
@@ -1271,29 +1722,123 @@ pub struct HostContext {
 impl HostContext {
     /// Builds the page's context: slot 0 of a fresh [`DocumentSet`], over `doc`,
     /// timestamping events against `clock`, with empty event state, the
-    /// context's cookie jar, and no script host yet.
+    /// context's cookie jar and storage view, and no script host yet.
     ///
     /// The slot-0 context is handed to the wrapper world and the engine, and
     /// both own it; the set holds it weakly, which is why the context is built
     /// through `Rc::new_cyclic` — the set needs the context's own `Weak` before
     /// the `Rc` exists.
-    pub fn new(doc: SharedDocument, clock: SharedClock, cookies: CookieJar) -> SharedContext {
-        Rc::new_cyclic(|weak| Self {
+    pub fn new(
+        doc: SharedDocument,
+        clock: SharedClock,
+        cookies: CookieJar,
+        storage: PageStorage,
+    ) -> SharedContext {
+        Self::new_with_native_memory(
             doc,
+            clock,
+            cookies,
+            storage,
+            NativeMemoryBudget::for_page(tenta_core::Budgets::platform_default().page_memory_mb),
+        )
+    }
+
+    /// Builds a page context using the ledger owned by its Page. Direct engine
+    /// callers use [`Self::new`] for an isolated platform-default ledger.
+    pub fn new_with_native_memory(
+        doc: SharedDocument,
+        clock: SharedClock,
+        cookies: CookieJar,
+        storage: PageStorage,
+        native_memory: NativeMemoryBudget,
+    ) -> SharedContext {
+        let observer_agent = Arc::new(parking_lot::Mutex::new(ObserverAgent::new(
+            native_memory.clone(),
+        )));
+        Self::new_with_observer_state(
+            doc,
+            clock,
+            cookies,
+            storage,
+            native_memory,
+            ObserverContextState {
+                agent: observer_agent,
+                attachment: None,
+                phase: ObserverInstallPhase::NeverInstalled,
+            },
+        )
+    }
+
+    /// The V8 constructor receives a root registration freshly created by
+    /// the Document itself while it holds its existing mutable root borrow.
+    /// No script world has been published, and no root quota is charged.
+    pub fn new_with_installed_observer(
+        doc: SharedDocument,
+        clock: SharedClock,
+        cookies: CookieJar,
+        storage: PageStorage,
+        native_memory: NativeMemoryBudget,
+    ) -> (SharedContext, NodeRef) {
+        let (document_ref, observer_agent, attachment) = {
+            let mut document = doc.borrow_mut();
+            let (agent, attachment) = document.new_observer_world_owned(native_memory.clone());
+            (
+                document.node_ref(document.document_node()),
+                agent,
+                attachment,
+            )
+        };
+        let context = Self::new_with_observer_state(
+            doc,
+            clock,
+            cookies,
+            storage,
+            native_memory,
+            ObserverContextState {
+                agent: observer_agent,
+                attachment: Some(Rc::new(attachment)),
+                phase: ObserverInstallPhase::Installed,
+            },
+        );
+        (context, document_ref)
+    }
+
+    fn new_with_observer_state(
+        doc: SharedDocument,
+        clock: SharedClock,
+        cookies: CookieJar,
+        storage: PageStorage,
+        native_memory: NativeMemoryBudget,
+        observer: ObserverContextState,
+    ) -> SharedContext {
+        let minted_charge = native_memory.begin(NativeMemoryComponent::MutationObserver);
+        Rc::new_cyclic(|weak| Self {
+            doc: doc.clone(),
             slot: 0,
             documents: Rc::new(DocumentSet {
                 root: RefCell::new(weak.clone()),
                 minted: RefCell::new(Vec::new()),
+                observer_agent: observer.agent,
+                observer_phase: Cell::new(observer.phase),
+                native_memory: native_memory.clone(),
+                minted_charge: RefCell::new(minted_charge),
+                charged_minted_capacity: Cell::new(0),
             }),
-            snapshots: RefCell::new(SnapshotSlab::new()),
+            observer_attachment: RefCell::new(observer.attachment),
+            snapshots: RefCell::new(SnapshotSlab::new(doc)),
             listeners: RefCell::new(ListenerTable::new()),
             handlers: RefCell::new(HashMap::new()),
             events: RefCell::new(EventSlab::new()),
             host_records: RefCell::new(HostSlab::new()),
+            attr_index: RefCell::new(HashMap::new()),
             script: RefCell::new(None),
             clock,
             click_in_progress: RefCell::new(HashSet::new()),
             cookies,
+            storage,
+            native_memory,
+            storage_keys: RefCell::new([None, None]),
+            crypto_key: RefCell::new(None),
             implementation: RefCell::new(None),
         })
     }
@@ -1303,7 +1848,7 @@ impl HostContext {
     ///
     /// The child inherits the parts of a context that belong to the *world*
     /// rather than to one document: the loop's clock, the context's cookie jar,
-    /// and the installed script host. The rest — the snapshot, event, listener
+    /// storage view, and the installed script host. The rest — the snapshot, event, listener
     /// and host-record slabs — starts empty, because those are keyed by handles
     /// whose slots name this document and would otherwise collide with the
     /// page's.
@@ -1311,23 +1856,47 @@ impl HostContext {
     /// The error is the field being full, which only a page that mints documents
     /// in a loop can cause: see [`DocumentSet::next_slot`].
     pub fn new_child(&self, doc: SharedDocument) -> Result<SharedContext, JsError> {
+        if self.documents.observer_phase.get() == ObserverInstallPhase::Closed {
+            return Err(JsError::type_error("observer world has closed"));
+        }
         let slot = self
             .documents
             .next_slot()
             .ok_or_else(document_slots_exhausted)?;
+        self.documents.reserve_minted_slot()?;
+        let attachment = if self.documents.observer_phase.get() == ObserverInstallPhase::Installed {
+            if let Some(existing) = self.documents.attachment_for(&doc) {
+                Some(existing)
+            } else {
+                let attached = doc
+                    .try_borrow_mut()
+                    .map_err(|_| JsError::type_error("observer Document is already borrowed"))?
+                    .attach_observer_agent_owned(Arc::clone(&self.documents.observer_agent))
+                    .map_err(|error| mutation_error(&error))?;
+                Some(Rc::new(attached))
+            }
+        } else {
+            None
+        };
         let ctx = Rc::new(Self {
-            doc,
+            doc: doc.clone(),
             slot,
             documents: self.documents.clone(),
-            snapshots: RefCell::new(SnapshotSlab::new()),
+            observer_attachment: RefCell::new(attachment),
+            snapshots: RefCell::new(SnapshotSlab::new(doc)),
             listeners: RefCell::new(ListenerTable::new()),
             handlers: RefCell::new(HashMap::new()),
             events: RefCell::new(EventSlab::new()),
             host_records: RefCell::new(HostSlab::new()),
+            attr_index: RefCell::new(HashMap::new()),
             script: RefCell::new(self.script.borrow().clone()),
             clock: self.clock.clone(),
             click_in_progress: RefCell::new(HashSet::new()),
             cookies: self.cookies.clone(),
+            storage: self.storage.clone(),
+            native_memory: self.native_memory.clone(),
+            storage_keys: RefCell::new([None, None]),
+            crypto_key: RefCell::new(None),
             implementation: RefCell::new(None),
         });
         self.documents.install(ctx.clone());
@@ -1338,6 +1907,120 @@ impl HostContext {
     /// reading `performance.now()` returns.
     pub fn time_stamp(&self) -> f64 {
         self.clock.now().as_millis_f64()
+    }
+
+    /// Reclaims a finalized host record and its weak Attr/CSS/Storage wrapper caches.
+    /// Exact generational keys prevent delayed finalizers from forgetting a
+    /// newer wrapper that reused the same slab slot.
+    pub fn reclaim_host(&self, key: HostKey) -> ReclaimedHost {
+        #[cfg(any(feature = "v8", feature = "quickjs"))]
+        let css_state = self
+            .host_records
+            .borrow()
+            .get(key)
+            .and_then(cssom::record_state);
+        let identity = match self.host_records.borrow().get(key) {
+            Some(HostRecord::Attr(record)) => record
+                .element
+                .map(|element| attr_identity(element, record.name)),
+            _ => None,
+        };
+        let reclaimed = reclaim_host_record(&mut self.host_records.borrow_mut(), key);
+        #[cfg(any(feature = "v8", feature = "quickjs"))]
+        if let Some(state) = css_state
+            && reclaimed.keys.contains(&key)
+        {
+            state.forget_key(key);
+        }
+        if let Some(identity) = identity
+            && reclaimed.keys.contains(&key)
+            && self.attr_index.borrow().get(&identity).copied() == Some(key)
+        {
+            self.attr_index.borrow_mut().remove(&identity);
+        }
+        if reclaimed.keys.contains(&key) {
+            let forget_crypto = *self.crypto_key.borrow() == Some(key);
+            if forget_crypto {
+                *self.crypto_key.borrow_mut() = None;
+            }
+            for cached in self.storage_keys.borrow_mut().iter_mut() {
+                if *cached == Some(key) {
+                    *cached = None;
+                }
+            }
+        }
+        reclaimed
+    }
+
+    /// Applies an element attribute value write. The document retains the
+    /// prefix of an existing `(namespace, local)` attribute.
+    fn set_element_attribute(
+        &self,
+        element: NodeId,
+        name: QualName,
+        value: String,
+    ) -> Result<(), JsError> {
+        self.doc
+            .borrow_mut()
+            .mutate(Mutation::SetAttribute {
+                element,
+                name,
+                value,
+            })
+            .map_err(|e| mutation_error(&e))?;
+        Ok(())
+    }
+
+    /// Removes an element attribute, detaching any exposed Attr with its last
+    /// value and releasing the strong owner-element handle after the mutation.
+    fn remove_element_attribute(
+        &self,
+        element: NodeId,
+        name: QualName,
+    ) -> Result<Option<(QualName, String, Option<HostKey>)>, JsError> {
+        let old = {
+            let doc = self.doc.borrow();
+            doc.attributes(element)
+                .find(|(stored, _)| stored.ns == name.ns && stored.local == name.local)
+                .map(|(stored, value)| (doc.node_ref(element), stored, value.to_owned()))
+        };
+        let Some((reference, stored_name, value)) = old else {
+            return Ok(None);
+        };
+        self.doc
+            .borrow_mut()
+            .mutate(Mutation::RemoveAttribute {
+                element,
+                name: stored_name,
+            })
+            .map_err(|e| mutation_error(&e))?;
+        let key = self.detach_cached_attr(reference, stored_name, value.clone());
+        Ok(Some((stored_name, value, key)))
+    }
+
+    /// Detaches one cached Attr after its packed attribute row was removed or
+    /// replaced. The caller supplies the old value captured before mutation.
+    fn detach_cached_attr(
+        &self,
+        element: NodeRef,
+        name: QualName,
+        value: String,
+    ) -> Option<HostKey> {
+        let key = self
+            .attr_index
+            .borrow_mut()
+            .remove(&attr_identity(element, name))?;
+        let pin = {
+            let mut records = self.host_records.borrow_mut();
+            let Some(HostRecord::Attr(record)) = records.get_mut(key) else {
+                return None;
+            };
+            record.element = None;
+            record.detached_value = value;
+            record.owner_pin.take()
+        };
+        drop(pin);
+        Some(key)
     }
 
     /// Drains the listener entries of every node the document's most recent
@@ -1361,28 +2044,28 @@ impl HostContext {
     /// a point where the world has one, which for a page engine is any entry
     /// point after `Engine::build` installed the host.
     pub fn drain_swept_listeners(&self) {
-        // The references are copied out so the document borrow ends before
-        // anything else is touched, matching the borrow discipline the engine
-        // boundary states for a caller; nothing below re-enters the document.
-        let freed = self.doc.borrow().sweep_freed_nodes().to_vec();
-        if freed.is_empty() {
-            return;
-        }
-        // The entries leave the table first, so no borrow of it is held while a
-        // released value drops (which can touch the wrapper world's own cells).
-        let drained: Vec<CallbackRef> = {
-            let mut listeners = self.listeners.borrow_mut();
-            freed
-                .iter()
-                .flat_map(|node| listeners.drain_target_at(TargetKey::Node(*node)))
-                .collect()
-        };
+        let drained = self.take_swept_listeners();
         let script = self.script.borrow();
         if let Some(script) = script.as_ref() {
             for callback in drained {
                 script.release_value(callback.0);
             }
         }
+    }
+
+    /// Detaches exact-generation swept-node registrations without releasing
+    /// their owned script references. A collector can stop between releases if
+    /// a native finalizer poisons the runtime; remaining roots stay reserved.
+    pub fn take_swept_listeners(&self) -> Vec<CallbackRef> {
+        let freed = self.doc.borrow().sweep_freed_nodes().to_vec();
+        if freed.is_empty() {
+            return Vec::new();
+        }
+        let mut listeners = self.listeners.borrow_mut();
+        freed
+            .iter()
+            .flat_map(|node| listeners.drain_target_at(TargetKey::Node(*node)))
+            .collect()
     }
 
     /// Removes and returns every listener registered on the host targets in
@@ -1537,6 +2220,219 @@ impl HostContext {
     }
 }
 
+#[cfg(test)]
+mod native_memory_tests {
+    use super::*;
+    use tenta_core::NativeMemoryComponent;
+
+    fn context(document: SharedDocument, budget: NativeMemoryBudget) -> SharedContext {
+        HostContext::new_with_native_memory(
+            document,
+            crate::event_loop::SharedClock::new(crate::event_loop::Clock::virtual_at(
+                crate::event_loop::MonoTime::ZERO,
+            )),
+            CookieJar::new(),
+            PageStorage::isolated(),
+            budget,
+        )
+    }
+
+    #[test]
+    fn minted_document_shares_the_page_ledger() {
+        let budget = NativeMemoryBudget::with_limits(100, 100, 100, 0);
+        let root = context(Rc::new(RefCell::new(Document::new())), budget.clone());
+        let child = root
+            .new_child(Rc::new(RefCell::new(Document::new())))
+            .expect("a second document slot is available");
+        assert!(root.native_memory.same_page(&child.native_memory));
+        assert!(root.native_memory.same_page(&budget));
+        let mut first = root
+            .native_memory
+            .begin(NativeMemoryComponent::StructuredClone);
+        let mut second = child
+            .native_memory
+            .begin(NativeMemoryComponent::MutationObserver);
+        assert!(first.charge(70));
+        assert!(!second.charge(40));
+        assert_eq!(root.native_memory.total_used(), 70);
+        root.documents.retire_observers();
+        root.documents.clear_minted();
+    }
+
+    #[test]
+    fn preinstalled_aliases_share_one_attachment_and_retire_without_document_borrow() {
+        let budget = NativeMemoryBudget::with_limits(1 << 20, 1 << 20, 1 << 20, 0);
+        let root = context(Rc::new(RefCell::new(Document::new())), budget);
+        let page_alias = root.new_child(root.doc.clone()).unwrap();
+        let child_document = Rc::new(RefCell::new(Document::new()));
+        let first = root.new_child(child_document.clone()).unwrap();
+        let second = root.new_child(child_document.clone()).unwrap();
+        assert!(first.observer_attachment.borrow().is_none());
+        root.documents.install_observer_world().unwrap();
+        assert!(Rc::ptr_eq(
+            root.observer_attachment.borrow().as_ref().unwrap(),
+            page_alias.observer_attachment.borrow().as_ref().unwrap()
+        ));
+        let first_owner = first.observer_attachment.borrow().as_ref().unwrap().clone();
+        let second_owner = second
+            .observer_attachment
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert!(Rc::ptr_eq(&first_owner, &second_owner));
+        let third = root.new_child(child_document.clone()).unwrap();
+        let third_owner = third.observer_attachment.borrow().as_ref().unwrap().clone();
+        assert!(Rc::ptr_eq(&first_owner, &third_owner));
+        drop(first_owner);
+        drop(third_owner);
+        let held_document = child_document.borrow_mut();
+        root.documents.retire_observers();
+        assert!(!second_owner.retire());
+        drop(held_document);
+        root.documents.clear_minted();
+        assert!(
+            root.new_child(Rc::new(RefCell::new(Document::new())))
+                .is_err()
+        );
+        drop(first);
+        drop(second);
+        drop(third);
+    }
+
+    #[test]
+    fn independent_worlds_over_one_document_keep_distinct_attachments() {
+        let document = Rc::new(RefCell::new(Document::new()));
+        let first = context(
+            document.clone(),
+            NativeMemoryBudget::with_limits(1 << 20, 1 << 20, 1 << 20, 0),
+        );
+        let second = context(
+            document,
+            NativeMemoryBudget::with_limits(1 << 20, 1 << 20, 1 << 20, 0),
+        );
+        first.documents.install_observer_world().unwrap();
+        second.documents.install_observer_world().unwrap();
+        let first_owner = first.observer_attachment.borrow().as_ref().unwrap().clone();
+        let second_owner = second
+            .observer_attachment
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert!(!Rc::ptr_eq(&first_owner, &second_owner));
+        first.documents.retire_observers();
+        assert!(!first_owner.retire());
+        assert!(second_owner.retire());
+        second.documents.retire_observers();
+    }
+
+    #[test]
+    fn child_quota_refusal_keeps_the_next_slot_unpublished() {
+        let budget = NativeMemoryBudget::with_limits(0, 0, 0, 0);
+        let root = context(Rc::new(RefCell::new(Document::new())), budget.clone());
+        root.documents.install_observer_world().unwrap();
+        assert!(
+            root.new_child(Rc::new(RefCell::new(Document::new())))
+                .is_err()
+        );
+        assert_eq!(root.documents.next_slot(), Some(1));
+        assert_eq!(root.documents.minted.borrow().len(), 0);
+        assert_eq!(
+            budget.first_failure().unwrap().component,
+            NativeMemoryComponent::MutationObserver
+        );
+        root.documents.retire_observers();
+    }
+
+    #[test]
+    fn fresh_root_constructor_attaches_the_exact_document_before_publication() {
+        let document = Rc::new(RefCell::new(Document::new()));
+        let (root, document_ref) = HostContext::new_with_installed_observer(
+            document.clone(),
+            crate::event_loop::SharedClock::new(crate::event_loop::Clock::virtual_at(
+                crate::event_loop::MonoTime::ZERO,
+            )),
+            CookieJar::new(),
+            PageStorage::isolated(),
+            NativeMemoryBudget::with_limits(1 << 20, 1 << 20, 1 << 20, 0),
+        );
+        let expected_ref = {
+            let document = document.borrow();
+            document.node_ref(document.document_node())
+        };
+        assert_eq!(document_ref, expected_ref);
+        assert_eq!(
+            root.documents.observer_phase.get(),
+            ObserverInstallPhase::Installed
+        );
+        assert_eq!(
+            root.observer_attachment
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .document_id(),
+            document.borrow().document_id()
+        );
+        root.documents.retire_observers();
+    }
+
+    #[test]
+    fn failed_preinstalled_child_attach_retires_prior_nodes_and_preserves_error() {
+        let budget = NativeMemoryBudget::with_limits(1 << 20, 1 << 20, 1 << 20, 0);
+        let root = context(Rc::new(RefCell::new(Document::new())), budget);
+        let first_document = Rc::new(RefCell::new(Document::new()));
+        let first_child = root.new_child(first_document.clone()).unwrap();
+        let blocked_document = Rc::new(RefCell::new(Document::new()));
+        let _second_child = root.new_child(blocked_document.clone()).unwrap();
+        let held = blocked_document.borrow_mut();
+        let error = root.documents.install_observer_world().unwrap_err();
+        assert_eq!(error.message(), "observer Document is already borrowed");
+        assert_eq!(
+            root.documents.observer_phase.get(),
+            ObserverInstallPhase::Closed
+        );
+        assert!(!root.observer_attachment.borrow().as_ref().unwrap().retire());
+        assert!(
+            !first_child
+                .observer_attachment
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .retire()
+        );
+        drop(held);
+        let independent = context(
+            first_document,
+            NativeMemoryBudget::with_limits(1 << 20, 1 << 20, 1 << 20, 0),
+        );
+        independent.documents.install_observer_world().unwrap();
+        independent.documents.retire_observers();
+        root.documents.clear_minted();
+    }
+
+    #[test]
+    fn borrowed_post_install_child_is_not_published() {
+        let root = context(
+            Rc::new(RefCell::new(Document::new())),
+            NativeMemoryBudget::with_limits(1 << 20, 1 << 20, 1 << 20, 0),
+        );
+        root.documents.install_observer_world().unwrap();
+        let child_document = Rc::new(RefCell::new(Document::new()));
+        let held = child_document.borrow_mut();
+        let before = root.documents.next_slot();
+        let error = root
+            .new_child(child_document.clone())
+            .err()
+            .expect("a held Document borrow must refuse child publication");
+        assert_eq!(error.message(), "observer Document is already borrowed");
+        assert_eq!(root.documents.next_slot(), before);
+        assert!(root.documents.minted.borrow().is_empty());
+        drop(held);
+        root.documents.retire_observers();
+    }
+}
+
 /// A context shared between the host objects of one world and the engine.
 pub type SharedContext = Rc<HostContext>;
 
@@ -1606,7 +2502,7 @@ pub enum HostObject {
         /// A generational reference to the element whose attributes the map is.
         owner: NodeRef,
     },
-    /// A wrapper for the inline `CSSStyleDeclaration` (`style`) of `owner`.
+    /// A wrapper for the inline `CSSStyleProperties` (`style`) of `owner`.
     Style {
         /// The context the style declaration's owner lives in.
         ctx: SharedContext,
@@ -1639,6 +2535,36 @@ pub enum HostObject {
     },
 }
 
+/// Resolves a `TAG_NODE` handle against `ctx`'s world: the document the handle's
+/// slot names and the live node id inside it.
+///
+/// [`HostObject::anchor_of`] is this function with the receiver's context
+/// supplied; it is free so that a constructor, which has a realm and not a
+/// receiver, resolves handles by the same rules.
+pub fn resolve_node_handle(
+    ctx: &SharedContext,
+    bits: u64,
+) -> Result<(SharedDocument, NodeId), JsError> {
+    let decoded = decode(bits);
+    if decoded.tag != TAG_NODE {
+        return Err(JsError::type_error("the value is not a node of this world"));
+    }
+    let owner = ctx
+        .documents
+        .get(decoded.slot)
+        .ok_or_else(|| JsError::type_error("the node's document is gone"))?;
+    let doc = owner.doc.clone();
+    {
+        let doc = doc.borrow();
+        if !doc.is_live(decoded.node_id)
+            || doc.node_ref(decoded.node_id).generation != u32::from(decoded.generation)
+        {
+            return Err(JsError::type_error("the node is stale"));
+        }
+    }
+    Ok((doc, decoded.node_id))
+}
+
 impl HostObject {
     /// Builds a node host for `node` in `ctx`.
     pub fn node(ctx: SharedContext, node: NodeRef) -> Self {
@@ -1665,7 +2591,7 @@ impl HostObject {
         Self::NamedNodeMap { ctx, owner }
     }
 
-    /// Builds a `CSSStyleDeclaration` host for the `style` of `owner` in `ctx`.
+    /// Builds a `CSSStyleProperties` host for the `style` of `owner` in `ctx`.
     pub fn style(ctx: SharedContext, owner: NodeRef) -> Self {
         Self::Style { ctx, owner }
     }
@@ -1732,26 +2658,12 @@ impl HostObject {
     /// document, or whose node is stale, is a `TypeError` — the same answer a
     /// wrapper world gives when it refuses to instantiate a wrapper, because
     /// the only way to hold such a handle is to have held a wrapper for it.
+    ///
+    /// The work is [`resolve_node_handle`]'s, so that a caller with no host —
+    /// a constructor, which receives a realm and a dictionary rather than a
+    /// receiver — resolves a handle by the same rules.
     fn anchor_of(&self, bits: u64) -> Result<(SharedDocument, NodeId), JsError> {
-        let decoded = decode(bits);
-        if decoded.tag != TAG_NODE {
-            return Err(JsError::type_error("the value is not a node of this world"));
-        }
-        let ctx = self
-            .context()
-            .documents
-            .get(decoded.slot)
-            .ok_or_else(|| JsError::type_error("the node's document is gone"))?;
-        let doc = ctx.doc.clone();
-        {
-            let doc = doc.borrow();
-            if !doc.is_live(decoded.node_id)
-                || doc.node_ref(decoded.node_id).generation as u16 != decoded.generation
-            {
-                return Err(JsError::type_error("the node is stale"));
-            }
-        }
-        Ok((doc, decoded.node_id))
+        resolve_node_handle(self.context(), bits)
     }
 
     /// The id of a `Node` argument that belongs to *this* host's document.
@@ -1775,6 +2687,12 @@ impl HostObject {
     /// of doing something arbitrary. See deviation 3 in `idl/dom/dom.webidl`.
     fn same_document_node(&self, handle: Handle<Node>) -> Result<NodeId, JsError> {
         let decoded = decode(handle.bits());
+        if is_attr_handle(self.context(), handle.bits()) {
+            return Err(JsError::dom_exception(
+                "HierarchyRequestError",
+                "an Attr cannot be inserted into a tree",
+            ));
+        }
         if decoded.tag != TAG_NODE {
             return Err(JsError::type_error("the argument is not a Node"));
         }
@@ -1797,6 +2715,12 @@ impl HostObject {
     /// arena.
     fn child_argument(&self, handle: Handle<Node>) -> Result<NodeId, JsError> {
         let decoded = decode(handle.bits());
+        if is_attr_handle(self.context(), handle.bits()) {
+            return Err(JsError::dom_exception(
+                "NotFoundError",
+                "an Attr is not a child of this node",
+            ));
+        }
         if decoded.tag != TAG_NODE {
             return Err(JsError::type_error("the argument is not a Node"));
         }
@@ -1817,14 +2741,7 @@ impl HostObject {
     /// arena a handle means. The set owns the context from here on, which is
     /// why the local clone can be dropped at the end of this call.
     fn mint_document(&self, document: Document) -> Result<u64, JsError> {
-        let ctx = self.context();
-        let shared: SharedDocument = Rc::new(RefCell::new(document));
-        let child = ctx.new_child(shared)?;
-        let node = {
-            let doc = child.doc.borrow();
-            doc.node_ref(doc.document_node())
-        };
-        Ok(encode_node(child.slot, node))
+        mint_document(self.context(), document)
     }
 
     /// Reads the event record this host stands for, or returns `default` when
@@ -1847,6 +2764,11 @@ impl HostObject {
             return f(record);
         }
         default
+    }
+
+    /// Attr inherits Node but has no arena id or tree position.
+    fn is_attr(&self) -> bool {
+        self.with_attr(false, |_| true)
     }
 
     /// The value this `Attr` currently reports: the element's own storage while
@@ -1876,51 +2798,63 @@ impl HostObject {
     fn attach_attribute_node(&self, attr: Handle<Attr>) -> Result<Option<Handle<Attr>>, JsError> {
         let ctx = self.context();
         let (doc, id) = self.anchor();
-        let key = decode(attr.bits()).host_key();
+        let decoded = decode(attr.bits());
+        if decoded.tag != TAG_HOST || decoded.slot != ctx.slot {
+            return Err(JsError::dom_exception(
+                "NotSupportedError",
+                "an Attr from another document cannot be adopted",
+            ));
+        }
+        let key = decoded.host_key();
         let Some(record) = attr_record(ctx, key) else {
             return Err(JsError::type_error("the argument is not an Attr"));
         };
-        // "If attr's element is not null, throw an `InUseAttributeError`"
-        // (https://dom.spec.whatwg.org/#dom-element-setattributenode). A
-        // re-attachment of an attribute already on *this* element is that same
-        // case, and the standard does not exempt it.
+        let node = doc.borrow().node_ref(id);
+        if record.element == Some(node) {
+            // Setting the exact Attr already in the list is a no-op that
+            // returns that same object.
+            return Ok(Some(attr));
+        }
         if record.element.is_some() {
             return Err(JsError::dom_exception(
                 "InUseAttributeError",
                 "The attribute is already attached to an element",
             ));
         }
-        let value = record.detached_value.clone();
-        let name = record.name.clone();
-        // The attribute the new one replaces, if any, reported as the same kind
-        // of object the page would have got from `getAttributeNode`.
+        let name = record.name;
         let replaced = {
             let doc = doc.borrow();
             doc.attributes(id)
-                .find(|(stored, _)| AttrName::from_qual(*stored) == AttrName::from_qual(name))
-                .map(|(stored, _)| AttrName::from_qual(stored))
+                .find(|(stored, _)| stored.ns == name.ns && stored.local == name.local)
+                .map(|(stored, value)| (stored, value.to_owned()))
         };
-        let node = {
-            let doc = doc.borrow();
-            doc.node_ref(id)
-        };
+        let owner_pin = AttrOwnerPin::new(doc.clone(), id)?;
         {
             let mut doc = doc.borrow_mut();
-            doc.mutate(Mutation::SetAttribute {
+            doc.mutate(Mutation::ReplaceAttribute {
                 element: id,
-                name: name.clone(),
-                value,
+                name,
+                value: record.detached_value,
             })
             .map_err(|e| mutation_error(&e))?;
         }
-        // The record now belongs to this element: its value comes from the
-        // element's storage from here on, which is what makes a later
-        // `setAttribute` visible through a held `Attr`.
+        let old_key = replaced
+            .as_ref()
+            .and_then(|(old_name, value)| ctx.detach_cached_attr(node, *old_name, value.clone()));
         if let Some(HostRecord::Attr(stored)) = ctx.host_records.borrow_mut().get_mut(key) {
             stored.element = Some(node);
             stored.detached_value = String::new();
+            stored.owner_pin = Some(owner_pin);
         }
-        Ok(replaced.map(|name| Handle::from_bits(mint_attr(ctx, Some(node), name.to_qual()))))
+        ctx.attr_index
+            .borrow_mut()
+            .insert(attr_identity(node, name), key);
+        Ok(replaced.map(|(old_name, value)| {
+            Handle::from_bits(match old_key {
+                Some(old_key) => encode_host(ctx.slot, old_key),
+                None => mint_detached_attr(ctx, old_name, value),
+            })
+        }))
     }
 
     /// Mutates the event record this host stands for, if it is a live `Event`.
@@ -2186,19 +3120,32 @@ impl HostObject {
         default
     }
 
+    /// Whether this host has standalone EventTarget lifetime semantics.
+    /// Linked host targets such as AbortSignal need different ownership edges.
+    pub fn is_standalone_event_target(&self) -> bool {
+        matches!(self, HostObject::Host { ctx, key }
+            if matches!(ctx.host_records.borrow().get(*key), Some(HostRecord::EventTarget)))
+    }
+
     /// The record key of the host object this host stands for when that object
     /// is an `EventTarget`, or `None` for every other host.
     ///
     /// The tag cannot answer this: every JS-owned wrapper carries [`TAG_HOST`],
-    /// so only the record knows which interface it is — and of them, only
-    /// `AbortSignal` and `XMLHttpRequest` are event targets. This is the
+    /// so only the record knows which interface it is — and of them,
+    /// standalone `EventTarget`, `AbortSignal`, `XMLHttpRequest`, and `Attr`
+    /// are event targets. This is the
     /// one place the host asks, and both event-target queries below go through
     /// it, as does every refusal that has to name the receiver as a target.
     fn event_target_key(&self) -> Option<HostKey> {
         if let HostObject::Host { ctx, key } = self
             && matches!(
                 ctx.host_records.borrow().get(*key),
-                Some(HostRecord::Signal(_) | HostRecord::Xhr(_))
+                Some(
+                    HostRecord::EventTarget
+                        | HostRecord::Signal(_)
+                        | HostRecord::Xhr(_)
+                        | HostRecord::Attr(_)
+                )
             )
         {
             return Some(*key);
@@ -2260,9 +3207,9 @@ impl HostObject {
     /// The event target this host stands for, or `None` for a host that cannot
     /// be one.
     ///
-    /// A node wrapper, the window, an `AbortSignal` and an `XMLHttpRequest`
-    /// carry the `EventTarget` prototype chain — the last two are JS-owned host
-    /// objects, which is why [`Self::dispatch_target`] has to consult the record
+    /// A node wrapper, the window, a standalone target, an `AbortSignal` and
+    /// an `XMLHttpRequest` carry the `EventTarget` prototype chain. JS-owned
+    /// host objects require [`Self::dispatch_target`] to consult the record
     /// rather than the handle tag. A `NodeList`, a snapshot, an `Event`, a
     /// `URL`, a `URLSearchParams` or a style declaration reaching here means
     /// the receiver was not what the template's signature promised.
@@ -2286,17 +3233,42 @@ impl HostObject {
         }
     }
 
+    /// Resolve an omitted passive option when the listener is registered.
+    /// The choice must not change if a body or document element is later moved.
+    fn default_passive_value(&self, event_type: &str) -> bool {
+        if !matches!(
+            event_type,
+            "touchstart" | "touchmove" | "wheel" | "mousewheel"
+        ) {
+            return false;
+        }
+        match self {
+            HostObject::Window { .. } => true,
+            HostObject::Node { ctx, node } => {
+                let doc = ctx.doc.borrow();
+                let Ok(id) = doc.resolve(*node) else {
+                    return false;
+                };
+                if id == doc.document_node() || doc.document_element() == Some(id) {
+                    return true;
+                }
+                // Document::body selects the first HTML body or frameset
+                // under an HTML html document element.
+                doc.body() == Some(id)
+            }
+            _ => false,
+        }
+    }
+
     /// Sets a reflected attribute (`id`, `class`, …) to `value` on the anchored
     /// element, ignoring any mutation error the way a fast-API reflected setter
     /// must. `name` is an already-lowercase attribute local name.
     fn reflect_attribute(&self, name: &str, value: &str) {
-        let (doc, id) = self.anchor();
+        let (_, id) = self.anchor();
         let qname = QualName::new(atoms::EMPTY, Atom::new(name));
-        let _ = doc.borrow_mut().mutate(Mutation::SetAttribute {
-            element: id,
-            name: qname,
-            value: value.to_owned(),
-        });
+        let _ = self
+            .context()
+            .set_element_attribute(id, qname, value.to_owned());
     }
 
     /// Reads a reflected DOMString attribute, returning "" when it is absent —
@@ -2369,20 +3341,14 @@ impl HostObject {
     /// value, `false` removes it. Mirrors `toggleAttribute` with an explicit
     /// force and, like the other reflected setters, ignores a mutation error.
     fn set_reflect_bool(&self, name: &str, value: bool) {
-        let (doc, id) = self.anchor();
+        let (_, id) = self.anchor();
         let qname = QualName::new(atoms::EMPTY, Atom::new(name));
-        let mut doc = doc.borrow_mut();
         if value {
-            let _ = doc.mutate(Mutation::SetAttribute {
-                element: id,
-                name: qname,
-                value: String::new(),
-            });
+            let _ = self
+                .context()
+                .set_element_attribute(id, qname, String::new());
         } else {
-            let _ = doc.mutate(Mutation::RemoveAttribute {
-                element: id,
-                name: qname,
-            });
+            let _ = self.context().remove_element_attribute(id, qname);
         }
     }
 
@@ -2416,49 +3382,36 @@ impl HostObject {
         self.reflect_attribute("class", &tokens.join(" "));
     }
 
-    /// A `CSSStyleDeclaration` handle for the anchored element's inline `style`.
-    fn style_handle(&self) -> Result<Handle<CSSStyleDeclaration>, JsError> {
+    /// A `CSSStyleProperties` handle for the anchored element's inline `style`.
+    fn style_handle(&self) -> Result<Handle<CSSStyleProperties>, JsError> {
         let (doc, id) = self.anchor();
         let owner = doc.borrow().node_ref(id);
         Ok(Handle::from_bits(encode_style(self.slot(), owner)))
     }
 
-    /// The anchored element's `style` attribute parsed into its declaration
-    /// block: an ordered list of `(name, value, important)`, property names
-    /// lowercased, later declarations of a property replacing earlier ones.
-    fn style_declarations(&self) -> Vec<StyleDeclaration> {
+    /// Parse the anchored element's inline declaration block with Stylo.
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    fn style_declarations(&self) -> CssDeclarationBlock {
         let (doc, id) = self.anchor();
-        let doc = doc.borrow();
-        let mut declarations: Vec<StyleDeclaration> = Vec::new();
-        let Some(text) = doc.attribute_str(id, "style") else {
-            return declarations;
+        let (text, base) = {
+            let doc = doc.borrow();
+            (
+                doc.attribute_str(id, "style")
+                    .unwrap_or_default()
+                    .to_owned(),
+                doc.base_url()
+                    .or(doc.url())
+                    .cloned()
+                    .unwrap_or_else(about_blank),
+            )
         };
-        for chunk in text.split(';') {
-            let Some((name, value)) = chunk.split_once(':') else {
-                continue;
-            };
-            let name = name.trim().to_ascii_lowercase();
-            if name.is_empty() {
-                continue;
-            }
-            let (value, important) = split_important(value.trim());
-            let value = value.trim();
-            if value.is_empty() {
-                continue;
-            }
-            declarations.retain(|declaration| declaration.name != name);
-            declarations.push(StyleDeclaration {
-                name,
-                value: value.to_owned(),
-                important,
-            });
-        }
-        declarations
+        CssDeclarationBlock::parse(&text, &base)
     }
 
-    /// Serialises a declaration block back into the `style` attribute.
-    fn set_style_declarations(&self, declarations: &[StyleDeclaration]) {
-        self.reflect_attribute("style", &serialize_declarations(declarations));
+    /// Serialise Stylo's effective declarations back into the style attribute.
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    fn set_style_declarations(&self, declarations: &CssDeclarationBlock) {
+        self.reflect_attribute("style", &declarations.snapshot().css_text);
     }
 
     /// Applies a navigation step to the anchored node and wraps the result as a
@@ -2475,24 +3428,59 @@ impl HostObject {
 
 impl NodeOps for HostObject {
     fn child_nodes(&self) -> Result<Handle<NodeList>, JsError> {
+        if let HostObject::Host { ctx, key } = self
+            && self.is_attr()
+        {
+            let cached = self.with_attr(None, |record| record.child_nodes);
+            if let Some(cached) = cached
+                && ctx.snapshots.borrow().get(cached).is_some()
+            {
+                return Ok(Handle::from_bits(encode_snapshot(
+                    ctx.slot,
+                    TAG_STATIC_NODE_LIST,
+                    cached,
+                )));
+            }
+            let snapshot = ctx.snapshots.borrow_mut().insert(Vec::new())?;
+            if let Some(HostRecord::Attr(record)) = ctx.host_records.borrow_mut().get_mut(*key) {
+                record.child_nodes = Some(snapshot);
+            }
+            return Ok(Handle::from_bits(encode_snapshot(
+                ctx.slot,
+                TAG_STATIC_NODE_LIST,
+                snapshot,
+            )));
+        }
         let (doc, id) = self.anchor();
         let owner = doc.borrow().node_ref(id);
         Ok(Handle::from_bits(encode_collection(self.slot(), owner)))
     }
 
     fn first_child(&self) -> Result<Option<Handle<Node>>, JsError> {
+        if self.is_attr() {
+            return Ok(None);
+        }
         Ok(self.navigate(|doc, id| doc.first_child(id)))
     }
 
     fn last_child(&self) -> Result<Option<Handle<Node>>, JsError> {
+        if self.is_attr() {
+            return Ok(None);
+        }
         Ok(self.navigate(|doc, id| doc.last_child(id)))
     }
 
     fn next_sibling(&self) -> Result<Option<Handle<Node>>, JsError> {
+        if self.is_attr() {
+            return Ok(None);
+        }
         Ok(self.navigate(|doc, id| doc.next_sibling(id)))
     }
 
     fn node_name(&self) -> Result<String, JsError> {
+        if self.is_attr() {
+            return AttrOps::name(self);
+        }
         let (doc, id) = self.anchor();
         Ok(node_name(&doc.borrow(), id))
     }
@@ -2501,6 +3489,9 @@ impl NodeOps for HostObject {
         // The DOM `nodeType` codes (https://dom.spec.whatwg.org/#dom-node-nodetype).
         // The `NodeOps` consts cover the kinds this slice exercises; the rest
         // use the fixed spec values.
+        if self.is_attr() {
+            return Self::ATTRIBUTE_NODE;
+        }
         let (doc, id) = self.anchor();
         match doc.borrow().kind(id) {
             NodeKind::Element => <Self as NodeOps>::ELEMENT_NODE,
@@ -2518,6 +3509,14 @@ impl NodeOps for HostObject {
         // The Document node's `ownerDocument` is null; every other node in this
         // world belongs to the one document the host is anchored in. `Document`
         // is qualified because `tenta_dom::Document` shadows the binding marker.
+        if self.is_attr() {
+            let ctx = self.context();
+            let doc = ctx.doc.borrow();
+            return Ok(Some(Handle::from_bits(encode_node(
+                ctx.slot,
+                doc.node_ref(doc.document_node()),
+            ))));
+        }
         let (doc, id) = self.anchor();
         let doc = doc.borrow();
         let document_node = doc.document_node();
@@ -2526,11 +3525,17 @@ impl NodeOps for HostObject {
     }
 
     fn is_connected(&self) -> bool {
+        if self.is_attr() {
+            return false;
+        }
         let (doc, id) = self.anchor();
         doc.borrow().is_connected(id)
     }
 
     fn has_child_nodes(&self) -> bool {
+        if self.is_attr() {
+            return false;
+        }
         let (doc, id) = self.anchor();
         doc.borrow().first_child(id).is_some()
     }
@@ -2540,12 +3545,17 @@ impl NodeOps for HostObject {
         // of `node`. `ancestors` excludes the node itself, so the identity case
         // is checked separately. A null argument is not contained. A swept
         // `other` is not live, so `ancestors` yields nothing and the answer is
-        // false; slot reuse within the 16-bit generation window is the
-        // handle-wide staleness limitation shared with every node-handle op
-        // (the `pack` TODO), not specific to this method.
+        // false. Exhausted arena slots are retired before the packed generation
+        // could wrap, so a stale handle cannot become a different node.
         let Some(other) = other else {
             return Ok(false);
         };
+        if self.is_attr() {
+            return Ok(self.handle_bits() == other.bits());
+        }
+        if is_attr_handle(self.context(), other.bits()) {
+            return Ok(false);
+        }
         // A node of another document is not this tree's, so it is not an
         // inclusive ancestor of anything here. Its id must not reach
         // `doc.ancestors`, which walks `parent` in *this* arena.
@@ -2563,6 +3573,9 @@ impl NodeOps for HostObject {
     }
 
     fn parent_element(&self) -> Result<Option<Handle<Element>>, JsError> {
+        if self.is_attr() {
+            return Ok(None);
+        }
         let (doc, id) = self.anchor();
         let doc = doc.borrow();
         let parent = doc.parent(id);
@@ -2571,14 +3584,23 @@ impl NodeOps for HostObject {
     }
 
     fn parent_node(&self) -> Result<Option<Handle<Node>>, JsError> {
+        if self.is_attr() {
+            return Ok(None);
+        }
         Ok(self.navigate(|doc, id| doc.parent(id)))
     }
 
     fn previous_sibling(&self) -> Result<Option<Handle<Node>>, JsError> {
+        if self.is_attr() {
+            return Ok(None);
+        }
         Ok(self.navigate(|doc, id| doc.previous_sibling(id)))
     }
 
     fn text_content(&self) -> Result<Option<String>, JsError> {
+        if self.is_attr() {
+            return AttrOps::value(self).map(Some);
+        }
         let (doc, id) = self.anchor();
         let doc = doc.borrow();
         let kind = doc.kind(id);
@@ -2605,6 +3627,10 @@ impl NodeOps for HostObject {
     }
 
     fn set_text_content(&self, value: Option<&str>) -> Result<(), JsError> {
+        if self.is_attr() {
+            self.write_attr_value(value.unwrap_or_default());
+            return Ok(());
+        }
         let (doc, id) = self.anchor();
         let doc = doc.borrow();
         let kind = doc.kind(id);
@@ -2624,26 +3650,18 @@ impl NodeOps for HostObject {
                 .map_err(|e| mutation_error(&e))
             }
             NodeKind::Element | NodeKind::Fragment | NodeKind::ShadowRoot => {
-                // Remove all children
-                let child_ids: Vec<NodeId> = doc.children(id).collect();
                 drop(doc);
                 let mut doc = self.anchor().0.borrow_mut();
-                for child_id in child_ids {
-                    doc.mutate(Mutation::Remove { child: child_id })
-                        .map_err(|e| mutation_error(&e))?;
-                }
-                // If value is non-empty, append a text node
-                if let Some(text) = value
-                    && !text.is_empty()
-                {
-                    let text_node_id = doc.create_text(text);
-                    doc.mutate(Mutation::Append {
-                        parent: id,
-                        child: text_node_id,
-                    })
-                    .map_err(|e| mutation_error(&e))?;
-                }
-                Ok(())
+                let replacement = if let Some(text) = value.filter(|text| !text.is_empty()) {
+                    ReplaceAllWith::Text(doc.create_text(text))
+                } else {
+                    ReplaceAllWith::Empty
+                };
+                doc.mutate(Mutation::ReplaceAll {
+                    parent: id,
+                    replacement,
+                })
+                .map_err(|e| mutation_error(&e))
             }
             NodeKind::Document | NodeKind::DocType => {
                 // No-op for Document and similar
@@ -2653,6 +3671,9 @@ impl NodeOps for HostObject {
     }
 
     fn node_value(&self) -> Result<Option<String>, JsError> {
+        if self.is_attr() {
+            return AttrOps::value(self).map(Some);
+        }
         let (doc, id) = self.anchor();
         let doc = doc.borrow();
         match doc.kind(id) {
@@ -2667,6 +3688,10 @@ impl NodeOps for HostObject {
     }
 
     fn set_node_value(&self, value: Option<&str>) -> Result<(), JsError> {
+        if self.is_attr() {
+            self.write_attr_value(value.unwrap_or_default());
+            return Ok(());
+        }
         let (doc, id) = self.anchor();
         let doc = doc.borrow();
         match doc.kind(id) {
@@ -2691,6 +3716,12 @@ impl NodeOps for HostObject {
     }
 
     fn append_child(&self, node: Handle<Node>) -> Result<Handle<Node>, JsError> {
+        if self.is_attr() {
+            return Err(JsError::dom_exception(
+                "HierarchyRequestError",
+                "an Attr cannot have children",
+            ));
+        }
         let (doc, self_id) = self.anchor();
         let child_id = self.same_document_node(node)?;
 
@@ -2711,6 +3742,12 @@ impl NodeOps for HostObject {
         node: Handle<Node>,
         child: Option<Handle<Node>>,
     ) -> Result<Handle<Node>, JsError> {
+        if self.is_attr() {
+            return Err(JsError::dom_exception(
+                "HierarchyRequestError",
+                "an Attr cannot have children",
+            ));
+        }
         let (doc, self_id) = self.anchor();
         let node_id = self.same_document_node(node)?;
 
@@ -2732,6 +3769,12 @@ impl NodeOps for HostObject {
     }
 
     fn remove_child(&self, child: Handle<Node>) -> Result<Handle<Node>, JsError> {
+        if self.is_attr() {
+            return Err(JsError::dom_exception(
+                "NotFoundError",
+                "an Attr has no child to remove",
+            ));
+        }
         let (doc, _) = self.anchor();
         let child_id = self.child_argument(child)?;
 
@@ -2748,6 +3791,12 @@ impl NodeOps for HostObject {
         node: Handle<Node>,
         child: Handle<Node>,
     ) -> Result<Handle<Node>, JsError> {
+        if self.is_attr() {
+            return Err(JsError::dom_exception(
+                "HierarchyRequestError",
+                "an Attr cannot have children",
+            ));
+        }
         let (doc, self_id) = self.anchor();
         let new_child = self.same_document_node(node)?;
         let old_child = self.child_argument(child)?;
@@ -2766,6 +3815,18 @@ impl NodeOps for HostObject {
     }
 
     fn clone_node(&self, deep: Option<bool>) -> Result<Handle<Node>, JsError> {
+        if self.is_attr() {
+            let record =
+                self.with_attr(None, |record| Some((record.name, self.attr_value(record))));
+            let Some((name, value)) = record else {
+                return Err(JsError::type_error("the Attr record is gone"));
+            };
+            return Ok(Handle::from_bits(mint_detached_attr(
+                self.context(),
+                name,
+                value,
+            )));
+        }
         let (doc, self_id) = self.anchor();
         let deep_flag = deep.unwrap_or(false);
 
@@ -2860,7 +3921,7 @@ impl ElementOps for HostObject {
 
         // Insert snapshot and return wrapped handle
         let ctx = self.context();
-        let key = ctx.snapshots.borrow_mut().insert(descendants);
+        let key = ctx.snapshots.borrow_mut().insert(descendants)?;
         Ok(Handle::from_bits(encode_snapshot(
             self.slot(),
             TAG_STATIC_HTML_COLLECTION,
@@ -2890,7 +3951,7 @@ impl ElementOps for HostObject {
                 None => {
                     drop(doc_ref);
                     let ctx = self.context();
-                    let key = ctx.snapshots.borrow_mut().insert(vec![]);
+                    let key = ctx.snapshots.borrow_mut().insert(vec![])?;
                     return Ok(Handle::from_bits(encode_snapshot(
                         self.slot(),
                         TAG_STATIC_HTML_COLLECTION,
@@ -2908,7 +3969,7 @@ impl ElementOps for HostObject {
         drop(doc_ref);
 
         let ctx = self.context();
-        let key = ctx.snapshots.borrow_mut().insert(descendants);
+        let key = ctx.snapshots.borrow_mut().insert(descendants)?;
         Ok(Handle::from_bits(encode_snapshot(
             self.slot(),
             TAG_STATIC_HTML_COLLECTION,
@@ -2919,7 +3980,7 @@ impl ElementOps for HostObject {
     fn get_elements_by_tag_name_ns(
         &self,
         namespace: Option<&str>,
-        local_name: Option<&str>,
+        local_name: &str,
     ) -> Result<Handle<HTMLCollection>, JsError> {
         // `[NewObject]`, and a snapshot rather than the standard's live
         // collection: this tree's `getElementsByTagName` is the same shape, and
@@ -2935,7 +3996,7 @@ impl ElementOps for HostObject {
         Ok(Handle::from_bits(encode_snapshot(
             self.slot(),
             TAG_STATIC_HTML_COLLECTION,
-            self.context().snapshots.borrow_mut().insert(snapshot),
+            self.context().snapshots.borrow_mut().insert(snapshot)?,
         )))
     }
 
@@ -3049,7 +4110,7 @@ impl ElementOps for HostObject {
                 drop(doc_ref);
 
                 let ctx = self.context();
-                let key = ctx.snapshots.borrow_mut().insert(refs);
+                let key = ctx.snapshots.borrow_mut().insert(refs)?;
                 Ok(Handle::from_bits(encode_snapshot(
                     self.slot(),
                     TAG_STATIC_NODE_LIST,
@@ -3067,49 +4128,42 @@ impl ElementOps for HostObject {
 
     fn set_attribute(&self, name: &str, value: &str) -> Result<(), JsError> {
         validate_attribute_name(name)?;
-
         let (doc, id) = self.anchor();
-        let lower_name = name.to_ascii_lowercase();
-        let attr_name = Atom::new(&lower_name);
-        let qname = QualName::new(atoms::EMPTY, attr_name);
-
-        let mut doc = doc.borrow_mut();
-        doc.mutate(Mutation::SetAttribute {
-            element: id,
-            name: qname,
-            value: value.to_owned(),
-        })
-        .map_err(|e| mutation_error(&e))
+        let qname = {
+            let doc = doc.borrow();
+            let name = attribute_qualified_name_for_lookup(&doc, id, name);
+            attribute_by_qualified_name(&doc, id, &name)
+                .map(|(stored, _)| stored)
+                .unwrap_or_else(|| QualName::new(atoms::EMPTY, Atom::new(&name)))
+        };
+        self.context()
+            .set_element_attribute(id, qname, value.to_owned())
     }
 
     fn get_attribute(&self, name: &str) -> Result<Option<String>, JsError> {
         let (doc, id) = self.anchor();
-        let lower_name = name.to_ascii_lowercase();
-        Ok(doc
-            .borrow()
-            .attribute_str(id, &lower_name)
-            .map(str::to_owned))
+        let doc = doc.borrow();
+        let name = attribute_qualified_name_for_lookup(&doc, id, name);
+        Ok(attribute_by_qualified_name(&doc, id, &name).map(|(_, value)| value.to_owned()))
     }
 
     fn remove_attribute(&self, name: &str) {
         let (doc, id) = self.anchor();
-        let lower_name = name.to_ascii_lowercase();
-        let attr_name = Atom::new(&lower_name);
-        let qname = QualName::new(atoms::EMPTY, attr_name);
-
-        let mut doc = doc.borrow_mut();
-        // Removing a non-existent attribute is a no-op, so we ignore errors
-        let _ = doc.mutate(Mutation::RemoveAttribute {
-            element: id,
-            name: qname,
-        });
+        let found = {
+            let doc = doc.borrow();
+            let name = attribute_qualified_name_for_lookup(&doc, id, name);
+            attribute_by_qualified_name(&doc, id, &name).map(|(stored, _)| stored)
+        };
+        if let Some(name) = found {
+            let _ = self.context().remove_element_attribute(id, name);
+        }
     }
 
     fn has_attribute(&self, name: &str) -> bool {
         let (doc, id) = self.anchor();
-        let lower_name = name.to_ascii_lowercase();
-        // Check if the attribute exists
-        doc.borrow().attribute_str(id, &lower_name).is_some()
+        let doc = doc.borrow();
+        let name = attribute_qualified_name_for_lookup(&doc, id, name);
+        attribute_by_qualified_name(&doc, id, &name).is_some()
     }
 
     fn has_attributes(&self) -> bool {
@@ -3120,29 +4174,28 @@ impl ElementOps for HostObject {
     fn toggle_attribute(&self, name: &str, force: Option<bool>) -> Result<bool, JsError> {
         validate_attribute_name(name)?;
         let (doc, id) = self.anchor();
-        let lower_name = name.to_ascii_lowercase();
-        let present = doc.borrow().attribute_str(id, &lower_name).is_some();
-        let qname = QualName::new(atoms::EMPTY, Atom::new(&lower_name));
-        let mut doc = doc.borrow_mut();
+        let (name, found) = {
+            let doc = doc.borrow();
+            let name = attribute_qualified_name_for_lookup(&doc, id, name);
+            let found = attribute_by_qualified_name(&doc, id, &name).map(|(stored, _)| stored);
+            (name, found)
+        };
+        let present = found.is_some();
 
-        // `force` absent toggles; present forces on; absent forces off. Adding an
-        // attribute with `toggleAttribute` gives it the empty-string value.
+        // An omitted force toggles; otherwise its Boolean value chooses the
+        // final presence. A newly added attribute has an empty-string value.
         let add = match force {
             Some(force) => force,
             None => !present,
         };
         if add && !present {
-            doc.mutate(Mutation::SetAttribute {
-                element: id,
-                name: qname,
-                value: String::new(),
-            })
-            .map_err(|e| mutation_error(&e))?;
-        } else if !add && present {
-            let _ = doc.mutate(Mutation::RemoveAttribute {
-                element: id,
-                name: qname,
-            });
+            self.context().set_element_attribute(
+                id,
+                QualName::new(atoms::EMPTY, Atom::new(&name)),
+                String::new(),
+            )?;
+        } else if !add && let Some(name) = found {
+            self.context().remove_element_attribute(id, name)?;
         }
         Ok(add)
     }
@@ -3172,25 +4225,20 @@ impl ElementOps for HostObject {
         // `dom/nodes/attributes.html` reads `setAttributeNS(ns, "foo:bar", ...)`
         // back with `localName` `"bar"` and `prefix` `"foo"`.
         let (ns, prefix, local) = validate_and_extract(namespace, qualified_name)?;
-        let (doc, id) = self.anchor();
+        let (_, id) = self.anchor();
         let qname = QualName {
             ns,
             prefix,
             local: Atom::new(local),
         };
-        let mut doc = doc.borrow_mut();
-        doc.mutate(Mutation::SetAttribute {
-            element: id,
-            name: qname,
-            value: value.to_owned(),
-        })
-        .map_err(|e| mutation_error(&e))
+        self.context()
+            .set_element_attribute(id, qname, value.to_owned())
     }
 
     fn get_attribute_ns(
         &self,
         namespace: Option<&str>,
-        local_name: Option<&str>,
+        local_name: &str,
     ) -> Result<Option<String>, JsError> {
         // The standard's whole *get an attribute by namespace and local name*
         // is the (namespace, localName) pair; the null namespace and the empty
@@ -3208,7 +4256,7 @@ impl ElementOps for HostObject {
     fn remove_attribute_ns(
         &self,
         namespace: Option<&str>,
-        local_name: Option<&str>,
+        local_name: &str,
     ) -> Result<(), JsError> {
         let (doc, id) = self.anchor();
         let Some(name) = attribute_name_ns(&doc.borrow(), id, namespace, local_name) else {
@@ -3216,20 +4264,11 @@ impl ElementOps for HostObject {
             // same as `removeAttribute`'s.
             return Ok(());
         };
-        let qname = name.to_qual();
-        let mut doc = doc.borrow_mut();
-        let _ = doc.mutate(Mutation::RemoveAttribute {
-            element: id,
-            name: qname,
-        });
+        let _ = self.context().remove_element_attribute(id, name.to_qual());
         Ok(())
     }
 
-    fn has_attribute_ns(
-        &self,
-        namespace: Option<&str>,
-        local_name: Option<&str>,
-    ) -> Result<bool, JsError> {
+    fn has_attribute_ns(&self, namespace: Option<&str>, local_name: &str) -> Result<bool, JsError> {
         let (doc, id) = self.anchor();
         Ok(lookup_attribute_ns(&doc.borrow(), id, namespace, local_name).is_some())
     }
@@ -3251,19 +4290,19 @@ impl ElementOps for HostObject {
         let (doc, id) = self.anchor();
         let (node, found) = {
             let doc = doc.borrow();
-            let found = doc
-                .attributes(id)
-                .find(|(stored, _)| qualified_attr_name(stored) == name)
-                .map(|(stored, _)| stored);
+            let lookup = attribute_qualified_name_for_lookup(&doc, id, name);
+            let found = attribute_by_qualified_name(&doc, id, &lookup).map(|(stored, _)| stored);
             (doc.node_ref(id), found)
         };
-        Ok(found.map(|name| Handle::from_bits(mint_attr(ctx, Some(node), name))))
+        found
+            .map(|name| mint_attr(ctx, Some(node), name).map(Handle::from_bits))
+            .transpose()
     }
 
     fn get_attribute_node_ns(
         &self,
         namespace: Option<&str>,
-        local_name: Option<&str>,
+        local_name: &str,
     ) -> Result<Option<Handle<Attr>>, JsError> {
         let ctx = self.context();
         let (doc, id) = self.anchor();
@@ -3272,7 +4311,9 @@ impl ElementOps for HostObject {
             let found = attribute_name_ns(&doc, id, namespace, local_name).map(AttrName::to_qual);
             (doc.node_ref(id), found)
         };
-        Ok(found.map(|name| Handle::from_bits(mint_attr(ctx, Some(node), name))))
+        found
+            .map(|name| mint_attr(ctx, Some(node), name).map(Handle::from_bits))
+            .transpose()
     }
 
     fn set_attribute_node(&self, attr: Handle<Attr>) -> Result<Option<Handle<Attr>>, JsError> {
@@ -3289,40 +4330,38 @@ impl ElementOps for HostObject {
         // attribute, throw a `NotFoundError`". A detached `Attr`, or one of
         // another element's, is exactly that case.
         let ctx = self.context();
-        let key = decode(attr.bits()).host_key();
+        let decoded = decode(attr.bits());
+        if decoded.tag != TAG_HOST || decoded.slot != ctx.slot {
+            return Err(attr_not_found());
+        }
+        let key = decoded.host_key();
         let (doc, id) = self.anchor();
         let name = {
             let records = ctx.host_records.borrow();
             let Some(HostRecord::Attr(record)) = records.get(key) else {
                 return Err(attr_not_found());
             };
-            if record.element.map(|node| node.id) != Some(id) {
+            if record.element != Some(doc.borrow().node_ref(id)) {
                 return Err(attr_not_found());
             }
-            record.name.clone()
+            record.name
         };
-        let value = doc
+        if ctx
+            .attr_index
             .borrow()
-            .attribute_ns(id, name.ns, name.local)
-            .unwrap_or_default()
-            .to_owned();
+            .get(&attr_identity(doc.borrow().node_ref(id), name))
+            .copied()
+            != Some(key)
         {
-            let mut doc = doc.borrow_mut();
-            doc.mutate(Mutation::RemoveAttribute {
-                element: id,
-                name: name.clone(),
-            })
-            .map_err(|e| mutation_error(&e))?;
+            return Err(attr_not_found());
         }
+        ctx.remove_element_attribute(id, name)?
+            .ok_or_else(attr_not_found)?;
         // The standard's *remove an attribute* sets the attribute's element to
         // null and keeps its value, so the record — and therefore the wrapper
         // the page already holds — becomes the detached object it returns.
         // Identity is deliberate: `removeAttributeNode` returns the *same*
         // `Attr` it was given.
-        if let Some(HostRecord::Attr(record)) = ctx.host_records.borrow_mut().get_mut(key) {
-            record.element = None;
-            record.detached_value = value;
-        }
         Ok(attr)
     }
 
@@ -3334,11 +4373,9 @@ impl ElementOps for HostObject {
     fn set_inner_html(&self, value: &str) {
         // Note: This is a fast-API eligible operation, so it must return void.
         // Errors are silently ignored to match the fast-API constraint.
-        // In practice, the HTML parser handles malformed input leniently per
-        // the HTML5 spec, so errors should be rare. If parsing the fragment
-        // fails, no mutation is applied; if a later tree mutation fails, the
-        // element may be left partially emptied (its old children are removed
-        // before the parsed fragment is reparented in).
+        // The native replace-all preflights hierarchy, live ranges and every
+        // attached observer world before removing any existing child. A
+        // later native failure remains subject to the Document poison path.
         let (doc, id) = self.anchor();
         let mut doc = doc.borrow_mut();
         let _ = doc.set_inner_html(id, value);
@@ -3361,6 +4398,10 @@ impl ElementOps for HostObject {
         let mut doc = doc.borrow_mut();
         doc.insert_adjacent_html(id, position, text)
             .map_err(|e| mutation_error(&e))
+    }
+
+    fn append(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.append_nodes(nodes)
     }
 }
 
@@ -3402,7 +4443,7 @@ impl DocumentOps for HostObject {
             local_name.to_owned()
         };
         let name = QualName::new(atoms::EMPTY, Atom::new(&local));
-        Ok(Handle::from_bits(mint_attr(self.context(), None, name)))
+        Ok(Handle::from_bits(mint_attr(self.context(), None, name)?))
     }
 
     fn create_attribute_ns(
@@ -3419,7 +4460,7 @@ impl DocumentOps for HostObject {
             prefix,
             local: Atom::new(local),
         };
-        Ok(Handle::from_bits(mint_attr(self.context(), None, name)))
+        Ok(Handle::from_bits(mint_attr(self.context(), None, name)?))
     }
 
     fn create_event(&self, interface: &str) -> Result<Handle<Event>, JsError> {
@@ -3431,22 +4472,53 @@ impl DocumentOps for HostObject {
         // so ProgressEvent is reachable only through its constructor, and
         // `createEvent('ProgressEvent')` throws here as it does in a browser.
         let kind = match interface.to_ascii_lowercase().as_str() {
-            "event" | "events" | "htmlevents" => EventKind::Plain,
+            "event" | "events" | "htmlevents" | "svgevents" => EventKind::Plain,
             "customevent" => EventKind::Custom { detail: None },
-            "uievent" | "uievents" => EventKind::Ui { detail: 0 },
-            "mouseevent" | "mouseevents" => EventKind::Mouse {
+            "uievent" | "uievents" => EventKind::Ui {
+                view: None,
                 detail: 0,
+                which: 0,
+            },
+            "compositionevent" => EventKind::Composition {
+                view: None,
+                detail: 0,
+                which: 0,
+                data: String::new(),
+            },
+            "focusevent" => EventKind::Focus {
+                view: None,
+                detail: 0,
+                which: 0,
+                related_target: None,
+                related_value: None,
+            },
+            "keyboardevent" => EventKind::Keyboard {
+                view: None,
+                detail: 0,
+                which: 0,
+                key: String::new(),
+                code: String::new(),
+                location: 0,
+                modifiers: 0,
+                repeat: false,
+                is_composing: false,
+                char_code: 0,
+                key_code: 0,
+            },
+            "mouseevent" | "mouseevents" => EventKind::Mouse {
+                view: None,
+                detail: 0,
+                which: 0,
                 screen_x: 0,
                 screen_y: 0,
                 client_x: 0,
                 client_y: 0,
-                ctrl: false,
-                shift: false,
-                alt: false,
-                meta: false,
+                modifiers: 0,
                 button: 0,
                 buttons: 0,
                 related_target: None,
+                related_value: None,
+                wheel: None,
             },
             _ => {
                 return Err(JsError::dom_exception(
@@ -3624,6 +4696,52 @@ impl DocumentOps for HostObject {
         )))
     }
 
+    fn create_cdata_section(&self, data: &str) -> Result<Handle<CDATASection>, JsError> {
+        // Both refusals are the DOM Standard's
+        // (<https://dom.spec.whatwg.org/#dom-document-createcdatasection>): an
+        // HTML document has no CDATA section to give, and `]]>` cannot appear
+        // inside one. The second is the same `InvalidCharacterError` the two
+        // parsers raise for the same input, because this factory is theirs too.
+        if self.anchor().0.borrow().is_html_document() {
+            return Err(JsError::dom_exception(
+                "NotSupportedError",
+                "an HTML document has no CDATA sections",
+            ));
+        }
+        if data.contains("]]>") {
+            return Err(JsError::dom_exception(
+                "InvalidCharacterError",
+                "the data contains the CDATA section terminator ]]>",
+            ));
+        }
+        let (doc, _) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        let id = doc.create_cdata(data);
+        Ok(Handle::from_bits(encode_node(
+            self.slot(),
+            doc.node_ref(id),
+        )))
+    }
+
+    fn create_range(&self) -> Result<Handle<Range>, JsError> {
+        // A new range's start and end are both `(this document, 0)`, so it comes
+        // out collapsed — which is what `Range-constructor.html` and
+        // `Range-detach.html` read before they move it.
+        let (doc, _) = self.anchor();
+        let point = {
+            let doc = doc.borrow();
+            RangePoint {
+                node: encode_node(self.slot(), doc.node_ref(doc.document_node())),
+                offset: 0,
+            }
+        };
+        Ok(Handle::from_bits(mint_range(self.context(), point, point)?))
+    }
+
+    fn append(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.append_nodes(nodes)
+    }
+
     fn body(&self) -> Result<Option<Handle<HTMLElement>>, JsError> {
         // Only an HTML-namespace body/frameset is `document.body`, so the
         // `HTMLElement` handle is always backed by an HTML element (the wrapper
@@ -3632,7 +4750,6 @@ impl DocumentOps for HostObject {
         let doc = doc.borrow();
         Ok(doc
             .body()
-            .filter(|id| doc.namespace(*id) == Some(atoms::NS_HTML))
             .map(|id| Handle::from_bits(encode_node(self.slot(), doc.node_ref(id)))))
     }
 
@@ -3723,17 +4840,15 @@ impl DocumentOps for HostObject {
                 created
             }
         };
-        let children: Vec<NodeId> = doc.children(title).collect();
-        for child in children {
-            let _ = doc.mutate(Mutation::Remove { child });
-        }
-        if !value.is_empty() {
-            let text = doc.create_text(value);
-            let _ = doc.mutate(Mutation::Append {
-                parent: title,
-                child: text,
-            });
-        }
+        let replacement = if value.is_empty() {
+            ReplaceAllWith::Empty
+        } else {
+            ReplaceAllWith::Text(doc.create_text(value))
+        };
+        let _ = doc.mutate(Mutation::ReplaceAll {
+            parent: title,
+            replacement,
+        });
     }
 
     fn url(&self) -> Result<String, JsError> {
@@ -3903,7 +5018,7 @@ impl DocumentOps for HostObject {
         drop(doc_ref);
 
         let ctx = self.context();
-        let key = ctx.snapshots.borrow_mut().insert(descendants);
+        let key = ctx.snapshots.borrow_mut().insert(descendants)?;
         Ok(Handle::from_bits(encode_snapshot(
             self.slot(),
             TAG_STATIC_HTML_COLLECTION,
@@ -3932,7 +5047,7 @@ impl DocumentOps for HostObject {
                 None => {
                     drop(doc_ref);
                     let ctx = self.context();
-                    let key = ctx.snapshots.borrow_mut().insert(vec![]);
+                    let key = ctx.snapshots.borrow_mut().insert(vec![])?;
                     return Ok(Handle::from_bits(encode_snapshot(
                         self.slot(),
                         TAG_STATIC_HTML_COLLECTION,
@@ -3950,7 +5065,7 @@ impl DocumentOps for HostObject {
         drop(doc_ref);
 
         let ctx = self.context();
-        let key = ctx.snapshots.borrow_mut().insert(descendants);
+        let key = ctx.snapshots.borrow_mut().insert(descendants)?;
         Ok(Handle::from_bits(encode_snapshot(
             self.slot(),
             TAG_STATIC_HTML_COLLECTION,
@@ -3961,7 +5076,7 @@ impl DocumentOps for HostObject {
     fn get_elements_by_tag_name_ns(
         &self,
         namespace: Option<&str>,
-        local_name: Option<&str>,
+        local_name: &str,
     ) -> Result<Handle<HTMLCollection>, JsError> {
         // The document-level query is the whole tree in document order, which
         // is `descendants` of the document node.
@@ -3979,7 +5094,7 @@ impl DocumentOps for HostObject {
         Ok(Handle::from_bits(encode_snapshot(
             self.slot(),
             TAG_STATIC_HTML_COLLECTION,
-            self.context().snapshots.borrow_mut().insert(snapshot),
+            self.context().snapshots.borrow_mut().insert(snapshot)?,
         )))
     }
 
@@ -4018,7 +5133,7 @@ impl DocumentOps for HostObject {
                 drop(doc_ref);
 
                 let ctx = self.context();
-                let key = ctx.snapshots.borrow_mut().insert(refs);
+                let key = ctx.snapshots.borrow_mut().insert(refs)?;
                 Ok(Handle::from_bits(encode_snapshot(
                     self.slot(),
                     TAG_STATIC_NODE_LIST,
@@ -4241,7 +5356,122 @@ impl DOMImplementationOps for HostObject {
     }
 }
 
+// ---------------------------------------------------------------------------
+// DOMParser / XMLSerializer
+// ---------------------------------------------------------------------------
+
+/// A parsed document inherits the parser's page URL but has no browsing
+/// context. Both parsers receive an already-decoded DOMString, so declarations
+/// inside the source cannot change its UTF-8 encoding.
+fn inert_parsed_document(ctx: &SharedContext, content_type: &str) -> Document {
+    let mut document = Document::new();
+    document.set_url(ctx.doc.borrow().url().cloned());
+    document.set_content_type(content_type);
+    document.set_scripting_enabled(false);
+    document
+}
+
+impl DOMParserConstructor for HostObject {
+    fn construct(realm: &Realm) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        let key = ctx.host_records.borrow_mut().insert(HostRecord::DomParser);
+        Ok(HostObject::host_record(ctx, key))
+    }
+}
+
+impl DOMParserOps for HostObject {
+    fn parse_from_string(
+        &self,
+        source: &str,
+        content_type: DOMParserSupportedType,
+    ) -> Result<Handle<super::Document>, JsError> {
+        let mime = content_type.as_str();
+        let document = inert_parsed_document(self.context(), mime);
+        let mut parsed = if mime == "text/html" {
+            let mut parser = HtmlParser::new(
+                document,
+                ParserOptions {
+                    scripting_enabled: false,
+                    ..ParserOptions::default()
+                },
+            );
+            let _ = parser.feed_str(source);
+            parser.finish()
+        } else {
+            let mut parser = XmlParser::new(document, XmlOptions::default());
+            parser.feed_str(source);
+            match parser.finish() {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    // The XML parser may have written part of the tree before
+                    // it found the error. Discard that arena and return a new
+                    // document with only the standard parsererror root.
+                    let mut error_document = inert_parsed_document(self.context(), mime);
+                    let root = error_document
+                        .create_element(
+                            QualName {
+                                ns: Atom::new(
+                                    "http://www.mozilla.org/newlayout/xml/parsererror.xml",
+                                ),
+                                prefix: None,
+                                local: Atom::new("parsererror"),
+                            },
+                            Vec::new(),
+                            ElementFlags::default(),
+                        )
+                        .map_err(|error| mutation_error(&error))?;
+                    let message = error_document.create_text(&error.to_string());
+                    error_document
+                        .mutate(Mutation::Append {
+                            parent: error_document.document_node(),
+                            child: root,
+                        })
+                        .map_err(|error| mutation_error(&error))?;
+                    error_document
+                        .mutate(Mutation::Append {
+                            parent: root,
+                            child: message,
+                        })
+                        .map_err(|error| mutation_error(&error))?;
+                    error_document
+                }
+            }
+        };
+        parsed.set_ready_state(ReadyState::Complete);
+        Ok(Handle::from_bits(self.mint_document(parsed)?))
+    }
+}
+
+impl XMLSerializerConstructor for HostObject {
+    fn construct(realm: &Realm) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        let key = ctx
+            .host_records
+            .borrow_mut()
+            .insert(HostRecord::XmlSerializer);
+        Ok(HostObject::host_record(ctx, key))
+    }
+}
+
+impl XMLSerializerOps for HostObject {
+    fn serialize_to_string(&self, root: Handle<Node>) -> Result<String, JsError> {
+        if is_attr_handle(self.context(), root.bits()) {
+            return Ok(String::new());
+        }
+        let (document, root) = self.anchor_of(root.bits())?;
+        Ok(document.borrow().to_xml(root))
+    }
+}
+
 impl NodeListOps for HostObject {
+    fn supported_property_indices(&self) -> Result<Vec<u32>, JsError> {
+        Ok((0..NodeListOps::length(self)).collect())
+    }
+
+    fn is_supported_property_index(&self, index: u32) -> Result<bool, JsError> {
+        Ok(index < NodeListOps::length(self))
+    }
+
     fn item(&self, index: u32) -> Result<Option<Handle<Node>>, JsError> {
         match self {
             HostObject::StaticNodeList { ctx, key } => {
@@ -4358,7 +5588,75 @@ impl TextOps for HostObject {}
 
 impl CommentOps for HostObject {}
 
+/// Names are collected in tree order, with each element's ID preceding its
+/// HTML-namespace `name` attribute. Later duplicates are omitted.
+fn html_collection_supported_names(
+    doc: &Document,
+    elements: impl Iterator<Item = NodeId>,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = HashSet::new();
+    for element in elements {
+        if let Some(id) = doc.element_id(element)
+            && seen.insert(id)
+        {
+            names.push(id.to_owned());
+        }
+        if doc.namespace(element) == Some(atoms::NS_HTML)
+            && let Some(name) = doc.attribute_str(element, "name")
+            && !name.is_empty()
+            && seen.insert(name)
+        {
+            names.push(name.to_owned());
+        }
+    }
+    names
+}
+
+fn html_collection_matches_name(doc: &Document, element: NodeId, name: &str) -> bool {
+    doc.element_id(element) == Some(name)
+        || (doc.namespace(element) == Some(atoms::NS_HTML)
+            && doc.attribute_str(element, "name") == Some(name))
+}
+
 impl HTMLCollectionOps for HostObject {
+    fn supported_property_indices(&self) -> Result<Vec<u32>, JsError> {
+        Ok((0..HTMLCollectionOps::length(self)).collect())
+    }
+
+    fn is_supported_property_index(&self, index: u32) -> Result<bool, JsError> {
+        Ok(index < HTMLCollectionOps::length(self))
+    }
+
+    fn supported_property_names(&self) -> Result<Vec<String>, JsError> {
+        match self {
+            HostObject::StaticHtmlCollection { ctx, key } => {
+                let snapshots = ctx.snapshots.borrow();
+                let Some(refs) = snapshots.get(*key) else {
+                    return Ok(Vec::new());
+                };
+                let doc = ctx.doc.borrow();
+                Ok(html_collection_supported_names(
+                    &doc,
+                    refs.iter()
+                        .filter_map(|reference| doc.resolve(*reference).ok()),
+                ))
+            }
+            _ => {
+                let (doc, root) = self.anchor();
+                let doc = doc.borrow();
+                Ok(html_collection_supported_names(
+                    &doc,
+                    doc.element_children(root),
+                ))
+            }
+        }
+    }
+
+    fn is_supported_property_name(&self, name: &str) -> Result<bool, JsError> {
+        Ok(HTMLCollectionOps::named_item(self, name)?.is_some())
+    }
+
     fn item(&self, index: u32) -> Result<Option<Handle<Element>>, JsError> {
         match self {
             HostObject::StaticHtmlCollection { ctx, key } => {
@@ -4405,9 +5703,11 @@ impl HTMLCollectionOps for HostObject {
     }
 
     fn named_item(&self, name: &str) -> Result<Option<Handle<Element>>, JsError> {
+        if name.is_empty() {
+            return Ok(None);
+        }
         match self {
             HostObject::StaticHtmlCollection { ctx, key } => {
-                // Static snapshot: look up by id in stored nodes
                 let snapshots = ctx.snapshots.borrow();
                 let refs = match snapshots.get(*key) {
                     Some(r) => r,
@@ -4416,10 +5716,7 @@ impl HTMLCollectionOps for HostObject {
                 let doc = ctx.doc.borrow();
                 for node_ref in refs {
                     if let Ok(id) = doc.resolve(*node_ref)
-                        && doc
-                            .element_id(id)
-                            .map(|id_attr| id_attr == name)
-                            .unwrap_or(false)
+                        && html_collection_matches_name(&doc, id, name)
                     {
                         return Ok(Some(Handle::from_bits(encode_node(
                             self.slot(),
@@ -4435,14 +5732,21 @@ impl HTMLCollectionOps for HostObject {
                 let doc = doc.borrow();
                 Ok(doc
                     .element_children(id)
-                    .find(|child_id| {
-                        doc.element_id(*child_id)
-                            .map(|id_attr| id_attr == name)
-                            .unwrap_or(false)
-                    })
+                    .find(|child_id| html_collection_matches_name(&doc, *child_id, name))
                     .map(|child| Handle::from_bits(encode_node(self.slot(), doc.node_ref(child)))))
             }
         }
+    }
+}
+
+impl EventTargetConstructor for HostObject {
+    fn construct(realm: &Realm) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        let key = ctx
+            .host_records
+            .borrow_mut()
+            .insert(HostRecord::EventTarget);
+        Ok(HostObject::host_record(ctx, key))
     }
 }
 
@@ -4457,15 +5761,16 @@ impl EventTargetOps for HostObject {
             return Ok(());
         };
         let (capture, once, passive) = match options {
-            None => (false, false, false),
-            Some(AddEventListenerOptionsOrBoolean::Boolean(capture)) => (capture, false, false),
+            None => (false, false, None),
+            Some(AddEventListenerOptionsOrBoolean::Boolean(capture)) => (capture, false, None),
             Some(AddEventListenerOptionsOrBoolean::AddEventListenerOptions(o)) => {
-                (o.capture, o.once, o.passive.unwrap_or(false))
+                (o.capture, o.once, o.passive)
             }
         };
         let target = self
             .target_key()
             .ok_or_else(|| JsError::type_error("the receiver is not an event target"))?;
+        let passive = passive.unwrap_or_else(|| self.default_passive_value(r#type));
         let cb = CallbackRef(callback.bits());
         let added = self.context().listeners.borrow_mut().add_at(
             target,
@@ -4524,7 +5829,14 @@ impl EventTargetOps for HostObject {
         let target = self
             .dispatch_target()
             .ok_or_else(|| JsError::type_error("the receiver is not an event target"))?;
-        dispatch_at(self.context(), target, key, false)
+        let context = self.context();
+        let event_context = context.documents.get(decoded.slot).ok_or_else(|| {
+            JsError::dom_exception(
+                "InvalidStateError",
+                "the event's document has been reclaimed",
+            )
+        })?;
+        dispatch_at_from(context, &event_context, target, key, false)
     }
 }
 
@@ -4688,6 +6000,45 @@ fn reset_for_init(record: &mut EventRecord, r#type: &str, bubbles: bool, cancela
     record.cancelable = cancelable;
 }
 
+/// Retains the exact wrapper converted from a script-provided EventTarget.
+/// `Handle` conversion has already rooted the source JS value for this callback.
+fn retain_related_target(ctx: &SharedContext, target: Option<u64>) -> Result<Option<u64>, JsError> {
+    let Some(target) = target else {
+        return Ok(None);
+    };
+    let decoded = decode(target);
+    let live = match decoded.tag {
+        TAG_WINDOW => target == encode_window(),
+        TAG_NODE => ctx.documents.get(decoded.slot).is_some_and(|owner| {
+            let doc = owner.doc.borrow();
+            doc.is_live(decoded.node_id)
+                && doc.node_ref(decoded.node_id).generation == u32::from(decoded.generation)
+        }),
+        TAG_HOST => ctx.documents.get(decoded.slot).is_some_and(|owner| {
+            matches!(
+                owner.host_records.borrow().get(decoded.host_key()),
+                Some(
+                    HostRecord::EventTarget
+                        | HostRecord::Signal(_)
+                        | HostRecord::Xhr(_)
+                        | HostRecord::Attr(_)
+                )
+            )
+        }),
+        _ => false,
+    };
+    if !live {
+        return Err(JsError::type_error("relatedTarget native handle is stale"));
+    }
+    let script = ctx
+        .script
+        .borrow()
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| JsError::type_error("relatedTarget has no active script world"))?;
+    script.retain_existing_target(target)
+}
+
 /// Builds an initialized, untrusted event record of `kind` and inserts it into
 /// `ctx`'s slab, returning the host that stands for it. Shared by the `Event`
 /// and `CustomEvent` constructors.
@@ -4825,18 +6176,434 @@ impl UIEventConstructor for HostObject {
             init.cancelable,
             init.composed,
             EventKind::Ui {
+                view: init.view.map(|handle| handle.bits()),
                 detail: init.detail,
+                which: init.which,
             },
         ))
     }
 }
 
 impl UIEventOps for HostObject {
+    fn view(&self) -> Result<Option<Handle<Window>>, JsError> {
+        Ok(self.with_event(None, |r| match r.kind {
+            EventKind::Ui { view, .. }
+            | EventKind::Focus { view, .. }
+            | EventKind::Composition { view, .. }
+            | EventKind::Keyboard { view, .. }
+            | EventKind::Mouse { view, .. } => view.map(Handle::from_bits),
+            _ => None,
+        }))
+    }
+
     fn detail(&self) -> i32 {
         self.with_event(0, |r| match r.kind {
-            EventKind::Ui { detail } | EventKind::Mouse { detail, .. } => detail,
+            EventKind::Ui { detail, .. }
+            | EventKind::Focus { detail, .. }
+            | EventKind::Composition { detail, .. }
+            | EventKind::Keyboard { detail, .. }
+            | EventKind::Mouse { detail, .. } => detail,
             _ => 0,
         })
+    }
+
+    fn which(&self) -> u32 {
+        self.with_event(0, |r| match r.kind {
+            EventKind::Ui { which, .. }
+            | EventKind::Focus { which, .. }
+            | EventKind::Composition { which, .. }
+            | EventKind::Keyboard { which, .. }
+            | EventKind::Mouse { which, .. } => which,
+            _ => 0,
+        })
+    }
+
+    fn init_ui_event(
+        &self,
+        type_arg: &str,
+        bubbles_arg: Option<bool>,
+        cancelable_arg: Option<bool>,
+        view_arg: Option<Option<Handle<Window>>>,
+        detail_arg: Option<i32>,
+    ) -> Result<(), JsError> {
+        let new_view = view_arg.flatten().map(|handle| handle.bits());
+        self.with_event_mut(|record| {
+            if record.flags.dispatch {
+                return;
+            }
+            reset_for_init(
+                record,
+                type_arg,
+                bubbles_arg.unwrap_or(false),
+                cancelable_arg.unwrap_or(false),
+            );
+            match &mut record.kind {
+                EventKind::Ui {
+                    view,
+                    detail,
+                    which,
+                }
+                | EventKind::Focus {
+                    view,
+                    detail,
+                    which,
+                    ..
+                }
+                | EventKind::Composition {
+                    view,
+                    detail,
+                    which,
+                    ..
+                }
+                | EventKind::Keyboard {
+                    view,
+                    detail,
+                    which,
+                    ..
+                }
+                | EventKind::Mouse {
+                    view,
+                    detail,
+                    which,
+                    ..
+                } => {
+                    *view = new_view;
+                    *detail = detail_arg.unwrap_or(0);
+                    *which = 0;
+                }
+                _ => {}
+            }
+        });
+        Ok(())
+    }
+}
+
+impl FocusEventConstructor for HostObject {
+    fn construct(
+        realm: &Realm,
+        r#type: &str,
+        event_init_dict: Option<FocusEventInit>,
+    ) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        let init = event_init_dict.unwrap_or_default();
+        let related_target = init.related_target.map(|handle| handle.bits());
+        let related_value = retain_related_target(&ctx, related_target)?;
+        Ok(new_event(
+            &ctx,
+            r#type,
+            init.bubbles,
+            init.cancelable,
+            init.composed,
+            EventKind::Focus {
+                view: init.view.map(|handle| handle.bits()),
+                detail: init.detail,
+                which: init.which,
+                related_target,
+                related_value,
+            },
+        ))
+    }
+}
+
+impl FocusEventOps for HostObject {
+    fn related_target(&self) -> Result<Option<Handle<EventTarget>>, JsError> {
+        Ok(self.with_event(None, |record| match record.kind {
+            EventKind::Focus { related_target, .. } => related_target.map(Handle::from_bits),
+            _ => None,
+        }))
+    }
+}
+
+impl CompositionEventConstructor for HostObject {
+    fn construct(
+        realm: &Realm,
+        r#type: &str,
+        event_init_dict: Option<CompositionEventInit>,
+    ) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        let init = event_init_dict.unwrap_or_default();
+        Ok(new_event(
+            &ctx,
+            r#type,
+            init.bubbles,
+            init.cancelable,
+            init.composed,
+            EventKind::Composition {
+                view: init.view.map(|handle| handle.bits()),
+                detail: init.detail,
+                which: init.which,
+                data: init.data,
+            },
+        ))
+    }
+}
+
+impl CompositionEventOps for HostObject {
+    fn data(&self) -> Result<String, JsError> {
+        Ok(self.with_event(String::new(), |record| match &record.kind {
+            EventKind::Composition { data, .. } => data.clone(),
+            _ => String::new(),
+        }))
+    }
+
+    fn init_composition_event(
+        &self,
+        type_arg: &str,
+        bubbles_arg: Option<bool>,
+        cancelable_arg: Option<bool>,
+        view_arg: Option<Option<Handle<WindowProxy>>>,
+        data_arg: Option<&str>,
+    ) -> Result<(), JsError> {
+        let new_view = view_arg.flatten().map(|handle| handle.bits());
+        self.with_event_mut(|record| {
+            if record.flags.dispatch {
+                return;
+            }
+            reset_for_init(
+                record,
+                type_arg,
+                bubbles_arg.unwrap_or(false),
+                cancelable_arg.unwrap_or(false),
+            );
+            if let EventKind::Composition {
+                view,
+                detail,
+                which,
+                data,
+            } = &mut record.kind
+            {
+                *view = new_view;
+                // The legacy initializer has no detail argument. The UI
+                // Events initializer path resets it to the UIEvent default.
+                *detail = 0;
+                *which = 0;
+                *data = data_arg.unwrap_or("").to_owned();
+            }
+        });
+        Ok(())
+    }
+}
+
+const KEY_CTRL: u16 = 1 << 0;
+const KEY_SHIFT: u16 = 1 << 1;
+const KEY_ALT: u16 = 1 << 2;
+const KEY_META: u16 = 1 << 3;
+const KEY_ALT_GRAPH: u16 = 1 << 4;
+const KEY_CAPS_LOCK: u16 = 1 << 5;
+const KEY_FN: u16 = 1 << 6;
+const KEY_FN_LOCK: u16 = 1 << 7;
+const KEY_HYPER: u16 = 1 << 8;
+const KEY_NUM_LOCK: u16 = 1 << 9;
+const KEY_SCROLL_LOCK: u16 = 1 << 10;
+const KEY_SUPER: u16 = 1 << 11;
+const KEY_SYMBOL: u16 = 1 << 12;
+const KEY_SYMBOL_LOCK: u16 = 1 << 13;
+
+macro_rules! event_modifier_bits {
+    ($init:expr) => {{
+        let init = &$init;
+        (u16::from(init.ctrl_key) * KEY_CTRL)
+            | (u16::from(init.shift_key) * KEY_SHIFT)
+            | (u16::from(init.alt_key) * KEY_ALT)
+            | (u16::from(init.meta_key) * KEY_META)
+            | (u16::from(init.modifier_alt_graph) * KEY_ALT_GRAPH)
+            | (u16::from(init.modifier_caps_lock) * KEY_CAPS_LOCK)
+            | (u16::from(init.modifier_fn) * KEY_FN)
+            | (u16::from(init.modifier_fn_lock) * KEY_FN_LOCK)
+            | (u16::from(init.modifier_hyper) * KEY_HYPER)
+            | (u16::from(init.modifier_num_lock) * KEY_NUM_LOCK)
+            | (u16::from(init.modifier_scroll_lock) * KEY_SCROLL_LOCK)
+            | (u16::from(init.modifier_super) * KEY_SUPER)
+            | (u16::from(init.modifier_symbol) * KEY_SYMBOL)
+            | (u16::from(init.modifier_symbol_lock) * KEY_SYMBOL_LOCK)
+    }};
+}
+
+fn modifier_bit(key: &str) -> u16 {
+    match key {
+        "Control" => KEY_CTRL,
+        "Shift" => KEY_SHIFT,
+        "Alt" => KEY_ALT,
+        "Meta" => KEY_META,
+        "AltGraph" => KEY_ALT_GRAPH,
+        "CapsLock" => KEY_CAPS_LOCK,
+        "Fn" => KEY_FN,
+        "FnLock" => KEY_FN_LOCK,
+        "Hyper" => KEY_HYPER,
+        "NumLock" => KEY_NUM_LOCK,
+        "ScrollLock" => KEY_SCROLL_LOCK,
+        "Super" => KEY_SUPER,
+        "Symbol" => KEY_SYMBOL,
+        "SymbolLock" => KEY_SYMBOL_LOCK,
+        _ => 0,
+    }
+}
+
+impl HostObject {
+    fn event_modifier(&self, bit: u16) -> bool {
+        self.with_event(false, |record| match record.kind {
+            EventKind::Keyboard { modifiers, .. } | EventKind::Mouse { modifiers, .. } => {
+                modifiers & bit != 0
+            }
+            _ => false,
+        })
+    }
+}
+
+impl KeyboardEventConstructor for HostObject {
+    fn construct(
+        realm: &Realm,
+        r#type: &str,
+        event_init_dict: Option<KeyboardEventInit>,
+    ) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        let init = event_init_dict.unwrap_or_default();
+        let modifiers = event_modifier_bits!(init);
+        Ok(new_event(
+            &ctx,
+            r#type,
+            init.bubbles,
+            init.cancelable,
+            init.composed,
+            EventKind::Keyboard {
+                view: init.view.map(|handle| handle.bits()),
+                detail: init.detail,
+                which: init.which,
+                key: init.key,
+                code: init.code,
+                location: init.location,
+                modifiers,
+                repeat: init.repeat,
+                is_composing: init.is_composing,
+                char_code: init.char_code,
+                key_code: init.key_code,
+            },
+        ))
+    }
+}
+
+impl KeyboardEventOps for HostObject {
+    fn key(&self) -> Result<String, JsError> {
+        Ok(self.with_event(String::new(), |record| match &record.kind {
+            EventKind::Keyboard { key, .. } => key.clone(),
+            _ => String::new(),
+        }))
+    }
+
+    fn code(&self) -> Result<String, JsError> {
+        Ok(self.with_event(String::new(), |record| match &record.kind {
+            EventKind::Keyboard { code, .. } => code.clone(),
+            _ => String::new(),
+        }))
+    }
+
+    fn location(&self) -> u32 {
+        self.with_event(0, |record| match record.kind {
+            EventKind::Keyboard { location, .. } => location,
+            _ => 0,
+        })
+    }
+
+    fn ctrl_key(&self) -> bool {
+        self.event_modifier(KEY_CTRL)
+    }
+    fn shift_key(&self) -> bool {
+        self.event_modifier(KEY_SHIFT)
+    }
+    fn alt_key(&self) -> bool {
+        self.event_modifier(KEY_ALT)
+    }
+    fn meta_key(&self) -> bool {
+        self.event_modifier(KEY_META)
+    }
+
+    fn repeat(&self) -> bool {
+        self.with_event(false, |record| match record.kind {
+            EventKind::Keyboard { repeat, .. } => repeat,
+            _ => false,
+        })
+    }
+
+    fn is_composing(&self) -> bool {
+        self.with_event(false, |record| match record.kind {
+            EventKind::Keyboard { is_composing, .. } => is_composing,
+            _ => false,
+        })
+    }
+
+    fn get_modifier_state(&self, key_arg: &str) -> bool {
+        self.event_modifier(modifier_bit(key_arg))
+    }
+
+    fn char_code(&self) -> u32 {
+        self.with_event(0, |record| match record.kind {
+            EventKind::Keyboard { char_code, .. } => char_code,
+            _ => 0,
+        })
+    }
+
+    fn key_code(&self) -> u32 {
+        self.with_event(0, |record| match record.kind {
+            EventKind::Keyboard { key_code, .. } => key_code,
+            _ => 0,
+        })
+    }
+
+    fn init_keyboard_event(
+        &self,
+        type_arg: &str,
+        bubbles_arg: Option<bool>,
+        cancelable_arg: Option<bool>,
+        view_arg: Option<Option<Handle<Window>>>,
+        key_arg: Option<&str>,
+        location_arg: Option<u32>,
+        ctrl_key: Option<bool>,
+        alt_key: Option<bool>,
+        shift_key: Option<bool>,
+        meta_key: Option<bool>,
+    ) -> Result<(), JsError> {
+        let new_view = view_arg.flatten().map(|handle| handle.bits());
+        self.with_event_mut(|record| {
+            if record.flags.dispatch {
+                return;
+            }
+            reset_for_init(
+                record,
+                type_arg,
+                bubbles_arg.unwrap_or(false),
+                cancelable_arg.unwrap_or(false),
+            );
+            if let EventKind::Keyboard {
+                view,
+                detail,
+                which,
+                key,
+                code,
+                location,
+                modifiers,
+                repeat,
+                is_composing,
+                char_code,
+                key_code,
+            } = &mut record.kind
+            {
+                *view = new_view;
+                *detail = 0;
+                *which = 0;
+                *key = key_arg.unwrap_or("").to_owned();
+                code.clear();
+                *location = location_arg.unwrap_or(0);
+                *modifiers = (u16::from(ctrl_key.unwrap_or(false)) * KEY_CTRL)
+                    | (u16::from(alt_key.unwrap_or(false)) * KEY_ALT)
+                    | (u16::from(shift_key.unwrap_or(false)) * KEY_SHIFT)
+                    | (u16::from(meta_key.unwrap_or(false)) * KEY_META);
+                *repeat = false;
+                *is_composing = false;
+                *char_code = 0;
+                *key_code = 0;
+            }
+        });
+        Ok(())
     }
 }
 
@@ -4848,11 +6615,12 @@ impl MouseEventConstructor for HostObject {
     ) -> Result<Self, JsError> {
         let ctx = realm_context(realm)?;
         let init = event_init_dict.unwrap_or_default();
-        // `relatedTarget?` is a nullable `EventTarget`: the outer `Option`
-        // reports whether the member was present, the inner whether the value
-        // was a target or `null`. A node handle needs no value-store reference
-        // (it is not an interned JS value), so its bits are stored directly.
+        // Dictionary conversion keeps the original wrapper rooted through this
+        // host call. The record takes one stored reference to that same object;
+        // the raw handle alone would not retain a detached relatedTarget.
+        let modifiers = event_modifier_bits!(init);
         let related_target = init.related_target.flatten().map(|handle| handle.bits());
+        let related_value = retain_related_target(&ctx, related_target)?;
         Ok(new_event(
             &ctx,
             r#type,
@@ -4860,24 +6628,129 @@ impl MouseEventConstructor for HostObject {
             init.cancelable,
             init.composed,
             EventKind::Mouse {
+                view: init.view.map(|handle| handle.bits()),
                 detail: init.detail,
+                which: init.which,
                 screen_x: init.screen_x,
                 screen_y: init.screen_y,
                 client_x: init.client_x,
                 client_y: init.client_y,
-                ctrl: init.ctrl_key,
-                shift: init.shift_key,
-                alt: init.alt_key,
-                meta: init.meta_key,
+                modifiers,
                 button: init.button,
                 buttons: init.buttons,
                 related_target,
+                related_value,
+                wheel: None,
             },
         ))
     }
 }
 
 impl MouseEventOps for HostObject {
+    fn get_modifier_state(&self, key_arg: &str) -> bool {
+        self.event_modifier(modifier_bit(key_arg))
+    }
+
+    fn init_mouse_event(
+        &self,
+        type_arg: &str,
+        bubbles_arg: Option<bool>,
+        cancelable_arg: Option<bool>,
+        view_arg: Option<Option<Handle<Window>>>,
+        detail_arg: Option<i32>,
+        screen_x_arg: Option<i32>,
+        screen_y_arg: Option<i32>,
+        client_x_arg: Option<i32>,
+        client_y_arg: Option<i32>,
+        ctrl_key_arg: Option<bool>,
+        alt_key_arg: Option<bool>,
+        shift_key_arg: Option<bool>,
+        meta_key_arg: Option<bool>,
+        button_arg: Option<i16>,
+        related_target_arg: Option<Option<Handle<EventTarget>>>,
+    ) -> Result<(), JsError> {
+        let HostObject::Event { ctx, key } = self else {
+            return Ok(());
+        };
+        // WebIDL conversion already happened. A dispatching or dead record
+        // ignores this initializer without any new fallible native acquisition.
+        if ctx
+            .events
+            .borrow()
+            .get(*key)
+            .is_none_or(|record| record.flags.dispatch)
+        {
+            return Ok(());
+        }
+        let new_view = view_arg.flatten().map(|handle| handle.bits());
+        let new_related_target = related_target_arg.flatten().map(|handle| handle.bits());
+        let new_related_value = retain_related_target(ctx, new_related_target)?;
+        let mut adopted = false;
+        let old_related_value = {
+            let mut events = ctx.events.borrow_mut();
+            if let Some(record) = events.get_mut(*key) {
+                if record.flags.dispatch {
+                    None
+                } else {
+                    reset_for_init(
+                        record,
+                        type_arg,
+                        bubbles_arg.unwrap_or(false),
+                        cancelable_arg.unwrap_or(false),
+                    );
+                    if let EventKind::Mouse {
+                        view,
+                        detail,
+                        which,
+                        screen_x,
+                        screen_y,
+                        client_x,
+                        client_y,
+                        modifiers,
+                        button,
+                        buttons,
+                        related_target,
+                        related_value,
+                        ..
+                    } = &mut record.kind
+                    {
+                        *view = new_view;
+                        *detail = detail_arg.unwrap_or(0);
+                        *which = 0;
+                        *screen_x = screen_x_arg.unwrap_or(0);
+                        *screen_y = screen_y_arg.unwrap_or(0);
+                        *client_x = client_x_arg.unwrap_or(0);
+                        *client_y = client_y_arg.unwrap_or(0);
+                        *modifiers = (u16::from(ctrl_key_arg.unwrap_or(false)) * KEY_CTRL)
+                            | (u16::from(shift_key_arg.unwrap_or(false)) * KEY_SHIFT)
+                            | (u16::from(alt_key_arg.unwrap_or(false)) * KEY_ALT)
+                            | (u16::from(meta_key_arg.unwrap_or(false)) * KEY_META);
+                        *button = button_arg.unwrap_or(0);
+                        // The deprecated initializer has no `buttons` parameter.
+                        *buttons = 0;
+                        *related_target = new_related_target;
+                        adopted = true;
+                        std::mem::replace(related_value, new_related_value)
+                    } else {
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        };
+        if adopted {
+            if let Some(bits) = old_related_value {
+                self.release_stored(bits);
+            }
+        } else if let Some(bits) = new_related_value {
+            // Native reentrancy invalidated the record after acquisition.
+            // Discard only this newly acquired reference; the old edge stayed.
+            self.release_stored(bits);
+        }
+        Ok(())
+    }
+
     fn screen_x(&self) -> i32 {
         self.with_event(0, |r| match r.kind {
             EventKind::Mouse { screen_x, .. } => screen_x,
@@ -4907,31 +6780,19 @@ impl MouseEventOps for HostObject {
     }
 
     fn ctrl_key(&self) -> bool {
-        self.with_event(false, |r| match r.kind {
-            EventKind::Mouse { ctrl, .. } => ctrl,
-            _ => false,
-        })
+        self.event_modifier(KEY_CTRL)
     }
 
     fn shift_key(&self) -> bool {
-        self.with_event(false, |r| match r.kind {
-            EventKind::Mouse { shift, .. } => shift,
-            _ => false,
-        })
+        self.event_modifier(KEY_SHIFT)
     }
 
     fn alt_key(&self) -> bool {
-        self.with_event(false, |r| match r.kind {
-            EventKind::Mouse { alt, .. } => alt,
-            _ => false,
-        })
+        self.event_modifier(KEY_ALT)
     }
 
     fn meta_key(&self) -> bool {
-        self.with_event(false, |r| match r.kind {
-            EventKind::Mouse { meta, .. } => meta,
-            _ => false,
-        })
+        self.event_modifier(KEY_META)
     }
 
     fn button(&self) -> i16 {
@@ -4953,6 +6814,85 @@ impl MouseEventOps for HostObject {
             EventKind::Mouse { related_target, .. } => related_target.map(Handle::from_bits),
             _ => None,
         }))
+    }
+}
+
+impl WheelEventConstructor for HostObject {
+    fn construct(
+        realm: &Realm,
+        r#type: &str,
+        event_init_dict: Option<WheelEventInit>,
+    ) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        let init = event_init_dict.unwrap_or_default();
+        let modifiers = event_modifier_bits!(init);
+        let related_target = init.related_target.flatten().map(|handle| handle.bits());
+        let related_value = retain_related_target(&ctx, related_target)?;
+        Ok(new_event(
+            &ctx,
+            r#type,
+            init.bubbles,
+            init.cancelable,
+            init.composed,
+            EventKind::Mouse {
+                view: init.view.map(|handle| handle.bits()),
+                detail: init.detail,
+                which: init.which,
+                screen_x: init.screen_x,
+                screen_y: init.screen_y,
+                client_x: init.client_x,
+                client_y: init.client_y,
+                modifiers,
+                button: init.button,
+                buttons: init.buttons,
+                related_target,
+                related_value,
+                wheel: Some(Box::new(crate::dom::events::WheelDelta {
+                    x: init.delta_x,
+                    y: init.delta_y,
+                    z: init.delta_z,
+                    mode: init.delta_mode,
+                })),
+            },
+        ))
+    }
+}
+
+impl WheelEventOps for HostObject {
+    fn delta_x(&self) -> f64 {
+        self.with_event(0.0, |record| match &record.kind {
+            EventKind::Mouse {
+                wheel: Some(wheel), ..
+            } => wheel.x,
+            _ => 0.0,
+        })
+    }
+
+    fn delta_y(&self) -> f64 {
+        self.with_event(0.0, |record| match &record.kind {
+            EventKind::Mouse {
+                wheel: Some(wheel), ..
+            } => wheel.y,
+            _ => 0.0,
+        })
+    }
+
+    fn delta_z(&self) -> f64 {
+        self.with_event(0.0, |record| match &record.kind {
+            EventKind::Mouse {
+                wheel: Some(wheel), ..
+            } => wheel.z,
+            _ => 0.0,
+        })
+    }
+
+    fn delta_mode(&self) -> u32 {
+        self.with_event(0, |record| match &record.kind {
+            EventKind::Mouse {
+                wheel: Some(wheel), ..
+            } => wheel.mode,
+            _ => 0,
+        })
     }
 }
 
@@ -5026,7 +6966,7 @@ impl HTMLElementOps for HostObject {
         result
     }
 
-    fn style(&self) -> Result<Handle<CSSStyleDeclaration>, JsError> {
+    fn style(&self) -> Result<Handle<CSSStyleProperties>, JsError> {
         self.style_handle()
     }
 }
@@ -5254,11 +7194,15 @@ impl HTMLScriptElementOps for HostObject {
 }
 
 impl SVGElementOps for HostObject {
-    fn style(&self) -> Result<Handle<CSSStyleDeclaration>, JsError> {
+    fn style(&self) -> Result<Handle<CSSStyleProperties>, JsError> {
         self.style_handle()
     }
 }
-impl DocumentFragmentOps for HostObject {}
+impl DocumentFragmentOps for HostObject {
+    fn append(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        self.append_nodes(nodes)
+    }
+}
 
 impl HTMLTemplateElementOps for HostObject {
     fn content(&self) -> Result<Handle<DocumentFragment>, JsError> {
@@ -5277,6 +7221,14 @@ impl HTMLTemplateElementOps for HostObject {
 }
 
 impl DOMTokenListOps for HostObject {
+    fn supported_property_indices(&self) -> Result<Vec<u32>, JsError> {
+        Ok((0..DOMTokenListOps::length(self)).collect())
+    }
+
+    fn is_supported_property_index(&self, index: u32) -> Result<bool, JsError> {
+        Ok(index < DOMTokenListOps::length(self))
+    }
+
     fn length(&self) -> u32 {
         self.class_tokens().len() as u32
     }
@@ -5388,6 +7340,45 @@ impl DOMTokenListOps for HostObject {
 /// the map is live without any state of its own to keep in step: the element is
 /// the state, exactly as it is for `classList`.
 impl NamedNodeMapOps for HostObject {
+    fn supported_property_indices(&self) -> Result<Vec<u32>, JsError> {
+        Ok((0..NamedNodeMapOps::length(self)).collect())
+    }
+
+    fn is_supported_property_index(&self, index: u32) -> Result<bool, JsError> {
+        Ok(index < NamedNodeMapOps::length(self))
+    }
+
+    fn supported_property_names(&self) -> Result<Vec<String>, JsError> {
+        let (doc, element) = self.anchor();
+        let doc = doc.borrow();
+        let filter_uppercase =
+            doc.is_html_document() && doc.namespace(element) == Some(atoms::NS_HTML);
+        let mut names = Vec::new();
+        let mut seen = HashSet::new();
+        for (attribute, _) in doc.attributes(element) {
+            let qualified = qualified_attr_name(&attribute);
+            if filter_uppercase && qualified.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                continue;
+            }
+            if seen.insert(qualified.clone()) {
+                names.push(qualified);
+            }
+        }
+        Ok(names)
+    }
+
+    fn is_supported_property_name(&self, name: &str) -> Result<bool, JsError> {
+        let (doc, element) = self.anchor();
+        let doc = doc.borrow();
+        if doc.is_html_document()
+            && doc.namespace(element) == Some(atoms::NS_HTML)
+            && name.bytes().any(|byte| byte.is_ascii_uppercase())
+        {
+            return Ok(false);
+        }
+        Ok(attribute_by_qualified_name(&doc, element, name).is_some())
+    }
+
     fn length(&self) -> u32 {
         let (doc, id) = self.anchor();
         doc.borrow().attribute_count(id) as u32
@@ -5401,7 +7392,9 @@ impl NamedNodeMapOps for HostObject {
             let found = doc.attributes(id).nth(index as usize).map(|(name, _)| name);
             (doc.node_ref(id), found)
         };
-        Ok(found.map(|name| Handle::from_bits(mint_attr(ctx, Some(node), name))))
+        found
+            .map(|name| mint_attr(ctx, Some(node), name).map(Handle::from_bits))
+            .transpose()
     }
 
     fn get_named_item(&self, name: &str) -> Result<Option<Handle<Attr>>, JsError> {
@@ -5409,19 +7402,19 @@ impl NamedNodeMapOps for HostObject {
         let (doc, id) = self.anchor();
         let (node, found) = {
             let doc = doc.borrow();
-            let found = doc
-                .attributes(id)
-                .find(|(stored, _)| qualified_attr_name(stored) == name)
-                .map(|(stored, _)| stored);
+            let lookup = attribute_qualified_name_for_lookup(&doc, id, name);
+            let found = attribute_by_qualified_name(&doc, id, &lookup).map(|(stored, _)| stored);
             (doc.node_ref(id), found)
         };
-        Ok(found.map(|name| Handle::from_bits(mint_attr(ctx, Some(node), name))))
+        found
+            .map(|name| mint_attr(ctx, Some(node), name).map(Handle::from_bits))
+            .transpose()
     }
 
     fn get_named_item_ns(
         &self,
         namespace: Option<&str>,
-        local_name: Option<&str>,
+        local_name: &str,
     ) -> Result<Option<Handle<Attr>>, JsError> {
         let ctx = self.context();
         let (doc, id) = self.anchor();
@@ -5430,7 +7423,9 @@ impl NamedNodeMapOps for HostObject {
             let found = attribute_name_ns(&doc, id, namespace, local_name).map(AttrName::to_qual);
             (doc.node_ref(id), found)
         };
-        Ok(found.map(|name| Handle::from_bits(mint_attr(ctx, Some(node), name))))
+        found
+            .map(|name| mint_attr(ctx, Some(node), name).map(Handle::from_bits))
+            .transpose()
     }
 
     fn set_named_item(&self, attr: Handle<Attr>) -> Result<Option<Handle<Attr>>, JsError> {
@@ -5449,9 +7444,8 @@ impl NamedNodeMapOps for HostObject {
         let (doc, id) = self.anchor();
         let found = {
             let doc = doc.borrow();
-            doc.attributes(id)
-                .find(|(stored, _)| qualified_attr_name(stored) == name)
-                .map(|(stored, _)| stored)
+            let lookup = attribute_qualified_name_for_lookup(&doc, id, name);
+            attribute_by_qualified_name(&doc, id, &lookup).map(|(stored, _)| stored)
         };
         let Some(name) = found else {
             return Err(attr_not_found());
@@ -5462,7 +7456,7 @@ impl NamedNodeMapOps for HostObject {
     fn remove_named_item_ns(
         &self,
         namespace: Option<&str>,
-        local_name: Option<&str>,
+        local_name: &str,
     ) -> Result<Handle<Attr>, JsError> {
         let ctx = self.context();
         let (doc, id) = self.anchor();
@@ -5485,62 +7479,22 @@ impl HostObject {
     fn detach_attribute(
         &self,
         ctx: &HostContext,
-        doc: &SharedDocument,
+        _doc: &SharedDocument,
         id: NodeId,
         name: QualName,
     ) -> Result<Handle<Attr>, JsError> {
-        let value = doc
-            .borrow()
-            .attribute_ns(id, name.ns, name.local)
-            .unwrap_or_default()
-            .to_owned();
-        {
-            let mut doc = doc.borrow_mut();
-            doc.mutate(Mutation::RemoveAttribute {
-                element: id,
-                name: name.clone(),
-            })
-            .map_err(|e| mutation_error(&e))?;
-        }
-        Ok(Handle::from_bits(mint_detached_attr(ctx, name, value)))
+        let (stored_name, value, cached) = ctx
+            .remove_element_attribute(id, name)?
+            .ok_or_else(attr_not_found)?;
+        Ok(Handle::from_bits(match cached {
+            Some(key) => encode_host(ctx.slot, key),
+            None => mint_detached_attr(ctx, stored_name, value),
+        }))
     }
 }
 
-/// `Attr`. An attribute is not a node in this tree, so this interface carries the
-/// four `Node` members the WPT attribute helpers read directly; see the
-/// deviation note on `interface Attr` in `idl/dom/dom.webidl`.
+/// Attr-specific members; inherited Node behavior is in `NodeOps` above.
 impl AttrOps for HostObject {
-    fn node_type(&self) -> u16 {
-        // `Node.ATTRIBUTE_NODE`, the value `Attr.nodeType` has.
-        2
-    }
-
-    fn node_name(&self) -> Result<String, JsError> {
-        // `nodeName` and `name` are one member for an `Attr`: both are the
-        // qualified name.
-        AttrOps::name(self)
-    }
-
-    fn node_value(&self) -> Result<Option<String>, JsError> {
-        Ok(Some(AttrOps::value(self)?))
-    }
-
-    fn set_node_value(&self, value: Option<&str>) -> Result<(), JsError> {
-        self.write_attr_value(value.unwrap_or_default());
-        Ok(())
-    }
-
-    fn text_content(&self) -> Result<Option<String>, JsError> {
-        // `Attr` takes the standard's "otherwise" arm of the `textContent`
-        // getter: its value.
-        AttrOps::node_value(self)
-    }
-
-    fn set_text_content(&self, value: Option<&str>) -> Result<(), JsError> {
-        self.write_attr_value(value.unwrap_or_default());
-        Ok(())
-    }
-
     fn namespace_uri(&self) -> Result<Option<String>, JsError> {
         Ok(self
             .with_attr(None, |record| Some(record.name.ns.as_str().to_owned()))
@@ -5611,12 +7565,7 @@ impl HostObject {
         };
         match target {
             (Some(element), name) => {
-                let mut doc = ctx.doc.borrow_mut();
-                let _ = doc.mutate(Mutation::SetAttribute {
-                    element: element.id,
-                    name,
-                    value: value.to_owned(),
-                });
+                let _ = ctx.set_element_attribute(element.id, name, value.to_owned());
             }
             (None, _) => {
                 if let Some(HostRecord::Attr(record)) = ctx.host_records.borrow_mut().get_mut(*key)
@@ -5628,103 +7577,1005 @@ impl HostObject {
     }
 }
 
-impl CSSStyleDeclarationOps for HostObject {
-    fn css_text(&self) -> Result<String, JsError> {
-        Ok(serialize_declarations(&self.style_declarations()))
-    }
+// ---------------------------------------------------------------------------
+// `AbstractRange`, `Range`, `StaticRange`
+// ---------------------------------------------------------------------------
+//
+// A range spends no handle tag. It is a `HostRecord` under `TAG_HOST`, like
+// `Attr` and for the same structural reason: a range names *two* nodes and a
+// handle's node field has room for one. `HostRecord::Range` says this at length,
+// and the five tags that are still free stay free.
 
-    fn set_css_text(&self, value: &str) {
-        // Re-parse and re-serialise so the stored attribute is normalised.
-        self.reflect_attribute("style", value);
-        let declarations = self.style_declarations();
-        self.set_style_declarations(&declarations);
-    }
+/// One boundary point of a range, decoded and resolved against the live tree.
+#[derive(Clone, Copy)]
+struct ResolvedPoint {
+    /// The node's id, in the document `anchor_of` resolved it in.
+    node: NodeId,
+    /// The offset into that node, in UTF-16 code units.
+    offset: u32,
+}
 
-    fn length(&self) -> u32 {
-        self.style_declarations().len() as u32
-    }
+/// A range's two endpoints, each resolved in the document its own handle names.
+struct ResolvedRange {
+    /// The document the *start* endpoint resolves in. It is the one every
+    /// tree-order question about a range is asked of, because the standard
+    /// defines a range's root as the root of its start node
+    /// (<https://dom.spec.whatwg.org/#concept-range-root>).
+    doc: SharedDocument,
+    /// The document slot the start endpoint's handle carries, and so the slot
+    /// every handle this range hands back has to carry.
+    slot: u16,
+    start: ResolvedPoint,
+    end: ResolvedPoint,
+    /// Whether both endpoints resolved in the same document.
+    ///
+    /// A live `Range` can never be in the other state: `set_boundary` drags the
+    /// far endpoint onto the near one whenever a write crosses a document, so
+    /// the two always agree afterwards. A `StaticRange` can, because its
+    /// constructor is the one range entry point the standard does not validate
+    /// and `StaticRange-constructor.html` asserts that endpoints in two
+    /// disconnected *documents* are allowed. Comparing the two documents once
+    /// here is what keeps a foreign `NodeId` out of this arena's tree walk.
+    same_document: bool,
+}
 
-    fn item(&self, index: u32) -> Result<String, JsError> {
-        Ok(self
-            .style_declarations()
-            .into_iter()
-            .nth(index as usize)
-            .map(|declaration| declaration.name)
-            .unwrap_or_default())
-    }
+/// One element of a `ParentNode.append` argument list, after resolution: a node
+/// of *this* document, or a string that has yet to become a text node.
+enum AppendItem {
+    Node(NodeId),
+    Text(String),
+}
 
-    fn get_property_value(&self, property: &str) -> Result<String, JsError> {
-        let name = property.trim().to_ascii_lowercase();
-        Ok(self
-            .style_declarations()
-            .into_iter()
-            .find(|declaration| declaration.name == name)
-            .map(|declaration| declaration.value)
-            .unwrap_or_default())
+/// *length* of a node (<https://dom.spec.whatwg.org/#concept-node-length>): `0`
+/// for a doctype, the number of UTF-16 code units of the data for a
+/// character-data node, and the child count otherwise.
+///
+/// The UTF-16 count is what `CharacterData.length` is and what the range tests
+/// measure offsets in (their own `nodeLength`), so `IndexSizeError` and the
+/// expected offsets agree with the standard only if this does.
+fn dom_node_length(doc: &Document, id: NodeId) -> u32 {
+    match doc.kind(id) {
+        NodeKind::DocType => 0,
+        kind if kind.is_character_data_subclass() => doc
+            .text_data(id)
+            .map_or(0, |data| data.encode_utf16().count() as u32),
+        _ => doc.children(id).count() as u32,
     }
+}
 
-    fn get_property_priority(&self, property: &str) -> Result<String, JsError> {
-        let name = property.trim().to_ascii_lowercase();
-        let important = self
-            .style_declarations()
-            .into_iter()
-            .find(|declaration| declaration.name == name)
-            .is_some_and(|declaration| declaration.important);
-        Ok(if important { "important" } else { "" }.to_owned())
+/// The index of `node` among its parent's children, or `None` when it has no
+/// parent.
+fn child_index(doc: &Document, node: NodeId) -> Option<u32> {
+    let parent = doc.parent(node);
+    if !parent.is_some() {
+        return None;
     }
+    doc.children(parent)
+        .position(|child| child == node)
+        .map(|index| index as u32)
+}
 
-    fn set_property(
-        &self,
-        property: &str,
-        value: &str,
-        priority: Option<&str>,
-    ) -> Result<(), JsError> {
-        let name = property.trim().to_ascii_lowercase();
-        if name.is_empty() {
-            return Ok(());
+/// The index, among `ancestor`'s children, of the one that leads to
+/// `descendant`.
+///
+/// The callers establish that `ancestor` is an inclusive ancestor of
+/// `descendant`, so the walk always finds the child; the `0` fallbacks are what
+/// keep the comparison below total when it does not.
+fn child_index_toward(doc: &Document, ancestor: NodeId, descendant: NodeId) -> u32 {
+    let mut node = descendant;
+    loop {
+        if node == ancestor {
+            return 0;
         }
-        // A non-empty priority that is not "important" is invalid: no-op.
-        let important = match priority.map(str::trim) {
-            None | Some("") => false,
-            Some(priority) if priority.eq_ignore_ascii_case("important") => true,
-            Some(_) => return Ok(()),
-        };
-        let mut declarations = self.style_declarations();
-        // An empty value removes the property.
-        if value.trim().is_empty() {
-            declarations.retain(|declaration| declaration.name != name);
-            self.set_style_declarations(&declarations);
-            return Ok(());
+        let parent = doc.parent(node);
+        if parent == ancestor {
+            return child_index(doc, node).unwrap_or(0);
         }
-        let value = value.trim().to_owned();
-        if let Some(declaration) = declarations
-            .iter_mut()
-            .find(|declaration| declaration.name == name)
-        {
-            declaration.value = value;
-            declaration.important = important;
+        if !parent.is_some() {
+            return 0;
+        }
+        node = parent;
+    }
+}
+
+/// The standard's *position of one boundary point relative to another*
+/// (<https://dom.spec.whatwg.org/#concept-range-bp-position>), as an `Ordering`.
+///
+/// This is a *strict* order over boundary points: `Equal` comes out only when the
+/// two points name the same node and the same offset. In particular
+/// `(parent, 0)` is before `(parent.firstChild, 0)` and not equal to it, which is
+/// why the two containment arms compare with `>` and `<` rather than `>=` and
+/// `<=`. `dom/common.js`'s `getPosition` is the same algorithm written out in
+/// JavaScript, and it is the expectation every range test in the directory is
+/// derived from.
+///
+/// Both points must resolve in one document: a `NodeId` means a node of one
+/// arena, and `tenta-dom`'s document-order table is that arena's.
+fn boundary_position(doc: &Document, a: ResolvedPoint, b: ResolvedPoint) -> Ordering {
+    if a.node == b.node {
+        return a.offset.cmp(&b.offset);
+    }
+    if doc.is_inclusive_ancestor(a.node, b.node) {
+        // `a` is an ancestor of `b`, so `a` is after `b` only when its offset is
+        // past the child that leads to `b`.
+        return if a.offset > child_index_toward(doc, a.node, b.node) {
+            Ordering::Greater
         } else {
-            declarations.push(StyleDeclaration {
-                name,
-                value,
-                important,
-            });
+            Ordering::Less
+        };
+    }
+    if doc.is_inclusive_ancestor(b.node, a.node) {
+        // The mirror: `b` is an ancestor of `a`, so `a` is before `b` only when
+        // `b`'s offset is past the child that leads to `a`.
+        return if child_index_toward(doc, b.node, a.node) < b.offset {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        };
+    }
+    if doc.precedes(a.node, b.node) {
+        Ordering::Less
+    } else {
+        Ordering::Greater
+    }
+}
+
+/// The UTF-16 substring of `data` between two code-unit offsets, clamped to its
+/// length.
+///
+/// Range offsets are UTF-16 code units, so a byte slice would split a surrogate
+/// pair. An offset pair that lands inside a surrogate pair — which JavaScript
+/// `substring` would answer with a lone surrogate — yields the shorter of the two
+/// answers instead, because a Rust `String` cannot hold half a pair.
+fn utf16_slice(data: &str, start: u32, end: u32) -> String {
+    let mut unit = 0u32;
+    let mut from: Option<usize> = None;
+    let mut to: Option<usize> = None;
+    for (byte, ch) in data.char_indices() {
+        let next = unit + ch.len_utf16() as u32;
+        if from.is_none() && unit >= start {
+            from = Some(byte);
         }
-        self.set_style_declarations(&declarations);
-        Ok(())
+        if to.is_none() && next > end {
+            to = Some(byte);
+        }
+        unit = next;
+        if from.is_some() && to.is_some() {
+            break;
+        }
+    }
+    let from = from.unwrap_or(data.len());
+    let to = to.unwrap_or(data.len()).max(from);
+    data[from..to].to_owned()
+}
+
+/// The `WrongDocumentError` three range members share.
+fn wrong_document() -> JsError {
+    JsError::dom_exception("WrongDocumentError", "the node is not in the range's tree")
+}
+
+/// The `InvalidNodeTypeError` a doctype container, a doctype/`Attr` static range
+/// endpoint or a parentless node produces.
+fn invalid_node_type(message: &str) -> JsError {
+    JsError::dom_exception("InvalidNodeTypeError", message)
+}
+
+/// The `IndexSizeError` an out-of-range offset produces.
+fn index_size() -> JsError {
+    JsError::dom_exception(
+        "IndexSizeError",
+        "the offset is greater than the node's length",
+    )
+}
+
+/// Gives a freshly built `document` a context of its own in `ctx`'s world and
+/// returns the `TAG_NODE` handle bits of its document node.
+///
+/// [`HostObject::mint_document`] supplies the receiver's context; it is free so
+/// that `new Document()` — a constructor, with a realm and no receiver — mints
+/// a document the same way `DOMImplementation.createDocument` does.
+fn mint_document(ctx: &SharedContext, document: Document) -> Result<u64, JsError> {
+    let shared: SharedDocument = Rc::new(RefCell::new(document));
+    let child = ctx.new_child(shared)?;
+    let node = {
+        let doc = child.doc.borrow();
+        doc.node_ref(doc.document_node())
+    };
+    Ok(encode_node(child.slot, node))
+}
+
+/// Stores a `Range` record in `ctx`'s slab and returns its key.
+///
+/// Both the constructor and `Document.createRange` need the key: the former
+/// hands a [`HostObject`] to the generated glue, the latter hands
+/// `AbstractRange` handle bits to the page, and the bits are the key encoded.
+fn insert_range(
+    ctx: &SharedContext,
+    start: RangePoint,
+    end: RangePoint,
+) -> Result<HostKey, JsError> {
+    let record = RangeRecord::new(ctx, start, end)?;
+    Ok(ctx
+        .host_records
+        .borrow_mut()
+        .insert(HostRecord::Range(record)))
+}
+
+/// Stores a `StaticRange` record in `ctx`'s slab and returns its key.
+fn insert_static_range(
+    ctx: &SharedContext,
+    start: RangePoint,
+    end: RangePoint,
+) -> Result<HostKey, JsError> {
+    let start = StaticRangePoint::new(ctx, start)?;
+    let end = StaticRangePoint::new(ctx, end)?;
+    Ok(ctx
+        .host_records
+        .borrow_mut()
+        .insert(HostRecord::StaticRange(StaticRangeRecord { start, end })))
+}
+
+/// Mints a `Range` record in `ctx`'s slab and returns its handle bits.
+///
+/// The bits carry no range tag: a range is a `TAG_HOST` object whose class the
+/// record names, exactly as a `URL` or an `Attr` is. Two ranges with equal
+/// endpoints get different keys and so different wrappers, which is what
+/// `cloneRange`'s `[NewObject]` requires.
+fn mint_range(ctx: &SharedContext, start: RangePoint, end: RangePoint) -> Result<u64, JsError> {
+    Ok(encode_host(ctx.slot, insert_range(ctx, start, end)?))
+}
+
+impl HostObject {
+    /// The two boundary points of the `Range` or `StaticRange` this host stands
+    /// for, still encoded, or `None` when the host is neither.
+    fn range_points(&self) -> Option<(RangePoint, RangePoint)> {
+        let HostObject::Host { ctx, key } = self else {
+            return None;
+        };
+        let records = ctx.host_records.borrow();
+        match records.get(*key)? {
+            HostRecord::Range(record) => record.points(),
+            HostRecord::StaticRange(record) => Some((record.start.point, record.end.point)),
+            _ => None,
+        }
     }
 
-    fn remove_property(&self, property: &str) -> Result<String, JsError> {
-        let name = property.trim().to_ascii_lowercase();
-        let mut declarations = self.style_declarations();
-        let removed = declarations
-            .iter()
-            .find(|declaration| declaration.name == name)
-            .map(|declaration| declaration.value.clone())
-            .unwrap_or_default();
-        declarations.retain(|declaration| declaration.name != name);
-        self.set_style_declarations(&declarations);
-        Ok(removed)
+    /// The two boundary points as a `Result`, for the members that cannot answer
+    /// without them.
+    fn range_record(&self) -> Result<(RangePoint, RangePoint), JsError> {
+        self.range_points()
+            .ok_or_else(|| JsError::type_error("the object is not a Range"))
+    }
+
+    /// Checks that both endpoints of this range are in one document, and returns
+    /// them resolved.
+    ///
+    /// The `RangeOps` members that compare two points all go through here. A
+    /// live `Range` is always in the state this demands — see
+    /// [`ResolvedRange::same_document`] — so the refusal is only reachable
+    /// through a `StaticRange`, which does not carry these members.
+    fn live_range(&self) -> Result<ResolvedRange, JsError> {
+        let range = self.resolved_range()?;
+        if !range.same_document {
+            return Err(JsError::type_error(
+                "the range's endpoints are in two documents",
+            ));
+        }
+        Ok(range)
+    }
+
+    /// Resolves both endpoints of this range against the live tree.
+    fn resolved_range(&self) -> Result<ResolvedRange, JsError> {
+        let (start, end) = self.range_record()?;
+        let (doc, start_node) = self.anchor_of(start.node)?;
+        let (end_doc, end_node) = self.anchor_of(end.node)?;
+        let same_document = Rc::ptr_eq(&doc, &end_doc);
+        Ok(ResolvedRange {
+            doc,
+            slot: decode(start.node).slot,
+            start: ResolvedPoint {
+                node: start_node,
+                offset: start.offset,
+            },
+            end: ResolvedPoint {
+                node: end_node,
+                offset: end.offset,
+            },
+            same_document,
+        })
+    }
+
+    /// The `TAG_NODE` handle of one encoded boundary point.
+    ///
+    /// The slot comes from the point's own handle and not from this host: a range
+    /// may name nodes of a document other than the one its record lives in, and
+    /// the handle it hands back has to carry *that* document's slot, or the
+    /// wrapper world looks the node up in the wrong arena.
+    fn point_handle(&self, point: RangePoint) -> Result<Handle<Node>, JsError> {
+        let (doc, id) = self.anchor_of(point.node)?;
+        let doc = doc.borrow();
+        Ok(Handle::from_bits(encode_node(
+            decode(point.node).slot,
+            doc.node_ref(id),
+        )))
+    }
+
+    /// The endpoints of the `Range` a handle names, resolved in the document the
+    /// handle carries.
+    ///
+    /// The handle is resolved through the world's `DocumentSet`, not through this
+    /// host's own record slab: the argument may be a range of another document,
+    /// and `Range-compareBoundaryPoints.html` builds exactly that pair — a page
+    /// range and a `foreignDoc` range — and expects `WrongDocumentError`.
+    /// Checking the record variant also protects Rust callers that construct a
+    /// typed handle directly, independently of the generated WebIDL brand check.
+    fn range_of(&self, handle: Handle<Range>) -> Result<ResolvedRange, JsError> {
+        let decoded = decode(handle.bits());
+        if decoded.tag != TAG_HOST {
+            return Err(JsError::type_error("the value is not a Range"));
+        }
+        let ctx = self
+            .context()
+            .documents
+            .get(decoded.slot)
+            .ok_or_else(|| JsError::type_error("the range's document is gone"))?;
+        if !matches!(
+            ctx.host_records.borrow().get(decoded.host_key()),
+            Some(HostRecord::Range(_))
+        ) {
+            return Err(JsError::type_error("the value is not a Range"));
+        }
+        HostObject::host_record(ctx, decoded.host_key()).resolved_range()
+    }
+
+    /// The node a handle names, if it is in the range's *tree*: its document has
+    /// to be the range's document and its root the range's root.
+    ///
+    /// `None` is the standard's "different root" answer, which the three members
+    /// built on this spell differently — `WrongDocumentError` for `comparePoint`
+    /// and `false` for `isPointInRange` and `intersectsNode`. Both halves have to
+    /// be checked: a `NodeId` means a node of one arena, so a node of another
+    /// document cannot even be ordered against this range's endpoints, and within
+    /// one arena a detached node has a root of its own.
+    fn same_tree(
+        &self,
+        range: &ResolvedRange,
+        handle: Handle<Node>,
+    ) -> Result<Option<(SharedDocument, NodeId)>, JsError> {
+        let (doc, id) = self.anchor_of(handle.bits())?;
+        if !Rc::ptr_eq(&doc, &range.doc) {
+            return Ok(None);
+        }
+        if doc.borrow().root_of(id) != doc.borrow().root_of(range.start.node) {
+            return Ok(None);
+        }
+        Ok(Some((doc, id)))
+    }
+
+    /// Writes both boundary points of the `Range` this host stands for.
+    fn write_points(&self, start: RangePoint, end: RangePoint) -> Result<(), JsError> {
+        let HostObject::Host { ctx, key } = self else {
+            return Err(JsError::type_error("the object is not a Range"));
+        };
+        let replacement = RangeRecord::new(ctx, start, end)?;
+        let mut records = ctx.host_records.borrow_mut();
+        match records.get_mut(*key) {
+            Some(HostRecord::Range(record)) => {
+                *record = replacement;
+                Ok(())
+            }
+            // A `StaticRange` has no mutators and its template carries none of
+            // the members that reach here, so any other record is a wiring bug
+            // and not a page's mistake.
+            _ => Err(JsError::type_error("the object is not a Range")),
+        }
+    }
+
+    /// The boundary point *before* a node — `(node.parentNode, node's index)` —
+    /// or after it when `after` is set.
+    ///
+    /// This is what the four node-relative setters are defined in terms of. A node
+    /// with no parent has no such point, which is the standard's own
+    /// `InvalidNodeTypeError`.
+    fn relative_point(&self, handle: Handle<Node>, after: bool) -> Result<RangePoint, JsError> {
+        let (doc, id) = self.anchor_of(handle.bits())?;
+        let slot = decode(handle.bits()).slot;
+        let doc = doc.borrow();
+        let parent = doc.parent(id);
+        if !parent.is_some() {
+            return Err(invalid_node_type("the node has no parent"));
+        }
+        let index = child_index(&doc, id).unwrap_or(0);
+        Ok(RangePoint {
+            node: encode_node(slot, doc.node_ref(parent)),
+            offset: if after { index + 1 } else { index },
+        })
+    }
+
+    /// The standard's *set the start of a range to a boundary point*, and its
+    /// mirror for the end, with the caller's point already validated.
+    ///
+    /// Moving either boundary into another root collapses the range there,
+    /// including two detached roots in the same document arena. Within one
+    /// root, a start after the end (or end before the start) also collapses it.
+    fn apply_boundary(&self, is_start: bool, point: RangePoint) -> Result<(), JsError> {
+        let (start_raw, end_raw) = self.range_record()?;
+        let other_raw = if is_start { end_raw } else { start_raw };
+        let (point_doc, point_node) = self.anchor_of(point.node)?;
+        let (other_doc, other_node) = self.anchor_of(other_raw.node)?;
+        let drags = if Rc::ptr_eq(&point_doc, &other_doc) {
+            let doc = point_doc.borrow();
+            if doc.root_of(point_node) != doc.root_of(other_node) {
+                true
+            } else {
+                boundary_position(
+                    &doc,
+                    ResolvedPoint {
+                        node: point_node,
+                        offset: point.offset,
+                    },
+                    ResolvedPoint {
+                        node: other_node,
+                        offset: other_raw.offset,
+                    },
+                ) == if is_start {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
+            }
+        } else {
+            true
+        };
+        let (start, end) = if is_start {
+            (point, if drags { point } else { end_raw })
+        } else {
+            (if drags { point } else { start_raw }, point)
+        };
+        self.write_points(start, end)
+    }
+
+    /// The standard's own two steps for `setStart` and `setEnd`: validate the
+    /// node and the offset, then apply the point.
+    fn set_boundary(&self, is_start: bool, node: Handle<Node>, offset: u32) -> Result<(), JsError> {
+        self.apply_boundary(is_start, self.checked_point(node, offset)?)
+    }
+
+    /// A boundary point the standard accepts as `setStart`/`setEnd`'s argument:
+    /// a live node that is not a doctype, at an offset inside the node's length.
+    fn checked_point(&self, node: Handle<Node>, offset: u32) -> Result<RangePoint, JsError> {
+        let (doc, id) = self.anchor_of(node.bits())?;
+        let slot = decode(node.bits()).slot;
+        let doc = doc.borrow();
+        if doc.kind(id) == NodeKind::DocType {
+            return Err(invalid_node_type(
+                "a DocumentType cannot be a range boundary point",
+            ));
+        }
+        if offset > dom_node_length(&doc, id) {
+            return Err(index_size());
+        }
+        Ok(RangePoint {
+            node: encode_node(slot, doc.node_ref(id)),
+            offset,
+        })
+    }
+
+    /// *convert nodes into a node* followed by *append* — what
+    /// `ParentNode.append` is defined as, shared by `Element`, `Document` and
+    /// `DocumentFragment`
+    /// (<https://dom.spec.whatwg.org/#converting-nodes-into-a-node>).
+    ///
+    /// Each string argument creates a separate Text node. Adjacent Text nodes
+    /// are preserved; appending does not normalize them.
+    fn append_nodes(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
+        let (doc, parent) = self.anchor();
+        // Resolve every node argument first: the resolution reads the document,
+        // and the mutations below hold it mutably.
+        let items = nodes
+            .into_iter()
+            .map(|item| match item {
+                NodeOrDomString::Node(handle) => {
+                    self.same_document_node(handle).map(AppendItem::Node)
+                }
+                NodeOrDomString::DomString(text) => Ok(AppendItem::Text(text)),
+            })
+            .collect::<Result<Vec<_>, JsError>>()?;
+        // The single-node case is the one the standard does not route through a
+        // fragment, and routing it anyway would still be observable as one extra
+        // tree the node passes through.
+        let single = match items.as_slice() {
+            [AppendItem::Node(child)] => Some(*child),
+            _ => None,
+        };
+        if let Some(child) = single {
+            let mut doc = doc.borrow_mut();
+            return doc
+                .mutate(Mutation::Append { parent, child })
+                .map_err(|error| mutation_error(&error));
+        }
+        let mut doc = doc.borrow_mut();
+        let fragment = doc.create_fragment();
+        for item in items {
+            let child = match item {
+                AppendItem::Node(child) => child,
+                AppendItem::Text(text) => doc.create_text(&text),
+            };
+            doc.mutate(Mutation::Append {
+                parent: fragment,
+                child,
+            })
+            .map_err(|error| mutation_error(&error))?;
+        }
+        doc.mutate(Mutation::Append {
+            parent,
+            child: fragment,
+        })
+        .map_err(|error| mutation_error(&error))
+    }
+}
+
+impl AbstractRangeOps for HostObject {
+    fn start_container(&self) -> Result<Handle<Node>, JsError> {
+        let (start, _) = self.range_record()?;
+        self.point_handle(start)
+    }
+
+    fn start_offset(&self) -> u32 {
+        self.range_points().map_or(0, |(start, _)| start.offset)
+    }
+
+    fn end_container(&self) -> Result<Handle<Node>, JsError> {
+        let (_, end) = self.range_record()?;
+        self.point_handle(end)
+    }
+
+    fn end_offset(&self) -> u32 {
+        self.range_points().map_or(0, |(_, end)| end.offset)
+    }
+
+    fn collapsed(&self) -> bool {
+        // "This's start and end are the same", where two boundary points are the
+        // same when their nodes are the same and their offsets are equal. The
+        // encoded handles answer that without touching the tree: a handle carries
+        // the node's id *and* its generation, so a swept node whose id was reused
+        // does not compare equal to the handle a range still holds. A host that
+        // is not a range cannot reach this — the template's signature — and a
+        // fresh range is collapsed, so `true` is the harmless answer.
+        match self.range_points() {
+            Some((start, end)) => start.node == end.node && start.offset == end.offset,
+            None => true,
+        }
+    }
+}
+
+impl StaticRangeOps for HostObject {}
+
+impl CDATASectionOps for HostObject {}
+
+impl DocumentConstructor for HostObject {
+    /// `new Document()`: "a new `Document`, whose content type is
+    /// `application/xml`, URL is `about:blank`, and origin is the current global
+    /// object's associated `Document`'s origin"
+    /// (<https://dom.spec.whatwg.org/#dom-document-document>).
+    ///
+    /// Both of the two observable properties are set, because the repository's
+    /// `Document::new` defaults are the *HTML* ones: it reports `text/html`, and
+    /// an HTML document is one that has no CDATA sections and lowercases tag
+    /// names. `dom/common.js` builds the XML tree its ranges are tested over with
+    /// this constructor and then calls `createCDATASection` on it, which an HTML
+    /// document refuses.
+    ///
+    /// A document minted here is a document of its own slot, exactly as one
+    /// `DOMImplementation.createDocument` produced is — so `document` and
+    /// `new Document()` are two arenas, and a node of one cannot be inserted into
+    /// the other. That is this engine's missing adoption, and it is why
+    /// `dom/common.js` still stops one line below this call (see the deviation in
+    /// `idl/dom/dom.webidl`).
+    fn construct(realm: &Realm) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        let mut document = Document::new();
+        document.set_url(Some(about_blank()));
+        document.set_content_type("application/xml");
+        let shared: SharedDocument = Rc::new(RefCell::new(document));
+        let child = ctx.new_child(shared)?;
+        let node = {
+            let doc = child.doc.borrow();
+            doc.node_ref(doc.document_node())
+        };
+        Ok(HostObject::node(child, node))
+    }
+}
+
+impl RangeOps for HostObject {
+    fn common_ancestor_container(&self) -> Result<Handle<Node>, JsError> {
+        let range = self.resolved_range()?;
+        let doc = range.doc.borrow();
+        let mut container = range.start.node;
+        // The standard's walk up from the start container. When the two endpoints
+        // are in different documents there is no common ancestor to find and the
+        // start container is the only container either tree can offer; the
+        // `parent` guard is the arena's `NONE`, which bounds the walk at the root
+        // for the same reason.
+        if range.same_document && !doc.is_inclusive_ancestor(container, range.end.node) {
+            loop {
+                let parent = doc.parent(container);
+                if !parent.is_some() {
+                    break;
+                }
+                container = parent;
+                if doc.is_inclusive_ancestor(container, range.end.node) {
+                    break;
+                }
+            }
+        }
+        Ok(Handle::from_bits(encode_node(
+            range.slot,
+            doc.node_ref(container),
+        )))
+    }
+
+    fn set_start(&self, node: Handle<Node>, offset: u32) -> Result<(), JsError> {
+        self.set_boundary(true, node, offset)
+    }
+
+    fn set_end(&self, node: Handle<Node>, offset: u32) -> Result<(), JsError> {
+        self.set_boundary(false, node, offset)
+    }
+
+    fn set_start_before(&self, node: Handle<Node>) -> Result<(), JsError> {
+        let point = self.relative_point(node, false)?;
+        self.apply_boundary(true, point)
+    }
+
+    fn set_start_after(&self, node: Handle<Node>) -> Result<(), JsError> {
+        let point = self.relative_point(node, true)?;
+        self.apply_boundary(true, point)
+    }
+
+    fn set_end_before(&self, node: Handle<Node>) -> Result<(), JsError> {
+        let point = self.relative_point(node, false)?;
+        self.apply_boundary(false, point)
+    }
+
+    fn set_end_after(&self, node: Handle<Node>) -> Result<(), JsError> {
+        let point = self.relative_point(node, true)?;
+        self.apply_boundary(false, point)
+    }
+
+    fn collapse(&self, to_start: Option<bool>) -> Result<(), JsError> {
+        let (start, end) = self.range_record()?;
+        // The argument defaults to false, which moves the start onto the end.
+        if to_start.unwrap_or(false) {
+            self.write_points(start, start)
+        } else {
+            self.write_points(end, end)
+        }
+    }
+
+    fn select_node(&self, node: Handle<Node>) -> Result<(), JsError> {
+        // The standard sets the start to `(parent, index)` and then the end to
+        // `(parent, index + 1)`. Written straight through, rather than through
+        // `apply_boundary`, because that is the state the two steps leave the
+        // range in either way: the second point is after the first in tree order,
+        // so neither step's fixup fires.
+        let before = self.relative_point(node, false)?;
+        let after = self.relative_point(node, true)?;
+        self.write_points(before, after)
+    }
+
+    fn select_node_contents(&self, node: Handle<Node>) -> Result<(), JsError> {
+        let (doc, id) = self.anchor_of(node.bits())?;
+        let slot = decode(node.bits()).slot;
+        let (point, length) = {
+            let doc = doc.borrow();
+            if doc.kind(id) == NodeKind::DocType {
+                return Err(invalid_node_type("a DocumentType has no contents"));
+            }
+            (
+                RangePoint {
+                    node: encode_node(slot, doc.node_ref(id)),
+                    offset: 0,
+                },
+                dom_node_length(&doc, id),
+            )
+        };
+        self.write_points(
+            point,
+            RangePoint {
+                node: point.node,
+                offset: length,
+            },
+        )
+    }
+
+    fn compare_boundary_points(
+        &self,
+        how: u16,
+        source_range: Handle<Range>,
+    ) -> Result<i16, JsError> {
+        // The standard's table, read off the expectation
+        // `Range-compareBoundaryPoints.html` computes for itself:
+        //   0 START_TO_START: this start vs source start
+        //   1 START_TO_END:   this end   vs source start
+        //   2 END_TO_END:     this end   vs source end
+        //   3 END_TO_START:   this start vs source end
+        let (this_is_start, source_is_start) = match how {
+            0 => (true, true),
+            1 => (false, true),
+            2 => (false, false),
+            3 => (true, false),
+            _ => {
+                return Err(JsError::dom_exception(
+                    "NotSupportedError",
+                    "the comparison method is not one of START_TO_START, START_TO_END, \
+                     END_TO_END or END_TO_START",
+                ));
+            }
+        };
+        let this = self.live_range()?;
+        let source = self.range_of(source_range)?;
+        if !Rc::ptr_eq(&this.doc, &source.doc) {
+            return Err(wrong_document());
+        }
+        let doc = this.doc.borrow();
+        if doc.root_of(this.start.node) != doc.root_of(source.start.node) {
+            return Err(wrong_document());
+        }
+        let this_point = if this_is_start { this.start } else { this.end };
+        let source_point = if source_is_start {
+            source.start
+        } else {
+            source.end
+        };
+        Ok(match boundary_position(&doc, this_point, source_point) {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        })
+    }
+
+    fn clone_range(&self) -> Result<Handle<Range>, JsError> {
+        let (start, end) = self.range_record()?;
+        Ok(Handle::from_bits(mint_range(self.context(), start, end)?))
+    }
+
+    /// The standard's own note: "The detach() method must do nothing. Its
+    /// functionality (removing a Range from the processing it used to be part of)
+    /// is now a no-op, because the processing is no longer performed."
+    fn detach(&self) {}
+
+    fn is_point_in_range(&self, node: Handle<Node>, offset: u32) -> Result<bool, JsError> {
+        let range = self.live_range()?;
+        let Some((doc, id)) = self.same_tree(&range, node)? else {
+            return Ok(false);
+        };
+        let doc = doc.borrow();
+        if doc.kind(id) == NodeKind::DocType {
+            return Err(invalid_node_type(
+                "a DocumentType cannot be a range boundary point",
+            ));
+        }
+        if offset > dom_node_length(&doc, id) {
+            return Err(index_size());
+        }
+        let point = ResolvedPoint { node: id, offset };
+        Ok(
+            boundary_position(&doc, point, range.start) != Ordering::Less
+                && boundary_position(&doc, point, range.end) != Ordering::Greater,
+        )
+    }
+
+    fn compare_point(&self, node: Handle<Node>, offset: u32) -> Result<i16, JsError> {
+        let range = self.live_range()?;
+        let Some((doc, id)) = self.same_tree(&range, node)? else {
+            return Err(wrong_document());
+        };
+        let doc = doc.borrow();
+        if doc.kind(id) == NodeKind::DocType {
+            return Err(invalid_node_type(
+                "a DocumentType cannot be a range boundary point",
+            ));
+        }
+        if offset > dom_node_length(&doc, id) {
+            return Err(index_size());
+        }
+        let point = ResolvedPoint { node: id, offset };
+        if boundary_position(&doc, point, range.start) == Ordering::Less {
+            return Ok(-1);
+        }
+        if boundary_position(&doc, point, range.end) == Ordering::Greater {
+            return Ok(1);
+        }
+        Ok(0)
+    }
+
+    fn intersects_node(&self, node: Handle<Node>) -> Result<bool, JsError> {
+        let range = self.live_range()?;
+        let Some((doc, id)) = self.same_tree(&range, node)? else {
+            return Ok(false);
+        };
+        let doc = doc.borrow();
+        // A node that is an inclusive ancestor of either endpoint shares that
+        // endpoint's position or is above it, so the range cannot miss it — and
+        // that covers `node` being the start node or the end node itself. This
+        // shortcut includes the root (whose null parent makes it intersect)
+        // and ancestors that satisfy the boundary-point comparisons.
+        if doc.is_inclusive_ancestor(id, range.start.node)
+            || doc.is_inclusive_ancestor(id, range.end.node)
+        {
+            return Ok(true);
+        }
+        let length = dom_node_length(&doc, id);
+        Ok(boundary_position(
+            &doc,
+            ResolvedPoint {
+                node: id,
+                offset: 0,
+            },
+            range.end,
+        ) == Ordering::Less
+            && boundary_position(
+                &doc,
+                ResolvedPoint {
+                    node: id,
+                    offset: length,
+                },
+                range.start,
+            ) == Ordering::Greater)
+    }
+
+    fn to_string(&self) -> Result<String, JsError> {
+        let range = self.live_range()?;
+        let doc = range.doc.borrow();
+        let is_text = |id: NodeId| {
+            matches!(doc.kind(id), NodeKind::Text | NodeKind::CData) && doc.text_data(id).is_some()
+        };
+        // The standard's stringifier, step by step: the start node's own tail, the
+        // data of every text node *contained* in the range, and the end node's own
+        // head. The one case those steps get wrong on their own is a range whose
+        // two endpoints are the same text node — the head and the tail would both
+        // be emitted, giving the whole string — so that case is the substring
+        // between the two offsets instead. `Range-stringifier.html`'s "Text node
+        // with offsets" is exactly it. An element container is *not* this case:
+        // `selectNodeContents(div)` has one node for both endpoints too, and there
+        // the general walk below is the answer.
+        if range.start.node == range.end.node && is_text(range.start.node) {
+            let data = doc.text_data(range.start.node).unwrap_or_default();
+            return Ok(utf16_slice(data, range.start.offset, range.end.offset));
+        }
+        let mut out = String::new();
+        if is_text(range.start.node) {
+            let data = doc.text_data(range.start.node).unwrap_or_default();
+            out.push_str(&utf16_slice(data, range.start.offset, u32::MAX));
+        }
+        // "A node is contained in a range if its root is the range's root, and
+        // (node, 0) is after the range's start, and (node, node's length) is
+        // before the range's end." Walking the root's descendants in tree order
+        // and asking the question of every text node is the definition, applied
+        // directly; the range's own endpoints fall out of it because their own
+        // points are never strictly inside.
+        let root = doc.root_of(range.start.node);
+        let contained: Vec<NodeId> = doc
+            .descendants_inclusive(root)
+            .filter(|id| is_text(*id))
+            .filter(|id| {
+                let length = dom_node_length(&doc, *id);
+                boundary_position(
+                    &doc,
+                    ResolvedPoint {
+                        node: *id,
+                        offset: 0,
+                    },
+                    range.start,
+                ) == Ordering::Greater
+                    && boundary_position(
+                        &doc,
+                        ResolvedPoint {
+                            node: *id,
+                            offset: length,
+                        },
+                        range.end,
+                    ) == Ordering::Less
+            })
+            .collect();
+        for id in contained {
+            out.push_str(doc.text_data(id).unwrap_or_default());
+        }
+        if is_text(range.end.node) {
+            let data = doc.text_data(range.end.node).unwrap_or_default();
+            out.push_str(&utf16_slice(data, 0, range.end.offset));
+        }
+        Ok(out)
+    }
+}
+
+impl RangeConstructor for HostObject {
+    /// `new Range()`, whose start and end are the *current global object's*
+    /// associated `Document` at offset `0`
+    /// (<https://dom.spec.whatwg.org/#dom-range-range>).
+    ///
+    /// The document is taken from the realm and not from `Document.createRange`'s
+    /// receiver, and the record is minted in the realm's own slot, so a range the
+    /// page makes with `new Range()` and one it makes with
+    /// `document.createRange()` are the same kind of object in the same place.
+    fn construct(realm: &Realm) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        let point = {
+            let doc = ctx.doc.borrow();
+            RangePoint {
+                node: encode_node(ctx.slot, doc.node_ref(doc.document_node())),
+                offset: 0,
+            }
+        };
+        Ok(HostObject::host_record(
+            ctx.clone(),
+            insert_range(&ctx, point, point)?,
+        ))
+    }
+}
+
+impl StaticRangeConstructor for HostObject {
+    /// `new StaticRange(init)`: the four members are *copied*, and nothing is
+    /// validated against the tree.
+    ///
+    /// Two things are refused, both because the standard's own definition of a
+    /// static range says its containers are nodes a range could hold, and
+    /// `StaticRange-constructor.html`'s last block asserts `InvalidNodeTypeError`
+    /// for both:
+    ///
+    /// - a `DocumentType`, which is a node of this tree and would resolve;
+    /// - an `Attr`, which inherits `Node` but uses a host record rather than
+    ///   an arena slot and so arrives as a `TAG_HOST` handle. Resolving it like
+    ///   an arena node would answer `TypeError` instead of the required
+    ///   `InvalidNodeTypeError`.
+    fn construct(realm: &Realm, init: StaticRangeInit) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        for handle in [init.start_container, init.end_container] {
+            let decoded = decode(handle.bits());
+            if decoded.tag == TAG_HOST {
+                let is_attr = ctx.documents.get(decoded.slot).is_some_and(|context| {
+                    matches!(
+                        context.host_records.borrow().get(decoded.host_key()),
+                        Some(HostRecord::Attr(_))
+                    )
+                });
+                return Err(if is_attr {
+                    invalid_node_type("an Attr cannot be a StaticRange endpoint")
+                } else {
+                    JsError::type_error("a StaticRange endpoint must be a Node")
+                });
+            }
+            let (doc, id) = resolve_node_handle(&ctx, handle.bits())?;
+            if doc.borrow().kind(id) == NodeKind::DocType {
+                return Err(invalid_node_type(
+                    "a DocumentType cannot be a StaticRange endpoint",
+                ));
+            }
+        }
+        let start = RangePoint {
+            node: init.start_container.bits(),
+            offset: init.start_offset,
+        };
+        let end = RangePoint {
+            node: init.end_container.bits(),
+            offset: init.end_offset,
+        };
+        Ok(HostObject::host_record(
+            ctx.clone(),
+            insert_static_range(&ctx, start, end)?,
+        ))
+    }
+}
+
+#[cfg(any(feature = "v8", feature = "quickjs"))]
+impl CSSOps for HostObject {
+    fn supports_1(condition_text: &str) -> Result<bool, JsError> {
+        Ok(supports_condition(condition_text, &about_blank()))
+    }
+
+    fn supports_2(property: &str, value: &str) -> Result<bool, JsError> {
+        Ok(supports_property(property, value, &about_blank()))
     }
 }
 
@@ -5867,7 +8718,7 @@ fn document_slots_exhausted() -> JsError {
 fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
     let params = match slab.get(key)? {
         HostRecord::Params(params) => params,
-        HostRecord::Url(_) | HostRecord::Headers(_) => return None,
+        HostRecord::EventTarget | HostRecord::Url(_) | HostRecord::Headers(_) => return None,
         // Neither abort record holds a pair list, so neither owns pairs.
         HostRecord::Controller(_) | HostRecord::Signal(_) => return None,
         // A response holds no pair list of its own; its headers do.
@@ -5878,29 +8729,52 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
         // would read.
         HostRecord::TextDecoder(_)
         | HostRecord::TextEncoder
+        | HostRecord::DomParser
+        | HostRecord::XmlSerializer
         | HostRecord::Xhr(_)
         | HostRecord::Blob(_)
         | HostRecord::File(_)
         | HostRecord::Implementation
         | HostRecord::Attr(_)
-        | HostRecord::FormData(_) => return None,
+        | HostRecord::FormData(_)
+        | HostRecord::Storage(_)
+        | HostRecord::Crypto => return None,
+        // A range holds two node handles and no pair list either.
+        HostRecord::Range(_) | HostRecord::StaticRange(_) => return None,
+        #[cfg(any(feature = "v8", feature = "quickjs"))]
+        HostRecord::CssSheet(_)
+        | HostRecord::CssRuleList(_)
+        | HostRecord::CssStyleRule(_)
+        | HostRecord::CssRuleStyle(_) => return None,
     };
     match params.url {
         Some(owner) => match slab.get(owner)? {
             HostRecord::Url(record) => Some(parse_pairs(record.url.query().unwrap_or(""))),
-            HostRecord::Params(_)
+            HostRecord::EventTarget
+            | HostRecord::Params(_)
             | HostRecord::Headers(_)
             | HostRecord::Controller(_)
             | HostRecord::Signal(_)
             | HostRecord::Response(_)
             | HostRecord::TextDecoder(_)
             | HostRecord::TextEncoder
+            | HostRecord::DomParser
+            | HostRecord::XmlSerializer
             | HostRecord::Xhr(_)
             | HostRecord::Blob(_)
             | HostRecord::File(_)
             | HostRecord::Attr(_)
             | HostRecord::FormData(_)
-            | HostRecord::Implementation => None,
+            | HostRecord::Range(_)
+            | HostRecord::StaticRange(_)
+            | HostRecord::Implementation
+            | HostRecord::Storage(_)
+            | HostRecord::Crypto => None,
+            #[cfg(any(feature = "v8", feature = "quickjs"))]
+            HostRecord::CssSheet(_)
+            | HostRecord::CssRuleList(_)
+            | HostRecord::CssStyleRule(_)
+            | HostRecord::CssRuleStyle(_) => None,
         },
         None => Some(params.list.clone()),
     }
@@ -5975,6 +8849,8 @@ fn url_search_params(ctx: &HostContext, key: HostKey) -> Result<Handle<URLSearch
 /// touched: a `match` on `slab.get` borrows the slab for the whole match, so the
 /// two steps cannot be interleaved.
 enum HostLink {
+    /// A standalone target has no native incoming owner.
+    EventTarget,
     /// The record is a URL holding this `[[searchParams]]` key, if any.
     Url(Option<HostKey>),
     /// The record is a query object holding the key of its URL, if any.
@@ -5993,6 +8869,10 @@ enum HostLink {
     TextDecoder,
     /// The record is a `TextEncoder`, which links to nothing.
     TextEncoder,
+    /// The record is a `DOMParser`, which links to nothing.
+    DomParser,
+    /// The record is an `XMLSerializer`, which links to nothing.
+    XmlSerializer,
     /// The record is an `XMLHttpRequest`, which links to nothing.
     Xhr,
     /// The record is a `Blob`, which links to nothing.
@@ -6009,6 +8889,23 @@ enum HostLink {
     /// The record is an `Attr`, which links to nothing: it names an element by
     /// node reference, and that reference is not a slab key.
     Attr,
+    /// A `Range` owns a document registration, released when its record drops.
+    Range,
+    /// A `StaticRange` owns node handles, released when its record drops.
+    StaticRange,
+    /// A Storage view links to no host record; the page's native lease owns it.
+    Storage,
+    /// The Window Crypto object has no native graph edge.
+    Crypto,
+    /// Constructed CSS records are independently owned by their wrappers.
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    CssSheet,
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    CssRuleList,
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    CssStyleRule,
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    CssRuleStyle,
 }
 
 /// What freeing host records took out of the world: the record slots that left
@@ -6105,6 +9002,7 @@ fn free_record(slab: &mut HostSlab, key: HostKey, out: &mut ReclaimedHost) {
 pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
     let mut freed = ReclaimedHost::default();
     let link = match slab.get(key) {
+        Some(HostRecord::EventTarget) => HostLink::EventTarget,
         Some(HostRecord::Url(record)) => HostLink::Url(record.params),
         Some(HostRecord::Params(record)) => HostLink::Params(record.url),
         Some(HostRecord::Headers(record)) => HostLink::Headers(record.response),
@@ -6113,12 +9011,26 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         Some(HostRecord::Response(record)) => HostLink::Response(record.headers),
         Some(HostRecord::TextDecoder(_)) => HostLink::TextDecoder,
         Some(HostRecord::TextEncoder) => HostLink::TextEncoder,
+        Some(HostRecord::DomParser) => HostLink::DomParser,
+        Some(HostRecord::XmlSerializer) => HostLink::XmlSerializer,
         Some(HostRecord::Xhr(_)) => HostLink::Xhr,
         Some(HostRecord::Blob(_)) => HostLink::Blob,
         Some(HostRecord::File(record)) => HostLink::File(record.owners.clone()),
         Some(HostRecord::FormData(record)) => HostLink::FormData(file_keys(&record.list)),
         Some(HostRecord::Implementation) => HostLink::Implementation,
         Some(HostRecord::Attr(_)) => HostLink::Attr,
+        Some(HostRecord::Range(_)) => HostLink::Range,
+        Some(HostRecord::StaticRange(_)) => HostLink::StaticRange,
+        Some(HostRecord::Storage(_)) => HostLink::Storage,
+        Some(HostRecord::Crypto) => HostLink::Crypto,
+        #[cfg(any(feature = "v8", feature = "quickjs"))]
+        Some(HostRecord::CssSheet(_)) => HostLink::CssSheet,
+        #[cfg(any(feature = "v8", feature = "quickjs"))]
+        Some(HostRecord::CssRuleList(_)) => HostLink::CssRuleList,
+        #[cfg(any(feature = "v8", feature = "quickjs"))]
+        Some(HostRecord::CssStyleRule(_)) => HostLink::CssStyleRule,
+        #[cfg(any(feature = "v8", feature = "quickjs"))]
+        Some(HostRecord::CssRuleStyle(_)) => HostLink::CssRuleStyle,
         None => return freed,
     };
     match link {
@@ -6132,12 +9044,27 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         // record's key, so the caller drains them from the freed key. A `Blob`
         // is the same shape again: nothing but its own wrapper can reach it, and
         // it owns no second record.
-        HostLink::TextDecoder
+        HostLink::EventTarget
+        | HostLink::TextDecoder
         | HostLink::TextEncoder
+        | HostLink::DomParser
+        | HostLink::XmlSerializer
         | HostLink::Xhr
         | HostLink::Blob
         | HostLink::Implementation
-        | HostLink::Attr => {
+        | HostLink::Attr
+        | HostLink::Range
+        | HostLink::StaticRange => {
+            free_record(slab, key, &mut freed);
+        }
+        HostLink::Storage | HostLink::Crypto => {
+            free_record(slab, key, &mut freed);
+        }
+        #[cfg(any(feature = "v8", feature = "quickjs"))]
+        HostLink::CssSheet
+        | HostLink::CssRuleList
+        | HostLink::CssStyleRule
+        | HostLink::CssRuleStyle => {
             free_record(slab, key, &mut freed);
         }
         // A file record is the shape a `FormData` entry list makes two-way: its
@@ -7995,18 +10922,9 @@ fn normalize_blob_type(value: &str) -> String {
 /// The bytes a `Blob` or `File` record holds, or `None` when `handle` names
 /// neither.
 ///
-/// This is the brand check the generated `BlobPart` union cannot perform. Its
-/// `Blob` arm is lowered to the test `value.is_object()`
-/// (`crates/tenta-idl/src/codegen/types.rs`'s `union_test` — *every* object, not
-/// a brand check) followed by `handle_from_v8::<Blob>`, and the V8
-/// `WrapperWorld::handle` (`crates/tenta-js-v8/src/world.rs`) ignores the
-/// interface name the prelude hands it: it answers with the host bits of any
-/// object that carries a host pointer, and with the window's handle for the
-/// global object. So the conversion alone accepts a `URL`, a `Headers`, a
-/// `Response`, a `TextDecoder`, a node, an event or the window, and the bits it
-/// returns point at a record of some other kind. Resolving the record here is
-/// what makes that unreachable: `HostRecord::interface_name` already names the
-/// interface, because every one of these wrappers shares `TAG_HOST`.
+/// The generated conversion checks the JavaScript interface brand. Resolving
+/// the tag and record variant here also validates handles supplied directly by
+/// Rust callers and distinguishes Blob from its File subclass.
 ///
 /// The tag test is not redundant with the record lookup. A window handle carries
 /// no key at all — `encode_window` is the tag alone — so reading its
@@ -8463,14 +11381,9 @@ enum BlobSource {
 
 /// Resolves the `Blob` or `File` record `handle` names, or refuses it.
 ///
-/// This is the brand check the generated `(Blob or USVString)` union cannot
-/// perform, for exactly the reasons [`blob_bytes_of`] records: the union's
-/// `Blob` arm is lowered to the test `value.is_object()` — *every* object, not a
-/// brand check — and the V8 `WrapperWorld::handle` ignores the interface name it
-/// is handed, so the conversion succeeds for any wrapper carrying a host
-/// pointer. What this function adds to that reasoning is the direction the entry
-/// needs: it has to say *which* of the two records the argument named, because
-/// that decides the entry's identity and its `lastModified`.
+/// As in [`blob_bytes_of`], record validation protects Rust callers as well as
+/// the generated binding path. Distinguishing Blob from File determines the
+/// entry's identity and whether its `lastModified` value is preserved.
 ///
 /// The tag test is not redundant with the record lookup. A window handle carries
 /// no key at all — `encode_window` is the tag alone — so reading its `host_key`
@@ -9449,8 +12362,8 @@ impl XMLHttpRequestOps for HostObject {
         self.with_xhr_mut((), |record| record.timeout = value);
     }
 
-    fn with_credentials(&self) -> bool {
-        self.with_xhr(false, |record| record.with_credentials)
+    fn with_credentials(&self) -> Result<bool, JsError> {
+        Ok(self.with_xhr(false, |record| record.with_credentials))
     }
 
     fn set_with_credentials(&self, value: bool) -> Result<(), JsError> {
@@ -10449,8 +13362,9 @@ fn split_header_value(value: &[u8]) -> Vec<Vec<u8>> {
 impl HostObject {
     /// Builds and dispatches the synthetic, untrusted `click` `MouseEvent` for
     /// [`HTMLElementOps::click`]. The event bubbles, is cancelable and composed,
-    /// carries `detail` 1 and `button` 0 with every coordinate and modifier at
-    /// its default, and no related target. If no listener created a wrapper for
+    /// carries the default `detail` 0 and `button` 0, with every coordinate and modifier at
+    /// its default, and no related target. Its view is the target document's
+    /// Window, if any. If no listener created a wrapper for
     /// it, its slab record is removed here so a transient click leaks nothing;
     /// when a wrapper exists, the world's dead-event sweep reclaims the record.
     fn dispatch_synthetic_click(&self, doc: &SharedDocument, id: NodeId) -> Result<(), JsError> {
@@ -10468,18 +13382,19 @@ impl HostObject {
         let mut record = EventRecord::new(
             "click".to_owned(),
             EventKind::Mouse {
-                detail: 1,
+                view: (ctx.slot == 0).then_some(encode_window()),
+                detail: 0,
+                which: 0,
                 screen_x: 0,
                 screen_y: 0,
                 client_x: 0,
                 client_y: 0,
-                ctrl: false,
-                shift: false,
-                alt: false,
-                meta: false,
+                modifiers: 0,
                 button: 0,
                 buttons: 0,
                 related_target: None,
+                related_value: None,
+                wheel: None,
             },
             ctx.time_stamp(),
         );
@@ -10613,8 +13528,6 @@ fn node_name(doc: &Document, id: NodeId) -> String {
     }
 }
 
-/// The DOM `tagName` of an element: the qualified name, ASCII-uppercased for
-/// elements in the HTML namespace (https://dom.spec.whatwg.org/#dom-element-tagname).
 /// The qualified name of an attribute (`prefix:local`, or just `local` when
 /// there is no prefix), as `getAttributeNames` reports it
 /// (<https://dom.spec.whatwg.org/#dom-element-getattributenames>).
@@ -10625,23 +13538,56 @@ fn qualified_attr_name(name: &QualName) -> String {
     }
 }
 
+/// DOM's get-by-name comparison lowercases the requested qualified name only
+/// for an HTML-namespace element in an HTML document. XML documents and SVG
+/// elements retain case-sensitive qualified names.
+fn attribute_qualified_name_for_lookup<'a>(
+    doc: &Document,
+    id: NodeId,
+    name: &'a str,
+) -> std::borrow::Cow<'a, str> {
+    if name.bytes().any(|byte| byte.is_ascii_uppercase())
+        && doc.is_html_document()
+        && doc.namespace(id) == Some(atoms::NS_HTML)
+    {
+        std::borrow::Cow::Owned(name.to_ascii_lowercase())
+    } else {
+        std::borrow::Cow::Borrowed(name)
+    }
+}
+
+/// The first attribute with this normalized qualified name, irrespective of
+/// namespace. Callers apply the element/document case rule before this lookup.
+fn attribute_by_qualified_name<'a>(
+    doc: &'a Document,
+    id: NodeId,
+    name: &str,
+) -> Option<(QualName, &'a str)> {
+    doc.attributes(id).find(|(stored, _)| match stored.prefix {
+        Some(prefix) => {
+            name.strip_prefix(prefix.as_str())
+                .and_then(|suffix| suffix.strip_prefix(':'))
+                == Some(stored.local.as_str())
+        }
+        None => name == stored.local.as_str(),
+    })
+}
+
 /// The elements an `Element.getElementsByTagNameNS` /
 /// `Document.getElementsByTagNameNS` query selects under `root`, as a snapshot
 /// of node references.
 ///
 /// `namespace` and `local_name` are the operation's own arguments: `"*"` matches
-/// anything in that position, `None` is the null namespace (which the empty
-/// string is too), and a `None` local name — what a `null` argument becomes — is
-/// the empty string, which no element has, so it selects nothing.
+/// anything in that position. `None` and the empty string both select the null
+/// namespace. Local names have already undergone ordinary DOMString conversion.
 fn qualified_snapshot(
     doc: &Document,
     root: NodeId,
     namespace: Option<&str>,
-    local_name: Option<&str>,
+    local_name: &str,
     include_root: bool,
 ) -> Vec<NodeRef> {
     let namespace = namespace.filter(|ns| !ns.is_empty());
-    let local_name = local_name.unwrap_or_default();
     let matches = |id: NodeId| {
         if doc.kind(id) != NodeKind::Element {
             return false;
@@ -10691,10 +13637,9 @@ fn attribute_name_ns(
     doc: &Document,
     id: NodeId,
     namespace: Option<&str>,
-    local_name: Option<&str>,
+    local_name: &str,
 ) -> Option<AttrName> {
     let namespace = namespace.filter(|ns| !ns.is_empty());
-    let local_name = local_name.unwrap_or_default();
     if local_name.is_empty() {
         return None;
     }
@@ -10708,10 +13653,9 @@ fn lookup_attribute_ns(
     doc: &Document,
     id: NodeId,
     namespace: Option<&str>,
-    local_name: Option<&str>,
+    local_name: &str,
 ) -> Option<String> {
     let namespace = namespace.filter(|ns| !ns.is_empty());
-    let local_name = local_name.unwrap_or_default();
     if local_name.is_empty() {
         return None;
     }
@@ -10727,23 +13671,37 @@ fn attr_not_found() -> JsError {
     JsError::dom_exception("NotFoundError", "The element does not carry that attribute")
 }
 
-/// Mints an `Attr` wrapper host for the attribute `name` of `element` in `ctx`
-/// and returns its handle bits.
-///
-/// The record is fresh on every mint. An attribute in this tree is a row of its
-/// element's packed attribute list rather than a node, so there is no
-/// per-attribute identity to hang a `[SameObject]` rule on: two reads of
-/// `element.attributes[0]` answer with two objects that read the same storage.
-/// `docs/dev/idl.md` records that as the `Attr` deviation's second half.
-fn mint_attr(ctx: &HostContext, element: Option<NodeRef>, name: QualName) -> u64 {
-    mint_attr_record(
-        ctx,
-        AttrRecord {
+/// Returns the canonical live Attr host for an attached attribute, or creates
+/// a detached Attr for Document.createAttribute. The index holds only keys;
+/// the wrapper finalizer still owns reclamation of the record and owner pin.
+fn mint_attr(ctx: &HostContext, element: Option<NodeRef>, name: QualName) -> Result<u64, JsError> {
+    let identity = element.map(|element| attr_identity(element, name));
+    if let Some(identity) = identity
+        && let Some(key) = ctx.attr_index.borrow().get(&identity).copied()
+        && matches!(
+            ctx.host_records.borrow().get(key),
+            Some(HostRecord::Attr(_))
+        )
+    {
+        return Ok(encode_host(ctx.slot, key));
+    }
+    let owner_pin = element
+        .map(|element| AttrOwnerPin::new(ctx.doc.clone(), element.id))
+        .transpose()?;
+    let key = ctx
+        .host_records
+        .borrow_mut()
+        .insert(HostRecord::Attr(AttrRecord {
             element,
             name,
             detached_value: String::new(),
-        },
-    )
+            owner_pin,
+            child_nodes: None,
+        }));
+    if let Some(identity) = identity {
+        ctx.attr_index.borrow_mut().insert(identity, key);
+    }
+    Ok(encode_host(ctx.slot, key))
 }
 
 /// Mints a *detached* `Attr` carrying `value` — the object a write through a
@@ -10756,6 +13714,8 @@ fn mint_detached_attr(ctx: &HostContext, name: QualName, value: String) -> u64 {
             element: None,
             name,
             detached_value: value,
+            owner_pin: None,
+            child_nodes: None,
         },
     )
 }
@@ -10778,9 +13738,23 @@ fn attr_record(ctx: &HostContext, key: HostKey) -> Option<AttrRecord> {
             element: record.element,
             name: record.name.clone(),
             detached_value: record.detached_value.clone(),
+            owner_pin: None,
+            child_nodes: record.child_nodes,
         }),
         _ => None,
     }
+}
+
+/// A Node-typed handle for an Attr in this world, including a minted document.
+fn is_attr_handle(ctx: &HostContext, bits: u64) -> bool {
+    let decoded = decode(bits);
+    decoded.tag == TAG_HOST
+        && ctx.documents.get(decoded.slot).is_some_and(|owner| {
+            matches!(
+                owner.host_records.borrow().get(decoded.host_key()),
+                Some(HostRecord::Attr(_))
+            )
+        })
 }
 
 /// Whether `c` may begin a name at the DOM boundary.
@@ -10868,43 +13842,6 @@ fn validate_attribute_name(name: &str) -> Result<(), JsError> {
     Ok(())
 }
 
-/// One parsed declaration of an inline `style` block (`CSSStyleDeclaration`).
-struct StyleDeclaration {
-    name: String,
-    value: String,
-    important: bool,
-}
-
-/// Splits a trailing `!important` (ASCII case-insensitive) off a declaration
-/// value, returning the remaining value and whether the flag was present.
-fn split_important(value: &str) -> (&str, bool) {
-    const IMPORTANT: &str = "!important";
-    let trimmed = value.trim_end();
-    if trimmed.len() >= IMPORTANT.len() {
-        let (head, tail) = trimmed.split_at(trimmed.len() - IMPORTANT.len());
-        if tail.eq_ignore_ascii_case(IMPORTANT) {
-            return (head, true);
-        }
-    }
-    (value, false)
-}
-
-/// Serialises a declaration block into the `style` attribute form
-/// (`name: value;` declarations joined by a space).
-fn serialize_declarations(declarations: &[StyleDeclaration]) -> String {
-    declarations
-        .iter()
-        .map(|declaration| {
-            if declaration.important {
-                format!("{}: {} !important;", declaration.name, declaration.value)
-            } else {
-                format!("{}: {};", declaration.name, declaration.value)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// Validates a `DOMTokenList` token (`add`/`remove`/`toggle`/`replace`): an
 /// empty token is a `SyntaxError`, a token with ASCII whitespace is an
 /// `InvalidCharacterError` (<https://dom.spec.whatwg.org/#dom-domtokenlist-add>).
@@ -10981,7 +13918,7 @@ fn validate_and_extract<'a>(
 }
 
 /// The DOM `tagName` of an element: the *qualified* name, ASCII-uppercased for
-/// elements in the HTML namespace
+/// elements in the HTML namespace whose node document is an HTML document
 /// (<https://dom.spec.whatwg.org/#dom-element-tagname>).
 ///
 /// The qualified name, not the local name: `createElementNS(HTMLNS, "html:span")`
@@ -10998,7 +13935,7 @@ fn element_tag_name(doc: &Document, id: NodeId) -> String {
         }
         _ => local.as_str().to_owned(),
     };
-    if doc.namespace(id) == Some(atoms::NS_HTML) {
+    if doc.is_html_document() && doc.namespace(id) == Some(atoms::NS_HTML) {
         qualified.to_ascii_uppercase()
     } else {
         qualified
@@ -11011,8 +13948,9 @@ fn element_tag_name(doc: &Document, id: NodeId) -> String {
 /// The document slot was eight bits until a world could hold more than one
 /// document, and the four bits it gave up are the tag's: ten tags are in use,
 /// `TAG_HOST` multiplexes the host-owned classes by a record field rather than
-/// by a tag, and a node's generation and id are the two fields whose width the
-/// arena's own types (`u32` and `u16`) pin.
+/// by a tag. A node id occupies 32 bits; generations occupy 16 bits. The arena
+/// stores a u32 generation but retires each index before a live generation can
+/// exceed the packed field, so no node identity is silently truncated.
 ///
 /// The slot is 12 bits because a page's *demand* is wider than eight: the
 /// largest `dom/nodes` file, `DOMImplementation-createDocument.html`, mints
@@ -11046,7 +13984,7 @@ pub const TAG_EVENT: u8 = 5;
 /// Handle tag for an element's `DOMTokenList` (`classList`); like a live
 /// collection, it anchors to the owning element's node.
 pub const TAG_TOKEN_LIST: u8 = 6;
-/// Handle tag for an element's inline `CSSStyleDeclaration` (`style`); it
+/// Handle tag for an element's inline `CSSStyleProperties` (`style`); it
 /// anchors to the owning element's node like a live collection.
 pub const TAG_STYLE: u8 = 7;
 /// Handle tag for the window. The window is not a node — it has no arena slot
@@ -11140,9 +14078,8 @@ impl DecodedHandle {
 /// [`DocumentSet`] that never hands out a slot wider than the field, and
 /// `DocumentSet::next_slot` is where running out is turned into an error.
 fn pack(tag: u8, slot: u16, node: NodeRef) -> u64 {
-    // TODO(phase 1): the arena generation is `u32`; the low 16 bits are enough
-    // to catch slot reuse within a page.
-    let generation = node.generation as u16;
+    let generation = u16::try_from(node.generation)
+        .expect("live native generations fit the packed handle identity");
     ((tag as u64) << TAG_SHIFT)
         | (((slot as u64) & DOC_SLOT_MASK) << DOC_SLOT_SHIFT)
         | ((node.id.raw() as u64) << NODE_ID_SHIFT)
@@ -11150,31 +14087,61 @@ fn pack(tag: u8, slot: u16, node: NodeRef) -> u64 {
 }
 
 /// Packs a node reference into a [`TAG_NODE`] handle, in document `slot`.
+///
+/// References minted for live document nodes fit the sixteen-bit generation
+/// field because the arena retires exhausted indices. Packing does not test
+/// current liveness; a previously minted stale reference remains stale when
+/// resolved by the wrapper world.
+///
+/// # Panics
+///
+/// Panics if `node.generation` exceeds `u16::MAX`, violating the minted-reference
+/// precondition. Such a value is never the generation of a live arena node.
 pub fn encode_node(slot: u16, node: NodeRef) -> u64 {
     pack(TAG_NODE, slot, node)
 }
 
 /// Packs a list owner's reference into a [`TAG_NODE_LIST`] handle.
+///
+/// # Panics
+///
+/// Uses the same minted-generation precondition as [`encode_node`].
 pub fn encode_collection(slot: u16, owner: NodeRef) -> u64 {
     pack(TAG_NODE_LIST, slot, owner)
 }
 
 /// Packs a collection owner's reference into a [`TAG_HTML_COLLECTION`] handle.
+///
+/// # Panics
+///
+/// Uses the same minted-generation precondition as [`encode_node`].
 pub fn encode_html_collection(slot: u16, owner: NodeRef) -> u64 {
     pack(TAG_HTML_COLLECTION, slot, owner)
 }
 
 /// Packs a token-list owner's reference into a [`TAG_TOKEN_LIST`] handle.
+///
+/// # Panics
+///
+/// Uses the same minted-generation precondition as [`encode_node`].
 pub fn encode_token_list(slot: u16, owner: NodeRef) -> u64 {
     pack(TAG_TOKEN_LIST, slot, owner)
 }
 
 /// Packs a `NamedNodeMap` owner's reference into a [`TAG_NAMED_NODE_MAP`] handle.
+///
+/// # Panics
+///
+/// Uses the same minted-generation precondition as [`encode_node`].
 pub fn encode_named_node_map(slot: u16, owner: NodeRef) -> u64 {
     pack(TAG_NAMED_NODE_MAP, slot, owner)
 }
 
 /// Packs a style declaration owner's reference into a [`TAG_STYLE`] handle.
+///
+/// # Panics
+///
+/// Uses the same minted-generation precondition as [`encode_node`].
 pub fn encode_style(slot: u16, owner: NodeRef) -> u64 {
     pack(TAG_STYLE, slot, owner)
 }

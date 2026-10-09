@@ -465,18 +465,12 @@ fn initialize_a_response_rejects_a_bad_status_or_body() {
             results.push(attempt(() => new Response(new Uint8Array(0), { status: 304 })));
             // Below the range, so the range check wins over the null body rule.
             results.push(attempt(() => new Response('hi', { status: 103 })));
-            // A throwing getter in the dictionary. WebIDL says the exception
-            // propagates, and this engine loses it when the throwing member is
-            // not the last one read: the generated `dictionary_member` maps an
-            // empty `Object::get` — the shape a throw takes — to "member
-            // absent", and the next member lookup then drops the pending
-            // exception. Pre-existing, not this slice's: `TextDecoderOptions`
-            // behaves identically. Reported, not worked around.
+            // A throwing dictionary getter propagates its original exception
+            // even when later members would otherwise be read.
             results.push(attempt(() => new Response('hi', { get status() {
                 throw new RangeError('boom');
             } })));
-            // The last member's exception does survive, which is what pins the
-            // rule above rather than leaving it a bare observation.
+            // A throwing getter for another member follows the same rule.
             results.push(attempt(() => new Response('hi', { get headers() {
                 throw new RangeError('boom');
             } })));
@@ -487,7 +481,7 @@ fn initialize_a_response_rejects_a_bad_status_or_body() {
             "|TypeError:TypeError|no throw|no throw",
             "|TypeError:TypeError|no throw|no throw",
             "|TypeError:TypeError|TypeError:TypeError",
-            "|RangeError:RangeError|no throw|RangeError:RangeError",
+            "|RangeError:RangeError|RangeError:RangeError|RangeError:RangeError",
         )
     );
 }

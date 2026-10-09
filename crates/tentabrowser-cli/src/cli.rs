@@ -126,10 +126,15 @@ pub struct FetchArgs {
     /// The URL to fetch.
     pub url: String,
 
-    /// What to print. The global `--json` is a shorthand for `--dump json`
-    /// and wins over this flag.
-    #[arg(long, value_enum, default_value_t = Dump::Text)]
-    pub dump: Dump,
+    /// What to print. Defaults to text; the global `--json` wins over this flag.
+    /// Cannot be combined with `--eval`.
+    #[arg(long, value_enum)]
+    pub dump: Option<Dump>,
+
+    /// Evaluate a JavaScript expression after the requested wait and print its
+    /// completion text. Requires a build with `--features v8`.
+    #[arg(short = 'e', long, value_name = "EXPRESSION")]
+    pub eval: Option<String>,
 
     /// Restrict `text` and `markdown` to the page's main content.
     #[arg(long)]
@@ -324,7 +329,8 @@ mod tests {
         let Command::Fetch(args) = cli.command else {
             panic!("expected fetch");
         };
-        assert_eq!(args.dump, Dump::Text);
+        assert_eq!(args.dump, None);
+        assert_eq!(args.eval, None);
         assert_eq!(args.wait, Wait::Load);
         assert!(args.output.is_none());
         assert!(!cli.global.allow_private_network);

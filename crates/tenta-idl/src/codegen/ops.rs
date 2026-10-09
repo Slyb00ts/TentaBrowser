@@ -80,6 +80,36 @@ pub fn interface_ops(model: &Model, interface: &Interface) -> String {
         };
         operation_item(&group, overload, &mut out);
     }
+    let properties = super::legacy::LegacyProperties::resolve(model, interface);
+    if properties
+        .indexed_getter
+        .is_some_and(|getter| getter.interface == name)
+    {
+        separate(&mut out, &mut first);
+        out.push_str(concat!(
+            "    /// The currently supported property indices, in ascending order.\n",
+            "    /// The owning specification defines this set, independently of getter values.\n",
+            "    fn supported_property_indices(&self) -> Result<Vec<u32>, JsError>;\n\n",
+            "    /// Whether `index` is supported. Override for an allocation-free lookup.\n",
+            "    fn is_supported_property_index(&self, index: u32) -> Result<bool, JsError> {\n",
+            "        Ok(self.supported_property_indices()?.contains(&index))\n",
+            "    }\n",
+        ));
+    }
+    if properties
+        .named_getter
+        .is_some_and(|getter| getter.interface == name)
+    {
+        separate(&mut out, &mut first);
+        out.push_str(concat!(
+            "    /// The currently supported property names, in the owning specification's order.\n",
+            "    fn supported_property_names(&self) -> Result<Vec<String>, JsError>;\n\n",
+            "    /// Whether `name` is supported, independently of prototype visibility.\n",
+            "    fn is_supported_property_name(&self, name: &str) -> Result<bool, JsError> {\n",
+            "        Ok(self.supported_property_names()?.iter().any(|candidate| candidate == name))\n",
+            "    }\n",
+        ));
+    }
     if let Some(iterable) = &interface.iterable
         && let Some(key) = &iterable.key
         && !iterable.is_async
@@ -238,10 +268,14 @@ fn operation_item(group: &OperationGroup, operation: &Operation, out: &mut Strin
         parameters.push(format!(
             "{}: {}",
             argument.rust_name,
-            argument_type(argument)
+            operation_argument_type(argument, operation.buffer_references())
         ));
     }
-    let return_type = rust_type(&operation.return_type, Position::Owned);
+    let return_type = super::rust_type::operation_buffer_type(
+        &operation.return_type,
+        operation.buffer_references(),
+        Position::Owned,
+    );
     let return_clause = match operation.fast {
         FastApi::Eligible if operation.return_type == Type::Undefined => String::new(),
         FastApi::Eligible => format!(" -> {return_type}"),
@@ -268,6 +302,9 @@ fn operation_item(group: &OperationGroup, operation: &Operation, out: &mut Strin
             out,
             "    ///\n    /// Included from `interface mixin {mixin}`.\n"
         );
+    }
+    if parameters.len() > 7 {
+        out.push_str("    // WebIDL fixes this operation's parameter list.\n    #[allow(clippy::too_many_arguments)]\n");
     }
     let _ = writeln!(
         out,
@@ -334,6 +371,20 @@ fn constructor_trait(interface: &Interface, out: &mut String) {
         );
     }
     out.push_str("}\n");
+}
+
+fn operation_argument_type(argument: &Argument, references: bool) -> String {
+    if references
+        && matches!(
+            argument.ty,
+            Type::Buffer(
+                crate::model::BufferType::BufferSource | crate::model::BufferType::ArrayBufferView
+            )
+        )
+    {
+        return super::rust_type::operation_buffer_type(&argument.ty, true, Position::Argument);
+    }
+    argument_type(argument)
 }
 
 /// The Rust type of an argument, taking `optional` and `T...` into account.

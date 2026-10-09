@@ -89,6 +89,14 @@ impl TimerQueue {
         self.live.is_empty()
     }
 
+    /// Drops every scheduled timer without resetting the id or insertion-order
+    /// sequences. A handle issued before this call must never name a timer
+    /// scheduled afterwards.
+    pub(crate) fn clear(&mut self) {
+        self.heap.clear();
+        self.live.clear();
+    }
+
     /// Schedules a timer `delay_ms` after `now`, applying the Chromium nesting
     /// clamp, and returns its id. `nesting_level` is the current timer nesting
     /// level (1 for a timer scheduled from a top-level task).

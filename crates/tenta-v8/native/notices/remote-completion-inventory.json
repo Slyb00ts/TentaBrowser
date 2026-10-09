@@ -1,0 +1,62 @@
+[
+  {
+    "name": "llvm-libc",
+    "repository": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc",
+    "revision": "75ae50cd48c8a9d70f552ccff040029968778da9",
+    "subdirectory": "",
+    "tree": "a76e949547e2e0c26351b50c2a0774bd56e1f08b",
+    "notices": [
+      {
+        "mode": 33188,
+        "type": "blob",
+        "id": "24806ab4c9eb291db4d28e159901f7a0901b9fd1",
+        "name": "LICENSE.TXT"
+      }
+    ]
+  },
+  {
+    "name": "utf8-decoder",
+    "repository": "https://chromium.googlesource.com/v8/v8",
+    "revision": "refs/tags/15.2.124.1",
+    "subdirectory": "third_party/utf8-decoder",
+    "tree": "00bdaa4104989d6d36a4f00b990510931971c73f",
+    "notices": [
+      {
+        "mode": 33188,
+        "type": "blob",
+        "id": "b59bef2fb6a81448fccc34f3d45c9405b70bd0dd",
+        "name": "LICENSE"
+      }
+    ]
+  },
+  {
+    "name": "rapidhash-v8",
+    "repository": "https://chromium.googlesource.com/v8/v8",
+    "revision": "refs/tags/15.2.124.1",
+    "subdirectory": "third_party/rapidhash-v8",
+    "tree": "d2b73802401a6c6d55eb221270450cdde8ce5a14",
+    "notices": [
+      {
+        "mode": 33188,
+        "type": "blob",
+        "id": "e70352870fba33e50902c8765cf71e3397b6667c",
+        "name": "LICENSE"
+      }
+    ]
+  },
+  {
+    "name": "siphash",
+    "repository": "https://chromium.googlesource.com/v8/v8",
+    "revision": "refs/tags/15.2.124.1",
+    "subdirectory": "third_party/siphash",
+    "tree": "514827bdf7603a020c241f16d31e00946c2d4555",
+    "notices": [
+      {
+        "mode": 33188,
+        "type": "blob",
+        "id": "670154e3538863b2d9891fd5483160fbdfc89164",
+        "name": "LICENSE"
+      }
+    ]
+  }
+]

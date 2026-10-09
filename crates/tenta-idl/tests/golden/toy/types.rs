@@ -5,6 +5,13 @@
 // Interface marker types. `Handle<Node>` names a host object of interface
 // `Node`; the marker itself is uninhabited and only carries the name.
 
+/// Marker for the WebIDL interface `BufferReferenceProbe` (defined in this module).
+pub enum BufferReferenceProbe {}
+
+impl InterfaceMarker for BufferReferenceProbe {
+    const INTERFACE_NAME: &'static str = "BufferReferenceProbe";
+}
+
 /// Marker for the WebIDL interface `ByteBox` (defined in this module).
 pub enum ByteBox {}
 
@@ -88,7 +95,7 @@ impl CounterState {
         scope: &mut v8::PinScope<'_, '_>,
         value: v8::Local<v8::Value>,
     ) -> Result<Self, JsError> {
-        let text = string_from_v8(scope, value);
+        let text = string_from_v8(scope, value)?;
         Self::parse(&text)
             .ok_or_else(|| JsError::type_error("the value is not a member of enum CounterState"))
     }
@@ -129,6 +136,8 @@ pub struct CounterOptions {
     pub initial_value: i32,
     /// `DOMString label;`
     pub label: Option<String>,
+    /// `DOMString? nullableLabel;`
+    pub nullable_label: Option<Option<String>>,
     /// `boolean autoStart = false;`
     pub auto_start: bool,
 }
@@ -141,12 +150,12 @@ impl CounterOptions {
         value: v8::Local<v8::Value>,
     ) -> Result<Self, JsError> {
         let mut result = Self::default();
-        if value.is_null_or_undefined() {
-            return Ok(result);
-        }
         let object: v8::Local<v8::Object> = value
             .try_into()
             .map_err(|_| JsError::type_error("expected a dictionary for `CounterOptions`"))?;
+        if let Some(member) = dictionary_member(scope, object, "autoStart")? {
+            result.auto_start = (Ok::<bool, JsError>(bool_from_v8(scope, member)))?;
+        }
         if let Some(member) = dictionary_member(scope, object, "initialValue")? {
             result.initial_value = (i32_from_v8(scope, member))?;
         } else {
@@ -155,10 +164,10 @@ impl CounterOptions {
             ));
         }
         if let Some(member) = dictionary_member(scope, object, "label")? {
-            result.label = Some((Ok::<String, JsError>(string_from_v8(scope, member)))?);
+            result.label = Some((string_from_v8(scope, member))?);
         }
-        if let Some(member) = dictionary_member(scope, object, "autoStart")? {
-            result.auto_start = (Ok::<bool, JsError>(bool_from_v8(scope, member)))?;
+        if let Some(member) = dictionary_member(scope, object, "nullableLabel")? {
+            result.nullable_label = Some((if member.is_null_or_undefined() { Ok(None) } else { (string_from_v8(scope, member)).map(Some) })?);
         }
         Ok(result)
     }
@@ -170,28 +179,48 @@ impl CounterOptions {
     ) -> Result<v8::Local<'s, v8::Value>, JsError> {
         let object = v8::Object::new(scope);
         {
-            let member = self.initial_value;
-            let key = v8_string(scope, "initialValue")?;
-            let value = (Ok::<v8::Local<v8::Value>, JsError>(v8::Integer::new(scope, member as i32).into()))?;
-            object
-                .set(scope, key.into(), value)
-                .ok_or_else(|| JsError::type_error("the dictionary member cannot be defined"))?;
-        }
-        {
-            let member = self.label.clone();
-            let key = v8_string(scope, "label")?;
-            let value = (match member { Some(inner) => string_to_v8(scope, &inner), None => Ok(v8::null(scope).into()) })?;
-            object
-                .set(scope, key.into(), value)
-                .ok_or_else(|| JsError::type_error("the dictionary member cannot be defined"))?;
-        }
-        {
             let member = self.auto_start;
             let key = v8_string(scope, "autoStart")?;
             let value = (Ok::<v8::Local<v8::Value>, JsError>(v8::Boolean::new(scope, member).into()))?;
-            object
-                .set(scope, key.into(), value)
-                .ok_or_else(|| JsError::type_error("the dictionary member cannot be defined"))?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
+        }
+        {
+            let member = self.initial_value;
+            let key = v8_string(scope, "initialValue")?;
+            let value = (Ok::<v8::Local<v8::Value>, JsError>(v8::Integer::new(scope, member as i32).into()))?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
+        }
+        if let Some(inner) = &self.label {
+            let member = inner.clone();
+            let key = v8_string(scope, "label")?;
+            let value = (string_to_v8(scope, &member))?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
+        }
+        if let Some(inner) = &self.nullable_label {
+            let member = inner.clone();
+            let key = v8_string(scope, "nullableLabel")?;
+            let value = (match member { Some(inner) => string_to_v8(scope, &inner), None => Ok(v8::null(scope).into()) })?;
+            let defined = object
+                .create_data_property(scope, key.into(), value)
+                .ok_or_else(JsError::pending_exception)?;
+            if !defined {
+                return Err(JsError::type_error("the dictionary member cannot be defined"));
+            }
         }
         Ok(object.into())
     }
@@ -201,10 +230,21 @@ impl CounterOptions {
 impl<'js> rquickjs::FromJs<'js> for CounterOptions {
     fn from_js(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {
         let mut result = Self::default();
+        if !value.is_object() && !value.is_null() && !value.is_undefined() { return Err(rquickjs::Exception::throw_type(ctx, "dictionary requires an object")); }
         let Some(object) = value.as_object() else {
-            return Ok(result);
+            return Err(rquickjs::Exception::throw_type(
+                ctx,
+                "`CounterOptions` requires an object",
+            ));
         };
-        if let Some(member) = object.get::<_, Option<i32>>("initialValue")? {
+        let member: rquickjs::Value = object.get("autoStart")?;
+        if !member.is_undefined() {
+            let member = rquickjs::Coerced::<bool>::from_js(ctx, member).map(|v| v.0)?;
+            result.auto_start = member;
+        }
+        let member: rquickjs::Value = object.get("initialValue")?;
+        if !member.is_undefined() {
+            let member = rquickjs::Coerced::<f64>::from_js(ctx, member).map(|v| to_long(v.0))?;
             result.initial_value = member;
         } else {
             return Err(rquickjs::Exception::throw_type(
@@ -212,11 +252,15 @@ impl<'js> rquickjs::FromJs<'js> for CounterOptions {
                 "`CounterOptions` requires the member `initialValue`",
             ));
         }
-        if let Some(member) = object.get::<_, Option<String>>("label")? {
+        let member: rquickjs::Value = object.get("label")?;
+        if !member.is_undefined() {
+            let member = rquickjs::Coerced::<rquickjs::String>::from_js(ctx, member).and_then(|v| v.0.to_string_lossy())?;
             result.label = Some(member);
         }
-        if let Some(member) = object.get::<_, Option<bool>>("autoStart")? {
-            result.auto_start = member;
+        let member: rquickjs::Value = object.get("nullableLabel")?;
+        if !member.is_undefined() {
+            let member = { let value = member; if value.is_null() || value.is_undefined() { Ok(None) } else { rquickjs::Coerced::<rquickjs::String>::from_js(ctx, value).and_then(|v| v.0.to_string_lossy()).map(Some) } }?;
+            result.nullable_label = Some(member);
         }
         Ok(result)
     }
@@ -226,9 +270,24 @@ impl<'js> rquickjs::FromJs<'js> for CounterOptions {
 impl<'js> rquickjs::IntoJs<'js> for CounterOptions {
     fn into_js(self, ctx: &rquickjs::Ctx<'js>) -> rquickjs::Result<rquickjs::Value<'js>> {
         let object = rquickjs::Object::new(ctx.clone())?;
-        object.set("initialValue", self.initial_value)?;
-        object.set("label", self.label)?;
-        object.set("autoStart", self.auto_start)?;
+        {
+            let member = self.auto_start;
+            let value = (rquickjs::IntoJs::into_js(member, ctx))?;
+            object.prop("autoStart", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
+        {
+            let member = self.initial_value;
+            let value = (rquickjs::IntoJs::into_js(member, ctx))?;
+            object.prop("initialValue", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
+        if let Some(member) = self.label {
+            let value = (rquickjs::IntoJs::into_js(member, ctx))?;
+            object.prop("label", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
+        if let Some(member) = self.nullable_label {
+            let value = (match member { Some(inner) => rquickjs::IntoJs::into_js(inner, ctx), None => Ok(rquickjs::Value::new_null((*ctx).clone())) })?;
+            object.prop("nullableLabel", rquickjs::object::Property::from(value).writable().enumerable().configurable())?;
+        }
         Ok(object.into_value())
     }
 }
@@ -246,9 +305,9 @@ pub enum BufferSourceOrUsvString {
 impl BufferSourceOrUsvString {
     /// Converts a JavaScript value to this union.
     ///
-    /// Arms are tried in declaration order, each one behind the WebIDL test
-    /// that selects it — a sequence by its `@@iterator`, a record by being an
-    /// object that is not an array. The first arm that has no test of its own
+    /// Tested arms keep declaration order except callback interfaces follow
+    /// callable, platform, buffer and iterable arms. A sequence uses
+    /// `@@iterator`; the first arm without a test
     /// is the fallback.
     pub fn from_v8<'s>(
         scope: &mut v8::PinScope<'s, '_>,
@@ -257,7 +316,7 @@ impl BufferSourceOrUsvString {
         if value.is_array_buffer() || value.is_shared_array_buffer() || value.is_array_buffer_view() {
             return (buffer_source_from_v8(scope, value)).map(BufferSourceOrUsvString::BufferSource);
         }
-        (Ok::<String, JsError>(string_from_v8(scope, value))).map(BufferSourceOrUsvString::UsvString)
+        (string_from_v8(scope, value)).map(BufferSourceOrUsvString::UsvString)
     }
 
     /// Converts this union to a JavaScript value.
@@ -281,10 +340,10 @@ impl BufferSourceOrUsvString {
 #[cfg(feature = "quickjs")]
 impl<'js> rquickjs::FromJs<'js> for BufferSourceOrUsvString {
     fn from_js(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {
-        if value.is_object() {
-            return <Vec<u8> as rquickjs::FromJs>::from_js(ctx, value).map(BufferSourceOrUsvString::BufferSource);
+        if quickjs_is_buffer(&value, "BufferSource") {
+            return quickjs_buffer_bytes(ctx, value, "BufferSource").map(BufferSourceOrUsvString::BufferSource);
         }
-        <String as rquickjs::FromJs>::from_js(ctx, value).map(BufferSourceOrUsvString::UsvString)
+        rquickjs::Coerced::<rquickjs::String>::from_js(ctx, value).and_then(|v| v.0.to_string_lossy()).map(BufferSourceOrUsvString::UsvString)
     }
 }
 
@@ -292,7 +351,7 @@ impl<'js> rquickjs::FromJs<'js> for BufferSourceOrUsvString {
 impl<'js> rquickjs::IntoJs<'js> for BufferSourceOrUsvString {
     fn into_js(self, ctx: &rquickjs::Ctx<'js>) -> rquickjs::Result<rquickjs::Value<'js>> {
         match self {
-            BufferSourceOrUsvString::BufferSource(inner) => rquickjs::IntoJs::into_js(inner, ctx),
+            BufferSourceOrUsvString::BufferSource(inner) => quickjs_buffer_value(ctx, inner, "BufferSource"),
             BufferSourceOrUsvString::UsvString(inner) => rquickjs::IntoJs::into_js(inner, ctx),
         }
     }

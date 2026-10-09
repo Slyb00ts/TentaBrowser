@@ -1,9 +1,9 @@
-//! The `tentabrowser` binary: `fetch`, `search` and `scrape` at Tier 1
-//! (`docs/spec/16-roadmap.md` P1).
+//! The `tentabrowser` binary: Tier 1 `fetch`, `search` and `scrape`, with an
+//! opt-in V8 path for `fetch --eval` (`docs/spec/16-roadmap.md` P1/P2).
 //!
-//! The process parses its arguments, builds an engine with the tier ceiling
-//! at `dom` and sends the first request before anything else exists: no
-//! script engine, no style, no fonts (`docs/spec/13-performance.md` §1, §2).
+//! By default the process builds an engine with the tier ceiling at `dom`
+//! and sends the first request without a script engine, style or fonts
+//! (`docs/spec/13-performance.md` §1, §2).
 //! `screenshot`, `serve`, `mcp`, `test` and `daemon` arrive with the phases
 //! that implement what they need.
 

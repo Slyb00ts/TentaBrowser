@@ -1,0 +1,18 @@
+{
+  "executed_base_input_sha256": {
+    "changed-files.json": "a0abd0977a4bb630aa402001a32967ccdc2eb91b5e862c189b9214df3c748b93",
+    "prepare_source.py": "81d27d8e37efeba8e56b14d3784e3bf54a4024d71cdc466f3b202c4c8fe2cf47",
+    "supplemental-inputs.lock.json": "3079347bdda38be7df5e05dc0369a202c9c61798b168d4a1816f26336f6d8ac1",
+    "web-idl-legacy-combined.patch": "2091d2806100fb4ea488312f88fa31ecee871fa773ecd431b4f6da26561a32cd"
+  },
+  "executed_script_sha256": "7c76108537243e3fbfc7ab510622be7e0103e36a86d5adf8d52a61b653527d23",
+  "execution_note": "Executed from a temporary installation layout containing exact copied new recipe files and symlinks to the four accepted live sibling native23 inputs. The same script and hashes are used by the proposed installed path.",
+  "installed_layout_script_sha256": "7c76108537243e3fbfc7ab510622be7e0103e36a86d5adf8d52a61b653527d23",
+  "matched_inputs": 35,
+  "mismatched_inputs": 0,
+  "native30_archive_sha256": "f7393a5194ca5e8360b10c50b465944dad656fec071f7f82dddf01544aa6d8c3",
+  "native30_incremental_patch_sha256": "a688da8fe4174962bfd41242d95560ee271b17333197c40889cd904ad99e036a",
+  "preserved_manifest_sha256": "caf49be3f5b69f9c80028abe81d95512ebe81003efe367ec9243936f659ea81d",
+  "preserved_receipt_sha256": "8327281d17c8cef118ac25f8736fe5b8d0b648d0388281601f62e77e96757e8d",
+  "status": "Final installed-sibling-layout source reconstruction passed; source only, no new native build"
+}

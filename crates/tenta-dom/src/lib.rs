@@ -26,13 +26,15 @@ pub mod text;
 
 pub use arena::{DocTypeData, NodeFlags, NodeKind, PiData, StyleHandle, WrapperSlot};
 pub use document::{
-    Document, MemoryReport, NodeHandle, ReadyState, StopPredicate, SweepStats,
+    Document, LiveRangeId, MemoryReport, NodeHandle, ObserverAgent, ObserverAttachment,
+    RangeBoundary, ReadyState, SharedObserverAgent, StopPredicate, SweepStats,
     validate_doctype_name, validate_processing_instruction_data,
     validate_processing_instruction_target,
 };
 pub use interner::{DocInterner, LocalName};
 pub use mutation::{
     Mutation, MutationObserverSink, MutationRecord, NoopObserverSink, RecordingObserverSink,
+    ReplaceAllWith,
 };
 pub use selectors::{CompiledSelector, ElementRef, SelectorCache, TentaSelectorImpl};
 pub use shared_sink::{SharedDocument, SharedSink};

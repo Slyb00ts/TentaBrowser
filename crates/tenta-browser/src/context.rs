@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use parking_lot::Mutex;
 use tenta_core::{Budgets, ContextId, Error, PageId, Result, Tier};
 use tenta_js::engine::PageEngineFactory;
+use tenta_js::storage::ContextStorage;
 use tenta_net::hooks::{Hooks, Interceptor, Observer};
 use tenta_net::policy::cache::{CacheConfig, HttpCache};
 use tenta_net::policy::cookies::{CookieJar, CookiePolicy, StorageState};
@@ -22,7 +23,7 @@ use tenta_page::page::{Goto, Page, PageConfig, TestHooks, Viewport};
 use tenta_page::settle::Settle;
 use url::Url;
 
-use crate::engine::{EngineInner, TrimLevel, TrimReport};
+use crate::engine::{EngineInner, JsEngine, TrimLevel, TrimReport};
 use crate::extensions::Extensions;
 use crate::hooks::{InterceptHub, ObserverHub};
 
@@ -113,6 +114,7 @@ pub(crate) struct ContextInner {
     engine: Arc<EngineInner>,
     client: Client,
     cookies: CookieJar,
+    storage: ContextStorage,
     cache: HttpCache,
     session_cache: SessionCache,
     destination: DestinationPolicy,
@@ -171,6 +173,7 @@ impl ContextInner {
             Some(budgets) => budgets.clamped_to(&engine.options.budgets),
             None => engine.options.budgets.clone(),
         };
+        let storage = ContextStorage::from_context_budget(&budgets);
 
         let config = ClientConfig {
             profile,
@@ -209,6 +212,7 @@ impl ContextInner {
                 engine,
                 client,
                 cookies,
+                storage,
                 cache,
                 session_cache,
                 destination,
@@ -291,6 +295,7 @@ impl ContextInner {
             page.begin_close();
         }
         self.groups.lock().clear();
+        self.storage.close();
         self.cookies.remove_session_cookies();
         let _ = self.session_cache.flush(std::time::SystemTime::now());
         self.client.close();
@@ -390,18 +395,20 @@ impl BrowserContext {
         self.inner.observers.len()
     }
 
-    /// Playwright's `storageState`: the cookies of this context. Origin
-    /// storage is Tier 2 and lands with it (P2), so `origins` is empty.
+    /// Playwright's `storageState`: cookies and local storage for this context.
+    /// Page-owned session storage is deliberately excluded.
     pub fn storage_state(&self) -> StorageState {
-        self.inner.cookies.to_storage_state()
+        let mut state = self.inner.cookies.to_storage_state();
+        state.origins = self.inner.storage.export_origins();
+        state
     }
 
-    /// Loads cookies from a `storageState` into this context.
+    /// Validates cookies and local origins before applying either store.
     pub fn set_storage_state(&self, state: &StorageState) -> Result<usize> {
         self.inner.check_open()?;
-        self.inner
-            .cookies
-            .load_storage_state(state, std::time::SystemTime::now())
+        let cookies = CookieJar::prepare_storage_state(state, std::time::SystemTime::now())?;
+        self.inner.storage.import_origins(&state.origins)?;
+        Ok(self.inner.cookies.load_prepared_storage_state(cookies))
     }
 
     /// Live page groups of this context.
@@ -422,10 +429,17 @@ impl BrowserContext {
             });
         }
         let max_tier = options.max_tier.unwrap_or(ceiling).min(ceiling);
-        // A page that asked for JavaScript gets the backend's factory; a Tier 1
-        // page never enters an engine, so it is not given one to leave unused.
+        // A page that asked for JavaScript gets the configured backend's
+        // factory. An explicit `None` is a policy choice even when this binary
+        // has V8 compiled in; a Tier 1 page never enters an engine, so it is
+        // not given one to leave unused.
         let engine = if options.javascript {
-            Some(javascript_engine(max_tier)?)
+            if self.inner.engine.options.js == JsEngine::None {
+                return Err(Error::unsupported(
+                    "JavaScript is disabled by EngineOptions.js = JsEngine::None",
+                ));
+            }
+            Some(javascript_engine(max_tier, self.inner.engine.options.js)?)
         } else {
             None
         };
@@ -449,6 +463,7 @@ impl BrowserContext {
             extra_headers: self.inner.extra_headers.clone(),
             viewport: options.viewport,
             cookies: self.inner.cookies.clone(),
+            storage: self.inner.storage.new_page(),
             on_close: Some({
                 let inner = Arc::downgrade(&self.inner);
                 Arc::new(move |page| {
@@ -550,24 +565,29 @@ pub fn parse_url(url: &str) -> Result<Url> {
 /// the feature that supplies one. A build with the V8 backend refuses only a
 /// page whose ceiling is below Tier 2, with the same error a page pinned above
 /// the engine's own ceiling gets.
-fn javascript_engine(ceiling: Tier) -> Result<Arc<dyn PageEngineFactory>> {
-    #[cfg(not(feature = "v8"))]
-    {
-        let _ = ceiling;
-        Err(Error::unsupported(
-            "javascript needs the `v8` feature: rebuild tenta-browser with `--features v8`",
-        ))
+fn javascript_engine(ceiling: Tier, selected: JsEngine) -> Result<Arc<dyn PageEngineFactory>> {
+    let factory = compiled_backend(selected)?;
+    if ceiling < Tier::Js {
+        return Err(Error::TierDenied {
+            needed: Tier::Js,
+            ceiling,
+        });
     }
+    Ok(factory)
+}
+
+fn compiled_backend(selected: JsEngine) -> Result<Arc<dyn PageEngineFactory>> {
     #[cfg(feature = "v8")]
-    {
-        if ceiling < Tier::Js {
-            return Err(Error::TierDenied {
-                needed: Tier::Js,
-                ceiling,
-            });
-        }
-        Ok(Arc::new(tenta_js_v8::V8EngineFactory))
+    if matches!(selected, JsEngine::Auto | JsEngine::V8) {
+        return Ok(Arc::new(tenta_js_v8::V8EngineFactory));
     }
+    #[cfg(feature = "quickjs")]
+    if matches!(selected, JsEngine::Auto | JsEngine::QuickJs) {
+        return Ok(Arc::new(tenta_js_qjs::QuickJsEngineFactory));
+    }
+    Err(Error::unsupported(format!(
+        "JavaScript backend {selected:?} is unavailable; enable `v8` or `quickjs`"
+    )))
 }
 
 #[cfg(test)]

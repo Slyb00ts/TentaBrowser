@@ -4,7 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use tentabrowser::{
-    BrowserContext, ClientProfile, ContextOptions, DownloadPolicy, Engine, FsPolicy, Profile, Tier,
+    BrowserContext, ClientProfile, ContextOptions, DownloadPolicy, Engine, FsPolicy, JsEngine,
+    Profile, Tier,
 };
 
 use crate::cli::{Global, default_profile};
@@ -33,12 +34,21 @@ impl Session {
 /// not one per core, because every thread it never uses is cold-start cost
 /// (`docs/spec/13-performance.md` §2).
 pub fn build_engine(global: &Global, page_threads: usize) -> CliResult<Engine> {
+    build_engine_for_tier(global, page_threads, Tier::Dom)
+}
+
+fn build_engine_for_tier(global: &Global, page_threads: usize, tier: Tier) -> CliResult<Engine> {
     let profile = resolve_profile(global.profile.as_deref())?;
     let session_dir = session_cache_dir(global);
     let policy = fs_policy(global, session_dir.as_deref())?;
 
     let mut builder = Engine::builder()
-        .max_tier(Tier::Dom)
+        .max_tier(tier)
+        .js(if tier == Tier::Js {
+            JsEngine::V8
+        } else {
+            JsEngine::Auto
+        })
         .profile(profile)
         .fs_policy(policy)
         .ephemeral(global.ephemeral)
@@ -68,6 +78,13 @@ pub fn build_context(engine: &Engine, global: &Global) -> CliResult<BrowserConte
 
 pub fn open(global: &Global, page_threads: usize) -> CliResult<Session> {
     let engine = build_engine(global, page_threads)?;
+    let context = build_context(&engine, global)?;
+    Ok(Session { engine, context })
+}
+
+/// Opens the JavaScript page path for an explicit `fetch --eval` request.
+pub fn open_eval(global: &Global) -> CliResult<Session> {
+    let engine = build_engine_for_tier(global, 1, Tier::Js)?;
     let context = build_context(&engine, global)?;
     Ok(Session { engine, context })
 }

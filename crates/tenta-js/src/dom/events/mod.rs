@@ -32,6 +32,8 @@ use crate::bindings::host::{
 use crate::fetch::FetchStartError;
 use crate::xhr::{XhrHandle, XhrRequest};
 
+pub mod cycles;
+
 #[cfg(test)]
 mod tests;
 
@@ -102,9 +104,34 @@ pub trait ScriptHost {
     /// event slab (invariant A5).
     fn invoke_listener(&self, callback: CallbackRef, current_target: u64, event: u64) -> bool;
 
+    /// Reads a callback-scoped, exact native typed-array view.
+    fn array_buffer_view_info(
+        &self,
+        _view: crate::bindings::ArrayBufferViewRef,
+    ) -> Result<crate::bindings::BufferMetadata, JsError>;
+
+    /// Writes independent bytes through a callback-scoped view after revalidation.
+    fn write_array_buffer_view(
+        &self,
+        _view: crate::bindings::ArrayBufferViewRef,
+        _bytes: &[u8],
+    ) -> Result<crate::bindings::BufferMetadata, JsError>;
+
+    /// Polls the engine's native-work watchdog without entering another callback.
+    fn check_native_buffer_work(&self) -> Result<(), JsError>;
+
+    /// Propagates an already-sticky page-memory failure through this engine.
+    fn native_buffer_memory_failure(&self) -> JsError;
+
     /// Drops one owned reference to a stored value (a callback, or a
     /// `CustomEvent` detail).
     fn release_value(&self, bits: u64);
+
+    /// Adds one stored-value reference to an already materialized EventTarget
+    /// wrapper. Window is the immortal realm global and returns `None`.
+    /// Dictionary conversion keeps the original wrapper scoped until this call;
+    /// implementations must not mint a replacement from the native handle.
+    fn retain_existing_target(&self, handle: u64) -> Result<Option<u64>, JsError>;
 
     /// Interns a value the engine has to build and returns the bits that stand
     /// for it, or `None` when this world cannot build one.
@@ -301,12 +328,13 @@ struct GenSlot<T> {
     value: Option<T>,
 }
 
-/// A slab with free-list slot reuse and per-slot generation counters, so a key
-/// to a freed slot cannot alias the next occupant (until the 16-bit generation
-/// wraps, which matches the node-handle TODO and is accepted for this phase).
+/// A slab with free-list slot reuse and per-slot generation counters. Each
+/// index is retired when its u16 identity is exhausted, so a stale key never
+/// aliases a later value.
 pub struct GenSlab<T> {
     slots: Vec<GenSlot<T>>,
     free: Vec<u32>,
+    live: usize,
 }
 
 impl<T> GenSlab<T> {
@@ -315,12 +343,13 @@ impl<T> GenSlab<T> {
         Self {
             slots: Vec::new(),
             free: Vec::new(),
+            live: 0,
         }
     }
 
     /// Inserts a value, reusing a free slot when available, and returns its key.
     pub fn insert(&mut self, value: T) -> GenKey {
-        if let Some(index) = self.free.pop() {
+        let key = if let Some(index) = self.free.pop() {
             let slot = &mut self.slots[index as usize];
             slot.value = Some(value);
             GenKey {
@@ -337,7 +366,9 @@ impl<T> GenSlab<T> {
                 index,
                 generation: 0,
             }
-        }
+        };
+        self.live += 1;
+        key
     }
 
     /// Borrows the value for `key`, or `None` when the key is stale/out of range.
@@ -358,22 +389,25 @@ impl<T> GenSlab<T> {
         slot.value.as_mut()
     }
 
-    /// Frees the slot for `key` (bumping its generation) and returns the value,
-    /// or `None` when the key is already stale.
+    /// Frees the slot for `key` and returns the value, or `None` when stale.
+    /// Exhausted u16 identities are retired instead of aliasing an old key.
     pub fn remove(&mut self, key: GenKey) -> Option<T> {
         let slot = self.slots.get_mut(key.index as usize)?;
         if slot.generation != key.generation {
             return None;
         }
-        slot.generation = slot.generation.wrapping_add(1);
-        let value = slot.value.take();
-        self.free.push(key.index);
-        value
+        let value = slot.value.take()?;
+        if let Some(next) = slot.generation.checked_add(1) {
+            slot.generation = next;
+            self.free.push(key.index);
+        }
+        self.live -= 1;
+        Some(value)
     }
 
     /// The number of live values (test/measurement hook).
     pub fn len(&self) -> usize {
-        self.slots.len() - self.free.len()
+        self.live
     }
 
     /// Whether the slab holds no live values.
@@ -424,6 +458,15 @@ pub struct EventFlags {
     pub in_passive_listener: bool,
 }
 
+/// Wheel-specific coordinates carried by the shared mouse event record.
+#[derive(Clone, Debug)]
+pub struct WheelDelta {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub mode: u32,
+}
+
 /// The interface-specific payload of an event.
 #[derive(Clone, Debug)]
 pub enum EventKind {
@@ -436,13 +479,65 @@ pub enum EventKind {
     },
     /// A `UIEvent`.
     Ui {
+        /// The page Window handle bits, or null.
+        view: Option<u64>,
         /// The `detail` field.
         detail: i32,
+        /// Legacy `UIEvent.which`.
+        which: u32,
+    },
+    /// A `CompositionEvent`; all additional state is owned by this record.
+    Composition {
+        /// `UIEvent.view` (the page Window handle bits, or null).
+        view: Option<u64>,
+        /// `UIEvent.detail`.
+        detail: i32,
+        /// Legacy `UIEvent.which`.
+        which: u32,
+        /// The composition data.
+        data: String,
+    },
+    /// A `FocusEvent`; its related target owns the exact script wrapper.
+    Focus {
+        view: Option<u64>,
+        detail: i32,
+        which: u32,
+        related_target: Option<u64>,
+        related_value: Option<u64>,
+    },
+    /// A `KeyboardEvent`; all key and modifier state is owned by this record.
+    Keyboard {
+        /// `UIEvent.view` (the page Window handle bits, or null).
+        view: Option<u64>,
+        /// `UIEvent.detail`.
+        detail: i32,
+        /// Legacy `UIEvent.which`.
+        which: u32,
+        /// Logical key value.
+        key: String,
+        /// Physical key code.
+        code: String,
+        /// Key location code.
+        location: u32,
+        /// Modifier state bits, including the four common accessors.
+        modifiers: u16,
+        /// Whether this is a repeated key event.
+        repeat: bool,
+        /// Whether composition is in progress.
+        is_composing: bool,
+        /// Legacy character code.
+        char_code: u32,
+        /// Legacy virtual key code.
+        key_code: u32,
     },
     /// A `MouseEvent`.
     Mouse {
+        /// `UIEvent.view` (the page Window handle bits, or null).
+        view: Option<u64>,
         /// `UIEvent.detail`.
         detail: i32,
+        /// Legacy `UIEvent.which`.
+        which: u32,
         /// Screen coordinates.
         screen_x: i32,
         /// Screen coordinates.
@@ -451,20 +546,19 @@ pub enum EventKind {
         client_x: i32,
         /// Client coordinates.
         client_y: i32,
-        /// Modifier: control.
-        ctrl: bool,
-        /// Modifier: shift.
-        shift: bool,
-        /// Modifier: alt.
-        alt: bool,
-        /// Modifier: meta.
-        meta: bool,
+        /// Modifier state shared with KeyboardEvent.
+        modifiers: u16,
         /// The button that changed state.
         button: i16,
         /// The buttons held down.
         buttons: u16,
         /// The related target handle bits, if any.
         related_target: Option<u64>,
+        /// One owned stored-value reference to the exact relatedTarget wrapper.
+        /// Window and null have no stored reference.
+        related_value: Option<u64>,
+        /// Wheel-specific state; present only for WheelEvent.
+        wheel: Option<Box<WheelDelta>>,
     },
     /// A `ProgressEvent`.
     ///
@@ -495,8 +589,25 @@ impl EventKind {
             EventKind::Plain => "Event",
             EventKind::Custom { .. } => "CustomEvent",
             EventKind::Ui { .. } => "UIEvent",
+            EventKind::Composition { .. } => "CompositionEvent",
+            EventKind::Focus { .. } => "FocusEvent",
+            EventKind::Keyboard { .. } => "KeyboardEvent",
+            EventKind::Mouse { wheel: Some(_), .. } => "WheelEvent",
             EventKind::Mouse { .. } => "MouseEvent",
             EventKind::Progress { .. } => "ProgressEvent",
+        }
+    }
+
+    /// The one stored JS value owned by this event payload, if present.
+    /// Every owner releases its own reference even when several events intern
+    /// the same JS object under one value-slot identity.
+    pub fn owned_stored_value(&self) -> Option<u64> {
+        match self {
+            EventKind::Custom { detail } => *detail,
+            EventKind::Mouse { related_value, .. } | EventKind::Focus { related_value, .. } => {
+                *related_value
+            }
+            _ => None,
         }
     }
 }
@@ -673,7 +784,7 @@ pub enum TargetKey {
     Node(NodeRef),
     Window,
     /// A host object that is an `EventTarget` and is neither a node nor the
-    /// window: an `AbortSignal` or an `XMLHttpRequest`.
+    /// window: an `AbortSignal`, an `XMLHttpRequest`, or an `Attr`.
     ///
     /// It is keyed by its [`HostKey`], generation included, because that is the
     /// only identity such an object has — it is not in the tree, so it has no
@@ -684,7 +795,8 @@ pub enum TargetKey {
     /// listener registered on one signal fire for another. The generation
     /// matters for the same reason it does on a node: the slab reuses a freed
     /// slot, and an object that took a recycled slot must not inherit the
-    /// listeners of the object that used to live there.
+    /// listeners of the object that used to live there. An `Attr` uses this key
+    /// because it inherits `EventTarget` but has no arena node id.
     Host(HostKey),
 }
 
@@ -765,7 +877,7 @@ impl DispatchTarget {
     }
 
     /// Dispatches at the host object whose record key is `key` — an
-    /// `AbortSignal` or an `XMLHttpRequest`.
+    /// `AbortSignal`, an `XMLHttpRequest`, or an `Attr`.
     ///
     /// The bits are the record's own tagged handle, which is exactly what
     /// `controller.signal` handed script: the world memoises one wrapper per
@@ -804,9 +916,9 @@ impl DispatchTarget {
     /// input back, which is what keeps `event.target` the *same* object the page
     /// holds — the world memoises one wrapper per handle.
     ///
-    /// A node's generation survives only as the 16 bits `encode_node` packs, so
-    /// a reference decoded from bits is the one that was encoded; nothing here
-    /// widens the handle format (see the `pack` TODO in `bindings::host`).
+    /// A live node's generation fits the 16 bits stored by `encode_node`.
+    /// Exhausted arena slots are retired before reuse could wrap those bits;
+    /// resolving the decoded reference still checks its full generation.
     pub fn from_bits(bits: u64) -> Option<DispatchTarget> {
         let decoded = decode(bits);
         match decoded.tag {
@@ -1118,9 +1230,22 @@ pub fn dispatch_at(
     key: EventKey,
     trusted: bool,
 ) -> Result<bool, JsError> {
+    dispatch_at_from(ctx, ctx, target, key, trusted)
+}
+
+/// Dispatches using the target's path/listeners and the event's own record slab.
+/// Both contexts belong to the same wrapper world; a document does not own
+/// every Event that script can dispatch at one of its nodes.
+pub(crate) fn dispatch_at_from(
+    ctx: &HostContext,
+    event_ctx: &HostContext,
+    target: DispatchTarget,
+    key: EventKey,
+    trusted: bool,
+) -> Result<bool, JsError> {
     // Step 1: validate + set up, under a short borrow of the event slab.
     let type_ = {
-        let mut events = ctx.events.borrow_mut();
+        let mut events = event_ctx.events.borrow_mut();
         let record = events
             .get_mut(key)
             .ok_or_else(|| invalid_state("the event has been reclaimed"))?;
@@ -1135,17 +1260,14 @@ pub fn dispatch_at(
         // everything below — the listener table and the path — stays keyed by
         // the target itself.
         record.target = Some(target.target_override.unwrap_or(target.bits));
-        record.flags.stop_propagation = false;
-        record.flags.stop_immediate = false;
         record.type_.clone()
     };
 
-    // Step 2: build the propagation path under a short borrow of the document.
-    // The window is the outermost entry: it is not an ancestor in the tree, but
-    // it is the document's parent in the event path, which is what makes a
-    // listener on `window` fire for an event on a descendant. A dispatch *at*
-    // the window has no ancestors to walk and no window above it, so its path is
-    // the target alone.
+    // Step 2: build the propagation path under a short document borrow. DOM's
+    // Document parent is its Window only when it has a browsing context and
+    // the event type is not "load". Detached nodes stop at their actual root.
+    // Slot 0 is the page document (the same distinction as defaultView); other
+    // documents have no browsing context. Direct Window dispatch stays alone.
     let path: Vec<PathEntry> = {
         let doc = ctx.doc.borrow();
         let mut path = Vec::new();
@@ -1154,12 +1276,14 @@ pub fn dispatch_at(
             for ancestor in doc.ancestors(node.id) {
                 path.push(PathEntry::node(ctx.slot, doc.node_ref(ancestor)));
             }
-            path.push(PathEntry::window());
+            if ctx.slot == 0 && doc.is_connected(node.id) && type_ != "load" {
+                path.push(PathEntry::window());
+            }
         }
         path
     };
     let bubbles = {
-        let mut events = ctx.events.borrow_mut();
+        let mut events = event_ctx.events.borrow_mut();
         if let Some(record) = events.get_mut(key) {
             record.path = path.iter().map(|entry| entry.bits).collect();
             record.bubbles
@@ -1168,10 +1292,14 @@ pub fn dispatch_at(
         }
     };
 
-    let event_bits = encode_event(ctx.slot, key);
+    let event_bits = encode_event(event_ctx.slot, key);
     let script = ctx.script.borrow().clone();
 
-    if let Some(script) = script {
+    // Pre-set stop flags suppress the first invocation. Later invocations
+    // stop through the existing loop checks; exit cleanup still resets flags.
+    if let Some(script) = script
+        && !propagation_stopped(event_ctx, key)
+    {
         // Step 4: capture pass, from the root down to and including the target.
         for entry in path.iter().rev() {
             let phase = if entry.target == target.target {
@@ -1179,8 +1307,9 @@ pub fn dispatch_at(
             } else {
                 PHASE_CAPTURING
             };
-            let stop =
-                invoke_listeners(ctx, &*script, *entry, &type_, phase, true, key, event_bits);
+            let stop = invoke_listeners(
+                ctx, event_ctx, &*script, *entry, &type_, phase, true, key, event_bits,
+            );
             if stop {
                 break;
             }
@@ -1188,7 +1317,7 @@ pub fn dispatch_at(
 
         // Step 5: bubble pass, from the target up to the root (ancestors only
         // when the event bubbles).
-        if !propagation_stopped(ctx, key) {
+        if !propagation_stopped(event_ctx, key) {
             for (index, entry) in path.iter().enumerate() {
                 if index > 0 && !bubbles {
                     break;
@@ -1198,8 +1327,9 @@ pub fn dispatch_at(
                 } else {
                     PHASE_BUBBLING
                 };
-                let stop =
-                    invoke_listeners(ctx, &*script, *entry, &type_, phase, false, key, event_bits);
+                let stop = invoke_listeners(
+                    ctx, event_ctx, &*script, *entry, &type_, phase, false, key, event_bits,
+                );
                 if stop {
                     break;
                 }
@@ -1208,7 +1338,7 @@ pub fn dispatch_at(
     }
 
     // Step 6: clear the transient dispatch state and report the result.
-    let mut events = ctx.events.borrow_mut();
+    let mut events = event_ctx.events.borrow_mut();
     if let Some(record) = events.get_mut(key) {
         record.phase = PHASE_NONE;
         record.current_target = None;
@@ -1233,6 +1363,7 @@ type PathEntry = DispatchTarget;
 #[allow(clippy::too_many_arguments)]
 fn invoke_listeners(
     ctx: &HostContext,
+    event_ctx: &HostContext,
     script: &dyn ScriptHost,
     entry: PathEntry,
     type_: &str,
@@ -1244,11 +1375,11 @@ fn invoke_listeners(
     let target = entry.target;
     let snapshot = ctx.listeners.borrow().snapshot_at(target, type_, capture);
     if snapshot.is_empty() {
-        return propagation_stopped(ctx, key);
+        return propagation_stopped(event_ctx, key);
     }
 
     {
-        let mut events = ctx.events.borrow_mut();
+        let mut events = event_ctx.events.borrow_mut();
         if let Some(record) = events.get_mut(key) {
             record.current_target = Some(entry.bits);
             record.phase = phase;
@@ -1266,14 +1397,14 @@ fn invoke_listeners(
                 .remove_by_id_at(target, listener.id);
         }
         if listener.passive {
-            set_passive(ctx, key, true);
+            set_passive(event_ctx, key, true);
         }
 
         // No borrow is held across the call into script.
         let returned_false = script.invoke_listener(listener.callback, entry.bits, event_bits);
 
         if listener.passive {
-            set_passive(ctx, key, false);
+            set_passive(event_ctx, key, false);
         }
         if listener.once {
             script.release_value(listener.callback.0);
@@ -1290,14 +1421,14 @@ fn invoke_listeners(
         // `onbeforeunload`, where any non-null value cancels; neither is
         // implemented.
         if listener.handler && returned_false {
-            set_canceled(ctx, key);
+            set_canceled(event_ctx, key);
         }
-        if immediate_stopped(ctx, key) {
+        if immediate_stopped(event_ctx, key) {
             break;
         }
     }
 
-    propagation_stopped(ctx, key)
+    propagation_stopped(event_ctx, key)
 }
 
 fn set_passive(ctx: &HostContext, key: EventKey, value: bool) {

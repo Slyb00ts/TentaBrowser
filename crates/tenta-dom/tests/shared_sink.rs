@@ -203,3 +203,130 @@ fn a_stop_predicate_still_ends_a_shared_parse() {
     let body = document.body().expect("body");
     assert_eq!(document.inner_html(body), "<p>first</p>");
 }
+
+#[test]
+fn published_parser_handles_are_deduplicated_and_released_on_finish() {
+    use tenta_html::{ElementFlags, QualName, TreeSink};
+    let (mut sink, document) = SharedSink::with_new_document();
+    let root = TreeSink::document(&mut sink);
+    assert_eq!(TreeSink::document(&mut sink), root);
+    let element = TreeSink::create_element(
+        &mut sink,
+        QualName::new(atoms::NS_HTML, atoms::DIV),
+        vec![],
+        ElementFlags::default(),
+    );
+    let comment = TreeSink::create_comment(&mut sink, "comment");
+    let pi = TreeSink::create_pi(&mut sink, "target", "data");
+    let template = TreeSink::create_element(
+        &mut sink,
+        QualName::new(atoms::NS_HTML, atoms::TEMPLATE),
+        vec![],
+        ElementFlags {
+            template: true,
+            ..Default::default()
+        },
+    );
+    let contents = TreeSink::get_template_contents(&mut sink, &template);
+    assert_eq!(
+        TreeSink::get_template_contents(&mut sink, &template),
+        contents
+    );
+    for node in [root, element, comment, pi, template, contents] {
+        assert_eq!(
+            document.borrow().handle_count(node),
+            1,
+            "each published handle is pinned once"
+        );
+    }
+    assert_eq!(document.borrow_mut().sweep_detached().nodes_freed, 0);
+    let finished = TreeSink::finish(sink);
+    assert!(Rc::ptr_eq(&finished, &document));
+    for node in [root, element, comment, pi, template, contents] {
+        assert_eq!(document.borrow().handle_count(node), 0);
+    }
+    document.borrow_mut().sweep_detached();
+    assert_eq!(document.borrow().len(), 1);
+}
+
+#[test]
+fn dropping_a_sink_releases_pins_without_retaining_script_created_nodes() {
+    use tenta_html::{ElementFlags, QualName, TreeSink};
+    let (mut sink, document) = SharedSink::with_new_document();
+    let parsed = TreeSink::create_element(
+        &mut sink,
+        QualName::new(atoms::NS_HTML, atoms::DIV),
+        vec![],
+        ElementFlags::default(),
+    );
+    let parsed_ref = document.borrow().node_ref(parsed);
+    let script = document.borrow_mut().create_html_element(atoms::B);
+    let script_ref = document.borrow().node_ref(script);
+    assert_eq!(document.borrow_mut().sweep_detached().nodes_freed, 1);
+    assert!(document.borrow().resolve(parsed_ref).is_ok());
+    assert!(document.borrow().resolve(script_ref).is_err());
+    drop(sink);
+    assert_eq!(document.borrow_mut().sweep_detached().nodes_freed, 1);
+    assert!(document.borrow().resolve(parsed_ref).is_err());
+}
+
+#[test]
+fn a_paused_parser_can_resume_after_a_sweep_of_unrelated_nodes() {
+    let (sink, document) = SharedSink::with_new_document();
+    let mut parser = scripting_parser(sink);
+    assert_eq!(
+        parser.feed_str("<body><div><script>s</script><b>after</b></div>"),
+        ParseStatus::Script
+    );
+    let script = parser.take_pending_script().unwrap();
+    let parent = document.borrow().parent(script);
+    let reference = document.borrow().node_ref(parent);
+    document
+        .borrow_mut()
+        .mutate(Mutation::Remove { child: parent })
+        .unwrap();
+    document.borrow_mut().create_html_element(atoms::I);
+    assert_eq!(
+        document.borrow_mut().sweep_detached().nodes_freed,
+        1,
+        "the parser's detached stack nodes must survive"
+    );
+    assert!(document.borrow().resolve(reference).is_ok());
+    assert_eq!(parser.resume(), ParseStatus::Continue);
+    assert!(
+        document
+            .borrow()
+            .inner_html(parent)
+            .contains("<b>after</b>")
+    );
+    parser.finish();
+    assert!(document.borrow_mut().sweep_detached().nodes_freed > 0);
+    assert!(document.borrow().resolve(reference).is_err());
+}
+
+#[test]
+fn a_borrow_conflict_during_parser_unwind_preserves_the_primary_panic() {
+    use tenta_html::{ElementFlags, QualName, TreeSink};
+    let (mut sink, document) = SharedSink::with_new_document();
+    let node = TreeSink::create_element(
+        &mut sink,
+        QualName::new(atoms::NS_HTML, atoms::DIV),
+        vec![],
+        ElementFlags::default(),
+    );
+    assert_eq!(document.borrow().handle_count(node), 1);
+    let held = document.borrow_mut();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _parser_sink = sink;
+        panic!("primary parser failure");
+    }))
+    .expect_err("parser must report its original failure without aborting");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"primary parser failure")
+    );
+    drop(held);
+    // Releasing through the conflicting borrow was impossible. This failed
+    // document is discarded, not returned to a healthy page with leaked pins.
+    drop(document);
+}

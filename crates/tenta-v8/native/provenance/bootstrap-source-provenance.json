@@ -1,0 +1,29 @@
+{
+  "description": "Pinned native bootstrap source/config inputs; not built artifact identities",
+  "files": {
+    "v8/DEPS": {
+      "sha256": "b588f2d248a7d4c6361c1d22a18dffc3320d832dbb8aef9ddc8e763723b6b712",
+      "bytes": 37147
+    },
+    "tools/clang/scripts/update.py": {
+      "sha256": "0679888392d7a700fb3a3c3de93f56bfb4e4064a5a46ece798c306b63e98b7cd",
+      "bytes": 14777
+    },
+    "tools/rust_toolchain.py": {
+      "sha256": "7ee7721ea8ba1ec817baaeb7f645de955d79862026932bb60596c477575e8c43",
+      "bytes": 1414
+    },
+    "build.rs": {
+      "sha256": "47d307ac1df6338dd418d57e286f96b3cf9fcd324579b28d754c56302dab7623",
+      "bytes": 84469
+    },
+    "Cargo.toml": {
+      "sha256": "a26e830ac05be8476213d61f83fd26fd0fbba14f52bde1752a9db6942b26cbcc",
+      "bytes": 6416
+    },
+    "Cargo.lock": {
+      "sha256": "4303ad4b560fcc024f800f31f306ca4401ae8636002733e3407c91df386bda9e",
+      "bytes": 28628
+    }
+  }
+}

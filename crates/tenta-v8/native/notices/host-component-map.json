@@ -1,0 +1,1302 @@
+{
+  "scope": "Default aarch64-apple-darwin native archive target; transitive non-tool targets, listed sources and header include paths. Not a certification of every binary obligation or another target.",
+  "gn_project_sha256": "550ec1d91a6531c7fec2a9a4c0a2de6450c142bfb1363bdb9c2af656e4a094cc",
+  "native_archive_sha256": "21f4d98158b2ac8695ad791bf8275e91dd1841b0423f946155c6ab19845c6f70",
+  "components": {
+    "abseil": {
+      "targets": [
+        "//:rusty_v8",
+        "//src/deno_inspector:deno_inspector_protocol",
+        "//third_party/abseil-cpp/absl/algorithm:algorithm",
+        "//third_party/abseil-cpp/absl/algorithm:container",
+        "//third_party/abseil-cpp/absl/base:atomic_hook",
+        "//third_party/abseil-cpp/absl/base:base",
+        "//third_party/abseil-cpp/absl/base:base_internal",
+        "//third_party/abseil-cpp/absl/base:config",
+        "//third_party/abseil-cpp/absl/base:core_headers",
+        "//third_party/abseil-cpp/absl/base:cycleclock_internal",
+        "//third_party/abseil-cpp/absl/base:dynamic_annotations",
+        "//third_party/abseil-cpp/absl/base:endian",
+        "//third_party/abseil-cpp/absl/base:errno_saver",
+        "//third_party/abseil-cpp/absl/base:fast_type_id",
+        "//third_party/abseil-cpp/absl/base:hardening",
+        "//third_party/abseil-cpp/absl/base:iterator_traits_internal",
+        "//third_party/abseil-cpp/absl/base:log_severity",
+        "//third_party/abseil-cpp/absl/base:malloc_internal",
+        "//third_party/abseil-cpp/absl/base:no_destructor",
+        "//third_party/abseil-cpp/absl/base:nullability",
+        "//third_party/abseil-cpp/absl/base:nullability_traits_internal",
+        "//third_party/abseil-cpp/absl/base:prefetch",
+        "//third_party/abseil-cpp/absl/base:raw_logging_internal",
+        "//third_party/abseil-cpp/absl/base:spinlock_wait",
+        "//third_party/abseil-cpp/absl/base:strerror",
+        "//third_party/abseil-cpp/absl/base:throw_delegate",
+        "//third_party/abseil-cpp/absl/base:tracing_internal",
+        "//third_party/abseil-cpp/absl/cleanup:cleanup",
+        "//third_party/abseil-cpp/absl/cleanup:cleanup_internal",
+        "//third_party/abseil-cpp/absl/container:btree",
+        "//third_party/abseil-cpp/absl/container:common",
+        "//third_party/abseil-cpp/absl/container:common_policy_traits",
+        "//third_party/abseil-cpp/absl/container:compressed_tuple",
+        "//third_party/abseil-cpp/absl/container:container_memory",
+        "//third_party/abseil-cpp/absl/container:fixed_array",
+        "//third_party/abseil-cpp/absl/container:flat_hash_map",
+        "//third_party/abseil-cpp/absl/container:flat_hash_set",
+        "//third_party/abseil-cpp/absl/container:hash_container_defaults",
+        "//third_party/abseil-cpp/absl/container:hash_function_defaults",
+        "//third_party/abseil-cpp/absl/container:hash_policy_traits",
+        "//third_party/abseil-cpp/absl/container:hashtable_control_bytes",
+        "//third_party/abseil-cpp/absl/container:hashtable_debug_hooks",
+        "//third_party/abseil-cpp/absl/container:hashtablez_sampler",
+        "//third_party/abseil-cpp/absl/container:inlined_vector",
+        "//third_party/abseil-cpp/absl/container:inlined_vector_internal",
+        "//third_party/abseil-cpp/absl/container:layout",
+        "//third_party/abseil-cpp/absl/container:linked_hash_map",
+        "//third_party/abseil-cpp/absl/container:linked_hash_set",
+        "//third_party/abseil-cpp/absl/container:node_hash_map",
+        "//third_party/abseil-cpp/absl/container:node_hash_set",
+        "//third_party/abseil-cpp/absl/container:node_slot_policy",
+        "//third_party/abseil-cpp/absl/container:raw_hash_map",
+        "//third_party/abseil-cpp/absl/container:raw_hash_set",
+        "//third_party/abseil-cpp/absl/container:raw_hash_set_resize_impl",
+        "//third_party/abseil-cpp/absl/crc:cpu_detect",
+        "//third_party/abseil-cpp/absl/crc:crc32c",
+        "//third_party/abseil-cpp/absl/crc:crc_cord_state",
+        "//third_party/abseil-cpp/absl/crc:crc_internal",
+        "//third_party/abseil-cpp/absl/crc:non_temporal_arm_intrinsics",
+        "//third_party/abseil-cpp/absl/crc:non_temporal_memcpy",
+        "//third_party/abseil-cpp/absl/debugging:bounded_utf8_length_sequence",
+        "//third_party/abseil-cpp/absl/debugging:debugging_internal",
+        "//third_party/abseil-cpp/absl/debugging:decode_rust_punycode",
+        "//third_party/abseil-cpp/absl/debugging:demangle_internal",
+        "//third_party/abseil-cpp/absl/debugging:demangle_rust",
+        "//third_party/abseil-cpp/absl/debugging:examine_stack",
+        "//third_party/abseil-cpp/absl/debugging:failure_signal_handler",
+        "//third_party/abseil-cpp/absl/debugging:leak_check",
+        "//third_party/abseil-cpp/absl/debugging:stacktrace",
+        "//third_party/abseil-cpp/absl/debugging:symbolize",
+        "//third_party/abseil-cpp/absl/debugging:utf8_for_code_point",
+        "//third_party/abseil-cpp/absl/functional:any_invocable",
+        "//third_party/abseil-cpp/absl/functional:bind_back",
+        "//third_party/abseil-cpp/absl/functional:bind_front",
+        "//third_party/abseil-cpp/absl/functional:function_ref",
+        "//third_party/abseil-cpp/absl/functional:overload",
+        "//third_party/abseil-cpp/absl/hash:city",
+        "//third_party/abseil-cpp/absl/hash:hash",
+        "//third_party/abseil-cpp/absl/hash:weakly_mixed_integer",
+        "//third_party/abseil-cpp/absl/log/internal:append_truncated",
+        "//third_party/abseil-cpp/absl/log/internal:check_impl",
+        "//third_party/abseil-cpp/absl/log/internal:check_op",
+        "//third_party/abseil-cpp/absl/log/internal:conditions",
+        "//third_party/abseil-cpp/absl/log/internal:config",
+        "//third_party/abseil-cpp/absl/log/internal:fnmatch",
+        "//third_party/abseil-cpp/absl/log/internal:format",
+        "//third_party/abseil-cpp/absl/log/internal:globals",
+        "//third_party/abseil-cpp/absl/log/internal:log_impl",
+        "//third_party/abseil-cpp/absl/log/internal:log_message",
+        "//third_party/abseil-cpp/absl/log/internal:log_sink_set",
+        "//third_party/abseil-cpp/absl/log/internal:nullguard",
+        "//third_party/abseil-cpp/absl/log/internal:nullstream",
+        "//third_party/abseil-cpp/absl/log/internal:proto",
+        "//third_party/abseil-cpp/absl/log/internal:strip",
+        "//third_party/abseil-cpp/absl/log/internal:structured_proto",
+        "//third_party/abseil-cpp/absl/log/internal:vlog_config",
+        "//third_party/abseil-cpp/absl/log/internal:voidify",
+        "//third_party/abseil-cpp/absl/log:absl_check",
+        "//third_party/abseil-cpp/absl/log:absl_log",
+        "//third_party/abseil-cpp/absl/log:absl_vlog_is_on",
+        "//third_party/abseil-cpp/absl/log:die_if_null",
+        "//third_party/abseil-cpp/absl/log:globals",
+        "//third_party/abseil-cpp/absl/log:initialize",
+        "//third_party/abseil-cpp/absl/log:log",
+        "//third_party/abseil-cpp/absl/log:log_entry",
+        "//third_party/abseil-cpp/absl/log:log_sink",
+        "//third_party/abseil-cpp/absl/log:log_sink_registry",
+        "//third_party/abseil-cpp/absl/log:vlog_is_on",
+        "//third_party/abseil-cpp/absl/memory:memory",
+        "//third_party/abseil-cpp/absl/meta:type_traits",
+        "//third_party/abseil-cpp/absl/numeric:bits",
+        "//third_party/abseil-cpp/absl/numeric:int128",
+        "//third_party/abseil-cpp/absl/numeric:representation",
+        "//third_party/abseil-cpp/absl/profiling:exponential_biased",
+        "//third_party/abseil-cpp/absl/profiling:sample_recorder",
+        "//third_party/abseil-cpp/absl/random/internal:distribution_caller",
+        "//third_party/abseil-cpp/absl/random/internal:entropy_pool",
+        "//third_party/abseil-cpp/absl/random/internal:fast_uniform_bits",
+        "//third_party/abseil-cpp/absl/random/internal:fastmath",
+        "//third_party/abseil-cpp/absl/random/internal:generate_real",
+        "//third_party/abseil-cpp/absl/random/internal:iostream_state_saver",
+        "//third_party/abseil-cpp/absl/random/internal:mock_helpers",
+        "//third_party/abseil-cpp/absl/random/internal:nonsecure_base",
+        "//third_party/abseil-cpp/absl/random/internal:pcg_engine",
+        "//third_party/abseil-cpp/absl/random/internal:platform",
+        "//third_party/abseil-cpp/absl/random/internal:randen",
+        "//third_party/abseil-cpp/absl/random/internal:randen_engine",
+        "//third_party/abseil-cpp/absl/random/internal:randen_hwaes",
+        "//third_party/abseil-cpp/absl/random/internal:randen_hwaes_impl",
+        "//third_party/abseil-cpp/absl/random/internal:randen_slow",
+        "//third_party/abseil-cpp/absl/random/internal:salted_seed_seq",
+        "//third_party/abseil-cpp/absl/random/internal:seed_material",
+        "//third_party/abseil-cpp/absl/random/internal:traits",
+        "//third_party/abseil-cpp/absl/random/internal:uniform_helper",
+        "//third_party/abseil-cpp/absl/random/internal:wide_multiply",
+        "//third_party/abseil-cpp/absl/random:bit_gen_ref",
+        "//third_party/abseil-cpp/absl/random:distributions",
+        "//third_party/abseil-cpp/absl/random:mocking_access",
+        "//third_party/abseil-cpp/absl/random:random",
+        "//third_party/abseil-cpp/absl/random:seed_gen_exception",
+        "//third_party/abseil-cpp/absl/random:seed_sequences",
+        "//third_party/abseil-cpp/absl/status:status",
+        "//third_party/abseil-cpp/absl/status:status_builder",
+        "//third_party/abseil-cpp/absl/status:status_macros",
+        "//third_party/abseil-cpp/absl/status:statusor",
+        "//third_party/abseil-cpp/absl/strings:append_and_overwrite",
+        "//third_party/abseil-cpp/absl/strings:charset",
+        "//third_party/abseil-cpp/absl/strings:cord",
+        "//third_party/abseil-cpp/absl/strings:cord_internal",
+        "//third_party/abseil-cpp/absl/strings:cordz_functions",
+        "//third_party/abseil-cpp/absl/strings:cordz_handle",
+        "//third_party/abseil-cpp/absl/strings:cordz_info",
+        "//third_party/abseil-cpp/absl/strings:cordz_statistics",
+        "//third_party/abseil-cpp/absl/strings:cordz_update_scope",
+        "//third_party/abseil-cpp/absl/strings:cordz_update_tracker",
+        "//third_party/abseil-cpp/absl/strings:has_ostream_operator",
+        "//third_party/abseil-cpp/absl/strings:internal",
+        "//third_party/abseil-cpp/absl/strings:resize_and_overwrite",
+        "//third_party/abseil-cpp/absl/strings:str_format",
+        "//third_party/abseil-cpp/absl/strings:str_format_internal",
+        "//third_party/abseil-cpp/absl/strings:string_view",
+        "//third_party/abseil-cpp/absl/strings:stringify_stream",
+        "//third_party/abseil-cpp/absl/strings:strings",
+        "//third_party/abseil-cpp/absl/synchronization:graphcycles_internal",
+        "//third_party/abseil-cpp/absl/synchronization:kernel_timeout_internal",
+        "//third_party/abseil-cpp/absl/synchronization:synchronization",
+        "//third_party/abseil-cpp/absl/time/internal/cctz:civil_time",
+        "//third_party/abseil-cpp/absl/time/internal/cctz:time_zone",
+        "//third_party/abseil-cpp/absl/time:clock_interface",
+        "//third_party/abseil-cpp/absl/time:time",
+        "//third_party/abseil-cpp/absl/types:any_span",
+        "//third_party/abseil-cpp/absl/types:compare",
+        "//third_party/abseil-cpp/absl/types:optional",
+        "//third_party/abseil-cpp/absl/types:optional_ref",
+        "//third_party/abseil-cpp/absl/types:source_location",
+        "//third_party/abseil-cpp/absl/types:span",
+        "//third_party/abseil-cpp/absl/types:variant",
+        "//third_party/abseil-cpp/absl/utility:utility",
+        "//third_party/abseil-cpp:absl",
+        "//third_party/abseil-cpp:absl_component_deps",
+        "//v8/src/inspector:inspector",
+        "//v8/src/inspector:inspector_string_conversions",
+        "//v8/third_party/inspector_protocol:crdtp",
+        "//v8/third_party/inspector_protocol:crdtp_platform",
+        "//v8:cppgc_base",
+        "//v8:cppgc_headers",
+        "//v8:torque_generated_definitions",
+        "//v8:v8_base_without_compiler",
+        "//v8:v8_compiler",
+        "//v8:v8_flags",
+        "//v8:v8_heap_base",
+        "//v8:v8_heap_base_headers",
+        "//v8:v8_internal_headers",
+        "//v8:v8_libbase",
+        "//v8:v8_libplatform",
+        "//v8:v8_shared_internal_headers",
+        "//v8:v8_snapshot"
+      ],
+      "example_inputs": [
+        "//third_party/abseil-cpp/",
+        "//third_party/abseil-cpp/absl/algorithm:algorithm",
+        "//third_party/abseil-cpp/absl/algorithm:container",
+        "//third_party/abseil-cpp/absl/base/casts.cc",
+        "//third_party/abseil-cpp/absl/base/internal/cycleclock.cc",
+        "//third_party/abseil-cpp/absl/base/internal/low_level_alloc.cc",
+        "//third_party/abseil-cpp/absl/base/internal/raw_logging.cc",
+        "//third_party/abseil-cpp/absl/base/internal/spinlock.cc"
+      ],
+      "notices": [
+        "texts/abseil/LICENSE"
+      ]
+    },
+    "dragonbox": {
+      "targets": [
+        "//third_party/dragonbox:dragonbox",
+        "//v8:v8_base_without_compiler"
+      ],
+      "example_inputs": [
+        "//third_party/dragonbox/src/include/",
+        "//third_party/dragonbox:dragonbox"
+      ],
+      "notices": [
+        "texts/dragonbox/LICENSE-Apache2-LLVM",
+        "texts/dragonbox/LICENSE-Boost"
+      ]
+    },
+    "fast_float": {
+      "targets": [
+        "//third_party/fast_float:fast_float",
+        "//v8:v8_base_without_compiler"
+      ],
+      "example_inputs": [
+        "//third_party/fast_float/src/include/",
+        "//third_party/fast_float:fast_float"
+      ],
+      "notices": [
+        "texts/fast_float/LICENSE-APACHE",
+        "texts/fast_float/LICENSE-BOOST",
+        "texts/fast_float/LICENSE-MIT"
+      ]
+    },
+    "fp16": {
+      "targets": [
+        "//:rusty_v8",
+        "//third_party/fp16:fp16",
+        "//v8/third_party/inspector_protocol:crdtp_platform",
+        "//v8:torque_generated_definitions",
+        "//v8:v8_base_without_compiler",
+        "//v8:v8_compiler",
+        "//v8:v8_internal_headers",
+        "//v8:v8_snapshot"
+      ],
+      "example_inputs": [
+        "//third_party/fp16/src/include/",
+        "//third_party/fp16:fp16"
+      ],
+      "notices": [
+        "texts/fp16/LICENSE"
+      ]
+    },
+    "highway": {
+      "targets": [
+        "//third_party/highway:libhwy",
+        "//v8:v8_base_without_compiler"
+      ],
+      "example_inputs": [
+        "//third_party/highway/src/",
+        "//third_party/highway/src/hwy/abort.cc",
+        "//third_party/highway/src/hwy/aligned_allocator.cc",
+        "//third_party/highway/src/hwy/per_target.cc",
+        "//third_party/highway/src/hwy/print.cc",
+        "//third_party/highway/src/hwy/stats.cc",
+        "//third_party/highway/src/hwy/targets.cc",
+        "//third_party/highway/src/hwy/timer.cc"
+      ],
+      "notices": [
+        "texts/highway/LICENSE"
+      ]
+    },
+    "icu": {
+      "targets": [
+        "//:rusty_v8",
+        "//third_party/icu:icu",
+        "//third_party/icu:icudata",
+        "//third_party/icu:icui18n",
+        "//third_party/icu:icuuc",
+        "//third_party/icu:icuuc_private",
+        "//third_party/icu:icuuc_public",
+        "//v8/third_party/inspector_protocol:crdtp_platform",
+        "//v8:torque_generated_definitions",
+        "//v8:v8_base_without_compiler",
+        "//v8:v8_compiler",
+        "//v8:v8_internal_headers",
+        "//v8:v8_snapshot"
+      ],
+      "example_inputs": [
+        "//third_party/icu/source/common/",
+        "//third_party/icu/source/common/appendable.cpp",
+        "//third_party/icu/source/common/bmpset.cpp",
+        "//third_party/icu/source/common/bmpset.h",
+        "//third_party/icu/source/common/brkeng.cpp",
+        "//third_party/icu/source/common/brkeng.h",
+        "//third_party/icu/source/common/brkiter.cpp",
+        "//third_party/icu/source/common/bytesinkutil.cpp"
+      ],
+      "notices": [
+        "texts/icu/LICENSE",
+        "texts/icu/license.html"
+      ]
+    },
+    "inspector_protocol": {
+      "targets": [
+        "//:rusty_v8",
+        "//src/deno_inspector:deno_inspector_protocol",
+        "//v8/third_party/inspector_protocol:crdtp",
+        "//v8/third_party/inspector_protocol:crdtp_platform"
+      ],
+      "example_inputs": [
+        "//v8/third_party/inspector_protocol/",
+        "//v8/third_party/inspector_protocol/crdtp/cbor.cc",
+        "//v8/third_party/inspector_protocol/crdtp/cbor.h",
+        "//v8/third_party/inspector_protocol/crdtp/dispatch.cc",
+        "//v8/third_party/inspector_protocol/crdtp/dispatch.h",
+        "//v8/third_party/inspector_protocol/crdtp/error_support.cc",
+        "//v8/third_party/inspector_protocol/crdtp/error_support.h",
+        "//v8/third_party/inspector_protocol/crdtp/export.h"
+      ],
+      "notices": [
+        "texts/inspector_protocol/LICENSE"
+      ]
+    },
+    "libcxx": {
+      "targets": [
+        "//:rusty_v8",
+        "//build/rust/allocator:alloc_error_handler_impl",
+        "//build/rust/allocator:alloc_error_handler_impl_ffi",
+        "//build/rust/allocator:allocator",
+        "//build/rust/std/rules:addr2line",
+        "//build/rust/std/rules:adler2",
+        "//build/rust/std/rules:alloc",
+        "//build/rust/std/rules:cfg_if",
+        "//build/rust/std/rules:compiler_builtins",
+        "//build/rust/std/rules:core",
+        "//build/rust/std/rules:getopts",
+        "//build/rust/std/rules:gimli",
+        "//build/rust/std/rules:hashbrown",
+        "//build/rust/std/rules:libc",
+        "//build/rust/std/rules:memchr",
+        "//build/rust/std/rules:miniz_oxide",
+        "//build/rust/std/rules:object",
+        "//build/rust/std/rules:panic_abort",
+        "//build/rust/std/rules:profiler_builtins",
+        "//build/rust/std/rules:rustc_demangle",
+        "//build/rust/std/rules:rustc_std_workspace_alloc",
+        "//build/rust/std/rules:rustc_std_workspace_core",
+        "//build/rust/std/rules:rustc_std_workspace_std",
+        "//build/rust/std/rules:std",
+        "//build/rust/std/rules:std_detect",
+        "//build/rust/std/rules:test",
+        "//build/rust/std/rules:unwind",
+        "//build:buildflag_header_h",
+        "//buildtools/third_party/libc++:all_modules",
+        "//buildtools/third_party/libc++:libc++",
+        "//buildtools/third_party/libc++abi:libc++abi",
+        "//src/deno_inspector:deno_inspector_protocol",
+        "//third_party/abseil-cpp/absl/algorithm:algorithm",
+        "//third_party/abseil-cpp/absl/algorithm:container",
+        "//third_party/abseil-cpp/absl/base:atomic_hook",
+        "//third_party/abseil-cpp/absl/base:base",
+        "//third_party/abseil-cpp/absl/base:base_internal",
+        "//third_party/abseil-cpp/absl/base:config",
+        "//third_party/abseil-cpp/absl/base:core_headers",
+        "//third_party/abseil-cpp/absl/base:cycleclock_internal",
+        "//third_party/abseil-cpp/absl/base:dynamic_annotations",
+        "//third_party/abseil-cpp/absl/base:endian",
+        "//third_party/abseil-cpp/absl/base:errno_saver",
+        "//third_party/abseil-cpp/absl/base:fast_type_id",
+        "//third_party/abseil-cpp/absl/base:hardening",
+        "//third_party/abseil-cpp/absl/base:iterator_traits_internal",
+        "//third_party/abseil-cpp/absl/base:log_severity",
+        "//third_party/abseil-cpp/absl/base:malloc_internal",
+        "//third_party/abseil-cpp/absl/base:no_destructor",
+        "//third_party/abseil-cpp/absl/base:nullability",
+        "//third_party/abseil-cpp/absl/base:nullability_traits_internal",
+        "//third_party/abseil-cpp/absl/base:prefetch",
+        "//third_party/abseil-cpp/absl/base:raw_logging_internal",
+        "//third_party/abseil-cpp/absl/base:spinlock_wait",
+        "//third_party/abseil-cpp/absl/base:strerror",
+        "//third_party/abseil-cpp/absl/base:throw_delegate",
+        "//third_party/abseil-cpp/absl/base:tracing_internal",
+        "//third_party/abseil-cpp/absl/cleanup:cleanup",
+        "//third_party/abseil-cpp/absl/cleanup:cleanup_internal",
+        "//third_party/abseil-cpp/absl/container:btree",
+        "//third_party/abseil-cpp/absl/container:common",
+        "//third_party/abseil-cpp/absl/container:common_policy_traits",
+        "//third_party/abseil-cpp/absl/container:compressed_tuple",
+        "//third_party/abseil-cpp/absl/container:container_memory",
+        "//third_party/abseil-cpp/absl/container:fixed_array",
+        "//third_party/abseil-cpp/absl/container:flat_hash_map",
+        "//third_party/abseil-cpp/absl/container:flat_hash_set",
+        "//third_party/abseil-cpp/absl/container:hash_container_defaults",
+        "//third_party/abseil-cpp/absl/container:hash_function_defaults",
+        "//third_party/abseil-cpp/absl/container:hash_policy_traits",
+        "//third_party/abseil-cpp/absl/container:hashtable_control_bytes",
+        "//third_party/abseil-cpp/absl/container:hashtable_debug_hooks",
+        "//third_party/abseil-cpp/absl/container:hashtablez_sampler",
+        "//third_party/abseil-cpp/absl/container:inlined_vector",
+        "//third_party/abseil-cpp/absl/container:inlined_vector_internal",
+        "//third_party/abseil-cpp/absl/container:layout",
+        "//third_party/abseil-cpp/absl/container:linked_hash_map",
+        "//third_party/abseil-cpp/absl/container:linked_hash_set",
+        "//third_party/abseil-cpp/absl/container:node_hash_map",
+        "//third_party/abseil-cpp/absl/container:node_hash_set",
+        "//third_party/abseil-cpp/absl/container:node_slot_policy",
+        "//third_party/abseil-cpp/absl/container:raw_hash_map",
+        "//third_party/abseil-cpp/absl/container:raw_hash_set",
+        "//third_party/abseil-cpp/absl/container:raw_hash_set_resize_impl",
+        "//third_party/abseil-cpp/absl/crc:cpu_detect",
+        "//third_party/abseil-cpp/absl/crc:crc32c",
+        "//third_party/abseil-cpp/absl/crc:crc_cord_state",
+        "//third_party/abseil-cpp/absl/crc:crc_internal",
+        "//third_party/abseil-cpp/absl/crc:non_temporal_arm_intrinsics",
+        "//third_party/abseil-cpp/absl/crc:non_temporal_memcpy",
+        "//third_party/abseil-cpp/absl/debugging:bounded_utf8_length_sequence",
+        "//third_party/abseil-cpp/absl/debugging:debugging_internal",
+        "//third_party/abseil-cpp/absl/debugging:decode_rust_punycode",
+        "//third_party/abseil-cpp/absl/debugging:demangle_internal",
+        "//third_party/abseil-cpp/absl/debugging:demangle_rust",
+        "//third_party/abseil-cpp/absl/debugging:examine_stack",
+        "//third_party/abseil-cpp/absl/debugging:failure_signal_handler",
+        "//third_party/abseil-cpp/absl/debugging:leak_check",
+        "//third_party/abseil-cpp/absl/debugging:stacktrace",
+        "//third_party/abseil-cpp/absl/debugging:symbolize",
+        "//third_party/abseil-cpp/absl/debugging:utf8_for_code_point",
+        "//third_party/abseil-cpp/absl/functional:any_invocable",
+        "//third_party/abseil-cpp/absl/functional:bind_back",
+        "//third_party/abseil-cpp/absl/functional:bind_front",
+        "//third_party/abseil-cpp/absl/functional:function_ref",
+        "//third_party/abseil-cpp/absl/functional:overload",
+        "//third_party/abseil-cpp/absl/hash:city",
+        "//third_party/abseil-cpp/absl/hash:hash",
+        "//third_party/abseil-cpp/absl/hash:weakly_mixed_integer",
+        "//third_party/abseil-cpp/absl/log/internal:append_truncated",
+        "//third_party/abseil-cpp/absl/log/internal:check_impl",
+        "//third_party/abseil-cpp/absl/log/internal:check_op",
+        "//third_party/abseil-cpp/absl/log/internal:conditions",
+        "//third_party/abseil-cpp/absl/log/internal:config",
+        "//third_party/abseil-cpp/absl/log/internal:fnmatch",
+        "//third_party/abseil-cpp/absl/log/internal:format",
+        "//third_party/abseil-cpp/absl/log/internal:globals",
+        "//third_party/abseil-cpp/absl/log/internal:log_impl",
+        "//third_party/abseil-cpp/absl/log/internal:log_message",
+        "//third_party/abseil-cpp/absl/log/internal:log_sink_set",
+        "//third_party/abseil-cpp/absl/log/internal:nullguard",
+        "//third_party/abseil-cpp/absl/log/internal:nullstream",
+        "//third_party/abseil-cpp/absl/log/internal:proto",
+        "//third_party/abseil-cpp/absl/log/internal:strip",
+        "//third_party/abseil-cpp/absl/log/internal:structured_proto",
+        "//third_party/abseil-cpp/absl/log/internal:vlog_config",
+        "//third_party/abseil-cpp/absl/log/internal:voidify",
+        "//third_party/abseil-cpp/absl/log:absl_check",
+        "//third_party/abseil-cpp/absl/log:absl_log",
+        "//third_party/abseil-cpp/absl/log:absl_vlog_is_on",
+        "//third_party/abseil-cpp/absl/log:die_if_null",
+        "//third_party/abseil-cpp/absl/log:globals",
+        "//third_party/abseil-cpp/absl/log:initialize",
+        "//third_party/abseil-cpp/absl/log:log",
+        "//third_party/abseil-cpp/absl/log:log_entry",
+        "//third_party/abseil-cpp/absl/log:log_sink",
+        "//third_party/abseil-cpp/absl/log:log_sink_registry",
+        "//third_party/abseil-cpp/absl/log:vlog_is_on",
+        "//third_party/abseil-cpp/absl/memory:memory",
+        "//third_party/abseil-cpp/absl/meta:type_traits",
+        "//third_party/abseil-cpp/absl/numeric:bits",
+        "//third_party/abseil-cpp/absl/numeric:int128",
+        "//third_party/abseil-cpp/absl/numeric:representation",
+        "//third_party/abseil-cpp/absl/profiling:exponential_biased",
+        "//third_party/abseil-cpp/absl/profiling:sample_recorder",
+        "//third_party/abseil-cpp/absl/random/internal:distribution_caller",
+        "//third_party/abseil-cpp/absl/random/internal:entropy_pool",
+        "//third_party/abseil-cpp/absl/random/internal:fast_uniform_bits",
+        "//third_party/abseil-cpp/absl/random/internal:fastmath",
+        "//third_party/abseil-cpp/absl/random/internal:generate_real",
+        "//third_party/abseil-cpp/absl/random/internal:iostream_state_saver",
+        "//third_party/abseil-cpp/absl/random/internal:mock_helpers",
+        "//third_party/abseil-cpp/absl/random/internal:nonsecure_base",
+        "//third_party/abseil-cpp/absl/random/internal:pcg_engine",
+        "//third_party/abseil-cpp/absl/random/internal:platform",
+        "//third_party/abseil-cpp/absl/random/internal:randen",
+        "//third_party/abseil-cpp/absl/random/internal:randen_engine",
+        "//third_party/abseil-cpp/absl/random/internal:randen_hwaes",
+        "//third_party/abseil-cpp/absl/random/internal:randen_hwaes_impl",
+        "//third_party/abseil-cpp/absl/random/internal:randen_slow",
+        "//third_party/abseil-cpp/absl/random/internal:salted_seed_seq",
+        "//third_party/abseil-cpp/absl/random/internal:seed_material",
+        "//third_party/abseil-cpp/absl/random/internal:traits",
+        "//third_party/abseil-cpp/absl/random/internal:uniform_helper",
+        "//third_party/abseil-cpp/absl/random/internal:wide_multiply",
+        "//third_party/abseil-cpp/absl/random:bit_gen_ref",
+        "//third_party/abseil-cpp/absl/random:distributions",
+        "//third_party/abseil-cpp/absl/random:mocking_access",
+        "//third_party/abseil-cpp/absl/random:random",
+        "//third_party/abseil-cpp/absl/random:seed_gen_exception",
+        "//third_party/abseil-cpp/absl/random:seed_sequences",
+        "//third_party/abseil-cpp/absl/status:status",
+        "//third_party/abseil-cpp/absl/status:status_builder",
+        "//third_party/abseil-cpp/absl/status:status_macros",
+        "//third_party/abseil-cpp/absl/status:statusor",
+        "//third_party/abseil-cpp/absl/strings:append_and_overwrite",
+        "//third_party/abseil-cpp/absl/strings:charset",
+        "//third_party/abseil-cpp/absl/strings:cord",
+        "//third_party/abseil-cpp/absl/strings:cord_internal",
+        "//third_party/abseil-cpp/absl/strings:cordz_functions",
+        "//third_party/abseil-cpp/absl/strings:cordz_handle",
+        "//third_party/abseil-cpp/absl/strings:cordz_info",
+        "//third_party/abseil-cpp/absl/strings:cordz_statistics",
+        "//third_party/abseil-cpp/absl/strings:cordz_update_scope",
+        "//third_party/abseil-cpp/absl/strings:cordz_update_tracker",
+        "//third_party/abseil-cpp/absl/strings:has_ostream_operator",
+        "//third_party/abseil-cpp/absl/strings:internal",
+        "//third_party/abseil-cpp/absl/strings:resize_and_overwrite",
+        "//third_party/abseil-cpp/absl/strings:str_format",
+        "//third_party/abseil-cpp/absl/strings:str_format_internal",
+        "//third_party/abseil-cpp/absl/strings:string_view",
+        "//third_party/abseil-cpp/absl/strings:stringify_stream",
+        "//third_party/abseil-cpp/absl/strings:strings",
+        "//third_party/abseil-cpp/absl/synchronization:graphcycles_internal",
+        "//third_party/abseil-cpp/absl/synchronization:kernel_timeout_internal",
+        "//third_party/abseil-cpp/absl/synchronization:synchronization",
+        "//third_party/abseil-cpp/absl/time/internal/cctz:civil_time",
+        "//third_party/abseil-cpp/absl/time/internal/cctz:time_zone",
+        "//third_party/abseil-cpp/absl/time:clock_interface",
+        "//third_party/abseil-cpp/absl/time:time",
+        "//third_party/abseil-cpp/absl/types:any_span",
+        "//third_party/abseil-cpp/absl/types:compare",
+        "//third_party/abseil-cpp/absl/types:optional",
+        "//third_party/abseil-cpp/absl/types:optional_ref",
+        "//third_party/abseil-cpp/absl/types:source_location",
+        "//third_party/abseil-cpp/absl/types:span",
+        "//third_party/abseil-cpp/absl/types:variant",
+        "//third_party/abseil-cpp/absl/utility:utility",
+        "//third_party/abseil-cpp:absl",
+        "//third_party/dragonbox:dragonbox",
+        "//third_party/fast_float:fast_float",
+        "//third_party/fp16:fp16",
+        "//third_party/highway:libhwy",
+        "//third_party/icu:icudata",
+        "//third_party/icu:icui18n",
+        "//third_party/icu:icuuc_private",
+        "//third_party/icu:icuuc_public",
+        "//third_party/rust/calendrical_calculations/v0_2:lib",
+        "//third_party/rust/core_maths/v0_1:lib",
+        "//third_party/rust/diplomat_runtime/v0_15:lib",
+        "//third_party/rust/either/v1:lib",
+        "//third_party/rust/icu_calendar/v2:lib",
+        "//third_party/rust/icu_calendar_data/v2:lib",
+        "//third_party/rust/icu_collections/v2:lib",
+        "//third_party/rust/icu_locale/v2:lib",
+        "//third_party/rust/icu_locale_core/v2:lib",
+        "//third_party/rust/icu_locale_data/v2:lib",
+        "//third_party/rust/icu_provider/v2:lib",
+        "//third_party/rust/ixdtf/v0_6:lib",
+        "//third_party/rust/libm/v0_2:lib",
+        "//third_party/rust/litemap/v0_8:lib",
+        "//third_party/rust/num_traits/v0_2:lib",
+        "//third_party/rust/potential_utf/v0_1:lib",
+        "//third_party/rust/resb/v0_1:lib",
+        "//third_party/rust/serde/v1:lib",
+        "//third_party/rust/serde_core/v1:lib",
+        "//third_party/rust/stable_deref_trait/v1:lib",
+        "//third_party/rust/temporal_capi/v0_2:lib",
+        "//third_party/rust/temporal_rs/v0_2:lib",
+        "//third_party/rust/timezone_provider/v0_2:lib",
+        "//third_party/rust/tinystr/v0_8:lib",
+        "//third_party/rust/utf8_iter/v1:lib",
+        "//third_party/rust/writeable/v0_6:lib",
+        "//third_party/rust/yoke/v0_8:lib",
+        "//third_party/rust/zerofrom/v0_1:lib",
+        "//third_party/rust/zerotrie/v0_2:lib",
+        "//third_party/rust/zerovec/v0_11:lib",
+        "//third_party/rust/zoneinfo64/v0_3:lib",
+        "//third_party/simdutf:header",
+        "//third_party/simdutf:simdutf",
+        "//v8/src/inspector:inspector",
+        "//v8/src/inspector:inspector_string_conversions",
+        "//v8/src/inspector:inspector_test_headers",
+        "//v8/third_party/inspector_protocol:crdtp",
+        "//v8/third_party/inspector_protocol:crdtp_platform",
+        "//v8:cppgc_base",
+        "//v8:cppgc_headers",
+        "//v8:torque_generated_definitions",
+        "//v8:torque_runtime_support",
+        "//v8:v8_base_without_compiler",
+        "//v8:v8_bigint",
+        "//v8:v8_compiler",
+        "//v8:v8_config_headers",
+        "//v8:v8_flags",
+        "//v8:v8_headers",
+        "//v8:v8_heap_base",
+        "//v8:v8_heap_base_headers",
+        "//v8:v8_internal_headers",
+        "//v8:v8_libbase",
+        "//v8:v8_libplatform",
+        "//v8:v8_shared_internal_headers",
+        "//v8:v8_snapshot",
+        "//v8:v8_version"
+      ],
+      "example_inputs": [
+        "//buildtools/third_party/libc++/",
+        "//buildtools/third_party/libc++:all_modules",
+        "//buildtools/third_party/libc++:libc++",
+        "//third_party/libc++/src/src/",
+        "//third_party/libc++/src/src/algorithm.cpp",
+        "//third_party/libc++/src/src/any.cpp",
+        "//third_party/libc++/src/src/atomic.cpp",
+        "//third_party/libc++/src/src/barrier.cpp"
+      ],
+      "notices": [
+        "texts/libcxx/LICENSE.TXT"
+      ]
+    },
+    "libcxxabi": {
+      "targets": [
+        "//buildtools/third_party/libc++abi:libc++abi"
+      ],
+      "example_inputs": [
+        "//buildtools/third_party/libc++abi:libc++abi",
+        "//third_party/libc++abi/src/src/abort_message.cpp",
+        "//third_party/libc++abi/src/src/cxa_aux_runtime.cpp",
+        "//third_party/libc++abi/src/src/cxa_default_handlers.cpp",
+        "//third_party/libc++abi/src/src/cxa_demangle.cpp",
+        "//third_party/libc++abi/src/src/cxa_exception.cpp",
+        "//third_party/libc++abi/src/src/cxa_exception_storage.cpp",
+        "//third_party/libc++abi/src/src/cxa_guard.cpp"
+      ],
+      "notices": [
+        "texts/libcxxabi/LICENSE.TXT"
+      ]
+    },
+    "llvm-libc": {
+      "targets": [
+        "//buildtools/third_party/libc++:libc++",
+        "//third_party/llvm-libc:headers",
+        "//third_party/llvm-libc:llvm-libc-shared",
+        "//v8:v8_libbase"
+      ],
+      "example_inputs": [
+        "//third_party/llvm-libc/src/",
+        "//third_party/llvm-libc:headers",
+        "//third_party/llvm-libc:llvm-libc-shared"
+      ],
+      "notices": [
+        "texts/llvm-libc/LICENSE.TXT"
+      ]
+    },
+    "rapidhash-v8": {
+      "targets": [
+        "//v8:v8_internal_headers",
+        "//v8:v8_libbase"
+      ],
+      "example_inputs": [
+        "//v8/third_party/rapidhash-v8/rapidhash.h",
+        "//v8/third_party/rapidhash-v8/secret.h"
+      ],
+      "notices": [
+        "texts/rapidhash-v8/LICENSE"
+      ]
+    },
+    "rust-stdlib": {
+      "targets": [
+        "//build/rust/std/rules:addr2line",
+        "//build/rust/std/rules:adler2",
+        "//build/rust/std/rules:alloc",
+        "//build/rust/std/rules:cfg_if",
+        "//build/rust/std/rules:compiler_builtins",
+        "//build/rust/std/rules:core",
+        "//build/rust/std/rules:getopts",
+        "//build/rust/std/rules:gimli",
+        "//build/rust/std/rules:hashbrown",
+        "//build/rust/std/rules:libc",
+        "//build/rust/std/rules:memchr",
+        "//build/rust/std/rules:miniz_oxide",
+        "//build/rust/std/rules:object",
+        "//build/rust/std/rules:panic_abort",
+        "//build/rust/std/rules:profiler_builtins",
+        "//build/rust/std/rules:rustc_demangle",
+        "//build/rust/std/rules:rustc_std_workspace_alloc",
+        "//build/rust/std/rules:rustc_std_workspace_core",
+        "//build/rust/std/rules:rustc_std_workspace_std",
+        "//build/rust/std/rules:std",
+        "//build/rust/std/rules:std_detect",
+        "//build/rust/std/rules:test",
+        "//build/rust/std/rules:unwind"
+      ],
+      "example_inputs": [
+        "//third_party/rust-toolchain/lib/rustlib/src/rust/library/alloc/src/alloc.rs",
+        "//third_party/rust-toolchain/lib/rustlib/src/rust/library/alloc/src/borrow.rs",
+        "//third_party/rust-toolchain/lib/rustlib/src/rust/library/alloc/src/boxed.rs",
+        "//third_party/rust-toolchain/lib/rustlib/src/rust/library/alloc/src/boxed/convert.rs",
+        "//third_party/rust-toolchain/lib/rustlib/src/rust/library/alloc/src/boxed/iter.rs",
+        "//third_party/rust-toolchain/lib/rustlib/src/rust/library/alloc/src/boxed/thin.rs",
+        "//third_party/rust-toolchain/lib/rustlib/src/rust/library/alloc/src/bstr.rs",
+        "//third_party/rust-toolchain/lib/rustlib/src/rust/library/alloc/src/collections/binary_heap/mod.rs"
+      ],
+      "notices": [
+        "texts/rust-stdlib/COPYRIGHT-library.html"
+      ]
+    },
+    "rust-vendor/calendrical_calculations-v0_2": {
+      "targets": [
+        "//third_party/rust/calendrical_calculations/v0_2:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/calendrical_calculations-v0_2/src/astronomy.rs",
+        "//third_party/rust/chromium_crates_io/vendor/calendrical_calculations-v0_2/src/chinese_based.rs",
+        "//third_party/rust/chromium_crates_io/vendor/calendrical_calculations-v0_2/src/coptic.rs",
+        "//third_party/rust/chromium_crates_io/vendor/calendrical_calculations-v0_2/src/error.rs",
+        "//third_party/rust/chromium_crates_io/vendor/calendrical_calculations-v0_2/src/ethiopian.rs",
+        "//third_party/rust/chromium_crates_io/vendor/calendrical_calculations-v0_2/src/gregorian.rs",
+        "//third_party/rust/chromium_crates_io/vendor/calendrical_calculations-v0_2/src/hebrew.rs",
+        "//third_party/rust/chromium_crates_io/vendor/calendrical_calculations-v0_2/src/hebrew_keviyah.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/calendrical_calculations-v0_2/LICENSE"
+      ]
+    },
+    "rust-vendor/core_maths-v0_1": {
+      "targets": [
+        "//third_party/rust/core_maths/v0_1:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/core_maths-v0_1/src/lib.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/core_maths-v0_1/LICENSE"
+      ]
+    },
+    "rust-vendor/diplomat-runtime-v0_15": {
+      "targets": [
+        "//third_party/rust/diplomat_runtime/v0_15:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/diplomat-runtime-v0_15/src/callback.rs",
+        "//third_party/rust/chromium_crates_io/vendor/diplomat-runtime-v0_15/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/diplomat-runtime-v0_15/src/result.rs",
+        "//third_party/rust/chromium_crates_io/vendor/diplomat-runtime-v0_15/src/rust_interop.rs",
+        "//third_party/rust/chromium_crates_io/vendor/diplomat-runtime-v0_15/src/slices.rs",
+        "//third_party/rust/chromium_crates_io/vendor/diplomat-runtime-v0_15/src/wasm_glue.rs",
+        "//third_party/rust/chromium_crates_io/vendor/diplomat-runtime-v0_15/src/write.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/diplomat-runtime-v0_15/LICENSE-APACHE",
+        "texts/rust-vendor/diplomat-runtime-v0_15/LICENSE-MIT"
+      ]
+    },
+    "rust-vendor/either-v1": {
+      "targets": [
+        "//third_party/rust/either/v1:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/either-v1/src/into_either.rs",
+        "//third_party/rust/chromium_crates_io/vendor/either-v1/src/iterator.rs",
+        "//third_party/rust/chromium_crates_io/vendor/either-v1/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/either-v1/src/serde_untagged.rs",
+        "//third_party/rust/chromium_crates_io/vendor/either-v1/src/serde_untagged_optional.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/either-v1/LICENSE-APACHE",
+        "texts/rust-vendor/either-v1/LICENSE-MIT"
+      ]
+    },
+    "rust-vendor/icu_calendar-v2": {
+      "targets": [
+        "//third_party/rust/icu_calendar/v2:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/icu_calendar-v2/src/any_calendar.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_calendar-v2/src/cal/abstract_gregorian.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_calendar-v2/src/cal/buddhist.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_calendar-v2/src/cal/coptic.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_calendar-v2/src/cal/east_asian_traditional.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_calendar-v2/src/cal/east_asian_traditional/china_data.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_calendar-v2/src/cal/east_asian_traditional/korea_data.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_calendar-v2/src/cal/east_asian_traditional/qing_data.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/icu_calendar-v2/LICENSE"
+      ]
+    },
+    "rust-vendor/icu_calendar_data-v2": {
+      "targets": [
+        "//third_party/rust/icu_calendar_data/v2:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/icu_calendar_data-v2/src/lib.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/icu_calendar_data-v2/LICENSE"
+      ]
+    },
+    "rust-vendor/icu_collections-v2": {
+      "targets": [
+        "//third_party/rust/icu_collections/v2:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/icu_collections-v2/src/char16trie/mod.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_collections-v2/src/char16trie/trie.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_collections-v2/src/codepointinvlist/builder.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_collections-v2/src/codepointinvlist/conversions.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_collections-v2/src/codepointinvlist/cpinvlist.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_collections-v2/src/codepointinvlist/mod.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_collections-v2/src/codepointinvlist/utils.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_collections-v2/src/codepointinvliststringlist/mod.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/icu_collections-v2/LICENSE"
+      ]
+    },
+    "rust-vendor/icu_locale-v2": {
+      "targets": [
+        "//third_party/rust/icu_locale/v2:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale-v2/src/canonicalizer.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale-v2/src/directionality.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale-v2/src/exemplar_chars.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale-v2/src/expander.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale-v2/src/fallback/algorithms.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale-v2/src/fallback/mod.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale-v2/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale-v2/src/provider.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/icu_locale-v2/LICENSE"
+      ]
+    },
+    "rust-vendor/icu_locale_core-v2": {
+      "targets": [
+        "//third_party/rust/icu_locale_core/v2:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale_core-v2/src/data.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale_core-v2/src/databake.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale_core-v2/src/extensions/mod.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale_core-v2/src/extensions/other/mod.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale_core-v2/src/extensions/private/mod.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale_core-v2/src/extensions/private/other.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale_core-v2/src/extensions/transform/fields.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale_core-v2/src/extensions/transform/key.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/icu_locale_core-v2/LICENSE"
+      ]
+    },
+    "rust-vendor/icu_locale_data-v2": {
+      "targets": [
+        "//third_party/rust/icu_locale_data/v2:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/icu_locale_data-v2/src/lib.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/icu_locale_data-v2/LICENSE"
+      ]
+    },
+    "rust-vendor/icu_provider-v2": {
+      "targets": [
+        "//third_party/rust/icu_provider/v2:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/icu_provider-v2/src/baked.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_provider-v2/src/baked/zerotrie.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_provider-v2/src/buf.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_provider-v2/src/buf/serde.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_provider-v2/src/constructors.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_provider-v2/src/data_provider.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_provider-v2/src/dynutil.rs",
+        "//third_party/rust/chromium_crates_io/vendor/icu_provider-v2/src/error.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/icu_provider-v2/LICENSE"
+      ]
+    },
+    "rust-vendor/ixdtf-v0_6": {
+      "targets": [
+        "//third_party/rust/ixdtf/v0_6:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/ixdtf-v0_6/src/core.rs",
+        "//third_party/rust/chromium_crates_io/vendor/ixdtf-v0_6/src/encoding.rs",
+        "//third_party/rust/chromium_crates_io/vendor/ixdtf-v0_6/src/error.rs",
+        "//third_party/rust/chromium_crates_io/vendor/ixdtf-v0_6/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/ixdtf-v0_6/src/parsers/annotations.rs",
+        "//third_party/rust/chromium_crates_io/vendor/ixdtf-v0_6/src/parsers/datetime.rs",
+        "//third_party/rust/chromium_crates_io/vendor/ixdtf-v0_6/src/parsers/duration.rs",
+        "//third_party/rust/chromium_crates_io/vendor/ixdtf-v0_6/src/parsers/grammar.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/ixdtf-v0_6/LICENSE"
+      ]
+    },
+    "rust-vendor/libm-v0_2": {
+      "targets": [
+        "//third_party/rust/libm/v0_2:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/libm-v0_2/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/libm-v0_2/src/libm_helper.rs",
+        "//third_party/rust/chromium_crates_io/vendor/libm-v0_2/src/math/acos.rs",
+        "//third_party/rust/chromium_crates_io/vendor/libm-v0_2/src/math/acosf.rs",
+        "//third_party/rust/chromium_crates_io/vendor/libm-v0_2/src/math/acosh.rs",
+        "//third_party/rust/chromium_crates_io/vendor/libm-v0_2/src/math/acoshf.rs",
+        "//third_party/rust/chromium_crates_io/vendor/libm-v0_2/src/math/arch/aarch64.rs",
+        "//third_party/rust/chromium_crates_io/vendor/libm-v0_2/src/math/arch/i586.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/libm-v0_2/LICENSE.txt"
+      ]
+    },
+    "rust-vendor/litemap-v0_8": {
+      "targets": [
+        "//third_party/rust/litemap/v0_8:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/litemap-v0_8/src/databake.rs",
+        "//third_party/rust/chromium_crates_io/vendor/litemap-v0_8/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/litemap-v0_8/src/map.rs",
+        "//third_party/rust/chromium_crates_io/vendor/litemap-v0_8/src/serde.rs",
+        "//third_party/rust/chromium_crates_io/vendor/litemap-v0_8/src/serde_helpers.rs",
+        "//third_party/rust/chromium_crates_io/vendor/litemap-v0_8/src/store/mod.rs",
+        "//third_party/rust/chromium_crates_io/vendor/litemap-v0_8/src/store/slice_impl.rs",
+        "//third_party/rust/chromium_crates_io/vendor/litemap-v0_8/src/store/vec_impl.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/litemap-v0_8/LICENSE"
+      ]
+    },
+    "rust-vendor/num-traits-v0_2": {
+      "targets": [
+        "//third_party/rust/num_traits/v0_2:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/num-traits-v0_2/src/bounds.rs",
+        "//third_party/rust/chromium_crates_io/vendor/num-traits-v0_2/src/cast.rs",
+        "//third_party/rust/chromium_crates_io/vendor/num-traits-v0_2/src/float.rs",
+        "//third_party/rust/chromium_crates_io/vendor/num-traits-v0_2/src/identities.rs",
+        "//third_party/rust/chromium_crates_io/vendor/num-traits-v0_2/src/int.rs",
+        "//third_party/rust/chromium_crates_io/vendor/num-traits-v0_2/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/num-traits-v0_2/src/macros.rs",
+        "//third_party/rust/chromium_crates_io/vendor/num-traits-v0_2/src/ops/bytes.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/num-traits-v0_2/LICENSE-APACHE",
+        "texts/rust-vendor/num-traits-v0_2/LICENSE-MIT"
+      ]
+    },
+    "rust-vendor/potential_utf-v0_1": {
+      "targets": [
+        "//third_party/rust/potential_utf/v0_1:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/potential_utf-v0_1/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/potential_utf-v0_1/src/uchar.rs",
+        "//third_party/rust/chromium_crates_io/vendor/potential_utf-v0_1/src/ustr.rs",
+        "//third_party/rust/chromium_crates_io/vendor/potential_utf-v0_1/src/writeable.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/potential_utf-v0_1/LICENSE"
+      ]
+    },
+    "rust-vendor/resb-v0_1": {
+      "targets": [
+        "//third_party/rust/resb/v0_1:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/resb-v0_1/src/binary.rs",
+        "//third_party/rust/chromium_crates_io/vendor/resb-v0_1/src/binary/deserializer.rs",
+        "//third_party/rust/chromium_crates_io/vendor/resb-v0_1/src/binary/header.rs",
+        "//third_party/rust/chromium_crates_io/vendor/resb-v0_1/src/binary/helpers.rs",
+        "//third_party/rust/chromium_crates_io/vendor/resb-v0_1/src/binary/serializer.rs",
+        "//third_party/rust/chromium_crates_io/vendor/resb-v0_1/src/bundle.rs",
+        "//third_party/rust/chromium_crates_io/vendor/resb-v0_1/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/resb-v0_1/src/text.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/resb-v0_1/LICENSE"
+      ]
+    },
+    "rust-vendor/serde-v1": {
+      "targets": [
+        "//third_party/rust/serde/v1:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/serde-v1/src/core/crate_root.rs",
+        "//third_party/rust/chromium_crates_io/vendor/serde-v1/src/core/de/ignored_any.rs",
+        "//third_party/rust/chromium_crates_io/vendor/serde-v1/src/core/de/impls.rs",
+        "//third_party/rust/chromium_crates_io/vendor/serde-v1/src/core/de/mod.rs",
+        "//third_party/rust/chromium_crates_io/vendor/serde-v1/src/core/de/value.rs",
+        "//third_party/rust/chromium_crates_io/vendor/serde-v1/src/core/format.rs",
+        "//third_party/rust/chromium_crates_io/vendor/serde-v1/src/core/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/serde-v1/src/core/macros.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/serde-v1/LICENSE-APACHE",
+        "texts/rust-vendor/serde-v1/LICENSE-MIT"
+      ]
+    },
+    "rust-vendor/serde_core-v1": {
+      "targets": [
+        "//third_party/rust/serde_core/v1:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/serde_core-v1/src/crate_root.rs",
+        "//third_party/rust/chromium_crates_io/vendor/serde_core-v1/src/de/ignored_any.rs",
+        "//third_party/rust/chromium_crates_io/vendor/serde_core-v1/src/de/impls.rs",
+        "//third_party/rust/chromium_crates_io/vendor/serde_core-v1/src/de/mod.rs",
+        "//third_party/rust/chromium_crates_io/vendor/serde_core-v1/src/de/value.rs",
+        "//third_party/rust/chromium_crates_io/vendor/serde_core-v1/src/format.rs",
+        "//third_party/rust/chromium_crates_io/vendor/serde_core-v1/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/serde_core-v1/src/macros.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/serde_core-v1/LICENSE-APACHE",
+        "texts/rust-vendor/serde_core-v1/LICENSE-MIT"
+      ]
+    },
+    "rust-vendor/stable_deref_trait-v1": {
+      "targets": [
+        "//third_party/rust/stable_deref_trait/v1:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/stable_deref_trait-v1/src/lib.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/stable_deref_trait-v1/LICENSE-APACHE",
+        "texts/rust-vendor/stable_deref_trait-v1/LICENSE-MIT"
+      ]
+    },
+    "rust-vendor/temporal_capi-v0_2": {
+      "targets": [
+        "//third_party/rust/temporal_capi/v0_2:lib",
+        "//v8:torque_generated_definitions",
+        "//v8:v8_base_without_compiler",
+        "//v8:v8_compiler",
+        "//v8:v8_internal_headers",
+        "//v8:v8_snapshot"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/temporal_capi-v0_2/bindings/cpp/",
+        "//third_party/rust/chromium_crates_io/vendor/temporal_capi-v0_2/src/calendar.rs",
+        "//third_party/rust/chromium_crates_io/vendor/temporal_capi-v0_2/src/duration.rs",
+        "//third_party/rust/chromium_crates_io/vendor/temporal_capi-v0_2/src/error.rs",
+        "//third_party/rust/chromium_crates_io/vendor/temporal_capi-v0_2/src/instant.rs",
+        "//third_party/rust/chromium_crates_io/vendor/temporal_capi-v0_2/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/temporal_capi-v0_2/src/options.rs",
+        "//third_party/rust/chromium_crates_io/vendor/temporal_capi-v0_2/src/plain_date.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/temporal_capi-v0_2/LICENSE-Apache",
+        "texts/rust-vendor/temporal_capi-v0_2/LICENSE-MIT"
+      ]
+    },
+    "rust-vendor/temporal_rs-v0_2": {
+      "targets": [
+        "//third_party/rust/temporal_rs/v0_2:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/temporal_rs-v0_2/src/builtins/compiled/duration.rs",
+        "//third_party/rust/chromium_crates_io/vendor/temporal_rs-v0_2/src/builtins/compiled/duration/tests.rs",
+        "//third_party/rust/chromium_crates_io/vendor/temporal_rs-v0_2/src/builtins/compiled/instant.rs",
+        "//third_party/rust/chromium_crates_io/vendor/temporal_rs-v0_2/src/builtins/compiled/mod.rs",
+        "//third_party/rust/chromium_crates_io/vendor/temporal_rs-v0_2/src/builtins/compiled/now.rs",
+        "//third_party/rust/chromium_crates_io/vendor/temporal_rs-v0_2/src/builtins/compiled/plain_date.rs",
+        "//third_party/rust/chromium_crates_io/vendor/temporal_rs-v0_2/src/builtins/compiled/plain_date_time.rs",
+        "//third_party/rust/chromium_crates_io/vendor/temporal_rs-v0_2/src/builtins/compiled/plain_month_day.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/temporal_rs-v0_2/LICENSE-Apache",
+        "texts/rust-vendor/temporal_rs-v0_2/LICENSE-MIT"
+      ]
+    },
+    "rust-vendor/timezone_provider-v0_2": {
+      "targets": [
+        "//third_party/rust/timezone_provider/v0_2:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/timezone_provider-v0_2/src/common.rs",
+        "//third_party/rust/chromium_crates_io/vendor/timezone_provider-v0_2/src/data/mod.rs",
+        "//third_party/rust/chromium_crates_io/vendor/timezone_provider-v0_2/src/epoch_nanoseconds.rs",
+        "//third_party/rust/chromium_crates_io/vendor/timezone_provider-v0_2/src/error.rs",
+        "//third_party/rust/chromium_crates_io/vendor/timezone_provider-v0_2/src/experimental_tzif/datagen.rs",
+        "//third_party/rust/chromium_crates_io/vendor/timezone_provider-v0_2/src/experimental_tzif/mod.rs",
+        "//third_party/rust/chromium_crates_io/vendor/timezone_provider-v0_2/src/experimental_tzif/posix.rs",
+        "//third_party/rust/chromium_crates_io/vendor/timezone_provider-v0_2/src/experimental_tzif/provider.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/timezone_provider-v0_2/LICENSE-Apache",
+        "texts/rust-vendor/timezone_provider-v0_2/LICENSE-MIT"
+      ]
+    },
+    "rust-vendor/tinystr-v0_8": {
+      "targets": [
+        "//third_party/rust/tinystr/v0_8:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/tinystr-v0_8/src/ascii.rs",
+        "//third_party/rust/chromium_crates_io/vendor/tinystr-v0_8/src/asciibyte.rs",
+        "//third_party/rust/chromium_crates_io/vendor/tinystr-v0_8/src/databake.rs",
+        "//third_party/rust/chromium_crates_io/vendor/tinystr-v0_8/src/error.rs",
+        "//third_party/rust/chromium_crates_io/vendor/tinystr-v0_8/src/int_ops.rs",
+        "//third_party/rust/chromium_crates_io/vendor/tinystr-v0_8/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/tinystr-v0_8/src/macros.rs",
+        "//third_party/rust/chromium_crates_io/vendor/tinystr-v0_8/src/serde.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/tinystr-v0_8/LICENSE"
+      ]
+    },
+    "rust-vendor/utf8_iter-v1": {
+      "targets": [
+        "//third_party/rust/utf8_iter/v1:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/utf8_iter-v1/src/indices.rs",
+        "//third_party/rust/chromium_crates_io/vendor/utf8_iter-v1/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/utf8_iter-v1/src/report.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/utf8_iter-v1/LICENSE-APACHE",
+        "texts/rust-vendor/utf8_iter-v1/LICENSE-MIT"
+      ]
+    },
+    "rust-vendor/writeable-v0_6": {
+      "targets": [
+        "//third_party/rust/writeable/v0_6:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/writeable-v0_6/src/cmp.rs",
+        "//third_party/rust/chromium_crates_io/vendor/writeable-v0_6/src/concat.rs",
+        "//third_party/rust/chromium_crates_io/vendor/writeable-v0_6/src/either.rs",
+        "//third_party/rust/chromium_crates_io/vendor/writeable-v0_6/src/impls.rs",
+        "//third_party/rust/chromium_crates_io/vendor/writeable-v0_6/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/writeable-v0_6/src/ops.rs",
+        "//third_party/rust/chromium_crates_io/vendor/writeable-v0_6/src/parts_write_adapter.rs",
+        "//third_party/rust/chromium_crates_io/vendor/writeable-v0_6/src/testing.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/writeable-v0_6/LICENSE"
+      ]
+    },
+    "rust-vendor/yoke-v0_8": {
+      "targets": [
+        "//third_party/rust/yoke/v0_8:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/yoke-v0_8/src/cartable_ptr.rs",
+        "//third_party/rust/chromium_crates_io/vendor/yoke-v0_8/src/either.rs",
+        "//third_party/rust/chromium_crates_io/vendor/yoke-v0_8/src/erased.rs",
+        "//third_party/rust/chromium_crates_io/vendor/yoke-v0_8/src/kinda_sorta_dangling.rs",
+        "//third_party/rust/chromium_crates_io/vendor/yoke-v0_8/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/yoke-v0_8/src/macro_impls.rs",
+        "//third_party/rust/chromium_crates_io/vendor/yoke-v0_8/src/utils.rs",
+        "//third_party/rust/chromium_crates_io/vendor/yoke-v0_8/src/yoke.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/yoke-v0_8/LICENSE"
+      ]
+    },
+    "rust-vendor/zerofrom-v0_1": {
+      "targets": [
+        "//third_party/rust/zerofrom/v0_1:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/zerofrom-v0_1/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerofrom-v0_1/src/macro_impls.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerofrom-v0_1/src/zero_from.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/zerofrom-v0_1/LICENSE"
+      ]
+    },
+    "rust-vendor/zerotrie-v0_2": {
+      "targets": [
+        "//third_party/rust/zerotrie/v0_2:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/zerotrie-v0_2/src/builder/branch_meta.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerotrie-v0_2/src/builder/dense.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerotrie-v0_2/src/builder/konst/builder.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerotrie-v0_2/src/builder/konst/mod.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerotrie-v0_2/src/builder/konst/store.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerotrie-v0_2/src/builder/litemap.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerotrie-v0_2/src/builder/mod.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerotrie-v0_2/src/builder/nonconst/builder.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/zerotrie-v0_2/LICENSE"
+      ]
+    },
+    "rust-vendor/zerovec-v0_11": {
+      "targets": [
+        "//third_party/rust/zerovec/v0_11:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/zerovec-v0_11/src/cow.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerovec-v0_11/src/hashmap/algorithms.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerovec-v0_11/src/hashmap/mod.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerovec-v0_11/src/hashmap/serde.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerovec-v0_11/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerovec-v0_11/src/map/borrowed.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerovec-v0_11/src/map/databake.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zerovec-v0_11/src/map/kv.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/zerovec-v0_11/LICENSE"
+      ]
+    },
+    "rust-vendor/zoneinfo64-v0_3": {
+      "targets": [
+        "//third_party/rust/zoneinfo64/v0_3:lib"
+      ],
+      "example_inputs": [
+        "//third_party/rust/chromium_crates_io/vendor/zoneinfo64-v0_3/src/chrono_impls.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zoneinfo64-v0_3/src/deserialize.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zoneinfo64-v0_3/src/lib.rs",
+        "//third_party/rust/chromium_crates_io/vendor/zoneinfo64-v0_3/src/rule.rs"
+      ],
+      "notices": [
+        "texts/rust-vendor/zoneinfo64-v0_3/LICENSE"
+      ]
+    },
+    "simdutf": {
+      "targets": [
+        "//third_party/simdutf:header",
+        "//third_party/simdutf:simdutf"
+      ],
+      "example_inputs": [
+        "//third_party/simdutf/simdutf.cpp",
+        "//third_party/simdutf/simdutf.h",
+        "//third_party/simdutf:header",
+        "//third_party/simdutf:simdutf"
+      ],
+      "notices": [
+        "texts/simdutf/LICENSE"
+      ]
+    },
+    "siphash": {
+      "targets": [
+        "//v8:v8_base_without_compiler",
+        "//v8:v8_internal_headers"
+      ],
+      "example_inputs": [
+        "//v8/third_party/siphash/halfsiphash.cc",
+        "//v8/third_party/siphash/halfsiphash.h"
+      ],
+      "notices": [
+        "texts/siphash/LICENSE"
+      ]
+    },
+    "utf8-decoder": {
+      "targets": [
+        "//v8:v8_internal_headers"
+      ],
+      "example_inputs": [
+        "//v8/third_party/utf8-decoder/generalized-utf8-decoder.h",
+        "//v8/third_party/utf8-decoder/utf8-decoder.h"
+      ],
+      "notices": [
+        "texts/utf8-decoder/LICENSE"
+      ]
+    }
+  },
+  "extra_notice_components": [
+    "rust-vendor/diplomat-v0_15",
+    "rust-vendor/diplomat_core-v0_15",
+    "rust-vendor/displaydoc-v0_2",
+    "rust-vendor/proc-macro2-v1",
+    "rust-vendor/quote-v1",
+    "rust-vendor/serde_derive-v1",
+    "rust-vendor/smallvec-v1",
+    "rust-vendor/strck-v1",
+    "rust-vendor/syn-v2",
+    "rust-vendor/synstructure-v0_13",
+    "rust-vendor/unicode-ident-v1",
+    "rust-vendor/yoke-derive-v0_8",
+    "rust-vendor/zerofrom-derive-v0_1",
+    "rust-vendor/zerovec-derive-v0_11",
+    "v8",
+    "valgrind",
+    "wasm-api",
+    "zlib"
+  ],
+  "partition_alloc": "No target in this preserved GN graph; pointer compression/shared cage is disabled in the accepted native configuration. Other configurations require their own notice audit.",
+  "system_libraries": "SDK 26.5 platform libraries are linked through the host SDK; no SDK/toolchain binary is included in the three-file artifact bundle."
+}

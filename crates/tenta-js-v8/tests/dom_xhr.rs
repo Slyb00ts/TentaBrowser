@@ -1809,14 +1809,12 @@ fn an_author_content_type_survives_the_inferred_one() {
     });
 }
 
-/// A `URLSearchParams` body falls to the `USVString` arm, because
-/// `XMLHttpRequestBodyInit` declares no arm for it: the arm cannot be declared
-/// until the generator's `union_test` can brand-check a platform object rather
-/// than testing `value.is_object()` for every object.
+/// A `URLSearchParams` body falls to the `USVString` arm because
+/// `XMLHttpRequestBodyInit` still declares no arm for it. Generated interface
+/// brand checks exist, but this host body extraction has not been widened.
 ///
-/// **The bytes are right and the inferred type is not**, and the assertion below
-/// pins the engine's *actual* behaviour so that a slice which adds the brand
-/// check is forced back here. `URLSearchParams`'s stringifier *is* the
+/// The bytes are right and the inferred type is not. This regression must be
+/// updated when that body arm is implemented. `URLSearchParams`'s stringifier is the
 /// `application/x-www-form-urlencoded` serializer, so the body is exactly what a
 /// browser sends; the type is `text/plain;charset=UTF-8`, where the standard's
 /// own `URLSearchParams` branch of *extract a body with type* sets
@@ -1935,27 +1933,11 @@ fn an_omitted_undefined_and_null_body_are_all_the_null_body() {
 }
 
 /// The `USVString` arm converts by WebIDL's `ToString`, which is why a number is
-/// stringified rather than refused: `send(5)` sends the byte `5`.
-///
-/// A `Symbol` is the one value `ToString` refuses, and what this engine does with
-/// it is **two things at once**, which is a recorded deviation rather than the
-/// standard's single throw. The standard converts an operation's arguments before
-/// its steps run, so a body whose conversion throws leaves `send()` with nothing
-/// to do; here the conversion is
-/// [`string_from_v8`](../../../tenta-idl/src/codegen/prelude.rs), which is
-/// infallible — it calls V8's `to_rust_string_lossy`, so a failing `to_string`
-/// yields `""` and leaves the exception pending. `send_request` therefore *runs*,
-/// starts a request with an empty body, and the `TypeError` V8 is still holding is
-/// thrown to the page when the binding returns.
-///
-/// The assertion below pins that pair, and the defect is deliberately not fixed
-/// here: it is the shared `DOMString`/`USVString` conversion rather than `send()`
-/// — `document.title = Symbol()` throws its `TypeError` and stores the empty
-/// string for the same reason — so the fix is `string_from_v8` becoming fallible,
-/// which rewrites every generated call site and therefore needs a generator slice
-/// with its own goldens.
+/// stringified rather than refused: `send(5)` sends the byte `5`. Argument
+/// conversion completes before the operation runs, so a `Symbol`'s abrupt
+/// `ToString` leaves the XHR in `OPENED` and starts no request.
 #[test]
-fn a_number_body_is_stringified_and_a_symbol_starts_a_request_before_it_throws() {
+fn a_number_body_is_stringified_and_a_symbol_throws_before_starting_a_request() {
     with_page(|engine| {
         let recorder = install_recorder(engine);
         recorder.hold.set(true);
@@ -1976,25 +1958,19 @@ fn a_number_body_is_stringified_and_a_symbol_starts_a_request_before_it_throws()
                 "#
             ),
             "TypeError|1",
-            "the symbol's `ToString` fails, and the state is the one `send()` left"
+            "the symbol's `ToString` fails before `send()` changes the state"
         );
 
         let starts = recorder.starts.borrow();
         assert_eq!(
             starts.len(),
-            2,
-            "the recorded deviation: the refused call started a request anyway"
+            1,
+            "the refused call does not reach the request driver"
         );
         assert_eq!(
             starts[0].0.body.as_deref(),
             Some(b"5".as_slice()),
             "`5` is stringified per WebIDL, not dropped"
-        );
-        assert_eq!(
-            starts[1].0.body.as_deref(),
-            Some(b"".as_slice()),
-            "the symbol's failed conversion reached `send_request` as the empty \
-             string, which is the half of the deviation a page can see on the wire"
         );
     });
 }

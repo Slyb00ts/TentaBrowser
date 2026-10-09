@@ -1,6 +1,5 @@
-//! Tests for `Blob` and `File` (P2 slice `d-4b`'s `Blob`/`File` prerequisite),
-//! the first `idl/fileapi` declarations and the first *host-side brand check* in
-//! the bindings.
+//! Tests for `Blob` and `File` (P2 slice `d-4b`'s `Blob`/`File` prerequisite)
+//! and the first `idl/fileapi` declarations.
 //!
 //! Two things make this file different from `dom_headers.rs` and
 //! `dom_response.rs`:
@@ -8,23 +7,15 @@
 //! 1. `File` is the corpus's first interface with a **parent**, so the
 //!    prototype chain (`File.prototype -> Blob.prototype -> Object.prototype`)
 //!    is a property of the generated glue rather than of the host, and it is
-//!    asserted here. The *other* subclassing property — the constructor function
-//!    inheriting its parent's, `Object.getPrototypeOf(File) === Blob` — the same
-//!    glue cannot express, and the second test in the file pins both that and
-//!    `File.length` as the defects they are.
+//!    asserted here. The constructor function inherits from `Blob` too.
 //!    `File` is installed *after* `Blob`, because `constructor.inherit` reads
 //!    the parent's template out of the isolate's cache
 //!    (`crates/tenta-js-v8/src/lib.rs`).
-//! 2. `BlobPart` is a union whose `Blob` arm the generator cannot test. Its
-//!    lowered test is `value.is_object()` — every object — and the V8
-//!    `WrapperWorld::handle` ignores the interface name it is handed, so the
-//!    *only* thing that stops `new Blob([new Headers()])` from appending
-//!    whatever that record's bytes happen to be is the host's own record brand
-//!    check (`crates/tenta-js/src/bindings/host.rs`'s `blob_bytes_of`). That
-//!    check is the property the brand section below exists for, and it cannot
-//!    be reached with `{}` or a `Date`: those carry no host pointer, so the
-//!    conversion refuses them before any host code runs. A host-backed wrapper
-//!    is the case that would silently produce a wrong `Blob` without it.
+//! 2. `BlobPart` is the first union with an interface arm. Generated V8 glue
+//!    selects that arm only for an actual `Blob` wrapper (including a `File`,
+//!    through interface inheritance). Other objects fall through to
+//!    `USVString`, so their string conversion supplies the bytes. The host
+//!    retains its record check as a defensive invariant.
 //!
 //! The algorithms themselves — the slice arithmetic and the type normalization —
 //! are unit-tested without a wrapper world in
@@ -42,8 +33,7 @@ use tenta_js_v8::Engine;
 
 /// A document with `<html><body><p></p></body></html>`.
 ///
-/// The `<p>` and the body exist for the brand tests: a node wrapper is the
-/// shape that reaches the union's `is_object` arm with a host pointer attached.
+/// The `<p>` and the body provide node wrappers for the interface-union tests.
 fn document() -> Rc<RefCell<Document>> {
     let mut d = Document::new();
     let html = d.create_html_element(atoms::HTML);
@@ -130,7 +120,7 @@ fn blob_and_file_are_installed_with_file_below_blob() {
                 Object.keys(Blob.prototype).join(','),
                 Object.keys(File.prototype).join(','),
                 // `Blob`'s `length` is 0 because both of its arguments are
-                // `optional`. `File`'s should be 2 — see the next test.
+                // `optional`. `File`'s is 2 — see the next test.
                 Blob.length,
             ].join('|');
             "#
@@ -140,36 +130,51 @@ fn blob_and_file_are_installed_with_file_below_blob() {
 }
 
 #[test]
-fn two_subclassing_properties_the_generated_glue_does_not_set() {
-    // Both of these are properties a browser has and this engine does not, both
-    // are the *generator's* rather than this slice's, and both are pinned here
-    // rather than fixed, because the fix moves every `*_v8.rs` golden.
-    //
-    // 1. `Object.getPrototypeOf(File)` is `Blob` in a browser: a subclass
-    //    constructor inherits its parent's function object. V8's
-    //    `FunctionTemplate::inherit` sets the *instance* prototype chain only —
-    //    which the test above shows working — and the template API has no way to
-    //    set the constructor function's own `[[Prototype]]`, so the generated
-    //    installer cannot express it at all. `File` is the corpus's first
-    //    derived interface, which is why this is the first place it shows.
-    // 2. `File.length` is 2 in a browser — `fileBits` and `fileName` are
-    //    required — and 0 here. The generator computes the right number
-    //    (`InterfaceDescriptor.constructor_length` is `Some(2)` for `File`) and
-    //    nothing reads it: no `*_v8.rs` sets the template's `length`, so every
-    //    constructor in this engine answers 0. `Blob`'s 0 is right by accident.
+fn constructor_lengths_and_file_inheritance() {
+    // File has two required arguments, while Blob has only optional ones.
     assert_eq!(
         eval(
             r#"
             [
                 Object.getPrototypeOf(File) === Blob,
                 typeof File.length + ':' + File.length,
-                // The two the standard gets right because both arguments of
-                // `Blob` are optional.
                 typeof Blob.length + ':' + Blob.length,
             ].join('|');
             "#
         ),
-        "false|number:0|number:0"
+        "true|number:2|number:0"
+    );
+}
+
+#[test]
+fn generated_interface_constructors_follow_the_webidl_inheritance_chain() {
+    assert_eq!(
+        eval(
+            r#"
+            const links = [
+                Object.getPrototypeOf(File) === Blob,
+                Object.getPrototypeOf(Blob) === Function.prototype,
+                Object.getPrototypeOf(HTMLDivElement) === HTMLElement,
+                Object.getPrototypeOf(HTMLElement) === Element,
+                Object.getPrototypeOf(Element) === Node,
+                Object.getPrototypeOf(Node) === EventTarget,
+                Object.getPrototypeOf(EventTarget) === Function.prototype,
+                Object.getPrototypeOf(UIEvent) === Event,
+                Object.getPrototypeOf(MouseEvent) === UIEvent,
+                Object.getPrototypeOf(FocusEvent) === UIEvent,
+                Object.getPrototypeOf(WheelEvent) === MouseEvent,
+                Object.getPrototypeOf(Event) === Function.prototype,
+            ];
+            const savedFile = File, savedBlob = Blob;
+            const savedWheel = WheelEvent, savedMouse = MouseEvent;
+            globalThis.Blob = function ReplacementBlob() {};
+            globalThis.MouseEvent = function ReplacementMouseEvent() {};
+            links.every(Boolean) &&
+                Object.getPrototypeOf(savedFile) === savedBlob &&
+                Object.getPrototypeOf(savedWheel) === savedMouse;
+            "#
+        ),
+        "true"
     );
 }
 
@@ -376,49 +381,57 @@ fn text_resolves_with_the_utf8_decoded_bytes() {
 }
 
 // ---------------------------------------------------------------------------
-// The brand check on the union's Blob arm
+// Interface selection in the BlobPart union
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_host_backed_wrapper_in_the_part_list_is_refused() {
-    // Every object in the first block carries a host pointer and a wrapper, so
-    // the union's `is_object` test passes, `handle_from_v8::<Blob>` succeeds —
-    // the V8 world ignores the interface name it is given — and the bits point
-    // at a record that is not a `Blob`. Without the host's record check these
-    // would append another record's bytes, and the window's handle would read
-    // slab slot 0.
+fn objects_without_the_blob_brand_use_the_string_arm() {
+    // WebIDL tests the interface brand before selecting the `Blob` arm. Every
+    // object below therefore reaches `USVString`, including wrappers for other
+    // platform interfaces. Reading each constructed Blob back proves that its
+    // bytes came from exactly that object's string conversion.
     assert_eq!(
-        caught(
+        settled(
             r#"
-            results.push(attempt(() => new Blob([new URL('https://example.com/')])));
-            results.push(attempt(() => new Blob([new Headers()])));
-            results.push(attempt(() => new Blob([new Response()])));
-            results.push(attempt(() => new Blob([new TextDecoder()])));
-            results.push(attempt(() => new Blob([new AbortController().signal])));
-            results.push(attempt(() => new Blob([document.body])));
-            results.push(attempt(() => new Blob([document])));
-            results.push(attempt(() => new Blob([window])));
-            // A plain object and a `Date` are thrown out by the *conversion*:
-            // they have no host pointer at all, so the internal field lookup
-            // fails before any host code runs. Pinned because the distinction
-            // between the two groups is the point of this test.
-            results.push(attempt(() => new Blob([{}])));
-            results.push(attempt(() => new Blob([new Date()])));
-            // A nested array is not a buffer source either, and it is the arm
-            // order — buffer first — that keeps it out of the buffer branch.
-            results.push(attempt(() => new Blob([['ab']])));
-            "#
+            globalThis.values = [
+                new URL('https://example.com/'),
+                new Headers(),
+                new Response(),
+                new TextDecoder(),
+                new AbortController().signal,
+                document.body,
+                document,
+                window,
+                {},
+                new Date(0),
+                ['ab'],
+            ];
+            globalThis.expected = values.map(value => String(value));
+            globalThis.texts = Array(values.length).fill(null);
+            values.forEach((value, index) => {
+                new Blob([value]).text().then(text => { texts[index] = text; });
+            });
+            "#,
+            r#"
+            [
+                texts.length,
+                texts.every((text, index) => text === expected[index]),
+                texts[0],
+                texts[1],
+                texts[8],
+                texts[10],
+            ].join('|');
+            "#,
         ),
-        "threw:TypeError|threw:TypeError|threw:TypeError|threw:TypeError|threw:TypeError|threw:TypeError|threw:TypeError|threw:TypeError|threw:TypeError|threw:TypeError|threw:TypeError"
+        "11|true|https://example.com/|[object Headers]|[object Object]|ab"
     );
 }
 
 #[test]
 fn a_typed_array_still_reaches_the_buffer_arm() {
-    // The buffer arm is declared first precisely because the `Blob` arm's test
-    // is `is_object()` and would swallow every typed array if it came before.
-    // An offset view is pinned because that is where a wrong reading of the
-    // underlying bytes shows up.
+    // Buffer-source class checks select typed arrays before the Blob/string
+    // alternatives. An offset view is pinned because that is where a wrong
+    // reading of the underlying bytes shows up.
     assert_eq!(
         eval(
             r#"

@@ -74,6 +74,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use tenta_js::bindings::host::utf8_decode;
+use tenta_js::bindings::v8_registered_slow_callback_boundary;
 use tenta_js::dom::events::{HostValue, PromiseOutcome, PromiseRef};
 
 use crate::script_host::V8ScriptHost;
@@ -377,7 +378,7 @@ pub(crate) fn queue_settlement(
     // The index travels as the function's data, which is what lets the microtask
     // find its own job without a pointer and without `unsafe`.
     let data = v8::Integer::new(scope, index as i32);
-    let Some(callback) = v8::Function::builder(promise_microtask)
+    let Some(callback) = v8::Function::builder(guarded_promise_microtask)
         .data(data.into())
         .build(scope)
     else {
@@ -411,6 +412,19 @@ fn parse_json<'s>(
 
 /// Applies one settlement: opens the resolver, settles the promise, and gives
 /// back every reference the job holds. The job's `Global` drops with `job`.
+fn guarded_promise_microtask<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    retval: v8::ReturnValue<'s, v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        promise_microtask(scope, args, retval);
+    };
+    // SAFETY: This microtask is a registered V8 Function callback. It is not
+    // a raw MicrotaskCallback or a GC hook, so slow API allocation is allowed.
+    unsafe { v8_registered_slow_callback_boundary(scope, "promise_microtask", (), call) };
+}
+
 fn promise_microtask(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments<'_>,

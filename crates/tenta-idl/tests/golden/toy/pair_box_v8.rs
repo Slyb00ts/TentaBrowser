@@ -25,7 +25,7 @@
 /// - `v8::ReturnValue::{set, set_bool, set_int32, set_uint32, set_double,
 ///   set_null, set_undefined}`
 /// - `v8::fast_api::{CFunction, CFunctionInfo, CTypeInfo, Flags,
-///   Int64Representation, Type, FastApiOneByteString}`
+///   Int64Representation, Type, FastApiOneByteString, FastApiCallbackOptions}`
 /// - `v8::Local<v8::Object>::{get_aligned_pointer_from_internal_field,
 ///   set_aligned_pointer_in_internal_field, get, set, create_data_property,
 ///   internal_field_count}` (through the prelude helpers)
@@ -43,7 +43,8 @@ pub fn install_pair_box<T: PairBoxOps + 'static>(
     global_template: v8::Local<'_, v8::ObjectTemplate>,
     registry: &mut dyn InterfaceRegistry,
 ) -> Result<v8::Global<v8::FunctionTemplate>, JsError> {
-    let constructor = v8::FunctionTemplate::builder(construct_pair_box::<T>).build(scope);
+    install_native_callback_state(scope);
+    let constructor = v8::FunctionTemplate::builder(construct_pair_box::<T>).length(0).build(scope);
     let class_name = v8_string(scope, "PairBox")?;
     constructor.set_class_name(class_name);
     let signature = v8::Signature::new(scope, constructor);
@@ -125,9 +126,23 @@ pub fn install_pair_box<T: PairBoxOps + 'static>(
     Ok(v8::Global::new(scope.as_ref(), constructor))
 }
 
+fn construct_pair_box<'s, T: PairBoxOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        v8_begin_stored_value_lease(scope);
+        body_construct_pair_box::<T>(scope, args, rv);
+        v8_end_stored_value_lease(scope);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "construct_pair_box", (), call) };
+}
+
 /// `PairBox` declares no `constructor`, so calling it throws, as WebIDL
 /// requires for an interface without a constructor operation.
-fn construct_pair_box<'s, T: PairBoxOps + 'static>(
+fn body_construct_pair_box<'s, T: PairBoxOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -135,12 +150,24 @@ fn construct_pair_box<'s, T: PairBoxOps + 'static>(
     throw_type_error(scope, "Illegal constructor");
 }
 
+fn call_pair_box_entries<'s, T: PairBoxOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_pair_box_entries::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_pair_box_entries", (), call) };
+}
+
 /// `PairBox.entries`.
 ///
 /// The host hands over a snapshot, so one call sees one consistent
 /// collection; the returned object is an Array Iterator, not an
 /// interface-branded one.
-fn call_pair_box_entries<'s, T: PairBoxOps + 'static>(
+fn body_call_pair_box_entries<'s, T: PairBoxOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -188,12 +215,24 @@ fn call_pair_box_entries<'s, T: PairBoxOps + 'static>(
     }
 }
 
+fn call_pair_box_for_each<'s, T: PairBoxOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_pair_box_for_each::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_pair_box_for_each", (), call) };
+}
+
 /// `PairBox.forEach`.
 ///
 /// The callback is called once per entry of one host snapshot, with the
 /// value first and the key second, as WebIDL's pair-iterator `forEach`
 /// prescribes.
-fn call_pair_box_for_each<'s, T: PairBoxOps + 'static>(
+fn body_call_pair_box_for_each<'s, T: PairBoxOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -259,12 +298,24 @@ fn call_pair_box_for_each<'s, T: PairBoxOps + 'static>(
     rv.set_undefined();
 }
 
+fn call_pair_box_keys<'s, T: PairBoxOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_pair_box_keys::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_pair_box_keys", (), call) };
+}
+
 /// `PairBox.keys`.
 ///
 /// The host hands over a snapshot, so one call sees one consistent
 /// collection; the returned object is an Array Iterator, not an
 /// interface-branded one.
-fn call_pair_box_keys<'s, T: PairBoxOps + 'static>(
+fn body_call_pair_box_keys<'s, T: PairBoxOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -305,12 +356,24 @@ fn call_pair_box_keys<'s, T: PairBoxOps + 'static>(
     }
 }
 
+fn call_pair_box_values<'s, T: PairBoxOps + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_pair_box_values::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_pair_box_values", (), call) };
+}
+
 /// `PairBox.values`.
 ///
 /// The host hands over a snapshot, so one call sees one consistent
 /// collection; the returned object is an Array Iterator, not an
 /// interface-branded one.
-fn call_pair_box_values<'s, T: PairBoxOps + 'static>(
+fn body_call_pair_box_values<'s, T: PairBoxOps + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,

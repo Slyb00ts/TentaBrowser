@@ -57,7 +57,9 @@ pub fn prelude() -> String {
     integer_conversions(&mut out);
     out.push_str(V8_SUPPORT);
     buffer_conversions(&mut out);
+    out.push_str(BUFFER_REF_V8);
     out.push_str(QUICKJS_SUPPORT);
+    out.push_str(BUFFER_REF_QJS);
     out
 }
 
@@ -252,6 +254,24 @@ impl<T: ?Sized> Clone for Handle<T> {
 
 impl<T: ?Sized> Copy for Handle<T> {}
 
+/// The zero handle, which is what a dictionary's `required` members start at
+/// while its conversion is still checking which of them were passed.
+///
+/// A dictionary derives `Default` because its *optional* members need one, and a
+/// `required` member of interface type then needs a value before the presence
+/// check: `StaticRangeInit`'s four members are all required, so its `from_v8`
+/// builds the default and overwrites each field only once the member has been
+/// found — a missing one makes the whole conversion a `TypeError`, which is what
+/// `StaticRange-constructor.html`'s last block asserts. The zero handle is never
+/// the value an operation receives through that path, and it is not a sentinel:
+/// it is a well-formed `TAG_NODE` handle naming node 0 of document slot 0, whose
+/// arena generation starts at zero.
+impl<T: ?Sized> Default for Handle<T> {
+    fn default() -> Self {
+        Self::from_bits(0)
+    }
+}
+
 impl<T: ?Sized> PartialEq for Handle<T> {
     fn eq(&self, other: &Self) -> bool {
         self.bits == other.bits
@@ -405,6 +425,84 @@ pub struct JsObject(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct JsSymbol(pub u64);
 
+/// A callback-scoped reference to the original JavaScript buffer or view.
+///
+/// The token does not own bytes or a permanent root. The generated binding's
+/// temporary stored-value lease owns the corresponding world value until the
+/// callback returns. Backend access revalidates the live value on each use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BufferSourceRef { bits: u64, lease_id: u64 }
+
+impl BufferSourceRef {
+    fn new(bits: u64, lease_id: u64) -> Self { Self { bits, lease_id } }
+    /// The existing world-value key, for the backend's checked bridge.
+    pub const fn bits(self) -> u64 { self.bits }
+    fn lease_id(self) -> u64 { self.lease_id }
+}
+
+/// A callback-scoped reference that is known to be an ArrayBufferView.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ArrayBufferViewRef { bits: u64, lease_id: u64 }
+
+impl ArrayBufferViewRef {
+    fn new(bits: u64, lease_id: u64) -> Self { Self { bits, lease_id } }
+    /// The existing world-value key, for the backend's checked bridge.
+    pub const fn bits(self) -> u64 { self.bits }
+    fn lease_id(self) -> u64 { self.lease_id }
+}
+
+// One ID space per generated binding module. A callback lease is never
+// recycled, even if an engine reuses a value-table index or creates a new
+// world. Exhaustion refuses the operation instead of wrapping to an old ID.
+static NEXT_BUFFER_LEASE_ID: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+fn next_buffer_lease_id() -> Option<u64> {
+    next_buffer_lease_id_from(&NEXT_BUFFER_LEASE_ID)
+}
+
+fn next_buffer_lease_id_from(counter: &std::sync::atomic::AtomicU64) -> Option<u64> {
+    use std::sync::atomic::Ordering;
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| current.checked_add(1))
+        .ok()
+        .map(|previous| previous + 1)
+}
+
+/// Exact native buffer/view kind of a checked reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BufferKind {
+    ArrayBuffer, DataView,
+    Int8, Uint8, Uint8Clamped, Int16, Uint16, Int32, Uint32,
+    BigInt64, BigUint64, Float16, Float32, Float64,
+}
+
+/// Current view span; re-read after page-controlled conversions or resize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BufferMetadata {
+    pub kind: BufferKind,
+    pub byte_offset: usize,
+    pub byte_length: usize,
+}
+
+// Write helpers require independent caller-owned bytes. A source slice into
+// the destination backing could alias native mutation even if its view span
+// differs, so reject the entire backing range before the first write.
+fn source_overlaps_backing(source: &[u8], backing: *const u8, backing_len: usize) -> bool {
+    if source.is_empty() || backing_len == 0 {
+        return false;
+    }
+    let source_start = source.as_ptr() as usize;
+    let backing_start = backing as usize;
+    let Some(source_end) = source_start.checked_add(source.len()) else {
+        return true;
+    };
+    let Some(backing_end) = backing_start.checked_add(backing_len) else {
+        return true;
+    };
+    source_start < backing_end && backing_start < source_end
+}
+
 /// The DOM exception or JavaScript error a binding method reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsError {
@@ -414,6 +512,9 @@ pub struct JsError {
     /// `DomException`. Carried separately so the throw path can build a real
     /// `DOMException` object with the right `name`/`code`.
     dom_name: Option<String>,
+    /// The engine already has the page exception or fatal stop pending.
+    /// Generated glue must propagate it without creating another exception.
+    pending_exception: bool,
 }
 
 /// The kind of error [`JsError`] carries.
@@ -436,6 +537,7 @@ impl JsError {
             kind: JsErrorKind::Type,
             message: message.into(),
             dom_name: None,
+            pending_exception: false,
         }
     }
 
@@ -445,6 +547,7 @@ impl JsError {
             kind: JsErrorKind::Range,
             message: message.into(),
             dom_name: None,
+            pending_exception: false,
         }
     }
 
@@ -454,6 +557,7 @@ impl JsError {
             kind: JsErrorKind::Syntax,
             message: message.into(),
             dom_name: None,
+            pending_exception: false,
         }
     }
 
@@ -464,6 +568,18 @@ impl JsError {
             kind: JsErrorKind::DomException,
             message: message.to_string(),
             dom_name: Some(name.to_string()),
+            pending_exception: false,
+        }
+    }
+
+    /// Marks an abrupt conversion whose original JavaScript exception is pending.
+    /// The marker creates no JS root and allocates no message.
+    fn pending_exception() -> Self {
+        Self {
+            kind: JsErrorKind::Type,
+            message: String::new(),
+            dom_name: None,
+            pending_exception: true,
         }
     }
 
@@ -485,6 +601,9 @@ impl JsError {
 
 impl core::fmt::Display for JsError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if self.pending_exception {
+            return f.write_str("pending JavaScript exception");
+        }
         let prefix = match self.kind {
             JsErrorKind::Type => "TypeError",
             JsErrorKind::Range => "RangeError",
@@ -496,6 +615,26 @@ impl core::fmt::Display for JsError {
 }
 
 impl std::error::Error for JsError {}
+
+/// Convert an ECMAScript Number to a restricted WebIDL float. Check after
+/// narrowing because a finite double can overflow to an infinite f32.
+pub fn restricted_f32(number: f64) -> Result<f32, JsError> {
+    let narrowed = number as f32;
+    if narrowed.is_finite() {
+        Ok(narrowed)
+    } else {
+        Err(JsError::type_error("non-finite number"))
+    }
+}
+
+/// Convert an ECMAScript Number to a restricted WebIDL double.
+pub fn restricted_f64(number: f64) -> Result<f64, JsError> {
+    if number.is_finite() {
+        Ok(number)
+    } else {
+        Err(JsError::type_error("non-finite number"))
+    }
+}
 
 /// Whether a descriptor describes an interface or a namespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -604,6 +743,470 @@ const V8_SUPPORT: &str = r#"
 // V8 support (rusty_v8 152.x).
 // ---------------------------------------------------------------------------
 
+/// Sticky failure state, allocated when templates are installed rather than
+/// while recovering from a native failure. A callback may have changed host
+/// state before failing, so the owning engine must be discarded after this is set.
+#[cfg(feature = "v8")]
+struct NativeCallbackState {
+    callback: std::cell::Cell<Option<&'static str>>,
+    payload: std::cell::Cell<Option<Box<dyn std::any::Any + Send>>>,
+}
+
+#[cfg(feature = "v8")]
+impl Drop for NativeCallbackState {
+    fn drop(&mut self) {
+        if let Some(payload) = self.payload.take() {
+            drop_native_panic_payload(payload);
+        }
+    }
+}
+
+#[cfg(feature = "v8")]
+fn drop_native_panic_payload(payload: Box<dyn std::any::Any + Send>) {
+    // A user-defined panic payload may panic in Drop. Contain that secondary
+    // panic as well, forgetting only its arbitrary payload rather than risk
+    // an unbounded chain of panicking destructors. Ordinary payloads are freed.
+    if let Err(nested) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload))) {
+        std::mem::forget(nested);
+    }
+}
+
+#[cfg(feature = "v8")]
+fn install_native_callback_state(scope: &mut v8::PinScope<'_, '_>) {
+    install_native_callback_state_for_isolate(scope);
+}
+
+/// Preallocates the failure marker before an embedder registers native V8
+/// callbacks, including callbacks that can run before a context exists.
+#[cfg(feature = "v8")]
+pub fn install_native_callback_state_for_isolate(isolate: &mut v8::Isolate) {
+    if isolate.get_slot::<NativeCallbackState>().is_none() {
+        isolate.set_slot(NativeCallbackState {
+            callback: std::cell::Cell::new(None),
+            payload: std::cell::Cell::new(None),
+        });
+    }
+}
+
+/// The first native callback or recovery step that failed in this isolate.
+///
+/// The marker is never cleared: even if a caller cancels V8 termination, host
+/// state may be inconsistent. Embedders must report a crash and discard this
+/// engine, rather than treat the failure as a catchable JavaScript exception.
+#[cfg(feature = "v8")]
+pub fn native_callback_failure(isolate: &v8::Isolate) -> Option<&'static str> {
+    isolate.get_slot::<NativeCallbackState>().and_then(|state| state.callback.get())
+}
+
+#[cfg(feature = "v8")]
+fn mark_native_callback_failure(isolate: &v8::Isolate, callback: &'static str) {
+    let Some(state) = isolate.get_slot::<NativeCallbackState>() else {
+        return;
+    };
+    if state.callback.get().is_none() {
+        state.callback.set(Some(callback));
+    }
+}
+
+/// Poisons an isolate after a native recovery failure and stops JavaScript.
+///
+/// Call this only when execution cannot safely resume. Like a contained native
+/// panic, this failure is sticky and cannot become a catchable JS exception.
+#[cfg(feature = "v8")]
+pub fn poison_native_callback(isolate: &v8::Isolate, callback: &'static str) {
+    mark_native_callback_failure(isolate, callback);
+    isolate.terminate_execution();
+}
+
+/// Carries an already pending V8 termination through a generated Result path
+/// without allocating or replacing it with a catchable JavaScript exception.
+#[cfg(feature = "v8")]
+pub fn v8_pending_exception_error() -> JsError {
+    JsError::pending_exception()
+}
+
+/// Propagates an existing exception in the current engine callback.
+pub fn pending_js_exception_error() -> JsError {
+    JsError::pending_exception()
+}
+
+/// A slow native callback's admission boundary. The owning engine may run a
+/// closed wrapper graph checkpoint before argument conversion or host effects.
+/// Fast API callbacks deliberately do not enter this allocating path.
+#[cfg(feature = "v8")]
+pub enum V8AdmissionError {
+    /// A consistent, catchable allocation refusal before host effects.
+    Throw(JsError),
+    /// Ordinary watchdog termination or a sticky native failure is active.
+    Terminated,
+}
+
+#[cfg(feature = "v8")]
+pub trait V8CallbackAdmission: 'static {
+    fn enter(&self, scope: &mut v8::PinScope<'_, '_>) -> Result<(), V8AdmissionError>;
+    /// Recheck after page-controlled constructor argument conversion, before
+    /// the host constructor can mutate a slab. No collection runs in this frame.
+    fn before_constructor_host(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> Result<(), V8AdmissionError>;
+    /// Track stored JS values acquired by the current constructor or listener call.
+    fn begin_stored_value_lease(&self);
+    /// Begin an annotated buffer lease only inside a live callback frame.
+    fn begin_checked_stored_value_lease(&self, _lease_id: u64) -> bool { false }
+    /// ID of the innermost active annotated buffer lease.
+    fn current_buffer_reference_lease(&self) -> Option<u64> { None }
+    /// Whether a token's original lease remains active, including an outer frame.
+    fn buffer_reference_lease_active(&self, _lease_id: u64) -> bool { false }
+    /// Poll a hard stop only while native buffer work runs, recording it for
+    /// the outer registered slow callback after its frame has been released.
+    fn poll_native_buffer_work_termination(&self) -> bool { false }
+    /// Read the recorded stop after frame cleanup. Nested direct boundaries
+    /// must not consume the outer registered callback's decision.
+    fn take_native_buffer_work_termination(&self) -> bool { false }
+    fn track_stored_value(&self, bits: u64);
+    /// The successful host operation has consumed those stored references.
+    fn transfer_stored_value_lease(&self);
+    /// Release values if conversion or the host operation returned early.
+    fn end_stored_value_lease(&self, isolate: &v8::Isolate);
+    fn exit(&self);
+}
+
+#[cfg(feature = "v8")]
+pub fn v8_begin_stored_value_lease(scope: &v8::Isolate) {
+    if let Some(slot) = scope.get_slot::<V8CallbackAdmissionSlot>() {
+        slot.0.begin_stored_value_lease();
+    }
+}
+
+/// Reject a reference-bearing operation before converting any argument when
+/// no admitted callback frame can own its temporary roots.
+#[cfg(feature = "v8")]
+pub fn v8_checked_begin_stored_value_lease(scope: &v8::Isolate) -> Result<(), JsError> {
+    let slot = scope.get_slot::<V8CallbackAdmissionSlot>()
+        .ok_or_else(|| JsError::type_error("buffer reference callback has no admission world"))?;
+    let lease_id = next_buffer_lease_id()
+        .ok_or_else(|| JsError::range_error("buffer reference lease IDs exhausted"))?;
+    if slot.0.begin_checked_stored_value_lease(lease_id) {
+        Ok(())
+    } else {
+        Err(JsError::type_error("buffer reference callback has no active frame"))
+    }
+}
+
+#[cfg(feature = "v8")]
+fn v8_current_buffer_reference_lease(scope: &v8::Isolate) -> Result<u64, JsError> {
+    scope.get_slot::<V8CallbackAdmissionSlot>()
+        .and_then(|slot| slot.0.current_buffer_reference_lease())
+        .ok_or_else(|| JsError::type_error("buffer reference has no active lease"))
+}
+
+#[cfg(feature = "v8")]
+fn v8_validate_buffer_reference_lease(scope: &v8::Isolate, lease_id: u64) -> Result<(), JsError> {
+    if scope.get_slot::<V8CallbackAdmissionSlot>()
+        .is_some_and(|slot| slot.0.buffer_reference_lease_active(lease_id)) {
+        Ok(())
+    } else {
+        Err(JsError::type_error("buffer reference escaped its callback"))
+    }
+}
+
+#[cfg(feature = "v8")]
+pub fn v8_check_native_buffer_work(scope: &v8::Isolate) -> Result<(), JsError> {
+    if v8_buffer_work_interrupted(scope) {
+        Err(JsError::pending_exception())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "v8")]
+fn v8_buffer_work_interrupted(scope: &v8::Isolate) -> bool {
+    scope.is_execution_terminating()
+        || native_callback_failure(scope).is_some()
+        || scope.get_slot::<V8CallbackAdmissionSlot>()
+            .is_some_and(|slot| slot.0.poll_native_buffer_work_termination())
+}
+
+#[cfg(feature = "v8")]
+pub fn v8_transfer_stored_value_lease(scope: &v8::Isolate) {
+    if let Some(slot) = scope.get_slot::<V8CallbackAdmissionSlot>() {
+        slot.0.transfer_stored_value_lease();
+    }
+}
+
+#[cfg(feature = "v8")]
+pub fn v8_end_stored_value_lease(scope: &v8::Isolate) {
+    if let Some(slot) = scope.get_slot::<V8CallbackAdmissionSlot>() {
+        slot.0.end_stored_value_lease(scope);
+    }
+}
+
+/// A page getter in argument conversion may publish many wrappers after the
+/// callback's initial admission. Refuse before host effects if it spent the
+/// hard budget; the active conversion frame cannot collect safely.
+#[cfg(feature = "v8")]
+pub fn v8_before_constructor_host(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Result<(), V8AdmissionError> {
+    if native_callback_failure(scope).is_some() {
+        scope.terminate_execution();
+        return Err(V8AdmissionError::Terminated);
+    }
+    let admission = scope
+        .get_slot::<V8CallbackAdmissionSlot>()
+        .map(|slot| std::rc::Rc::clone(&slot.0));
+    let result = match admission {
+        Some(admission) => admission.before_constructor_host(scope),
+        None => Ok(()),
+    };
+    if native_callback_failure(scope).is_some() {
+        scope.terminate_execution();
+        Err(V8AdmissionError::Terminated)
+    } else {
+        result
+    }
+}
+
+#[cfg(feature = "v8")]
+struct V8CallbackAdmissionSlot(std::rc::Rc<dyn V8CallbackAdmission>);
+
+#[cfg(feature = "v8")]
+pub fn install_v8_callback_admission(
+    isolate: &mut v8::Isolate,
+    admission: std::rc::Rc<dyn V8CallbackAdmission>,
+) {
+    isolate.set_slot(V8CallbackAdmissionSlot(admission));
+}
+
+/// Removes the admission state before the V8 world is drained at teardown.
+#[cfg(feature = "v8")]
+pub fn clear_v8_callback_admission(isolate: &mut v8::Isolate) {
+    drop(isolate.remove_slot::<V8CallbackAdmissionSlot>());
+}
+
+#[cfg(feature = "v8")]
+struct V8CallbackFrame(std::rc::Rc<dyn V8CallbackAdmission>);
+
+#[cfg(feature = "v8")]
+impl Drop for V8CallbackFrame {
+    fn drop(&mut self) {
+        self.0.exit();
+    }
+}
+
+#[cfg(feature = "v8")]
+fn terminate_native_callback(
+    isolate: &v8::Isolate,
+    callback: &'static str,
+    payload: Box<dyn std::any::Any + Send>,
+) {
+    mark_native_callback_failure(isolate, callback);
+    if let Some(state) = isolate.get_slot::<NativeCallbackState>() {
+        // Keep the payload until isolate teardown, after V8 has returned. An
+        // already-active outer callback can also panic after an inner one has
+        // failed; dispose the previous payload under its own guard in that case.
+        if let Some(previous) = state.payload.replace(Some(payload)) {
+            drop_native_panic_payload(previous);
+        }
+    } else {
+        // Generated installers always preallocate this slot. Keep the native
+        // boundary contained even if an embedder bypasses those installers.
+        drop_native_panic_payload(payload);
+    }
+    // This uses V8's termination API without allocating handles, constructing
+    // an exception or running page script. JavaScript cannot catch it.
+    isolate.terminate_execution();
+}
+
+/// Contains Rust callback work, or a direct embedder invocation, without
+/// unwinding across the V8 boundary.
+///
+/// A native panic poisons the isolate and requests termination. Registered
+/// slow callbacks use [`v8_registered_slow_callback_boundary`] around this
+/// core to install the termination sentinel before returning to JavaScript.
+#[cfg(feature = "v8")]
+pub fn v8_callback_boundary<'s, 'i, R: Copy>(
+    scope: &mut v8::PinScope<'s, 'i>,
+    callback: &'static str,
+    fallback: R,
+    call: impl FnOnce(&mut v8::PinScope<'s, 'i>) -> R,
+) -> R {
+    let hard_stop_requested = std::cell::Cell::new(false);
+    v8_callback_boundary_inner(scope, callback, fallback, call, &hard_stop_requested)
+}
+
+#[cfg(feature = "v8")]
+fn v8_callback_boundary_inner<'s, 'i, R: Copy>(
+    scope: &mut v8::PinScope<'s, 'i>,
+    callback: &'static str,
+    fallback: R,
+    call: impl FnOnce(&mut v8::PinScope<'s, 'i>) -> R,
+    hard_stop_requested: &std::cell::Cell<bool>,
+) -> R {
+    if native_callback_failure(scope).is_some() {
+        scope.terminate_execution();
+        return fallback;
+    }
+    // The mutable scope and interior-mutable hosts are not unwind-safe to
+    // resume. AssertUnwindSafe is justified by the sticky failure marker and
+    // uncatchable termination: neither this operation nor its host is retried.
+    let admission = scope
+        .get_slot::<V8CallbackAdmissionSlot>()
+        .map(|slot| std::rc::Rc::clone(&slot.0));
+    let poll = admission.clone();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _frame = if let Some(admission) = admission {
+            match admission.enter(scope) {
+                Ok(()) => {}
+                Err(V8AdmissionError::Throw(error)) => {
+                    // No frame was entered. Preserve a stop observed by an
+                    // outer native buffer loop even if this nested admission
+                    // reports an ordinary refusal first.
+                    hard_stop_requested.set(poll.as_ref().is_some_and(|admission| {
+                        admission.take_native_buffer_work_termination()
+                    }));
+                    if native_callback_failure(scope).is_some() {
+                        scope.terminate_execution();
+                        return fallback;
+                    }
+                    throw_js_error(scope, &error);
+                    return fallback;
+                }
+                Err(V8AdmissionError::Terminated) => {
+                    hard_stop_requested.set(true);
+                    scope.terminate_execution();
+                    return fallback;
+                }
+            }
+            Some(V8CallbackFrame(admission))
+        } else {
+            None
+        };
+        let value = call(scope);
+        drop(_frame);
+        if let Some(admission) = poll {
+            hard_stop_requested.set(admission.take_native_buffer_work_termination());
+        }
+        if native_callback_failure(scope).is_some() {
+            scope.terminate_execution();
+            return fallback;
+        }
+        value
+    })) {
+        Ok(value) => value,
+        Err(payload) => {
+            terminate_native_callback(scope, callback, payload);
+            fallback
+        }
+    }
+}
+
+/// Contains a callback registered through V8's slow function or property API
+/// and makes a sticky native failure uncatchable before returning to JavaScript.
+///
+/// The ordinary boundary owns admission, Rust unwind containment, and callback
+/// frame cleanup. Only after it returns may this tail synchronously install
+/// V8's termination sentinel. The generic boundary remains safe for embedder
+/// calls made outside a V8 callback.
+///
+/// # Safety
+/// Call only from the owning isolate's active slow V8 function or property
+/// callback, on its thread, where V8 allocation is permitted. Native callback
+/// state must have been installed before registration. Never call this from a
+/// Fast API callback, GC/heap hook, or a plain embedder scope.
+#[cfg(feature = "v8")]
+pub unsafe fn v8_registered_slow_callback_boundary<'s, 'i, R: Copy>(
+    scope: &mut v8::PinScope<'s, 'i>,
+    callback: &'static str,
+    fallback: R,
+    call: impl FnOnce(&mut v8::PinScope<'s, 'i>) -> R,
+) -> R {
+    let hard_stop_requested = std::cell::Cell::new(false);
+    let value = v8_callback_boundary_inner(scope, callback, fallback, call, &hard_stop_requested);
+    if native_callback_failure(scope).is_some() || hard_stop_requested.get() {
+        // SAFETY: The caller guarantees an active allocating slow API callback.
+        // A native failure, hard memory refusal, or watchdog request dominates
+        // an ordinary pending exception. Engine classification keeps their
+        // typed causes separate after termination.
+        unsafe { scope.terminate_execution_now_from_callback() };
+        fallback
+    } else {
+        value
+    }
+}
+
+/// Contains a native V8 hook that receives an isolate rather than a callback
+/// scope. Heap-limit and GC hooks use this entry point and share the same
+/// sticky failure marker as generated and handwritten function callbacks.
+#[cfg(feature = "v8")]
+pub fn v8_isolate_callback_boundary<R: Copy>(
+    isolate: &v8::Isolate,
+    callback: &'static str,
+    fallback: R,
+    call: impl FnOnce() -> R,
+) -> R {
+    if native_callback_failure(isolate).is_some() {
+        isolate.terminate_execution();
+        return fallback;
+    }
+    // A panic can follow a partial host mutation, so the isolate is poisoned
+    // and terminated before control returns to V8.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) {
+        Ok(value) => {
+            if native_callback_failure(isolate).is_some() {
+                isolate.terminate_execution();
+                fallback
+            } else {
+                value
+            }
+        }
+        Err(payload) => {
+            terminate_native_callback(isolate, callback, payload);
+            fallback
+        }
+    }
+}
+
+/// Fast calls have no PinScope, but V8 supplies the current isolate in the
+/// final CallbackOptions argument. No slow-call fallback may retry host work
+/// after a panic; the ABI return value is only a placeholder during termination.
+#[cfg(feature = "v8")]
+fn v8_fast_callback_boundary<R: Copy>(
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
+    callback: &'static str,
+    fallback: R,
+    call: impl FnOnce() -> R,
+) -> R {
+    // SAFETY: only generated fast extern C callbacks call this helper, using
+    // the options V8 supplied for the current call. The shared isolate view
+    // never escapes this callback and does not create a handle scope.
+    if native_callback_failure(unsafe { options.isolate_unchecked() }).is_some() {
+        // SAFETY: same active callback, with no host operation in progress.
+        unsafe { options.isolate_unchecked() }.terminate_execution();
+        return fallback;
+    }
+    // As above: failure poisons and terminates the engine, never resumes it.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) {
+        Ok(value) => {
+            // A finalizer reached during the fast host body can poison the
+            // isolate without unwinding this callback itself.
+            if native_callback_failure(unsafe { options.isolate_unchecked() }).is_some() {
+                unsafe { options.isolate_unchecked() }.terminate_execution();
+                fallback
+            } else {
+                value
+            }
+        }
+        Err(payload) => {
+            // SAFETY: the caught host operation has finished unwinding. No
+            // isolate reference is retained across that operation or escapes.
+            terminate_native_callback(unsafe { options.isolate_unchecked() }, callback, payload);
+            fallback
+        }
+    }
+}
+
 /// The `v8::EmbedderDataTypeTag` used for wrapper internal fields.
 ///
 /// V8 152 only guarantees `kEmbedderDataTypeTagDefault` to be inside
@@ -619,11 +1222,20 @@ pub const WRAPPER_HOST_FIELD: i32 = 0;
 /// Per-isolate cache of the constructor templates installed so far.
 ///
 /// `install_*` looks the parent interface up here before calling
-/// `FunctionTemplate::inherit`, so parents must be installed first.
+/// `FunctionTemplate::inherit`, so parents must be installed first. Each entry
+/// also keeps a no-op function template carrying the interface signature. The
+/// pinned rusty_v8 release does not expose `FunctionTemplate::HasInstance`, so
+/// calling that no-op under a `TryCatch` is the equivalent native brand test:
+/// V8 accepts instances of this template (including inherited templates) and
+/// rejects unrelated objects before the callback runs.
 #[cfg(feature = "v8")]
 #[derive(Default)]
 pub struct TemplateCache {
-    templates: Vec<(&'static str, v8::Global<v8::FunctionTemplate>)>,
+    templates: Vec<(
+        &'static str,
+        v8::Global<v8::FunctionTemplate>,
+        v8::Global<v8::FunctionTemplate>,
+    )>,
 }
 
 #[cfg(feature = "v8")]
@@ -641,14 +1253,36 @@ pub fn cache_template(
     name: &'static str,
     template: v8::Local<v8::FunctionTemplate>,
 ) {
+    install_native_callback_state(scope);
     let global = v8::Global::new(scope.as_ref(), template);
+    let signature = v8::Signature::new(scope, template);
+    let brand_probe = v8::FunctionTemplate::builder(probe_interface_brand)
+        .signature(signature)
+        .build(scope);
+    let brand_probe = v8::Global::new(scope.as_ref(), brand_probe);
     if scope.get_slot::<TemplateCache>().is_none() {
         scope.set_slot(TemplateCache::new());
     }
     if let Some(cache) = scope.get_slot_mut::<TemplateCache>() {
-        cache.templates.retain(|(cached, _)| *cached != name);
-        cache.templates.push((name, global));
+        cache.templates.retain(|(cached, _, _)| *cached != name);
+        cache.templates.push((name, global, brand_probe));
     }
+}
+
+/// The callback behind a cached interface brand probe.
+///
+/// A matching receiver reaches this empty body. V8 rejects every other
+/// receiver through the function template's signature before entering it.
+#[cfg(feature = "v8")]
+fn probe_interface_brand<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    // Signature validation is an internal, no-op brand query. It neither
+    // allocates a wrapper nor enters host code, so the wrapper-pressure
+    // admission limit must not turn a valid object into a failed brand check.
+    v8_isolate_callback_boundary(scope, "probe_interface_brand", (), || {});
 }
 
 /// Looks a previously installed constructor template up by interface name.
@@ -661,9 +1295,81 @@ pub fn cached_template<'s>(
     let global = cache
         .templates
         .iter()
-        .find(|(cached, _)| *cached == name)
-        .map(|(_, template)| template)?;
+        .find(|(cached, _, _)| *cached == name)
+        .map(|(_, template, _)| template)?;
     Some(v8::Local::new(scope, global))
+}
+
+/// Looks up the native receiver check paired with an interface template.
+#[cfg(feature = "v8")]
+fn cached_brand_probe<'s>(
+    scope: &v8::PinScope<'s, '_>,
+    name: &str,
+) -> Option<v8::Local<'s, v8::FunctionTemplate>> {
+    let cache = scope.get_slot::<TemplateCache>()?;
+    let global = cache
+        .templates
+        .iter()
+        .find(|(cached, _, _)| *cached == name)
+        .map(|(_, _, brand_probe)| brand_probe)?;
+    Some(v8::Local::new(scope, global))
+}
+
+/// Runs one cached `FunctionTemplate` receiver check without exposing its
+/// expected TypeError to script.
+#[cfg(feature = "v8")]
+fn matches_interface_template(
+    scope: &mut v8::PinScope<'_, '_>,
+    name: &str,
+    value: v8::Local<v8::Value>,
+) -> bool {
+    let Some(probe) = cached_brand_probe(scope, name) else {
+        return false;
+    };
+    let Some(probe) = probe.get_function(scope) else {
+        return false;
+    };
+    v8::tc_scope!(let try_catch, scope);
+    probe.call(try_catch, value, &[]).is_some()
+}
+
+/// Whether `value` is an instance of `T`'s WebIDL interface.
+///
+/// This is a native template test rather than JavaScript `instanceof`, so an
+/// object whose prototype was merely set to `T.prototype` does not acquire the
+/// platform brand. V8's template inheritance makes genuine derived interface
+/// wrappers satisfy their parent interface.
+#[cfg(feature = "v8")]
+fn matches_interface_brand<T: InterfaceMarker>(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<v8::Value>,
+) -> bool {
+    let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
+        return false;
+    };
+    let interface = T::INTERFACE_NAME;
+
+    // The page global is the Window wrapper and deliberately has no API-object
+    // internal field. This IDL slice models Window's inherited event surface as
+    // EventTarget. The opaque Window and WindowProxy markers identify this same
+    // global; no unrelated interface acquires its brand by sharing the object.
+    if matches!(interface, "EventTarget" | "Window" | "WindowProxy") {
+        let global = scope.get_current_context().global(scope);
+        if object.strict_equals(global.into()) {
+            return true;
+        }
+    }
+
+    if matches_interface_template(scope, interface, value) {
+        return true;
+    }
+
+    // This tree stores attributes outside its node arena, so `Attr` is a
+    // standalone interface even though the DOM Standard makes it a Node. Keep
+    // the existing narrow compatibility path: Node-typed range endpoints must
+    // reach the host's InvalidNodeTypeError check, while every other unrelated
+    // platform wrapper is rejected here as a TypeError.
+    interface == "Node" && matches_interface_template(scope, "Attr", value)
 }
 
 /// Maps interface handles to their wrapper objects for one world.
@@ -678,7 +1384,7 @@ pub trait WrapperWorld: 'static {
         scope: &mut v8::PinScope<'s, '_>,
         interface: &'static str,
         handle: u64,
-    ) -> Option<v8::Local<'s, v8::Object>>;
+    ) -> Result<Option<v8::Local<'s, v8::Object>>, JsError>;
 
     /// Returns the handle a wrapper stands for.
     ///
@@ -707,6 +1413,26 @@ pub trait WrapperWorld: 'static {
         bits: u64,
     ) -> Option<v8::Local<'s, v8::Value>>;
 
+    /// Reads the pristine ArrayBuffer resizable flag in this world's context.
+    /// The getter is world-owned, never stored in a Context-owned slot.
+    fn array_buffer_resizable<'s>(
+        &self,
+        _scope: &mut v8::PinScope<'s, '_>,
+        _buffer: v8::Local<'s, v8::ArrayBuffer>,
+    ) -> Result<bool, JsError> {
+        Err(JsError::type_error("buffer reference intrinsic was not captured"))
+    }
+
+    /// Reads an optional pristine immutable flag. A missing intrinsic is
+    /// allowed only when that feature was absent in the world's bootstrap.
+    fn array_buffer_immutable<'s>(
+        &self,
+        _scope: &mut v8::PinScope<'s, '_>,
+        _buffer: v8::Local<'s, v8::ArrayBuffer>,
+    ) -> Result<bool, JsError> {
+        Err(JsError::type_error("buffer reference intrinsic was not captured"))
+    }
+
     /// Returns the realm (host context) a constructor downcasts to reach the
     /// document and event slab. See [`Realm`].
     fn realm(&self) -> Realm;
@@ -728,10 +1454,93 @@ pub trait WrapperWorld: 'static {
 #[cfg(feature = "v8")]
 struct WrapperWorldSlot(Box<dyn WrapperWorld>);
 
+/// The realm's original `Reflect.set`, retained before page script can replace it.
+#[cfg(feature = "v8")]
+struct LegacyReflectSetSlot(v8::Global<v8::Function>);
+
+#[cfg(feature = "v8")]
+fn capture_legacy_reflect_set(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Result<v8::Global<v8::Function>, JsError> {
+    let global = scope.get_current_context().global(scope);
+    let reflect_key = v8_string(scope, "Reflect")?;
+    let reflect = global
+        .get(scope, reflect_key.into())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .ok_or_else(|| JsError::type_error("the context has no `Reflect` global"))?;
+    let set_key = v8_string(scope, "set")?;
+    let set = reflect
+        .get(scope, set_key.into())
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+        .ok_or_else(|| JsError::type_error("`Reflect.set` is not callable"))?;
+    Ok(v8::Global::new(scope, set))
+}
+
+/// Runs the captured `Reflect.set` so its Boolean result and Proxy traps are
+/// preserved. `None` leaves the original JavaScript exception pending.
+#[cfg(feature = "v8")]
+fn legacy_reflect_set(
+    scope: &mut v8::PinScope<'_, '_>,
+    target: v8::Local<v8::Object>,
+    property: v8::Local<v8::Value>,
+    value: v8::Local<v8::Value>,
+    receiver: v8::Local<v8::Object>,
+) -> Option<bool> {
+    let set = {
+        let Some(slot) = scope.get_slot::<LegacyReflectSetSlot>() else {
+            throw_js_error(scope, &JsError::type_error("the wrapper world has no `Reflect.set` intrinsic"));
+            return None;
+        };
+        v8::Local::new(scope, &slot.0)
+    };
+    let this = v8::undefined(scope);
+    let result = set.call(
+        scope,
+        this.into(),
+        &[target.into(), property, value, receiver.into()],
+    )?;
+    Some(result.is_true())
+}
+
 /// Installs the wrapper world for this isolate.
 #[cfg(feature = "v8")]
-pub fn set_wrapper_world(scope: &mut v8::PinScope<'_, '_>, world: Box<dyn WrapperWorld>) {
+pub fn set_wrapper_world(
+    scope: &mut v8::PinScope<'_, '_>,
+    world: Box<dyn WrapperWorld>,
+) -> Result<(), JsError> {
+    let set = capture_legacy_reflect_set(scope)?;
+    scope.set_slot(LegacyReflectSetSlot(set));
     scope.set_slot(WrapperWorldSlot(world));
+    Ok(())
+}
+
+/// Releases the captured legacy setter while its V8 isolate is still alive.
+#[cfg(feature = "v8")]
+pub fn clear_legacy_reflect_set(isolate: &mut v8::Isolate) {
+    drop(isolate.remove_slot::<LegacyReflectSetSlot>());
+}
+
+/// Temporarily lends the world and scope to a conversion, restoring the world
+/// slot before an unwind reaches the callback boundary. Dropping the removed
+/// world during unwind could free hosts whose wrappers still exist in V8.
+#[cfg(feature = "v8")]
+fn with_wrapper_world<'s, 'i, R>(
+    scope: &mut v8::PinScope<'s, 'i>,
+    call: impl FnOnce(&dyn WrapperWorld, &mut v8::PinScope<'s, 'i>) -> R,
+) -> Result<R, JsError> {
+    let world = scope
+        .remove_slot::<WrapperWorldSlot>()
+        .ok_or_else(|| JsError::type_error("no wrapper world is installed for this isolate"))?;
+    // This does not recover or reuse host state: restore ownership, then pass
+    // the original panic to the outer callback boundary to poison the isolate.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        call(world.0.as_ref(), scope)
+    }));
+    scope.set_slot(world);
+    match outcome {
+        Ok(value) => Ok(value),
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 /// Converts a handle to its wrapper object.
@@ -742,11 +1551,7 @@ pub fn handle_to_v8<'s, T: InterfaceMarker>(
 ) -> Result<v8::Local<'s, v8::Value>, JsError> {
     let interface = T::INTERFACE_NAME;
     let bits = handle.bits();
-    let world = scope
-        .remove_slot::<WrapperWorldSlot>()
-        .ok_or_else(|| JsError::type_error("no wrapper world is installed for this isolate"))?;
-    let wrapper = world.0.wrapper(scope, interface, bits);
-    scope.set_slot(world);
+    let wrapper = with_wrapper_world(scope, |world, scope| world.wrapper(scope, interface, bits))??;
     match wrapper {
         Some(object) => Ok(object.into()),
         None => Err(JsError::type_error("the host object has no wrapper")),
@@ -759,10 +1564,29 @@ pub fn handle_from_v8<T: InterfaceMarker>(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<v8::Value>,
 ) -> Result<Handle<T>, JsError> {
+    interface_handle_from_v8::<T>(scope, value)?
+        .ok_or_else(|| JsError::type_error("expected an interface instance"))
+}
+
+/// Returns `T`'s handle when `value` is an actual wrapper carrying its brand.
+///
+/// Generated union conversion uses `None` to continue to its remaining arms.
+/// Requiring both the template signature and the wrapper world's own handle
+/// lookup matters for objects such as `Object.create(Node.prototype)` and
+/// `Object.create(realNode)`: a signature may find a matching holder in their
+/// prototype chain, but neither object is itself a Node wrapper.
+#[cfg(feature = "v8")]
+fn interface_handle_from_v8<T: InterfaceMarker>(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<v8::Value>,
+) -> Result<Option<Handle<T>>, JsError> {
+    if !matches_interface_brand::<T>(scope, value) {
+        return Ok(None);
+    }
     let interface = T::INTERFACE_NAME;
-    let object: v8::Local<v8::Object> = value
-        .try_into()
-        .map_err(|_| JsError::type_error("expected an interface instance"))?;
+    let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
+        return Ok(None);
+    };
     // The world is taken out of the scope for the duration of the call, as in
     // `handle_to_v8`, because `handle` needs the scope mutably to ask the realm
     // whether this object is its global.
@@ -770,14 +1594,8 @@ pub fn handle_from_v8<T: InterfaceMarker>(
     // INVARIANT: nothing on `handle`'s path may call back into this function or
     // `handle_to_v8` while the slot is out — they would find no world. Resolving
     // a receiver only reads: it neither runs script nor creates a wrapper.
-    let world = scope
-        .remove_slot::<WrapperWorldSlot>()
-        .ok_or_else(|| JsError::type_error("no wrapper world is installed for this isolate"))?;
-    let handle = world.0.handle(scope, interface, object);
-    scope.set_slot(world);
-    handle
-        .map(Handle::from_bits)
-        .ok_or_else(|| JsError::type_error("expected an interface instance"))
+    let handle = with_wrapper_world(scope, |world, scope| world.handle(scope, interface, object))?;
+    Ok(handle.map(Handle::from_bits))
 }
 
 /// Reads the host object out of a wrapper's internal field.
@@ -886,9 +1704,88 @@ pub fn throw_type_error(scope: &mut v8::PinScope<'_, '_>, message: &str) {
     }
 }
 
+/// Saves the realm's DOMException prototype behind an engine-private key.
+///
+/// Call after the realm's DOMException bootstrap and before page script runs.
+/// Later exception creation must not consult a mutable global constructor or
+/// page-controlled `Object.create`/`Object.defineProperty` functions.
+#[cfg(feature = "v8")]
+pub fn capture_v8_dom_exception_prototype(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    let context = scope.get_current_context();
+    let global = context.global(scope);
+    let Some(key) = v8::String::new(scope, "DOMException") else {
+        return false;
+    };
+    let Some(constructor) = global.get(scope, key.into()) else {
+        return false;
+    };
+    let Ok(constructor) = v8::Local::<v8::Object>::try_from(constructor) else {
+        return false;
+    };
+    let Some(key) = v8::String::new(scope, "prototype") else {
+        return false;
+    };
+    let Some(prototype) = constructor.get(scope, key.into()) else {
+        return false;
+    };
+    if !prototype.is_object() {
+        return false;
+    }
+    let Some(key) = v8::String::new(scope, "TentaBrowser#DOMException.prototype") else {
+        return false;
+    };
+    let private = v8::Private::for_api(scope, Some(key));
+    global.set_private(scope, private, prototype) == Some(true)
+}
+
+#[cfg(feature = "v8")]
+fn v8_dom_exception<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    name: &str,
+    message: v8::Local<'s, v8::String>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let global = scope.get_current_context().global(scope);
+    let key = v8::String::new(scope, "TentaBrowser#DOMException.prototype")?;
+    let private = v8::Private::for_api(scope, Some(key));
+    let prototype = global.get_private(scope, private)?;
+    if !prototype.is_object() {
+        return None;
+    }
+    // The native Error factory captures the stack without invoking a mutable
+    // page constructor. Keep that stack when applying the DOMException brand.
+    let exception = v8::Exception::error(scope, message);
+    let exception = v8::Local::<v8::Object>::try_from(exception).ok()?;
+    if exception.set_prototype(scope, prototype) != Some(true) {
+        return None;
+    }
+    let name_value = v8::String::new(scope, name)?;
+    let name_key = v8::String::new(scope, "name")?;
+    if exception.define_own_property(
+        scope,
+        name_key.into(),
+        name_value.into(),
+        v8::PropertyAttribute::DONT_ENUM | v8::PropertyAttribute::READ_ONLY,
+    ) != Some(true) {
+        return None;
+    }
+    let message_key = v8::String::new(scope, "message")?;
+    if exception.define_own_property(
+        scope,
+        message_key.into(),
+        message.into(),
+        v8::PropertyAttribute::DONT_ENUM | v8::PropertyAttribute::READ_ONLY,
+    ) != Some(true) {
+        return None;
+    }
+    Some(exception.into())
+}
+
 /// Throws the JavaScript error a binding method reported.
 #[cfg(feature = "v8")]
 pub fn throw_js_error(scope: &mut v8::PinScope<'_, '_>, error: &JsError) {
+    if error.pending_exception {
+        return;
+    }
     let Some(message) = v8::String::new(scope, error.message()) else {
         return;
     };
@@ -897,24 +1794,13 @@ pub fn throw_js_error(scope: &mut v8::PinScope<'_, '_>, error: &JsError) {
         JsErrorKind::Range => v8::Exception::range_error(scope, message),
         JsErrorKind::Syntax => v8::Exception::syntax_error(scope, message),
         JsErrorKind::DomException => {
-            // Build a real `DOMException` by invoking the globally installed
-            // constructor: `new DOMException(message, name)`. Fall back to a
-            // `TypeError` carrying the same message when the constructor is
-            // absent (a context without the DOM bootstrap).
+            // The saved prototype and native own-data definitions avoid page
+            // constructor replacement or prototype setters during a throw.
             let name = error.dom_name().unwrap_or("Error");
-            let built = (|| {
-                let context = scope.get_current_context();
-                let global = context.global(scope);
-                let key = v8::String::new(scope, "DOMException")?;
-                let constructor = global.get(scope, key.into())?;
-                let constructor = v8::Local::<v8::Function>::try_from(constructor).ok()?;
-                let name_value = v8::String::new(scope, name)?;
-                let arguments = [message.into(), name_value.into()];
-                constructor
-                    .new_instance(scope, &arguments)
-                    .map(|object| object.into())
-            })();
-            built.unwrap_or_else(|| v8::Exception::type_error(scope, message))
+            // Standalone generated-binding contexts may omit the browser's
+            // bootstrap; retain their previous safe TypeError fallback.
+            v8_dom_exception(scope, name, message)
+                .unwrap_or_else(|| v8::Exception::type_error(scope, message))
         }
     };
     scope.throw_exception(exception);
@@ -926,9 +1812,7 @@ pub fn number_from_v8(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<v8::Value>,
 ) -> Result<f64, JsError> {
-    value
-        .number_value(scope)
-        .ok_or_else(|| JsError::type_error("the argument cannot be converted to a number"))
+    value.number_value(scope).ok_or_else(JsError::pending_exception)
 }
 
 /// WebIDL `boolean` conversion.
@@ -943,10 +1827,10 @@ pub fn u32_from_v8(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<v8::Value>,
 ) -> Result<u32, JsError> {
-    match value.to_uint32(scope) {
-        Some(number) => Ok(number.value()),
-        None => Err(JsError::type_error("the argument cannot be converted to an integer")),
-    }
+    value
+        .to_uint32(scope)
+        .map(|number| number.value())
+        .ok_or_else(JsError::pending_exception)
 }
 
 /// WebIDL `long` conversion straight through V8's `ToInt32`.
@@ -955,28 +1839,17 @@ pub fn i32_from_v8(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<v8::Value>,
 ) -> Result<i32, JsError> {
-    value
-        .int32_value(scope)
-        .ok_or_else(|| JsError::type_error("the argument cannot be converted to an integer"))
+    value.int32_value(scope).ok_or_else(JsError::pending_exception)
 }
 
 /// WebIDL `DOMString` conversion.
 #[cfg(feature = "v8")]
-pub fn string_from_v8(scope: &mut v8::PinScope<'_, '_>, value: v8::Local<v8::Value>) -> String {
-    value.to_rust_string_lossy(scope.as_ref())
-}
-
-/// WebIDL `DOMString?` conversion: `null` and `undefined` become `None`.
-#[cfg(feature = "v8")]
-pub fn optional_string_from_v8(
+pub fn string_from_v8(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<v8::Value>,
-) -> Option<String> {
-    if value.is_null_or_undefined() {
-        None
-    } else {
-        Some(value.to_rust_string_lossy(scope.as_ref()))
-    }
+) -> Result<String, JsError> {
+    let string = value.to_string(scope).ok_or_else(JsError::pending_exception)?;
+    Ok(string.to_rust_string_lossy(scope.as_ref()))
 }
 
 /// Converts a Rust string to a JavaScript value.
@@ -1000,9 +1873,7 @@ pub fn byte_string_from_v8(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<v8::Value>,
 ) -> Result<Vec<u8>, JsError> {
-    let string = value
-        .to_string(scope)
-        .ok_or_else(|| JsError::type_error("the argument cannot be converted to a ByteString"))?;
+    let string = value.to_string(scope).ok_or_else(JsError::pending_exception)?;
     let mut units = vec![0u16; string.length()];
     string.write_v2(scope.as_ref(), 0, &mut units, v8::WriteFlags::empty());
     let mut bytes = Vec::with_capacity(units.len());
@@ -1067,10 +1938,15 @@ where
     let object = v8::Object::new(scope);
     for (entry, value) in entries {
         let key = key(scope, entry)?;
+        let key = v8::Local::<v8::String>::try_from(key)
+            .map_err(|_| JsError::type_error("the record key must be a string"))?;
         let value = convert(scope, value)?;
-        object
-            .set(scope, key, value)
-            .ok_or_else(|| JsError::type_error("the record entry cannot be defined"))?;
+        let defined = object
+            .create_data_property(scope, key.into(), value)
+            .ok_or_else(JsError::pending_exception)?;
+        if !defined {
+            return Err(JsError::type_error("the record entry cannot be defined"));
+        }
     }
     Ok(object.into())
 }
@@ -1140,11 +2016,10 @@ fn array_prototype_values<'s>(
 /// Calls `function` with `receiver` as its `this` and `arguments` as its
 /// argument list.
 ///
-/// An exception the call throws is rethrown into `scope`, so it propagates out
-/// of the binding on its own; the returned error only carries the message for
-/// the caller's report. Relying on the `TryCatch` destructor instead would
-/// swallow the exception — the opposite of what the event-listener path in
-/// `tenta-js-v8` wants, and therefore not a contract this helper may lean on.
+/// An exception the call throws is rethrown into `scope`, and the returned
+/// error is only the pending-exception marker. The caller must not turn it into
+/// a new host TypeError. Relying on the `TryCatch` destructor instead would
+/// swallow the original page value.
 #[cfg(feature = "v8")]
 pub fn call_js_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -1156,12 +2031,8 @@ pub fn call_js_function<'s>(
     match function.call(tc, receiver, arguments) {
         Some(value) => Ok(value),
         None => {
-            let message = tc
-                .message()
-                .map(|message| message.get(tc).to_rust_string_lossy(tc))
-                .unwrap_or_else(|| "the JavaScript call threw".to_string());
             tc.rethrow();
-            Err(JsError::type_error(message))
+            Err(JsError::pending_exception())
         }
     }
 }
@@ -1177,11 +2048,10 @@ pub fn value_from_v8(
     if value.is_null() {
         return Ok(AnyValue::NULL.0);
     }
-    let world = scope
-        .remove_slot::<WrapperWorldSlot>()
-        .ok_or_else(|| JsError::type_error("no wrapper world is installed for this isolate"))?;
-    let bits = world.0.store_value(scope, value);
-    scope.set_slot(world);
+    let bits = with_wrapper_world(scope, |world, scope| world.store_value(scope, value))?;
+    if let Some(slot) = scope.get_slot::<V8CallbackAdmissionSlot>() {
+        slot.0.track_stored_value(bits);
+    }
     Ok(bits)
 }
 
@@ -1195,11 +2065,7 @@ pub fn value_to_v8<'s>(
     if bits == AnyValue::NULL.0 {
         return Ok(v8::null(scope).into());
     }
-    let world = scope
-        .remove_slot::<WrapperWorldSlot>()
-        .ok_or_else(|| JsError::type_error("no wrapper world is installed for this isolate"))?;
-    let value = world.0.load_value(scope, bits);
-    scope.set_slot(world);
+    let value = with_wrapper_world(scope, |world, scope| world.load_value(scope, bits))?;
     value.ok_or_else(|| JsError::type_error("the value is no longer live"))
 }
 
@@ -1222,12 +2088,7 @@ pub fn adopt_host<T: std::any::Any>(
     this: v8::Local<v8::Object>,
     host: T,
 ) -> Result<(), JsError> {
-    let world = scope
-        .remove_slot::<WrapperWorldSlot>()
-        .ok_or_else(|| JsError::type_error("no wrapper world is installed for this isolate"))?;
-    let result = world.0.adopt(scope, interface, this, Box::new(host));
-    scope.set_slot(world);
-    result
+    with_wrapper_world(scope, |world, scope| world.adopt(scope, interface, this, Box::new(host)))?
 }
 
 /// Converts a JavaScript value to a sequence through `@@iterator`.
@@ -1274,23 +2135,28 @@ fn iteration_method<'s>(
     let key = v8::Symbol::get_iterator(scope);
     let method = object
         .get(scope, key.into())
-        .ok_or_else(|| JsError::type_error("the `@@iterator` of the value cannot be read"))?;
-    Ok(v8::Local::<v8::Function>::try_from(method).ok())
+        .ok_or_else(JsError::pending_exception)?;
+    if method.is_null_or_undefined() {
+        return Ok(None);
+    }
+    v8::Local::<v8::Function>::try_from(method)
+        .map(Some)
+        .map_err(|_| JsError::type_error("the `@@iterator` of the value is not callable"))
 }
 
 /// Whether `value` has a callable `@@iterator`, which is what selects a union's
 /// `sequence<T>` arm.
 ///
 /// The probe performs the `Get` the spec performs, so a proxy or an accessor
-/// observes it. An `@@iterator` that throws, or that is not callable, reads as
-/// "no iterator" — the union then tries its remaining arms, and the pending
-/// exception surfaces through one of their reads.
+/// observes it. An abrupt getter or a non-callable value is an abrupt union
+/// conversion too; only `null` or `undefined` means that the remaining arms
+/// should be tried.
 #[cfg(feature = "v8")]
 pub fn has_iterator<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-) -> bool {
-    matches!(iteration_method(scope, value), Ok(Some(_)))
+) -> Result<bool, JsError> {
+    iteration_method(scope, value).map(|method| method.is_some())
 }
 
 /// `value`'s iterator object, as WebIDL's `GetIterator` obtains it.
@@ -1318,8 +2184,9 @@ fn iterator_next<'s>(
     let key = v8_string(scope, "next")?;
     let next = iterator
         .get(scope, key.into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-        .ok_or_else(|| JsError::type_error("the iterator has no callable `next`"))?;
+        .ok_or_else(JsError::pending_exception)?;
+    let next = v8::Local::<v8::Function>::try_from(next)
+        .map_err(|_| JsError::type_error("the iterator has no callable `next`"))?;
     let result = call_js_function(scope, next, iterator.into(), &[])?;
     let result = v8::Local::<v8::Object>::try_from(result)
         .map_err(|_| JsError::type_error("the iterator result is not an object"))?;
@@ -1330,14 +2197,14 @@ fn iterator_next<'s>(
     // iterator had finished, which is a wrong answer rather than a failure.
     let done = result
         .get(scope, key.into())
-        .ok_or_else(|| JsError::type_error("the iterator result has no `done`"))?;
+        .ok_or_else(JsError::pending_exception)?;
     if done.boolean_value(scope) {
         return Ok(None);
     }
     let key = v8_string(scope, "value")?;
     let value = result
         .get(scope, key.into())
-        .ok_or_else(|| JsError::type_error("the iterator result has no value"))?;
+        .ok_or_else(JsError::pending_exception)?;
     Ok(Some(value))
 }
 
@@ -1389,13 +2256,13 @@ where
     };
     let names = object
         .get_own_property_names(scope, args)
-        .ok_or_else(|| JsError::type_error("the record keys cannot be read"))?;
+        .ok_or_else(JsError::pending_exception)?;
     let enumerable_key = v8_string(scope, "enumerable")?;
     let mut entries = Vec::with_capacity(names.length() as usize);
     for index in 0..names.length() {
         let property = names
             .get_index(scope, index)
-            .ok_or_else(|| JsError::type_error("the record key cannot be read"))?;
+            .ok_or_else(JsError::pending_exception)?;
         // `? V.[[GetOwnProperty]](key)` — an abrupt descriptor read propagates,
         // so a proxy that throws from its `getOwnPropertyDescriptor` trap fails
         // the conversion instead of quietly dropping the key. Skipping is for
@@ -1405,19 +2272,21 @@ where
             .map_err(|_| JsError::type_error("the record key is not a property name"))?;
         let descriptor = object
             .get_own_property_descriptor(scope, name)
-            .ok_or_else(|| JsError::type_error("the record key descriptor cannot be read"))?;
-        let Some(descriptor) = descriptor.to_object(scope) else {
+            .ok_or_else(JsError::pending_exception)?;
+        if descriptor.is_undefined() {
             continue;
-        };
+        }
+        let descriptor = v8::Local::<v8::Object>::try_from(descriptor)
+            .map_err(|_| JsError::type_error("the record key descriptor is not an object"))?;
         let enumerable = descriptor
             .get(scope, enumerable_key.into())
-            .ok_or_else(|| JsError::type_error("the descriptor flag cannot be read"))?;
+            .ok_or_else(JsError::pending_exception)?;
         if !enumerable.boolean_value(scope) {
             continue;
         }
         let entry = object
             .get(scope, property)
-            .ok_or_else(|| JsError::type_error("the record value cannot be read"))?;
+            .ok_or_else(JsError::pending_exception)?;
         let key = key(scope, property)?;
         entries.push((key, convert(scope, entry)?));
     }
@@ -1432,11 +2301,13 @@ pub fn dictionary_member<'s>(
     name: &str,
 ) -> Result<Option<v8::Local<'s, v8::Value>>, JsError> {
     let key = v8_string(scope, name)?;
-    let value = object.get(scope, key.into());
-    Ok(match value {
-        Some(value) if !value.is_undefined() => Some(value),
-        _ => None,
-    })
+    // `None` means V8 already has the page getter's exception pending. A
+    // required dictionary member must not turn that abrupt completion into a
+    // synthetic "missing member" TypeError.
+    let value = object
+        .get(scope, key.into())
+        .ok_or_else(JsError::pending_exception)?;
+    Ok((!value.is_undefined()).then_some(value))
 }
 
 /// The property attributes WebIDL gives a constant.
@@ -1714,6 +2585,29 @@ pub trait QuickJsWrapperWorld: 'static {
     /// Returns the handle a wrapper stands for.
     fn handle(&self, interface: &'static str, wrapper: &rquickjs::Object<'_>) -> Option<u64>;
 
+    /// Opens a nested scope for interface values consumed by native conversion.
+    fn begin_callback_roots(&self, ctx: &rquickjs::Ctx<'_>) -> rquickjs::Result<u64>;
+
+    /// Begin a stored-value lease in the existing callback frame.
+    fn begin_stored_value_lease(&self, ctx: &rquickjs::Ctx<'_>) -> rquickjs::Result<()>;
+    /// Starts a temporary annotated buffer lease in the current callback frame.
+    fn begin_buffer_reference_lease(&self, ctx: &rquickjs::Ctx<'_>, lease_id: u64) -> rquickjs::Result<()>;
+    fn current_buffer_reference_lease(&self) -> Option<u64>;
+    fn buffer_reference_lease_active(&self, lease_id: u64) -> bool;
+    /// Track one newly stored reference; failures poison rather than lose it.
+    fn track_stored_value(&self, ctx: &rquickjs::Ctx<'_>, bits: u64) -> rquickjs::Result<()>;
+    /// Transfer tracked references after the host operation succeeds.
+    fn transfer_stored_value_lease(&self, ctx: &rquickjs::Ctx<'_>) -> rquickjs::Result<()>;
+    /// Recheck hard admission after page-controlled constructor conversion.
+    fn before_constructor_host(&self, ctx: &rquickjs::Ctx<'_>) -> rquickjs::Result<()>;
+
+    /// Retains a successfully branded argument until its callback returns.
+    fn retain_callback_argument<'js>(&self, ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<()>;
+
+    /// Ends exactly the latest scope, dropping roots outside native borrows.
+    /// An invariant failure must poison the world and retain its remaining roots.
+    fn end_callback_roots(&self, frame: u64);
+
     /// Stores an arbitrary value and returns the bits that stand for it.
     fn store_value(&self, ctx: &rquickjs::Ctx<'_>, value: rquickjs::Value<'_>) -> u64;
 
@@ -1723,6 +2617,71 @@ pub trait QuickJsWrapperWorld: 'static {
     /// Returns the realm (host context) a constructor downcasts to reach the
     /// document and event slab. See [`Realm`].
     fn realm(&self) -> Realm;
+    fn adopt<'js>(&self, ctx: &rquickjs::Ctx<'js>, interface: &'static str, host: Box<dyn std::any::Any>) -> Option<rquickjs::Object<'js>>;
+    fn prototype<'js>(&self, ctx: &rquickjs::Ctx<'js>, interface: &'static str) -> Option<rquickjs::Object<'js>>;
+    fn cache_prototype<'js>(&self, ctx: &rquickjs::Ctx<'js>, interface: &'static str, prototype: rquickjs::Object<'js>, ancestors: &'static [&'static str]);
+    /// Returns an intrinsic saved before page script can replace it.
+    fn intrinsic<'js>(&self, ctx: &rquickjs::Ctx<'js>, name: &str) -> Option<rquickjs::Value<'js>>;
+    /// Saves generated legacy property callbacks alongside the native prototype.
+    fn cache_legacy(&self, interface: &'static str, methods: QuickJsLegacyMethods);
+    fn native_failure(&self) -> Option<&'static str>;
+    /// Whether page-native accounting already recorded a sticky memory failure.
+    fn native_memory_failure(&self) -> bool { false }
+    /// Whether a watchdog or sticky native memory failure forbids more work.
+    fn script_interrupted(&self) -> bool;
+    fn record_native_failure(&self, name: &'static str);
+
+    fn native_host(&self, interface: &'static str, value: &rquickjs::Value<'_>) -> Option<std::rc::Rc<dyn std::any::Any>>;
+
+}
+
+/// Converts and assigns a value through an interface's indexed setter.
+#[cfg(feature = "quickjs")]
+pub type QuickJsIndexedSetter = for<'js> fn(&rquickjs::Ctx<'js>, &rquickjs::Object<'js>, u32, rquickjs::Value<'js>) -> rquickjs::Result<()>;
+/// Converts and assigns a value through an interface's named setter.
+#[cfg(feature = "quickjs")]
+pub type QuickJsNamedSetter = for<'js> fn(&rquickjs::Ctx<'js>, &rquickjs::Object<'js>, &str, rquickjs::Value<'js>) -> rquickjs::Result<()>;
+/// Deletes a supported named property and reports whether deletion succeeded.
+#[cfg(feature = "quickjs")]
+pub type QuickJsNamedDeleter = for<'js> fn(&rquickjs::Ctx<'js>, &rquickjs::Object<'js>, &str) -> rquickjs::Result<bool>;
+
+/// Native dispatch for an interface's indexed properties. Support is explicit:
+/// a nullable getter result is not used to infer whether an index exists.
+#[cfg(feature = "quickjs")]
+#[derive(Clone, Copy)]
+pub struct QuickJsIndexedProperties {
+    pub indices: for<'js> fn(&rquickjs::Ctx<'js>, &rquickjs::Object<'js>) -> rquickjs::Result<Vec<u32>>,
+    pub supports: for<'js> fn(&rquickjs::Ctx<'js>, &rquickjs::Object<'js>, u32) -> rquickjs::Result<bool>,
+    pub get: for<'js> fn(&rquickjs::Ctx<'js>, &rquickjs::Object<'js>, u32) -> rquickjs::Result<rquickjs::Value<'js>>,
+    pub set: Option<QuickJsIndexedSetter>,
+}
+/// Native dispatch for an interface's named properties.
+#[cfg(feature = "quickjs")]
+#[derive(Clone, Copy)]
+pub struct QuickJsNamedProperties {
+    pub names: for<'js> fn(&rquickjs::Ctx<'js>, &rquickjs::Object<'js>) -> rquickjs::Result<Vec<String>>,
+    pub supports: for<'js> fn(&rquickjs::Ctx<'js>, &rquickjs::Object<'js>, &str) -> rquickjs::Result<bool>,
+    pub get: for<'js> fn(&rquickjs::Ctx<'js>, &rquickjs::Object<'js>, &str) -> rquickjs::Result<rquickjs::Value<'js>>,
+    pub set: Option<QuickJsNamedSetter>,
+    pub delete: Option<QuickJsNamedDeleter>,
+}
+/// Immutable generated metadata used by a native legacy platform wrapper.
+#[cfg(feature = "quickjs")]
+#[derive(Clone, Copy)]
+pub struct QuickJsLegacyMethods {
+    pub indexed: Option<QuickJsIndexedProperties>,
+    pub named: Option<QuickJsNamedProperties>,
+    pub override_builtins: bool,
+    pub unenumerable_names: bool,
+    pub is_global: bool,
+    pub unforgeable_names: &'static [&'static str],
+}
+/// Registers the generated native callbacks without consulting page globals.
+#[cfg(feature = "quickjs")]
+pub fn quickjs_cache_legacy(ctx: &rquickjs::Ctx<'_>, interface: &'static str, methods: QuickJsLegacyMethods) -> rquickjs::Result<()> {
+    let world = ctx.userdata::<QuickJsWorldSlot>().ok_or_else(|| rquickjs::Exception::throw_type(ctx, "no wrapper world"))?;
+    world.0.cache_legacy(interface, methods);
+    Ok(())
 }
 
 /// The userdata slot that carries the wrapper world of a context.
@@ -1740,19 +2699,48 @@ unsafe impl<'js> rquickjs::JsLifetime<'js> for QuickJsWorldSlot {
 /// when a crate enables both engines, so they carry different names.
 #[cfg(feature = "quickjs")]
 pub fn throw_quickjs_error(ctx: &rquickjs::Ctx<'_>, error: &JsError) -> rquickjs::Error {
+    if error.pending_exception {
+        return rquickjs::Error::Exception;
+    }
     let message = error.message();
     match error.kind() {
         JsErrorKind::Type => rquickjs::Exception::throw_type(ctx, message),
         JsErrorKind::Range => rquickjs::Exception::throw_range(ctx, message),
         JsErrorKind::Syntax => rquickjs::Exception::throw_syntax(ctx, message),
         JsErrorKind::DomException => {
-            // The QuickJS backend has no DOMException object yet (WP-b), so the
-            // name is folded back into the message, matching the previous
-            // behaviour until a real DOMException lands here too.
             let name = error.dom_name().unwrap_or("Error");
-            rquickjs::Exception::throw_type(ctx, &format!("{name}: {message}"))
+            match quickjs_dom_exception(ctx, name, message) {
+                Ok(value) => ctx.throw(value),
+                Err(error) => error,
+            }
         }
     }
+}
+
+/// Creates a DOMException using the saved native prototype, even if script
+/// replaces the global constructor.
+#[cfg(feature = "quickjs")]
+pub fn quickjs_dom_exception<'js>(ctx: &rquickjs::Ctx<'js>, name: &str, message: &str) -> rquickjs::Result<rquickjs::Value<'js>> {
+    let value = rquickjs::Object::new(ctx.clone())?;
+    value.set_prototype(Some(&quickjs_prototype(ctx, "DOMException")?))?;
+    let code = match name {
+        "IndexSizeError" => 1, "DOMStringSizeError" => 2,
+        "HierarchyRequestError" => 3, "WrongDocumentError" => 4,
+        "InvalidCharacterError" => 5, "NoDataAllowedError" => 6,
+        "NoModificationAllowedError" => 7, "NotFoundError" => 8,
+        "NotSupportedError" => 9, "InUseAttributeError" => 10,
+        "InvalidStateError" => 11, "SyntaxError" => 12,
+        "InvalidModificationError" => 13, "NamespaceError" => 14,
+        "InvalidAccessError" => 15, "ValidationError" => 16,
+        "TypeMismatchError" => 17, "SecurityError" => 18,
+        "NetworkError" => 19, "AbortError" => 20, "URLMismatchError" => 21,
+        "QuotaExceededError" => 22, "TimeoutError" => 23,
+        "InvalidNodeTypeError" => 24, "DataCloneError" => 25, _ => 0,
+    };
+    value.prop("name", rquickjs::object::Property::from(name).enumerable().configurable())?;
+    value.prop("message", rquickjs::object::Property::from(message).enumerable().configurable())?;
+    value.prop("code", rquickjs::object::Property::from(code).enumerable().configurable())?;
+    Ok(value.into_value())
 }
 
 /// Converts a handle to its wrapper object.
@@ -1767,18 +2755,27 @@ pub fn handle_to_quickjs<'js, T: InterfaceMarker>(
         .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "no wrapper world for this context"))?;
     match world.0.wrapper(ctx, interface, handle.bits()) {
         Some(object) => Ok(object.into_value()),
-        None => Err(rquickjs::Exception::throw_type(
-            ctx,
-            "the host object has no wrapper",
-        )),
+        None => Err(quickjs_wrapper_error(ctx, "the host object has no wrapper")),
+    }
+}
+
+// Wrapper publication can already have thrown an allocation-limit exception.
+// Preserve it instead of replacing a failed publication with a brand error.
+#[cfg(feature = "quickjs")]
+fn quickjs_wrapper_error(ctx: &rquickjs::Ctx<'_>, message: &str) -> rquickjs::Error {
+    // SAFETY: the context belongs to the current native callback.
+    if unsafe { rquickjs::qjs::JS_HasException(ctx.as_raw().as_ptr()) } {
+        rquickjs::Error::Exception
+    } else {
+        rquickjs::Exception::throw_type(ctx, message)
     }
 }
 
 /// Converts a wrapper object back to a handle.
 #[cfg(feature = "quickjs")]
-pub fn handle_from_quickjs<T: InterfaceMarker>(
-    ctx: &rquickjs::Ctx<'_>,
-    value: rquickjs::Value<'_>,
+pub fn handle_from_quickjs<'js, T: InterfaceMarker>(
+    ctx: &rquickjs::Ctx<'js>,
+    value: rquickjs::Value<'js>,
 ) -> rquickjs::Result<Handle<T>> {
     let interface = T::INTERFACE_NAME;
     let object = value
@@ -1787,11 +2784,15 @@ pub fn handle_from_quickjs<T: InterfaceMarker>(
     let world = ctx
         .userdata::<QuickJsWorldSlot>()
         .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "no wrapper world for this context"))?;
-    world
+    let handle = world
         .0
         .handle(interface, object)
-        .map(Handle::from_bits)
-        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "expected an interface instance"))
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "expected an interface instance"))?;
+    // A later dictionary getter or iterator step can reenter JavaScript after
+    // this temporary Value is consumed. Keep the original wrapper, not only
+    // its native bits, until the enclosing host call has produced its result.
+    world.0.retain_callback_argument(ctx, value)?;
+    Ok(Handle::from_bits(handle))
 }
 
 /// Stores an arbitrary JavaScript value in the context's value table.
@@ -1803,7 +2804,9 @@ pub fn value_from_quickjs(ctx: &rquickjs::Ctx<'_>, value: rquickjs::Value<'_>) -
     let world = ctx
         .userdata::<QuickJsWorldSlot>()
         .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "no wrapper world for this context"))?;
-    Ok(world.0.store_value(ctx, value))
+    let bits = world.0.store_value(ctx, value);
+    world.0.track_stored_value(ctx, bits)?;
+    Ok(bits)
 }
 
 /// Reads an arbitrary JavaScript value back out of the value table.
@@ -1912,5 +2915,980 @@ impl<'js> rquickjs::IntoJs<'js> for JsSymbol {
     fn into_js(self, ctx: &rquickjs::Ctx<'js>) -> rquickjs::Result<rquickjs::Value<'js>> {
         value_to_quickjs(ctx, self.0)
     }
+}
+/// A native host uses a single class id; the immutable brand is independent of
+/// script-visible prototypes. This makes inherited WebIDL calls safe.
+#[cfg(feature = "quickjs")]
+pub struct QuickJsHost {
+    pub host: Option<std::rc::Rc<dyn std::any::Any>>,
+    pub handle: u64,
+    pub generation: u64,
+    pub native_failure: std::rc::Rc<std::cell::Cell<Option<&'static str>>>,
+    pub interfaces: &'static [&'static str],
+    pub dead: std::rc::Rc<std::cell::Cell<Vec<(u64, u64)>>>,
+}
+#[cfg(feature = "quickjs")]
+impl Drop for QuickJsHost {
+    fn drop(&mut self) {
+        // Finalization records ids only. Document and value-table borrows are
+        // deferred until the engine reaches a safe point outside QuickJS GC.
+        let mut dead = self.dead.take();
+        dead.push((self.handle, self.generation));
+        self.dead.set(dead);
+        // rquickjs calls the class finalizer from C. Taking the payload means
+        // automatic field destruction cannot run arbitrary native Drop code.
+        if let Some(host) = self.host.take()
+            && let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(host))) {
+            if self.native_failure.get().is_none() { self.native_failure.set(Some("native host finalizer")); }
+            if let Err(nested) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload))) { std::mem::forget(nested); }
+        }
+    }
+}
+#[cfg(feature = "quickjs")]
+impl<'js> rquickjs::class::Trace<'js> for QuickJsHost {
+    fn trace<'a>(&self, _: rquickjs::class::Tracer<'a, 'js>) {}
+}
+// SAFETY: the native host carries no lifetime-branded QuickJS values.
+#[cfg(feature = "quickjs")]
+unsafe impl<'js> rquickjs::JsLifetime<'js> for QuickJsHost { type Changed<'to> = Self; }
+#[cfg(feature = "quickjs")]
+impl<'js> rquickjs::class::JsClass<'js> for QuickJsHost {
+    const NAME: &'static str = "TentaHost";
+    type Mutable = rquickjs::class::Readable;
+    fn constructor(_: &rquickjs::Ctx<'js>) -> rquickjs::Result<Option<rquickjs::function::Constructor<'js>>> { Ok(None) }
+}
+#[cfg(feature = "quickjs")]
+pub fn quickjs_host<'js, T: 'static>(ctx: &rquickjs::Ctx<'js>, value: &rquickjs::Value<'js>, interface: &'static str) -> rquickjs::Result<std::rc::Rc<T>> {
+    // Web IDL regular operation/attribute receivers substitute the method
+    // realm's global object for a nullish this value before brand checking.
+    // Generated callers use this helper only for receivers; interface
+    // argument conversion goes through the separate handle conversion path.
+    let global = (value.is_null() || value.is_undefined()).then(|| ctx.globals());
+    let value = global.as_ref().map_or(value, rquickjs::Object::as_value);
+    if let Some(host) = ctx.userdata::<QuickJsWorldSlot>().and_then(|world| world.0.native_host(interface, value)) {
+        return host.downcast().map_err(|_| rquickjs::Exception::throw_type(ctx, "native host type mismatch"));
+    }
+    let class = value.as_object().and_then(|o| o.as_class::<QuickJsHost>()).ok_or_else(|| rquickjs::Exception::throw_type(ctx, "Illegal invocation"))?;
+    let host = class.borrow();
+    if !host.interfaces.contains(&interface) { return Err(rquickjs::Exception::throw_type(ctx, "Illegal invocation")); }
+    host.host.as_ref().ok_or_else(|| rquickjs::Exception::throw_type(ctx, "collected host"))?.clone().downcast().map_err(|_| rquickjs::Exception::throw_type(ctx, "native host type mismatch"))
+}
+#[cfg(feature = "quickjs")]
+pub fn quickjs_begin_stored_value_lease(ctx: &rquickjs::Ctx<'_>) -> rquickjs::Result<()> {
+    let world = ctx.userdata::<QuickJsWorldSlot>()
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "no wrapper world"))?;
+    world.0.begin_stored_value_lease(ctx)
+}
+
+#[cfg(feature = "quickjs")]
+pub fn quickjs_begin_buffer_reference_lease(ctx: &rquickjs::Ctx<'_>) -> rquickjs::Result<()> {
+    let lease_id = next_buffer_lease_id()
+        .ok_or_else(|| rquickjs::Exception::throw_range(ctx, "buffer reference lease IDs exhausted"))?;
+    let world = ctx.userdata::<QuickJsWorldSlot>()
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "no wrapper world"))?;
+    world.0.begin_buffer_reference_lease(ctx, lease_id)
+}
+
+#[cfg(feature = "quickjs")]
+fn quickjs_current_buffer_reference_lease(ctx: &rquickjs::Ctx<'_>) -> rquickjs::Result<u64> {
+    ctx.userdata::<QuickJsWorldSlot>()
+        .and_then(|world| world.0.current_buffer_reference_lease())
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "buffer reference has no active lease"))
+}
+
+#[cfg(feature = "quickjs")]
+fn quickjs_validate_buffer_reference_lease(ctx: &rquickjs::Ctx<'_>, lease_id: u64) -> rquickjs::Result<()> {
+    if ctx.userdata::<QuickJsWorldSlot>()
+        .is_some_and(|world| world.0.buffer_reference_lease_active(lease_id)) {
+        Ok(())
+    } else {
+        Err(rquickjs::Exception::throw_type(ctx, "buffer reference escaped its callback"))
+    }
+}
+
+#[cfg(feature = "quickjs")]
+pub fn quickjs_before_constructor_host(ctx: &rquickjs::Ctx<'_>) -> rquickjs::Result<()> {
+    let world = ctx.userdata::<QuickJsWorldSlot>()
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "no wrapper world"))?;
+    world.0.before_constructor_host(ctx)
+}
+
+#[cfg(feature = "quickjs")]
+pub fn quickjs_transfer_stored_value_lease(ctx: &rquickjs::Ctx<'_>) -> rquickjs::Result<()> {
+    let world = ctx.userdata::<QuickJsWorldSlot>()
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "no wrapper world"))?;
+    world.0.transfer_stored_value_lease(ctx)
+}
+
+#[cfg(feature = "quickjs")]
+pub fn quickjs_adopt<'js>(ctx: &rquickjs::Ctx<'js>, interface: &'static str, host: Box<dyn std::any::Any>) -> rquickjs::Result<rquickjs::Object<'js>> {
+    let world = ctx.userdata::<QuickJsWorldSlot>().ok_or_else(|| rquickjs::Exception::throw_type(ctx, "no wrapper world"))?;
+    world.0.adopt(ctx, interface, host).ok_or_else(|| quickjs_wrapper_error(ctx, "cannot wrap native host"))
+}
+#[cfg(feature = "quickjs")]
+pub fn quickjs_prototype<'js>(ctx: &rquickjs::Ctx<'js>, interface: &'static str) -> rquickjs::Result<rquickjs::Object<'js>> {
+    let world = ctx.userdata::<QuickJsWorldSlot>().ok_or_else(|| rquickjs::Exception::throw_type(ctx, "no wrapper world"))?;
+    world.0.prototype(ctx, interface).ok_or_else(|| rquickjs::Exception::throw_type(ctx, "missing interface prototype"))
+}
+/// Resolve a constructed Web IDL object's prototype after its arguments have
+/// been converted. The current QuickJS page path has one realm per Engine.
+#[cfg(feature = "quickjs")]
+pub fn quickjs_constructor_prototype<'js>(ctx: &rquickjs::Ctx<'js>, target: &rquickjs::Function<'js>, interface: &'static str) -> rquickjs::Result<rquickjs::Object<'js>> {
+    let value: rquickjs::Value<'js> = target.get(rquickjs::atom::PredefinedAtom::Prototype)?;
+    quickjs_check_native_failure(ctx)?;
+    if let Some(prototype) = value.as_object() { Ok(prototype.clone()) } else { quickjs_prototype(ctx, interface) }
+}
+#[cfg(feature = "quickjs")]
+pub fn quickjs_cache_prototype<'js>(ctx: &rquickjs::Ctx<'js>, interface: &'static str, prototype: rquickjs::Object<'js>, ancestors: &'static [&'static str]) -> rquickjs::Result<()> {
+    let world = ctx.userdata::<QuickJsWorldSlot>().ok_or_else(|| rquickjs::Exception::throw_type(ctx, "no wrapper world"))?;
+    world.0.cache_prototype(ctx, interface, prototype, ancestors);
+    Ok(())
+}
+
+/// Looks up a native intrinsic without consulting script-mutable globals.
+#[cfg(feature = "quickjs")]
+pub fn quickjs_intrinsic<'js>(ctx: &rquickjs::Ctx<'js>, name: &str) -> rquickjs::Result<rquickjs::Value<'js>> {
+    ctx.userdata::<QuickJsWorldSlot>().and_then(|world| world.0.intrinsic(ctx, name))
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "missing native intrinsic"))
+}
+
+#[cfg(feature = "quickjs")]
+struct QuickJsArgumentFrame<'js> {
+    ctx: rquickjs::Ctx<'js>,
+    frame: u64,
+    callback: &'static str,
+}
+
+#[cfg(feature = "quickjs")]
+impl<'js> QuickJsArgumentFrame<'js> {
+    fn enter(ctx: &rquickjs::Ctx<'js>, callback: &'static str) -> rquickjs::Result<Option<Self>> {
+        // Pure static callbacks can operate without a wrapper world. Typed
+        // interface conversion already requires one, and never takes this path.
+        let frame = match ctx.userdata::<QuickJsWorldSlot>() {
+            Some(world) => world.0.begin_callback_roots(ctx)?,
+            None => return Ok(None),
+        };
+        Ok(Some(Self { ctx: ctx.clone(), frame, callback }))
+    }
+}
+
+#[cfg(feature = "quickjs")]
+impl Drop for QuickJsArgumentFrame<'_> {
+    fn drop(&mut self) {
+        // This guard also runs during a native unwind. A cleanup failure must
+        // not start a second unwind through QuickJS's C callback.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some(world) = self.ctx.userdata::<QuickJsWorldSlot>() {
+                // The outer boundary records a panic only after Rust has run
+                // this guard. Preserve that primary callback before cleanup
+                // could discover a second native failure.
+                if std::thread::panicking() {
+                    world.0.record_native_failure(self.callback);
+                }
+                world.0.end_callback_roots(self.frame);
+            }
+        }));
+        if let Err(payload) = result {
+            if let Some(world) = self.ctx.userdata::<QuickJsWorldSlot>() {
+                world.0.record_native_failure("callback argument cleanup");
+            }
+            if let Err(nested) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload))) { std::mem::forget(nested); }
+        }
+    }
+}
+
+/// Panic containment for every generated and handwritten QuickJS callback.
+/// The runtime's sticky failure flag forbids further entries after a panic.
+#[cfg(feature = "quickjs")]
+pub fn quickjs_callback_boundary<'js, T>(ctx: &rquickjs::Ctx<'js>, name: &'static str, f: impl FnOnce() -> rquickjs::Result<T>) -> rquickjs::Result<T> {
+    quickjs_check_native_failure(ctx)?;
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _arguments = QuickJsArgumentFrame::enter(ctx, name)?;
+        f()
+    })) {
+        Ok(result) => {
+            quickjs_check_native_failure(ctx)?;
+            // Host APIs can throw an existing stored value (AbortSignal.reason).
+            // SAFETY: the context belongs to this active callback.
+            if unsafe { rquickjs::qjs::JS_HasException(ctx.as_raw().as_ptr()) } { Err(rquickjs::Error::Exception) } else { result }
+        },
+        Err(payload) => {
+            if let Some(world) = ctx.userdata::<QuickJsWorldSlot>() { world.0.record_native_failure(name); }
+            // Arbitrary panic payloads can panic during Drop as well.
+            if let Err(nested) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload))) { std::mem::forget(nested); }
+            Err(quickjs_fatal_exception(ctx))
+        }
+    }
+}
+/// Preserves sticky poison before an error handler could enter more script.
+#[cfg(feature = "quickjs")]
+pub fn quickjs_check_native_failure(ctx: &rquickjs::Ctx<'_>) -> rquickjs::Result<()> {
+    if ctx.userdata::<QuickJsWorldSlot>().is_some_and(|w| w.0.native_failure().is_some()) {
+        Err(quickjs_fatal_exception(ctx))
+    } else { Ok(()) }
+}
+#[cfg(feature = "quickjs")]
+fn quickjs_fatal_exception(ctx: &rquickjs::Ctx<'_>) -> rquickjs::Error {
+    let _ = rquickjs::Exception::throw_internal(ctx, "native callback failed");
+    let error = ctx.catch();
+    // SAFETY: `error` and `ctx` belong to this live runtime. QuickJS-ng marks
+    // this Error uncatchable, so page catch/finally blocks cannot resume it.
+    unsafe { rquickjs::qjs::JS_SetUncatchableError(ctx.as_raw().as_ptr(), error.as_raw()); }
+    ctx.throw(error)
+}
+
+#[cfg(feature = "quickjs")]
+pub fn quickjs_bytestring<'js>(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Vec<u8>> {
+    use rquickjs::FromJs;
+    let text = rquickjs::Coerced::<String>::from_js(ctx, value)?.0;
+    text.chars().map(|c| u8::try_from(u32::from(c)).map_err(|_| rquickjs::Exception::throw_type(ctx, "ByteString contains a character above 255"))).collect()
+}
+#[cfg(feature = "quickjs")]
+pub fn quickjs_sequence<'js, T>(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>, mut convert: impl FnMut(rquickjs::Value<'js>) -> rquickjs::Result<T>) -> rquickjs::Result<Vec<T>> {
+    let object = value.as_object().ok_or_else(|| rquickjs::Exception::throw_type(ctx, "sequence requires an iterable object"))?;
+    let method: rquickjs::Function = object.get(rquickjs::atom::PredefinedAtom::SymbolIterator)?;
+    let iterator: rquickjs::Object = method.call((rquickjs::function::This(object.clone()),))?;
+    let next: rquickjs::Function = iterator.get("next")?;
+    let mut values = Vec::new();
+    loop {
+        let step: rquickjs::Object = next.call((rquickjs::function::This(iterator.clone()),))?;
+        let done: rquickjs::Coerced<bool> = step.get("done")?;
+        if done.0 { return Ok(values); }
+        let item = step.get("value")?;
+        match convert(item) {
+            Ok(item) => values.push(item),
+            Err(error) => {
+                quickjs_check_native_failure(ctx)?;
+                let original = if error.is_exception() { Some(ctx.catch()) } else { None };
+                if let Ok(Some(close)) = iterator.get::<_, Option<rquickjs::Function>>("return") { let _ = close.call::<_, rquickjs::Value>((rquickjs::function::This(iterator),)); }
+                if let Some(original) = original { ctx.throw(original); }
+                return Err(error);
+            }
+        }
+    }
+}
+#[cfg(feature = "quickjs")]
+pub fn quickjs_record<'js, K, V>(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>, mut key: impl FnMut(rquickjs::Value<'js>) -> rquickjs::Result<K>, mut item: impl FnMut(rquickjs::Value<'js>) -> rquickjs::Result<V>) -> rquickjs::Result<Vec<(K,V)>> {
+    use rquickjs::IntoJs;
+    let object = value.as_object().ok_or_else(|| rquickjs::Exception::throw_type(ctx, "record requires an object"))?;
+    let mut values = Vec::new();
+    for name in object.keys::<String>() { let name = name?; values.push((key(name.clone().into_js(ctx)?)?, item(object.get(name)?)?)); }
+    Ok(values)
+}
+#[cfg(feature = "quickjs")]
+pub fn quickjs_array_data_property<'js>(array: &rquickjs::Array<'js>, index: usize, value: rquickjs::Value<'js>) -> rquickjs::Result<()> {
+    let ctx = array.as_object().ctx();
+    let key = match u32::try_from(index) {
+        Ok(index) => rquickjs::Atom::from_u32(ctx.clone(), index)?,
+        Err(_) => rquickjs::Atom::from_str(ctx.clone(), &index.to_string())?,
+    };
+    array.as_object().prop(key, rquickjs::object::Property::from(value).writable().enumerable().configurable())
+}
+#[cfg(feature = "quickjs")]
+pub fn quickjs_sequence_value<'js,T>(ctx:&rquickjs::Ctx<'js>, values:Vec<T>, mut convert:impl FnMut(T)->rquickjs::Result<rquickjs::Value<'js>>) -> rquickjs::Result<rquickjs::Value<'js>> {
+    let array=rquickjs::Array::new(ctx.clone())?;
+    for (index,value) in values.into_iter().enumerate() { quickjs_array_data_property(&array,index,convert(value)?)?; }
+    Ok(array.into_value())
+}
+#[cfg(feature = "quickjs")]
+pub fn quickjs_record_value<'js,K,V>(ctx:&rquickjs::Ctx<'js>, values:Vec<(K,V)>, mut key:impl FnMut(K)->rquickjs::Result<rquickjs::Value<'js>>, mut item:impl FnMut(V)->rquickjs::Result<rquickjs::Value<'js>>) -> rquickjs::Result<rquickjs::Value<'js>> {
+    use rquickjs::FromJs;
+    let object=rquickjs::Object::new(ctx.clone())?;
+    for (k,v) in values { let k=rquickjs::Coerced::<String>::from_js(ctx,key(k)?)?.0; object.prop(k,rquickjs::object::Property::from(item(v)?).writable().enumerable().configurable())?; }
+    Ok(object.into_value())
+}
+#[cfg(feature = "quickjs")]
+pub fn quickjs_array_iterator<'js>(ctx:&rquickjs::Ctx<'js>, array:rquickjs::Array<'js>)->rquickjs::Result<rquickjs::Value<'js>> {
+    let method:rquickjs::Function=rquickjs::FromJs::from_js(ctx, quickjs_intrinsic(ctx, "Array.values")?)?;
+    method.call((rquickjs::function::This(array),))
+}
+
+#[cfg(feature = "quickjs")]
+pub fn quickjs_buffer_bytes<'js>(ctx:&rquickjs::Ctx<'js>,value:rquickjs::Value<'js>,kind:&str)->rquickjs::Result<Vec<u8>> {
+    if !quickjs_is_buffer(&value, kind) { return Err(rquickjs::Exception::throw_type(ctx, "wrong buffer source type")); }
+    if quickjs_is_buffer(&value, "ArrayBuffer") { return value.as_object().and_then(|o| o.as_array_buffer()).and_then(|b|b.as_bytes()).map(|b|b.to_vec()).ok_or_else(||rquickjs::Exception::throw_type(ctx,"detached ArrayBuffer")); }
+    let mut offset=0; let mut len=0; let mut element=0;
+    let buffer = if quickjs_is_buffer(&value, "DataView") {
+        let getter = |name| -> rquickjs::Result<rquickjs::Value<'js>> {
+            let function: rquickjs::Function = rquickjs::FromJs::from_js(ctx, quickjs_intrinsic(ctx, name)?)?;
+            function.call((rquickjs::function::This(value.clone()),))
+        };
+        let buffer = getter("DataView.buffer")?;
+        offset = rquickjs::FromJs::from_js(ctx, getter("DataView.byteOffset")?)?;
+        len = rquickjs::FromJs::from_js(ctx, getter("DataView.byteLength")?)?;
+        buffer
+    } else {
+        // SAFETY: QuickJS checks the native typed-array brand and returns a new
+        // owned buffer reference. No JS callback runs while its bytes are read.
+        let raw=unsafe { rquickjs::qjs::JS_GetTypedArrayBuffer(ctx.as_raw().as_ptr(),value.as_raw(),&mut offset,&mut len,&mut element) };
+        // SAFETY: JS_GetTypedArrayBuffer returns one owned reference, including
+        // the exception sentinel; this value takes responsibility for it.
+        unsafe { rquickjs::Value::from_raw(ctx.clone(),raw) }
+    };
+    if buffer.is_exception() { return Err(rquickjs::Error::Exception); }
+    let bytes=buffer.as_object().and_then(|o| o.as_array_buffer()).and_then(|b|b.as_bytes()).ok_or_else(||rquickjs::Exception::throw_type(ctx,"detached buffer"))?;
+    let offset = usize::try_from(offset).map_err(|_| rquickjs::Exception::throw_type(ctx,"invalid buffer offset"))?;
+    let len = usize::try_from(len).map_err(|_| rquickjs::Exception::throw_type(ctx,"invalid buffer length"))?;
+    let end = offset.checked_add(len).ok_or_else(||rquickjs::Exception::throw_type(ctx,"invalid buffer range"))?;
+    bytes.get(offset..end).map(|v|v.to_vec()).ok_or_else(||rquickjs::Exception::throw_type(ctx,"invalid buffer view"))
+}
+#[cfg(feature = "quickjs")]
+pub fn quickjs_buffer_value<'js>(ctx:&rquickjs::Ctx<'js>,bytes:Vec<u8>,kind:&str)->rquickjs::Result<rquickjs::Value<'js>> {
+    let buffer=rquickjs::ArrayBuffer::new(ctx.clone(),bytes)?;
+    if kind=="ArrayBuffer" {return Ok(buffer.into_value());}
+    let kind = match kind { "ArrayBufferView" | "BufferSource" => "Uint8Array", kind => kind };
+    let constructor:rquickjs::function::Constructor=rquickjs::FromJs::from_js(ctx, quickjs_intrinsic(ctx, kind)?)?;
+    constructor.construct((buffer,))
+}
+
+#[cfg(feature = "quickjs")]
+pub fn quickjs_is_interface(ctx: &rquickjs::Ctx<'_>, value: &rquickjs::Value<'_>, interface: &'static str) -> bool {
+    let Some(object) = value.as_object() else { return false; };
+    ctx.userdata::<QuickJsWorldSlot>().is_some_and(|world| world.0.handle(interface, object).is_some())
+}
+#[cfg(feature = "quickjs")]
+pub fn quickjs_has_iterator(ctx: &rquickjs::Ctx<'_>, value: &rquickjs::Value<'_>) -> rquickjs::Result<bool> {
+    let Some(object) = value.as_object() else { return Ok(false); };
+    let iterator: rquickjs::Value = object.get(rquickjs::atom::PredefinedAtom::SymbolIterator)?;
+    if iterator.is_null() || iterator.is_undefined() { return Ok(false); }
+    if iterator.is_function() { Ok(true) } else { Err(rquickjs::Exception::throw_type(ctx, "iterator is not callable")) }
+}
+#[cfg(feature = "quickjs")]
+pub fn quickjs_is_buffer(value: &rquickjs::Value<'_>, kind: &str) -> bool {
+    // SAFETY: these QuickJS queries read native value brands without running JS.
+    unsafe {
+        if kind == "ArrayBuffer" { return rquickjs::qjs::JS_IsArrayBuffer(value.as_raw()); }
+        if kind == "DataView" { return rquickjs::qjs::JS_IsDataView(value.as_raw()); }
+        let tag = rquickjs::qjs::JS_GetTypedArrayType(value.as_raw());
+        match kind {
+            "BufferSource" => tag >= 0 || rquickjs::qjs::JS_IsArrayBuffer(value.as_raw()) || rquickjs::qjs::JS_IsDataView(value.as_raw()),
+            "ArrayBufferView" => tag >= 0 || rquickjs::qjs::JS_IsDataView(value.as_raw()),
+            "Uint8ClampedArray" => tag == 0, "Int8Array" => tag == 1,
+            "Uint8Array" => tag == 2, "Int16Array" => tag == 3,
+            "Uint16Array" => tag == 4, "Int32Array" => tag == 5,
+            "Uint32Array" => tag == 6, "Float32Array" => tag == 10,
+            "Float64Array" => tag == 11, _ => false,
+        }
+    }
+}
+"#;
+
+const BUFFER_REF_V8: &str = r#"
+// Callback-scoped reference-preserving BufferSource conversions.
+#[cfg(feature = "v8")]
+fn v8_buffer_kind(value: v8::Local<v8::Value>) -> Option<BufferKind> {
+    Some(if value.is_array_buffer() {
+        BufferKind::ArrayBuffer
+    } else if value.is_data_view() {
+        BufferKind::DataView
+    } else if value.is_int8_array() {
+        BufferKind::Int8
+    } else if value.is_uint8_array() {
+        BufferKind::Uint8
+    } else if value.is_uint8_clamped_array() {
+        BufferKind::Uint8Clamped
+    } else if value.is_int16_array() {
+        BufferKind::Int16
+    } else if value.is_uint16_array() {
+        BufferKind::Uint16
+    } else if value.is_int32_array() {
+        BufferKind::Int32
+    } else if value.is_uint32_array() {
+        BufferKind::Uint32
+    } else if value.is_big_int64_array() {
+        BufferKind::BigInt64
+    } else if value.is_big_uint64_array() {
+        BufferKind::BigUint64
+    } else if value.is_float16_array() {
+        BufferKind::Float16
+    } else if value.is_float32_array() {
+        BufferKind::Float32
+    } else if value.is_float64_array() {
+        BufferKind::Float64
+    } else {
+        return None;
+    })
+}
+
+#[cfg(feature = "v8")]
+fn v8_buffer_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<v8::Local<'s, v8::ArrayBuffer>, JsError> {
+    if value.is_array_buffer() {
+        return v8::Local::<v8::ArrayBuffer>::try_from(value)
+            .map_err(|_| JsError::type_error("not an ArrayBuffer"));
+    }
+    let view = v8::Local::<v8::ArrayBufferView>::try_from(value)
+        .map_err(|_| JsError::type_error("not an ArrayBufferView"))?;
+    view.buffer(scope)
+        .ok_or_else(|| JsError::type_error("buffer view has no backing object"))
+}
+
+#[cfg(feature = "v8")]
+fn v8_buffer_metadata<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    allow_buffer: bool,
+) -> Result<BufferMetadata, JsError> {
+    let kind = v8_buffer_kind(value)
+        .ok_or_else(|| JsError::type_error("expected a native buffer source"))?;
+    if !allow_buffer && kind == BufferKind::ArrayBuffer {
+        return Err(JsError::type_error("expected an ArrayBufferView"));
+    }
+    let buffer = v8_buffer_object(scope, value)?;
+    // `ArrayBufferView::buffer()` is historically typed ArrayBuffer even for
+    // shared backing, so inspect both the native value brand and backing.
+    let backing = buffer.get_backing_store();
+    if buffer.is_shared_array_buffer() || backing.is_shared() {
+        return Err(JsError::type_error("shared buffer source is not supported"));
+    }
+    // The native backing store can become a fresh empty fixed store after
+    // detachment. The saved original ArrayBuffer getter sees the original flag.
+    if with_wrapper_world(scope, |world, scope| {
+        world.array_buffer_resizable(scope, buffer)
+    })?? {
+        return Err(JsError::type_error(
+            "resizable buffer source is not supported",
+        ));
+    }
+    if buffer.was_detached() {
+        return Ok(BufferMetadata {
+            kind,
+            byte_offset: 0,
+            byte_length: 0,
+        });
+    }
+    let (byte_offset, byte_length) = if kind == BufferKind::ArrayBuffer {
+        (0, buffer.byte_length())
+    } else {
+        let view = v8::Local::<v8::ArrayBufferView>::try_from(value)
+            .map_err(|_| JsError::type_error("expected an ArrayBufferView"))?;
+        (view.byte_offset(), view.byte_length())
+    };
+    let end = byte_offset
+        .checked_add(byte_length)
+        .ok_or_else(|| JsError::type_error("buffer view range overflow"))?;
+    if end > backing.byte_length() {
+        return Err(JsError::type_error("buffer view is out of bounds"));
+    }
+    Ok(BufferMetadata {
+        kind,
+        byte_offset,
+        byte_length,
+    })
+}
+
+/// Stores the original validated BufferSource in the current callback lease.
+#[cfg(feature = "v8")]
+pub fn buffer_source_ref_from_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<BufferSourceRef, JsError> {
+    let lease_id = v8_current_buffer_reference_lease(scope)?;
+    v8_buffer_metadata(scope, value, true)?;
+    value_from_v8(scope, value).map(|bits| BufferSourceRef::new(bits, lease_id))
+}
+
+/// Stores the original validated ArrayBufferView in the current callback lease.
+#[cfg(feature = "v8")]
+pub fn array_buffer_view_ref_from_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<ArrayBufferViewRef, JsError> {
+    let lease_id = v8_current_buffer_reference_lease(scope)?;
+    v8_buffer_metadata(scope, value, false)?;
+    value_from_v8(scope, value).map(|bits| ArrayBufferViewRef::new(bits, lease_id))
+}
+
+#[cfg(feature = "v8")]
+pub fn buffer_source_ref_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    reference: BufferSourceRef,
+) -> Result<v8::Local<'s, v8::Value>, JsError> {
+    v8_validate_buffer_reference_lease(scope, reference.lease_id())?;
+    let value = value_to_v8(scope, reference.bits())?;
+    v8_buffer_metadata(scope, value, true)?;
+    Ok(value)
+}
+
+#[cfg(feature = "v8")]
+pub fn array_buffer_view_ref_to_v8<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    reference: ArrayBufferViewRef,
+) -> Result<v8::Local<'s, v8::Value>, JsError> {
+    v8_validate_buffer_reference_lease(scope, reference.lease_id())?;
+    let value = value_to_v8(scope, reference.bits())?;
+    v8_buffer_metadata(scope, value, false)?;
+    Ok(value)
+}
+
+/// Re-reads current metadata after all page-controlled conversions.
+#[cfg(feature = "v8")]
+pub fn v8_buffer_source_info(
+    scope: &mut v8::PinScope<'_, '_>,
+    reference: BufferSourceRef,
+) -> Result<BufferMetadata, JsError> {
+    v8_validate_buffer_reference_lease(scope, reference.lease_id())?;
+    let value = value_to_v8(scope, reference.bits())?;
+    v8_buffer_metadata(scope, value, true)
+}
+
+#[cfg(feature = "v8")]
+pub fn v8_array_buffer_view_info(
+    scope: &mut v8::PinScope<'_, '_>,
+    reference: ArrayBufferViewRef,
+) -> Result<BufferMetadata, JsError> {
+    v8_validate_buffer_reference_lease(scope, reference.lease_id())?;
+    let value = value_to_v8(scope, reference.bits())?;
+    v8_buffer_metadata(scope, value, false)
+}
+
+/// Copies the current view span into an already admitted caller-owned slice.
+#[cfg(feature = "v8")]
+pub fn v8_copy_buffer_source_into(
+    scope: &mut v8::PinScope<'_, '_>,
+    reference: BufferSourceRef,
+    destination: &mut [u8],
+) -> Result<BufferMetadata, JsError> {
+    v8_validate_buffer_reference_lease(scope, reference.lease_id())?;
+    let value = value_to_v8(scope, reference.bits())?;
+    let info = v8_buffer_metadata(scope, value, true)?;
+    if destination.len() != info.byte_length {
+        return Err(JsError::type_error("buffer destination length changed"));
+    }
+    let buffer = v8_buffer_object(scope, value)?;
+    let backing = buffer.get_backing_store();
+    let end = info
+        .byte_offset
+        .checked_add(info.byte_length)
+        .ok_or_else(|| JsError::type_error("buffer range overflow"))?;
+    let bytes = backing
+        .get(info.byte_offset..end)
+        .ok_or_else(|| JsError::type_error("buffer range changed"))?;
+    for (source, target) in bytes
+        .chunks(64 * 1024)
+        .zip(destination.chunks_mut(64 * 1024))
+    {
+        if v8_buffer_work_interrupted(scope) {
+            return Err(JsError::pending_exception());
+        }
+        for (source, target) in source.iter().zip(target) {
+            *target = source.get();
+        }
+    }
+    Ok(info)
+}
+
+/// Writes through the original view after rechecking its current span.
+#[cfg(feature = "v8")]
+pub fn v8_write_array_buffer_view(
+    scope: &mut v8::PinScope<'_, '_>,
+    reference: ArrayBufferViewRef,
+    source: &[u8],
+) -> Result<BufferMetadata, JsError> {
+    v8_validate_buffer_reference_lease(scope, reference.lease_id())?;
+    let value = value_to_v8(scope, reference.bits())?;
+    let info = v8_buffer_metadata(scope, value, false)?;
+    if source.len() != info.byte_length {
+        return Err(JsError::type_error("buffer source length changed"));
+    }
+    let buffer = v8_buffer_object(scope, value)?;
+    if with_wrapper_world(scope, |world, scope| {
+        world.array_buffer_immutable(scope, buffer)
+    })?? {
+        return Err(JsError::type_error("immutable buffer cannot be written"));
+    }
+    let backing = buffer.get_backing_store();
+    let end = info
+        .byte_offset
+        .checked_add(info.byte_length)
+        .ok_or_else(|| JsError::type_error("buffer range overflow"))?;
+    let bytes = backing
+        .get(info.byte_offset..end)
+        .ok_or_else(|| JsError::type_error("buffer range changed"))?;
+    if info.byte_length != 0 {
+        let data = backing.data()
+            .ok_or_else(|| JsError::type_error("buffer backing disappeared"))?;
+        if source_overlaps_backing(source, data.as_ptr().cast(), backing.byte_length()) {
+            return Err(JsError::type_error("buffer write source overlaps backing"));
+        }
+    }
+    for (target, source) in bytes.chunks(64 * 1024).zip(source.chunks(64 * 1024)) {
+        if v8_buffer_work_interrupted(scope) {
+            return Err(JsError::pending_exception());
+        }
+        for (target, source) in target.iter().zip(source) {
+            target.set(*source);
+        }
+    }
+    Ok(info)
+}
+"#;
+
+const BUFFER_REF_QJS: &str = r#"
+// Callback-scoped reference-preserving BufferSource conversions.
+#[cfg(feature = "quickjs")]
+fn quickjs_buffer_kind(value: &rquickjs::Value<'_>) -> Option<BufferKind> {
+    // SAFETY: these are exact native class queries and cannot invoke a Proxy.
+    unsafe {
+        let raw = value.as_raw();
+        if rquickjs::qjs::JS_IsArrayBuffer(raw) {
+            return Some(BufferKind::ArrayBuffer);
+        }
+        if rquickjs::qjs::JS_IsDataView(raw) {
+            return Some(BufferKind::DataView);
+        }
+        let tag = rquickjs::qjs::JS_GetTypedArrayType(raw);
+        Some(match tag {
+            x if x == rquickjs::qjs::JSTypedArrayEnum_JS_TYPED_ARRAY_UINT8C as i32 => {
+                BufferKind::Uint8Clamped
+            }
+            x if x == rquickjs::qjs::JSTypedArrayEnum_JS_TYPED_ARRAY_INT8 as i32 => {
+                BufferKind::Int8
+            }
+            x if x == rquickjs::qjs::JSTypedArrayEnum_JS_TYPED_ARRAY_UINT8 as i32 => {
+                BufferKind::Uint8
+            }
+            x if x == rquickjs::qjs::JSTypedArrayEnum_JS_TYPED_ARRAY_INT16 as i32 => {
+                BufferKind::Int16
+            }
+            x if x == rquickjs::qjs::JSTypedArrayEnum_JS_TYPED_ARRAY_UINT16 as i32 => {
+                BufferKind::Uint16
+            }
+            x if x == rquickjs::qjs::JSTypedArrayEnum_JS_TYPED_ARRAY_INT32 as i32 => {
+                BufferKind::Int32
+            }
+            x if x == rquickjs::qjs::JSTypedArrayEnum_JS_TYPED_ARRAY_UINT32 as i32 => {
+                BufferKind::Uint32
+            }
+            x if x == rquickjs::qjs::JSTypedArrayEnum_JS_TYPED_ARRAY_BIG_INT64 as i32 => {
+                BufferKind::BigInt64
+            }
+            x if x == rquickjs::qjs::JSTypedArrayEnum_JS_TYPED_ARRAY_BIG_UINT64 as i32 => {
+                BufferKind::BigUint64
+            }
+            x if x == rquickjs::qjs::JSTypedArrayEnum_JS_TYPED_ARRAY_FLOAT16 as i32 => {
+                BufferKind::Float16
+            }
+            x if x == rquickjs::qjs::JSTypedArrayEnum_JS_TYPED_ARRAY_FLOAT32 as i32 => {
+                BufferKind::Float32
+            }
+            x if x == rquickjs::qjs::JSTypedArrayEnum_JS_TYPED_ARRAY_FLOAT64 as i32 => {
+                BufferKind::Float64
+            }
+            _ => return None,
+        })
+    }
+}
+
+#[cfg(feature = "quickjs")]
+fn quickjs_native_work_stop(ctx: &rquickjs::Ctx<'_>, message: &'static str) -> rquickjs::Error {
+    let _ = rquickjs::Exception::throw_internal(ctx, message);
+    let error = ctx.catch();
+    // SAFETY: the thrown Error belongs to this callback's live runtime.
+    unsafe { rquickjs::qjs::JS_SetUncatchableError(ctx.as_raw().as_ptr(), error.as_raw()); }
+    ctx.throw(error)
+}
+
+#[cfg(feature = "quickjs")]
+pub fn quickjs_check_buffer_interrupt(ctx: &rquickjs::Ctx<'_>) -> rquickjs::Result<()> {
+    quickjs_check_native_failure(ctx)?;
+    if let Some(slot) = ctx.userdata::<QuickJsWorldSlot>() {
+        if slot.0.native_memory_failure() {
+            return Err(quickjs_native_work_stop(ctx, "page memory budget exceeded"));
+        }
+        if slot.0.script_interrupted() {
+            return Err(quickjs_native_work_stop(ctx, "script execution interrupted"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "quickjs")]
+fn quickjs_buffer_backing<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    value: &rquickjs::Value<'js>,
+    kind: BufferKind,
+) -> rquickjs::Result<rquickjs::Value<'js>> {
+    if kind == BufferKind::ArrayBuffer {
+        return Ok(value.clone());
+    }
+    let name = if kind == BufferKind::DataView {
+        "DataView.buffer"
+    } else {
+        "TypedArray.buffer"
+    };
+    let getter: rquickjs::Function = rquickjs::FromJs::from_js(ctx, quickjs_intrinsic(ctx, name)?)?;
+    let backing = getter.call((rquickjs::function::This(value.clone()),))?;
+    quickjs_check_buffer_interrupt(ctx)?;
+    Ok(backing)
+}
+
+#[cfg(feature = "quickjs")]
+fn quickjs_buffer_metadata<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    value: &rquickjs::Value<'js>,
+    allow_buffer: bool,
+) -> rquickjs::Result<(BufferMetadata, rquickjs::Value<'js>)> {
+    quickjs_check_buffer_interrupt(ctx)?;
+    let kind = quickjs_buffer_kind(value)
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "expected a native buffer source"))?;
+    if !allow_buffer && kind == BufferKind::ArrayBuffer {
+        return Err(rquickjs::Exception::throw_type(
+            ctx,
+            "expected an ArrayBufferView",
+        ));
+    }
+    let backing = quickjs_buffer_backing(ctx, value, kind)?;
+    // The trusted native getter may return an SAB; never infer safety from a
+    // zero-length pointer or from a page-mutable prototype property.
+    if !unsafe { rquickjs::qjs::JS_IsArrayBuffer(backing.as_raw()) } {
+        return Err(rquickjs::Exception::throw_type(
+            ctx,
+            "shared buffer source is not supported",
+        ));
+    }
+    if unsafe { rquickjs::qjs::JS_IsResizableArrayBuffer(backing.as_raw()) } {
+        return Err(rquickjs::Exception::throw_type(
+            ctx,
+            "resizable buffer source is not supported",
+        ));
+    }
+    if unsafe { rquickjs::qjs::JS_IsDetachedArrayBuffer(backing.as_raw()) } {
+        return Ok((
+            BufferMetadata {
+                kind,
+                byte_offset: 0,
+                byte_length: 0,
+            },
+            backing,
+        ));
+    }
+    let (offset, length) = if kind == BufferKind::ArrayBuffer {
+        let buffer = backing
+            .as_object()
+            .and_then(|o| o.as_array_buffer())
+            .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "buffer brand changed"))?;
+        (0, buffer.len())
+    } else if kind == BufferKind::DataView {
+        let getter = |name| -> rquickjs::Result<usize> {
+            let function: rquickjs::Function =
+                rquickjs::FromJs::from_js(ctx, quickjs_intrinsic(ctx, name)?)?;
+            let value = function.call((rquickjs::function::This(value.clone()),))?;
+            quickjs_check_buffer_interrupt(ctx)?;
+            rquickjs::FromJs::from_js(ctx, value)
+        };
+        (
+            getter("DataView.byteOffset")?,
+            getter("DataView.byteLength")?,
+        )
+    } else {
+        let mut offset = 0;
+        let mut length = 0;
+        let mut element = 0;
+        // SAFETY: the native brand, fixed backing and attached state have been
+        // checked. The function returns an owned backing value or exception.
+        let raw = unsafe {
+            rquickjs::qjs::JS_GetTypedArrayBuffer(
+                ctx.as_raw().as_ptr(),
+                value.as_raw(),
+                &mut offset,
+                &mut length,
+                &mut element,
+            )
+        };
+        let returned = unsafe { rquickjs::Value::from_raw(ctx.clone(), raw) };
+        if returned.is_exception() {
+            return Err(rquickjs::Error::Exception);
+        }
+        let offset = usize::try_from(offset)
+            .map_err(|_| rquickjs::Exception::throw_type(ctx, "invalid view offset"))?;
+        let length = usize::try_from(length)
+            .map_err(|_| rquickjs::Exception::throw_type(ctx, "invalid view length"))?;
+        (offset, length)
+    };
+    let end = offset
+        .checked_add(length)
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "buffer view range overflow"))?;
+    let backing_len = backing
+        .as_object()
+        .and_then(|o| o.as_array_buffer())
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "buffer brand changed"))?
+        .len();
+    if end > backing_len {
+        return Err(rquickjs::Exception::throw_type(
+            ctx,
+            "buffer view is out of bounds",
+        ));
+    }
+    Ok((
+        BufferMetadata {
+            kind,
+            byte_offset: offset,
+            byte_length: length,
+        },
+        backing,
+    ))
+}
+
+#[cfg(feature = "quickjs")]
+pub fn buffer_source_ref_from_quickjs<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    value: rquickjs::Value<'js>,
+) -> rquickjs::Result<BufferSourceRef> {
+    let lease_id = quickjs_current_buffer_reference_lease(ctx)?;
+    quickjs_buffer_metadata(ctx, &value, true)?;
+    value_from_quickjs(ctx, value).map(|bits| BufferSourceRef::new(bits, lease_id))
+}
+
+#[cfg(feature = "quickjs")]
+pub fn array_buffer_view_ref_from_quickjs<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    value: rquickjs::Value<'js>,
+) -> rquickjs::Result<ArrayBufferViewRef> {
+    let lease_id = quickjs_current_buffer_reference_lease(ctx)?;
+    quickjs_buffer_metadata(ctx, &value, false)?;
+    value_from_quickjs(ctx, value).map(|bits| ArrayBufferViewRef::new(bits, lease_id))
+}
+
+#[cfg(feature = "quickjs")]
+pub fn buffer_source_ref_to_quickjs<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    reference: BufferSourceRef,
+) -> rquickjs::Result<rquickjs::Value<'js>> {
+    quickjs_validate_buffer_reference_lease(ctx, reference.lease_id())?;
+    let value = value_to_quickjs(ctx, reference.bits())?;
+    quickjs_buffer_metadata(ctx, &value, true)?;
+    Ok(value)
+}
+
+#[cfg(feature = "quickjs")]
+pub fn array_buffer_view_ref_to_quickjs<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    reference: ArrayBufferViewRef,
+) -> rquickjs::Result<rquickjs::Value<'js>> {
+    quickjs_validate_buffer_reference_lease(ctx, reference.lease_id())?;
+    let value = value_to_quickjs(ctx, reference.bits())?;
+    quickjs_buffer_metadata(ctx, &value, false)?;
+    Ok(value)
+}
+
+#[cfg(feature = "quickjs")]
+pub fn quickjs_buffer_source_info(
+    ctx: &rquickjs::Ctx<'_>,
+    reference: BufferSourceRef,
+) -> rquickjs::Result<BufferMetadata> {
+    quickjs_validate_buffer_reference_lease(ctx, reference.lease_id())?;
+    let value = value_to_quickjs(ctx, reference.bits())?;
+    quickjs_buffer_metadata(ctx, &value, true).map(|(info, _)| info)
+}
+
+#[cfg(feature = "quickjs")]
+pub fn quickjs_array_buffer_view_info(
+    ctx: &rquickjs::Ctx<'_>,
+    reference: ArrayBufferViewRef,
+) -> rquickjs::Result<BufferMetadata> {
+    quickjs_validate_buffer_reference_lease(ctx, reference.lease_id())?;
+    let value = value_to_quickjs(ctx, reference.bits())?;
+    quickjs_buffer_metadata(ctx, &value, false).map(|(info, _)| info)
+}
+
+#[cfg(feature = "quickjs")]
+pub fn quickjs_copy_buffer_source_into(
+    ctx: &rquickjs::Ctx<'_>,
+    reference: BufferSourceRef,
+    destination: &mut [u8],
+) -> rquickjs::Result<BufferMetadata> {
+    quickjs_validate_buffer_reference_lease(ctx, reference.lease_id())?;
+    let value = value_to_quickjs(ctx, reference.bits())?;
+    let (info, backing) = quickjs_buffer_metadata(ctx, &value, true)?;
+    if destination.len() != info.byte_length {
+        return Err(rquickjs::Exception::throw_type(
+            ctx,
+            "buffer destination length changed",
+        ));
+    }
+    if info.byte_length == 0 {
+        return Ok(info);
+    }
+    let buffer = backing
+        .as_object()
+        .and_then(|o| o.as_array_buffer())
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "buffer brand changed"))?;
+    let all = buffer
+        .as_bytes()
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "buffer detached"))?;
+    let end = info
+        .byte_offset
+        .checked_add(info.byte_length)
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "buffer range overflow"))?;
+    let bytes = all
+        .get(info.byte_offset..end)
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "buffer range changed"))?;
+    for (source, target) in bytes
+        .chunks(64 * 1024)
+        .zip(destination.chunks_mut(64 * 1024))
+    {
+        quickjs_check_buffer_interrupt(ctx)?;
+        target.copy_from_slice(source);
+    }
+    Ok(info)
+}
+
+#[cfg(feature = "quickjs")]
+pub fn quickjs_write_array_buffer_view(
+    ctx: &rquickjs::Ctx<'_>,
+    reference: ArrayBufferViewRef,
+    source: &[u8],
+) -> rquickjs::Result<BufferMetadata> {
+    quickjs_validate_buffer_reference_lease(ctx, reference.lease_id())?;
+    let value = value_to_quickjs(ctx, reference.bits())?;
+    let (info, backing) = quickjs_buffer_metadata(ctx, &value, false)?;
+    if source.len() != info.byte_length {
+        return Err(rquickjs::Exception::throw_type(
+            ctx,
+            "buffer source length changed",
+        ));
+    }
+    // This native class query does not read a page property or invoke Proxy
+    // traps. QuickJS's raw pointer API does not enforce immutability itself.
+    if unsafe { rquickjs::qjs::JS_IsImmutableArrayBuffer(backing.as_raw()) } != 0 {
+        return Err(rquickjs::Exception::throw_type(
+            ctx,
+            "immutable buffer cannot be written",
+        ));
+    }
+    if info.byte_length == 0 {
+        return Ok(info);
+    }
+    let mut len = 0;
+    // SAFETY: backing is a live, attached, exact native ArrayBuffer. No page JS
+    // runs while its pointer is used; the saved Value roots it for this scope.
+    let ptr = unsafe {
+        rquickjs::qjs::JS_GetArrayBuffer(ctx.as_raw().as_ptr(), &mut len, backing.as_raw())
+    };
+    let len = usize::try_from(len)
+        .map_err(|_| rquickjs::Exception::throw_type(ctx, "invalid buffer length"))?;
+    let end = info
+        .byte_offset
+        .checked_add(info.byte_length)
+        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "buffer range overflow"))?;
+    if ptr.is_null() || end > len {
+        return Err(rquickjs::Exception::throw_type(ctx, "buffer range changed"));
+    }
+    if source_overlaps_backing(source, ptr.cast_const(), len) {
+        return Err(rquickjs::Exception::throw_type(ctx, "buffer write source overlaps backing"));
+    }
+    for (index, chunk) in source.chunks(64 * 1024).enumerate() {
+        quickjs_check_buffer_interrupt(ctx)?;
+        let start = info.byte_offset + index * 64 * 1024;
+        // SAFETY: the entire source was checked disjoint from this native
+        // backing before mutation, and `start..start+chunk.len()` is in range.
+        unsafe {
+            std::ptr::copy_nonoverlapping(chunk.as_ptr(), ptr.add(start), chunk.len());
+        }
+    }
+    Ok(info)
 }
 "#;

@@ -136,6 +136,7 @@ fn lower(definitions: &[Definition<'_>]) -> Result<Model> {
 
     let mut model = Model::default();
     lowerer.lower_definitions(definitions, &mut model)?;
+    reject_misplaced_buffer_references(&model)?;
 
     model.unions = lowerer.unions.into_values().collect();
     model.opaque_interfaces = lowerer.opaque.into_iter().collect();
@@ -709,13 +710,19 @@ impl<'a> Lowerer<'a> {
         members
             .iter()
             .map(|member| {
+                let ty = self.lower_type(&member.type_.type_)?;
+                let mut attrs = self.lower_ext_attrs(member.attributes.as_ref());
+                attrs
+                    .0
+                    .extend(self.lower_ext_attrs(member.type_.attributes.as_ref()).0);
+                validate_string_annotation(&ty, &attrs)?;
                 Ok(DictionaryMember {
                     name: member.identifier.0.to_string(),
                     rust_name: naming::snake_case(member.identifier.0),
-                    ty: self.lower_type(&member.type_.type_)?,
+                    ty,
                     required: member.required.is_some(),
                     default: member.default.map(|d| lower_default(&d.value)),
-                    attrs: self.lower_ext_attrs(member.type_.attributes.as_ref()),
+                    attrs,
                 })
             })
             .collect()
@@ -812,6 +819,7 @@ impl<'a> Lowerer<'a> {
                         stringifier,
                         fast: FastApi::Eligible,
                     };
+                    validate_buffer_references(&lowered)?;
                     if stringifier {
                         out.stringifier = Some(Stringifier::Operation(name.to_string()));
                     }
@@ -906,6 +914,7 @@ impl<'a> Lowerer<'a> {
                     if stringifier {
                         out.stringifier = Some(Stringifier::Operation(name.to_string()));
                     }
+                    validate_buffer_references(&lowered)?;
                     if name.is_empty() {
                         out.special_operations.push(lowered);
                     } else {
@@ -986,6 +995,7 @@ impl<'a> Lowerer<'a> {
                         stringifier: false,
                         fast: FastApi::Eligible,
                     };
+                    validate_buffer_references(&lowered)?;
                     out.push(Member::Operation(OperationGroup {
                         name: name.to_string(),
                         is_static: true,
@@ -1060,6 +1070,17 @@ impl<'a> Lowerer<'a> {
         attrs
             .0
             .extend(self.lower_ext_attrs(ty.attributes.as_ref()).0);
+        if attrs.has("PutForwards")
+            && (is_static
+                || !readonly
+                || !matches!(lowered_type, Type::Interface(_))
+                || attrs.ident("PutForwards").is_none())
+        {
+            return Err(Error::Model(format!(
+                "attribute `{name}` uses [PutForwards] without an identifier-valued target on a readonly, non-static interface type"
+            )));
+        }
+        validate_string_annotation(&lowered_type, &attrs)?;
         let getter_name = naming::snake_case(name);
         let setter_name = if readonly {
             None
@@ -1067,7 +1088,7 @@ impl<'a> Lowerer<'a> {
             Some(naming::snake_case(&format!("set_{name}")))
         };
         let throws = attrs.has("Throws");
-        let fast_getter = classify_getter(&lowered_type, is_static);
+        let fast_getter = classify_getter(&lowered_type, is_static, throws);
         let fast_setter = if readonly {
             None
         } else {
@@ -1117,25 +1138,32 @@ impl<'a> Lowerer<'a> {
                     attrs
                         .0
                         .extend(self.lower_ext_attrs(single.type_.attributes.as_ref()).0);
+                    let ty = self.lower_type(&single.type_.type_)?;
+                    validate_string_annotation(&ty, &attrs)?;
                     Ok(Argument {
                         name: single.identifier.0.to_string(),
                         rust_name: naming::snake_case(single.identifier.0),
-                        ty: self.lower_type(&single.type_.type_)?,
+                        ty,
                         optional: single.optional.is_some(),
                         variadic: false,
                         default: single.default.map(|d| lower_default(&d.value)),
                         attrs,
                     })
                 }
-                Arg::Variadic(variadic) => Ok(Argument {
-                    name: variadic.identifier.0.to_string(),
-                    rust_name: naming::snake_case(variadic.identifier.0),
-                    ty: self.lower_type(&variadic.type_)?,
-                    optional: false,
-                    variadic: true,
-                    default: None,
-                    attrs: self.lower_ext_attrs(variadic.attributes.as_ref()),
-                }),
+                Arg::Variadic(variadic) => {
+                    let ty = self.lower_type(&variadic.type_)?;
+                    let attrs = self.lower_ext_attrs(variadic.attributes.as_ref());
+                    validate_string_annotation(&ty, &attrs)?;
+                    Ok(Argument {
+                        name: variadic.identifier.0.to_string(),
+                        rust_name: naming::snake_case(variadic.identifier.0),
+                        ty,
+                        optional: false,
+                        variadic: true,
+                        default: None,
+                        attrs,
+                    })
+                }
             })
             .collect()
     }
@@ -1317,6 +1345,14 @@ fn check_duplicate_operations(interface: &Interface) -> Result<()> {
         let Member::Operation(group) = member else {
             continue;
         };
+        if group.overloads.iter().any(Operation::buffer_references)
+            && !group.overloads.iter().all(Operation::buffer_references)
+        {
+            return Err(Error::Unsupported(format!(
+                "[TentaBufferReferences] must be present on every overload of `{}`",
+                group.name
+            )));
+        }
         for (index, overload) in group.overloads.iter().enumerate() {
             let duplicated = group.overloads[..index]
                 .iter()
@@ -1495,6 +1531,156 @@ fn classify_group(group: &OperationGroup) -> FastApi {
     FastApi::Eligible
 }
 
+fn contains_buffer(ty: &Type) -> bool {
+    match ty {
+        Type::Buffer(_) => true,
+        Type::Sequence(inner)
+        | Type::FrozenArray(inner)
+        | Type::ObservableArray(inner)
+        | Type::Promise(inner)
+        | Type::Nullable(inner) => contains_buffer(inner),
+        Type::Record(key, value) => contains_buffer(key) || contains_buffer(value),
+        _ => false,
+    }
+}
+
+fn reject_misplaced_buffer_references(model: &Model) -> Result<()> {
+    let reject = |attrs: &ExtendedAttributes| -> Result<()> {
+        if attrs.has("TentaBufferReferences") {
+            Err(Error::Unsupported(
+                "[TentaBufferReferences] is valid only on a regular operation".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    };
+    let arguments = |args: &[Argument]| -> Result<()> {
+        for argument in args {
+            reject(&argument.attrs)?;
+        }
+        Ok(())
+    };
+    let members = |members: &[Member]| -> Result<()> {
+        for member in members {
+            match member {
+                Member::Attribute(attribute) => reject(&attribute.attrs)?,
+                Member::Operation(group) => {
+                    for operation in &group.overloads {
+                        arguments(&operation.arguments)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    };
+    for interface in &model.interfaces {
+        reject(&interface.attrs)?;
+        for constructor in &interface.constructors {
+            reject(&constructor.attrs)?;
+            arguments(&constructor.arguments)?;
+        }
+        for constant in &interface.constants {
+            reject(&constant.attrs)?;
+        }
+        members(&interface.members)?;
+        for operation in &interface.special_operations {
+            arguments(&operation.arguments)?;
+        }
+    }
+    for namespace in &model.namespaces {
+        reject(&namespace.attrs)?;
+        for constant in &namespace.constants {
+            reject(&constant.attrs)?;
+        }
+        members(&namespace.members)?;
+        for member in &namespace.members {
+            if let Member::Operation(group) = member {
+                for operation in &group.overloads {
+                    if operation.buffer_references() {
+                        return Err(Error::Unsupported(
+                            "[TentaBufferReferences] supports only interface operations in this slice"
+                                .into(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for dictionary in &model.dictionaries {
+        reject(&dictionary.attrs)?;
+        for member in &dictionary.members {
+            reject(&member.attrs)?;
+        }
+    }
+    for enumeration in &model.enums {
+        reject(&enumeration.attrs)?;
+    }
+    for callback in &model.callbacks {
+        reject(&callback.attrs)?;
+        arguments(&callback.arguments)?;
+    }
+    for callback in &model.callback_interfaces {
+        reject(&callback.attrs)?;
+        reject(&callback.operation.attrs)?;
+        arguments(&callback.operation.arguments)?;
+        for constant in &callback.constants {
+            reject(&constant.attrs)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_buffer_references(operation: &Operation) -> Result<()> {
+    if !operation.buffer_references() {
+        return Ok(());
+    }
+    if operation.special.is_some() || operation.stringifier || operation.name.is_empty() {
+        return Err(Error::Unsupported(
+            "[TentaBufferReferences] requires a regular named operation".into(),
+        ));
+    }
+    let direct = |ty: &Type| {
+        matches!(
+            ty,
+            Type::Buffer(BufferType::BufferSource | BufferType::ArrayBufferView)
+        )
+    };
+    let mut seen = direct(&operation.return_type);
+    // A Promise<ArrayBuffer> return remains an opaque Promise token in this
+    // slice. No other nested buffer-bearing return is silently lowered.
+    if contains_buffer(&operation.return_type) && !seen {
+        let supported_promise = matches!(
+            &operation.return_type,
+            Type::Promise(inner) if matches!(inner.as_ref(), Type::Buffer(BufferType::ArrayBuffer))
+        );
+        if !supported_promise {
+            return Err(Error::Unsupported(
+                "[TentaBufferReferences] supports only direct buffer references or Promise<ArrayBuffer> returns".into(),
+            ));
+        }
+    }
+    for argument in &operation.arguments {
+        if direct(&argument.ty) {
+            seen = true;
+            if argument.optional || argument.variadic {
+                return Err(Error::Unsupported(
+                    "[TentaBufferReferences] does not support optional or variadic buffer references".into(),
+                ));
+            }
+        } else if contains_buffer(&argument.ty) {
+            return Err(Error::Unsupported(
+                "[TentaBufferReferences] supports only direct BufferSource and ArrayBufferView buffer arguments".into(),
+            ));
+        }
+    }
+    if !seen {
+        return Err(Error::Unsupported(
+            "[TentaBufferReferences] requires a direct BufferSource or ArrayBufferView".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn classify_operation(operation: &Operation, is_static: bool) -> FastApi {
     if is_static {
         return FastApi::Ineligible(NotFastBecause::Static);
@@ -1540,9 +1726,12 @@ fn is_narrow_integer(ty: &Type) -> bool {
     )
 }
 
-fn classify_getter(ty: &Type, is_static: bool) -> FastApi {
+fn classify_getter(ty: &Type, is_static: bool, throws: bool) -> FastApi {
     if is_static {
         return FastApi::Ineligible(NotFastBecause::Static);
+    }
+    if throws {
+        return FastApi::Ineligible(NotFastBecause::Throws);
     }
     if ty.is_fast_primitive() {
         FastApi::Eligible
@@ -1643,4 +1832,16 @@ fn nullable_if(nullable: bool, ty: Type) -> Type {
     } else {
         ty
     }
+}
+
+fn validate_string_annotation(ty: &Type, attrs: &ExtendedAttributes) -> Result<()> {
+    if let Some(attribute) = attrs.0.iter().find(|a| a.name == "LegacyNullToEmptyString")
+        && (!matches!(ty, Type::DomString | Type::UsvString)
+            || !matches!(attribute.value, ExtendedAttributeValue::None))
+    {
+        return Err(Error::Model(
+            "[LegacyNullToEmptyString] requires a non-nullable DOMString or USVString and takes no arguments".to_owned(),
+        ));
+    }
+    Ok(())
 }

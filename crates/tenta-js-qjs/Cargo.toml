@@ -1,6 +1,6 @@
 [package]
 name = "tenta-js-qjs"
-description = "QuickJS-ng backend: runtimes, bytecode cache, shared-array-buffer hooks."
+description = "QuickJS-ng page runtime with native DOM bindings, timers, and watchdogs."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,4 +10,27 @@ publish = false
 
 [dependencies]
 tenta-core = { workspace = true }
-tenta-js = { workspace = true }
+tenta-js = { workspace = true, features = ["quickjs"] }
+tenta-dom = { workspace = true }
+tenta-net = { workspace = true }
+rquickjs = { workspace = true }
+
+[dev-dependencies]
+url.workspace = true
+tenta-html = { workspace = true }
+
+[[example]]
+name = "dom_calls_qjs"
+path = "examples/dom_calls.rs"
+
+[[example]]
+name = "listener_gc_qjs"
+path = "examples/listener_gc.rs"
+
+[[example]]
+name = "cssom_wrapper_graph_qjs"
+path = "examples/cssom_wrapper_graph.rs"
+
+[[example]]
+name = "structured_clone_timed_qjs"
+path = "examples/structured_clone_timed.rs"

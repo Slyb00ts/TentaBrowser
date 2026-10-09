@@ -11,6 +11,7 @@ use common::tls::{TlsMode, TlsServer};
 use http::StatusCode;
 use tenta_net::client::{Client, ClientConfig, NetRuntime, Protocol};
 use tenta_net::dns::Resolver;
+use tenta_net::error::ErrorName;
 use tenta_net::policy::private_network::DestinationPolicy;
 use tenta_net::policy::session_cache::SessionCache;
 use tenta_net::profile::{ClientProfile, Profile};
@@ -185,9 +186,9 @@ async fn a_pooled_http2_connection_closed_without_goaway_is_evicted() {
     assert_eq!(response.status, StatusCode::OK);
     let pool_stats = client.pool_stats().await;
     assert_eq!(pool_stats.h2_connections, 1, "one connection is open");
-
-    // Wait a bit to ensure the server closes the connection.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(response.text().await.expect("body"), "hello from h2");
+    server.capture.drop_h2_after_response();
+    server.capture.wait_h2_closed(1).await;
 
     // Second request (GET): must retry on a fresh connection (reused is retryable).
     let response = client
@@ -199,6 +200,9 @@ async fn a_pooled_http2_connection_closed_without_goaway_is_evicted() {
         StatusCode::OK,
         "second GET succeeds on new connection"
     );
+    assert_eq!(response.text().await.expect("body"), "hello from h2");
+    server.capture.drop_h2_after_response();
+    server.capture.wait_h2_closed(2).await;
 
     // Pool should still report the dead handle as gone or no longer usable.
     let pool_stats = client.pool_stats().await;
@@ -215,6 +219,9 @@ async fn a_pooled_http2_connection_closed_without_goaway_is_evicted() {
         StatusCode::OK,
         "POST succeeds on fresh connection"
     );
+    assert_eq!(response.text().await.expect("body"), "body");
+    server.capture.drop_h2_after_response();
+    server.capture.wait_h2_closed(3).await;
 }
 
 #[tokio::test]
@@ -243,16 +250,15 @@ async fn an_http2_request_with_userinfo_stripped() {
     );
 }
 
-/// A request retried after its pooled connection died keeps its replay
-/// body (round-4 MAJOR-1): the retry is answered with a 307 and the body
-/// has to be sent a third time, on the redirect target.
+/// A remote REFUSED_STREAM on a reused HTTP/2 stream guarantees no
+/// processing, so a replayable POST can be sent once more, then redirected
+/// with its original body preserved.
 #[tokio::test]
 async fn a_retried_post_keeps_its_body_through_a_redirect() {
-    let server = TlsServer::start(TlsMode::ServeH2DropAfterOne).await;
+    let server = TlsServer::start(TlsMode::ServeH2RefusePostOnce).await;
     let runtime = NetRuntime::new(1).expect("io runtime");
     let client = client(&runtime, vec![server.cert_pem.clone()], None);
 
-    // Warms the pool with a connection the server drops right after.
     client
         .get(&server.url("/warm"))
         .await
@@ -260,7 +266,6 @@ async fn a_retried_post_keeps_its_body_through_a_redirect() {
         .bytes()
         .await
         .expect("body");
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let request = Request::post(&server.url("/temporary"), "replayed body").expect("request");
     let response = client.send(request).await.expect("retried and redirected");
@@ -271,6 +276,106 @@ async fn a_retried_post_keeps_its_body_through_a_redirect() {
         response.text().await.expect("body"),
         "replayed body",
         "the 307 target must receive the same body"
+    );
+    assert_eq!(
+        server.capture.replay_paths(),
+        ["/warm", "/temporary", "/temporary", "/echo"]
+    );
+    assert_eq!(
+        server.capture.replay_bodies(),
+        [
+            ("/warm".to_owned(), Vec::new()),
+            ("/temporary".to_owned(), b"replayed body".to_vec()),
+            ("/echo".to_owned(), b"replayed body".to_vec()),
+        ]
+    );
+    assert_eq!(server.capture.client_hellos().len(), 1);
+}
+
+#[tokio::test]
+async fn repeated_refused_stream_is_not_retried_without_bound() {
+    let server = TlsServer::start(TlsMode::ServeH2RefusePostTwice).await;
+    let runtime = NetRuntime::new(1).expect("io runtime");
+    let client = client(&runtime, vec![server.cert_pem.clone()], None);
+    client
+        .get(&server.url("/warm"))
+        .await
+        .expect("response")
+        .bytes()
+        .await
+        .expect("body");
+
+    let request = Request::post(&server.url("/temporary"), "replayed body").expect("request");
+    let error = client
+        .send(request)
+        .await
+        .expect_err("a second refusal is final");
+    assert_eq!(error.name, ErrorName::Http2ProtocolError);
+    assert_eq!(
+        server.capture.replay_paths(),
+        ["/warm", "/temporary", "/temporary"]
+    );
+    assert_eq!(server.capture.client_hellos().len(), 1);
+}
+
+#[tokio::test]
+async fn a_non_refused_stream_reset_does_not_replay_a_post() {
+    let server = TlsServer::start(TlsMode::ServeH2CancelPost).await;
+    let runtime = NetRuntime::new(1).expect("io runtime");
+    let client = client(&runtime, vec![server.cert_pem.clone()], None);
+    client
+        .get(&server.url("/warm"))
+        .await
+        .expect("response")
+        .bytes()
+        .await
+        .expect("body");
+
+    let request = Request::post(&server.url("/temporary"), "replayed body").expect("request");
+    let error = client
+        .send(request)
+        .await
+        .expect_err("CANCEL is not safe to replay");
+    assert_eq!(error.name, ErrorName::Http2ProtocolError);
+    assert_eq!(server.capture.replay_paths(), ["/warm", "/temporary"]);
+    assert_eq!(server.capture.client_hellos().len(), 1);
+}
+
+#[tokio::test]
+async fn a_post_received_before_transport_close_is_not_replayed() {
+    let server = TlsServer::start(TlsMode::ServeH2CloseAfterPostBody).await;
+    let runtime = NetRuntime::new(1).expect("io runtime");
+    let client = client(&runtime, vec![server.cert_pem.clone()], None);
+    client
+        .get(&server.url("/warm"))
+        .await
+        .expect("response")
+        .bytes()
+        .await
+        .expect("body");
+
+    let request = Request::post(&server.url("/temporary"), "applied once")
+        .expect("request")
+        .timeout(Duration::from_secs(5));
+    let error = client
+        .send(request)
+        .await
+        .expect_err("connection closed before response head");
+    assert!(
+        error.retryable(),
+        "fixture must exercise ambiguous transport retry: {error:?}"
+    );
+    assert_eq!(
+        server.capture.replay_paths(),
+        ["/warm", "/temporary"],
+        "an ambiguous close must not send the POST again"
+    );
+    assert_eq!(
+        server.capture.replay_bodies(),
+        [
+            ("/warm".to_owned(), Vec::new()),
+            ("/temporary".to_owned(), b"applied once".to_vec()),
+        ]
     );
 }
 

@@ -1,10 +1,11 @@
-//! CSS parsing, CSSOM objects and Stylo integration glue.
+//! CSS parsing and CSSOM objects backed by Stylo.
 //!
-//! Skeleton crate created in P0; the implementation lands in the phase named
-//! for it in `docs/spec/16-roadmap.md`. Dependency direction is enforced by
-//! `cargo xtask lint-deps` (`docs/spec/02-architecture.md` §2).
+//! The Stylo model is opt-in so Tier 0/1 browser hosts do not pull in a style
+//! engine. V8 and QuickJS hosts enable `stylo` for Tier 2 CSSOM; P3 attaches
+//! the resulting sheets to the arena-backed cascade.
 
-#[allow(unused_imports)]
-use tenta_core as _;
-#[allow(unused_imports)]
-use tenta_dom as _;
+#[cfg(feature = "stylo")]
+mod cssom;
+
+#[cfg(feature = "stylo")]
+pub use cssom::*;

@@ -173,6 +173,9 @@ pub struct TrimObservation {
 /// What the engine did, for the test to assert on.
 #[derive(Debug, Default)]
 pub struct Record {
+    pub engine_creations: usize,
+    /// Native page ledgers seen by each factory creation.
+    pub native_memories: Vec<tenta_core::NativeMemoryBudget>,
     pub scripts: Vec<ScriptRun>,
     pub tasks: Vec<(TaskEvent, Origin)>,
     /// The `id` of every marker the command language appended to the tree.
@@ -310,6 +313,7 @@ impl EngineWatchdog for StubWatchdog {
 /// is `Send + Sync` while the engines it builds are not.
 pub struct StubFactory {
     record: Recorder,
+    failure: Option<String>,
     /// Whether the engines it builds offer a watchdog. A test that exercises
     /// the "no handle to arm" path leaves this off.
     watchdog: bool,
@@ -319,8 +323,16 @@ impl PageEngineFactory for StubFactory {
     fn create(
         &self,
         document: SharedDocument,
-        _config: &PageEngineConfig,
+        config: &PageEngineConfig,
     ) -> std::result::Result<Box<dyn PageEngine>, String> {
+        {
+            let mut record = self.record.lock().unwrap();
+            record.engine_creations += 1;
+            record.native_memories.push(config.native_memory.clone());
+        }
+        if let Some(reason) = &self.failure {
+            return Err(reason.clone());
+        }
         Ok(Box::new(StubEngine::new(
             document,
             Arc::clone(&self.record),
@@ -443,6 +455,14 @@ impl PageEngine for StubEngine {
             }
         });
         Ok(())
+    }
+
+    fn evaluate(
+        &mut self,
+        source: &str,
+        _timeout: Duration,
+    ) -> std::result::Result<String, ScriptError> {
+        Ok(source.to_owned())
     }
 
     fn set_timer_rule(&mut self, rule: TimerRule) {
@@ -779,6 +799,7 @@ impl Harness {
             settle: SettleConfig::library(),
             javascript: true,
             engine: true,
+            engine_failure: None,
             watchdog: false,
             budgets: Budgets::default(),
             routes: Vec::new(),
@@ -824,6 +845,7 @@ pub struct Builder {
     settle: SettleConfig,
     javascript: bool,
     engine: bool,
+    engine_failure: Option<String>,
     /// Whether the stub engine hands out a watchdog handle.
     watchdog: bool,
     /// The page's budgets, which set the per-entry script deadline the page
@@ -853,6 +875,12 @@ impl Builder {
     /// Tier 1 page is.
     pub fn no_engine(mut self) -> Builder {
         self.engine = false;
+        self
+    }
+
+    /// Makes the configured backend report a runtime-initialization failure.
+    pub fn failing_engine(mut self, reason: &str) -> Builder {
+        self.engine_failure = Some(reason.to_owned());
         self
     }
 
@@ -933,6 +961,7 @@ impl Builder {
         let engine = self.engine.then(|| {
             Arc::new(StubFactory {
                 record: Arc::clone(&record),
+                failure: self.engine_failure,
                 watchdog: self.watchdog,
             }) as Arc<dyn PageEngineFactory>
         });
@@ -951,6 +980,7 @@ impl Builder {
             extra_headers: Vec::new(),
             viewport: Viewport::default(),
             cookies: CookieJar::new(),
+            storage: tenta_js::storage::PageStorage::isolated(),
             on_close: None,
             test_hooks: TestHooks::default(),
         });

@@ -91,8 +91,8 @@ fn click_dispatches_an_untrusted_mouse_event_to_the_target() {
             out;
         "#
         ),
-        // type, target, AT_TARGET(2), untrusted, MouseEvent, detail 1, button 0
-        "click,true,2,false,true,1,0"
+        // type, target, AT_TARGET(2), untrusted, MouseEvent, detail 0, button 0
+        "click,true,2,false,true,0,0"
     );
 }
 

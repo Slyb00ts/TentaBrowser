@@ -104,6 +104,29 @@ the never-blessable list.
   `SIGABRT` after 163 s — an engine teardown panic on a shared page thread;
   `docs/dev/wpt.md` has the mechanism.
 
+## QuickJS runs
+
+Build the shared driver with `--features quickjs` or `--features v8,quickjs`,
+then select `--product tentabrowser-qjs`:
+
+```bash
+cargo build --release -p tenta-browser --features v8,quickjs --bin tenta-wpt-driver
+python3 wpt/run.py run --product tentabrowser-qjs --dir dom/nodes --jobs 4
+```
+
+`tentabrowser` explicitly selects V8; `tentabrowser-qjs` explicitly selects
+QuickJS. A missing backend fails instead of falling back. Plans and result
+JSON identify the backend, and the runner rejects a mismatched or older
+unlabelled driver result. Stored reports are also checked before comparison,
+candidate generation or promotion; historical unlabelled Tenta reports must
+be rerun to provide backend evidence. Expectations, candidate ledgers and results live
+under separate product directories, so V8 results cannot bless QuickJS.
+The `wpt-driver` feature only gates the shared transport target; enabling it
+without an engine does not provide a JavaScript runtime.
+
+These switches enable measurement, not a conformance claim. Full P2 WPT
+thresholds remain to be measured separately on both engines.
+
 ## Pinned WPT commit
 
 `b89af32bc8f42d678f444eb0703bca015ddcf240` (`web-platform-tests/wpt` master,

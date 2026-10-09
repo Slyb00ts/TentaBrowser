@@ -1,0 +1,21 @@
+{
+  "upstream_package": "v8",
+  "version": "152.2.0",
+  "archive_url": "https://static.crates.io/crates/v8/v8-152.2.0.crate",
+  "archive_sha256": "a10fe1a92da5c32c7c7f838ce36c0ccfcfd5edf0865b58bdde820aa64cea9888",
+  "archive_bytes": 36569477,
+  "vcs_revision": "2768994f664e8a6e3aba27503606c58339136e2a",
+  "vcs_dirty": true,
+  "native_v8_version": "15.2.124.1",
+  "native_patch_sha256": "2091d2806100fb4ea488312f88fa31ecee871fa773ecd431b4f6da26561a32cd",
+  "rust_binding_license": "MIT",
+  "local_changes_license": "Apache-2.0",
+  "restored_rustfmt_source": {
+    "source": "https://raw.githubusercontent.com/denoland/rusty_v8/2768994f664e8a6e3aba27503606c58339136e2a/.rustfmt.toml",
+    "sha256": "7841f9e72caf0933e93335ad73b178bfcb9e5af4edab656c76e4a6c0c4ccc80f",
+    "bytes": 104
+  },
+  "accepted_native_archive_sha256": "744252be94bd7a095a64db86ca10d8349493447860bdbc8a2ede5bb028bd985f",
+  "native_helper_patch_sha256": "b72ddc9ec0110c9a10eeb8c63edaa1091d878206ae018c58731b4bffd1df24ad",
+  "native_validation_receipt_sha256": "655c8ec3ec7647d0e72fa887a540f32aae72a72dac157d5ccf5738a0101b40e0"
+}

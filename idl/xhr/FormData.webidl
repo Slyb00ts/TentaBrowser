@@ -45,7 +45,7 @@
 // The standard's pair is **not expressible through this generator's overload
 // resolution**, and the difference is observable. The generated dispatcher
 // selects an overload by `args.length()` alone
-// (`crates/tenta-idl/src/codegen/v8.rs`'s `overload_dispatch`, whose tie-break
+// (`crates/tenta-idl/src/codegen/mod.rs`'s `overload_dispatch`, whose tie-break
 // is "the first declared overload wins"), while WebIDL's own algorithm
 // (<https://webidl.spec.whatwg.org/#es-overloads>) truncates each overload's
 // argument list at the call's arity and then selects on the *distinguishing
@@ -60,10 +60,8 @@
 // actually consumes restores the standard's *semantics* for every input a
 // browser distinguishes, and is what this file declares.
 //
-// The cost is deviation 2 below: the union's interface arm has no brand test in
-// the generator, so a value that is an object the host does not recognise is
-// refused where a browser would stringify it. The *optional* `filename` stays
-// where the standard puts it — on the three-argument form only — so a
+// The *optional* `filename` stays where the standard puts it — on the
+// three-argument form only — so a
 // three-argument call is still the Blob form and `append(name, value, filename)`
 // on a string argument is still refused, as WebIDL refuses it.
 //
@@ -79,29 +77,9 @@
 //    refused with a `NotSupportedError` DOMException, the same error direction
 //    slice b-6.5 chose for `RequestInit`'s twelve unserved members and `open()`
 //    chose for `async = false`. `new FormData()` is the standard's and is
-//    served. One further consequence is a limit of the generator rather than of
-//    this file: the argument conversion reaches the host for *any* node wrapper
-//    — `crates/tenta-js-v8/src/world.rs`'s `WrapperWorld::handle` ignores the
-//    interface name it is handed — so `new FormData(document.body)` is refused
-//    with the `NotSupportedError` above where a browser raises a `TypeError`
-//    for the wrong type. Both throw; the name differs.
-// 2. **A non-`Blob`, non-`File` object value throws where a browser takes the
-//    string arm and stringifies.** The lowered test for the union's `Blob` arm
-//    is `value.is_object()`
-//    (`crates/tenta-idl/src/codegen/types.rs`'s `union_test`) — *every* object,
-//    not a brand check — and nothing downstream re-tests it: the arm's
-//    conversion succeeds for any object carrying a host pointer, and the *host*
-//    is what refuses the rest (`blob_source_of`,
-//    `crates/tenta-js/src/bindings/host.rs`). So `formData.append("k", {})`,
-//    `...("k", new Date())` and `...("k", new URL("https://example.com/"))`
-//    each raise a `TypeError` here where a browser stores `"[object Object]"`,
-//    the date string and the serialized URL. This is `BlobPart`'s deviation
-//    restated (`idl/fileapi/Blob.webidl`, deviation 3) and its rationale is the
-//    same: a wrong acceptance produces a silently different object, a wrong
-//    refusal says so. Refusing is also the *only* option this generator leaves
-//    open, because the union's `Blob` arm must precede the test-less `USVString`
-//    fallback for `formData.append("k", blob)` to be a `Blob` at all.
-// 3. **A mutation during iteration is not observed, because a pair iterator is
+//    served. Values without the `HTMLFormElement` interface brand, including
+//    unrelated node wrappers, fail argument conversion with a `TypeError`.
+// 2. **A mutation during iteration is not observed, because a pair iterator is
 //    a snapshot.** This one is the generator's and is shared with every landed
 //    pair `iterable` (`Headers`, `URLSearchParams`):
 //    `crates/tenta-idl/src/codegen/v8.rs`'s `pair_iterator_callback` calls the
@@ -117,7 +95,7 @@
 //    consequence for the pair form generally, and
 //    `crates/tenta-js-v8/tests/dom_formdata.rs` pins it so that slice has to
 //    come back and flip the test.
-// 4. **An entry's value can be collected while the `FormData` still holds it,
+// 3. **An entry's value can be collected while the `FormData` still holds it,
 //    so a later read can mint a *new* wrapper object for the same record.**
 //    A browser's entry list holds the `File` object itself, which keeps it
 //    uncollectable; here the entry holds the record's key and the record

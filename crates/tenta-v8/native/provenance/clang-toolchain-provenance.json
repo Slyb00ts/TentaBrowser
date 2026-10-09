@@ -1,0 +1,37 @@
+{
+  "url": "https://storage.googleapis.com/chromium-browser-clang/Mac_arm64/clang-llvmorg-23-init-19482-g53d18800-1.tar.xz",
+  "sha256": "e96c5e31ddc2a6e841bcb0f7278ae82b3a581799904276e6f7673213c9748c27",
+  "archive_bytes": 47058068,
+  "extracted_file_bytes": 273316471,
+  "entries": 375,
+  "package": "v8 152.2.0",
+  "source": "v8/DEPS",
+  "verified_before_extraction": true,
+  "executables": {
+    "clang": {
+      "sha256": "75228e26b09e1045e9f8b2cfcb5ad5b689c3ee3d74cdfab58e705260f70baf73",
+      "version": "clang version 23.0.0git (https://chromium.googlesource.com/a/external/github.com/llvm/llvm-project 53d18800eda3b7407e53366f27ca78e922c6e0db)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /private/tmp/tenta-v8-native-build/tools/clang/bin",
+      "resolved_path": "/private/tmp/tenta-v8-native-build/tools/clang/bin/clang"
+    },
+    "clang++": {
+      "sha256": "75228e26b09e1045e9f8b2cfcb5ad5b689c3ee3d74cdfab58e705260f70baf73",
+      "version": "clang version 23.0.0git (https://chromium.googlesource.com/a/external/github.com/llvm/llvm-project 53d18800eda3b7407e53366f27ca78e922c6e0db)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /private/tmp/tenta-v8-native-build/tools/clang/bin",
+      "resolved_path": "/private/tmp/tenta-v8-native-build/tools/clang/bin/clang"
+    },
+    "ld64.lld": {
+      "sha256": "b3f5d2d13548443396baedd54ebe50f1ad9d7ba971499ba33ec7f749dc575655",
+      "version": "LLD 23.0.0 (https://chromium.googlesource.com/a/external/github.com/llvm/llvm-project 53d18800eda3b7407e53366f27ca78e922c6e0db)",
+      "resolved_path": "/private/tmp/tenta-v8-native-build/tools/clang/bin/lld"
+    },
+    "llvm-ar": {
+      "sha256": "d47e36aa62feb58fd0b179711377aa64eccd70763a8552336fae28cb9365ffce",
+      "version": "LLVM (http://llvm.org/):\n  LLVM version 23.0.0git\n  Optimized build.",
+      "resolved_path": "/private/tmp/tenta-v8-native-build/tools/clang/bin/llvm-ar"
+    },
+    "llvm-strip": {
+      "sha256": "81b70c8b536d509582b432495cbd99aa49491c50610a0124f5887e1f456b064b",
+      "version": "llvm-strip, compatible with GNU strip\nLLVM (http://llvm.org/):\n  LLVM version 23.0.0git\n  Optimized build.",
+      "resolved_path": "/private/tmp/tenta-v8-native-build/tools/clang/bin/llvm-objcopy"
+    }
+  }
+}

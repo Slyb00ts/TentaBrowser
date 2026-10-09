@@ -67,7 +67,7 @@ fn the_sink_builds_a_document_the_way_the_tree_builder_will() {
 #[test]
 fn append_before_sibling_foster_parents() {
     let mut document = Document::new();
-    let root = TreeSink::document(&mut document);
+    let root = document.create_fragment();
     let table = element(&mut document, "table", &[]);
     document.append(&root, NodeOrText::Node(table));
     // The tree builder foster-parents misnested content before the table.
@@ -86,7 +86,7 @@ fn append_before_sibling_foster_parents() {
 #[test]
 fn append_based_on_parent_node_follows_the_template_rule() {
     let mut document = Document::new();
-    let root = TreeSink::document(&mut document);
+    let root = document.create_fragment();
     let parented = element(&mut document, "div", &[]);
     let previous = element(&mut document, "section", &[]);
     document.append(&root, NodeOrText::Node(parented));

@@ -25,7 +25,7 @@
 /// - `v8::ReturnValue::{set, set_bool, set_int32, set_uint32, set_double,
 ///   set_null, set_undefined}`
 /// - `v8::fast_api::{CFunction, CFunctionInfo, CTypeInfo, Flags,
-///   Int64Representation, Type, FastApiOneByteString}`
+///   Int64Representation, Type, FastApiOneByteString, FastApiCallbackOptions}`
 /// - `v8::Local<v8::Object>::{get_aligned_pointer_from_internal_field,
 ///   set_aligned_pointer_in_internal_field, get, set, create_data_property,
 ///   internal_field_count}` (through the prelude helpers)
@@ -43,7 +43,8 @@ pub fn install_timed_counter<T: TimedCounterOps + CounterOps + CounterConstructo
     global_template: v8::Local<'_, v8::ObjectTemplate>,
     registry: &mut dyn InterfaceRegistry,
 ) -> Result<v8::Global<v8::FunctionTemplate>, JsError> {
-    let constructor = v8::FunctionTemplate::builder(construct_timed_counter::<T>).build(scope);
+    install_native_callback_state(scope);
+    let constructor = v8::FunctionTemplate::builder(construct_timed_counter::<T>).length(0).build(scope);
     let class_name = v8_string(scope, "TimedCounter")?;
     constructor.set_class_name(class_name);
     let parent = cached_template(scope, "Counter").ok_or_else(|| {
@@ -98,9 +99,23 @@ pub fn install_timed_counter<T: TimedCounterOps + CounterOps + CounterConstructo
     Ok(v8::Global::new(scope.as_ref(), constructor))
 }
 
+fn construct_timed_counter<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        v8_begin_stored_value_lease(scope);
+        body_construct_timed_counter::<T>(scope, args, rv);
+        v8_end_stored_value_lease(scope);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "construct_timed_counter", (), call) };
+}
+
 /// `TimedCounter` declares no `constructor`, so calling it throws, as WebIDL
 /// requires for an interface without a constructor operation.
-fn construct_timed_counter<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
+fn body_construct_timed_counter<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -108,8 +123,20 @@ fn construct_timed_counter<'s, T: TimedCounterOps + CounterOps + CounterConstruc
     throw_type_error(scope, "Illegal constructor");
 }
 
-/// Getter for `TimedCounter.interval`.
 fn get_timed_counter_interval<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_get_timed_counter_interval::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "get_timed_counter_interval", (), call) };
+}
+
+/// Getter for `TimedCounter.interval`.
+fn body_get_timed_counter_interval<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -131,13 +158,16 @@ fn get_timed_counter_interval<'s, T: TimedCounterOps + CounterOps + CounterConst
 /// Fast-API getter for `TimedCounter.interval`.
 extern "C" fn fast_get_timed_counter_interval<T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) -> u32 {
+    v8_fast_callback_boundary(options, "fast_get_timed_counter_interval", 0, || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.interval(),
         None => 0,
     }
+    })
 }
 
 /// Fast-call table for the `TimedCounter.interval` getter.
@@ -148,7 +178,7 @@ impl<T: TimedCounterOps + CounterOps + CounterConstructor + 'static> TimedCounte
         fast_get_timed_counter_interval::<T> as *const std::ffi::c_void,
         &v8::fast_api::CFunctionInfo::new(
             v8::fast_api::Type::Uint32.as_info(),
-            &[v8::fast_api::Type::V8Value.as_info()],
+            &[v8::fast_api::Type::V8Value.as_info(), v8::fast_api::Type::CallbackOptions.as_info()],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
@@ -158,11 +188,14 @@ impl<T: TimedCounterOps + CounterOps + CounterConstructor + 'static> TimedCounte
 extern "C" fn fast_set_timed_counter_interval<T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
     value: u32,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) {
+    v8_fast_callback_boundary(options, "fast_set_timed_counter_interval", (), || {
     // SAFETY: as for the fast getter.
     if let Some(host) = unsafe { unwrap_receiver::<T>(receiver) } {
         host.set_interval(value);
     }
+    });
 }
 
 /// Fast-call table for the `TimedCounter.interval` setter.
@@ -176,14 +209,27 @@ impl<T: TimedCounterOps + CounterOps + CounterConstructor + 'static> TimedCounte
             &[
                 v8::fast_api::Type::V8Value.as_info(),
                 v8::fast_api::Type::Uint32.as_info(),
+                v8::fast_api::Type::CallbackOptions.as_info(),
             ],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// Setter for `TimedCounter.interval`.
 fn set_timed_counter_interval<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_set_timed_counter_interval::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "set_timed_counter_interval", (), call) };
+}
+
+/// Setter for `TimedCounter.interval`.
+fn body_set_timed_counter_interval<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
@@ -210,8 +256,20 @@ fn set_timed_counter_interval<'s, T: TimedCounterOps + CounterOps + CounterConst
     host.set_interval(value);
 }
 
-/// `TimedCounter.startTimer`.
 fn call_timed_counter_start_timer<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_timed_counter_start_timer::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_timed_counter_start_timer", (), call) };
+}
+
+/// `TimedCounter.startTimer`.
+fn body_call_timed_counter_start_timer<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -234,13 +292,16 @@ fn call_timed_counter_start_timer<'s, T: TimedCounterOps + CounterOps + CounterC
 /// Fast-API callback for `TimedCounter.startTimer`.
 extern "C" fn fast_call_timed_counter_start_timer<T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     receiver: v8::Local<v8::Object>,
+    options: &v8::fast_api::FastApiCallbackOptions<'_>,
 ) {
+    v8_fast_callback_boundary(options, "fast_call_timed_counter_start_timer", (), || {
     // SAFETY: the fast callback is only reachable through a template that
     // carries the interface signature, so the receiver is an instance.
     match unsafe { unwrap_receiver::<T>(receiver) } {
         Some(host) => host.start_timer(),
         None => (),
     }
+    })
 }
 
 /// Fast-call table for `TimedCounter.startTimer`.
@@ -253,14 +314,27 @@ impl<T: TimedCounterOps + CounterOps + CounterConstructor + 'static> TimedCounte
             v8::fast_api::Type::Void.as_info(),
             &[
                 v8::fast_api::Type::V8Value.as_info(),
+                v8::fast_api::Type::CallbackOptions.as_info(),
             ],
             v8::fast_api::Int64Representation::Number,
         ),
     )];
 }
 
-/// `TimedCounter.describe`.
 fn call_timed_counter_describe<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        body_call_timed_counter_describe::<T>(scope, args, rv);
+    };
+    // SAFETY: V8 invokes this registered slow FunctionTemplate callback.
+    unsafe { v8_registered_slow_callback_boundary(scope, "call_timed_counter_describe", (), call) };
+}
+
+/// `TimedCounter.describe`.
+fn body_call_timed_counter_describe<'s, T: TimedCounterOps + CounterOps + CounterConstructor + 'static>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,

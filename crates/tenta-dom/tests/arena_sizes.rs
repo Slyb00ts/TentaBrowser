@@ -172,7 +172,7 @@ fn the_write_counter_is_not_part_of_the_memory_total() {
     // `text_bytes` is what the document holds; `text_bytes_written` counts
     // every byte ever copied into the rope and must stay out of `total()`.
     let mut document = tenta_dom::Document::new();
-    let root = document.document_node();
+    let root = document.create_fragment();
     document.append_text(root, "hello ").expect("append");
     document.append_text(root, "world").expect("append");
     let report = document.memory_report();

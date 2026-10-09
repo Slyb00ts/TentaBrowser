@@ -89,8 +89,7 @@ impl Model {
         chain
     }
 
-    /// Dictionary members of `name` and of its ancestors, inherited first.
-    pub fn dictionary_members(&self, name: &str) -> Vec<&DictionaryMember> {
+    fn dictionary_lineage(&self, name: &str) -> Vec<&Dictionary> {
         let mut chain = Vec::new();
         let mut current = Some(name.to_string());
         while let Some(next) = current {
@@ -103,7 +102,29 @@ impl Model {
             chain.push(dict);
             current = dict.parent.clone();
         }
-        chain.iter().rev().flat_map(|d| d.members.iter()).collect()
+        chain.reverse();
+        chain
+    }
+
+    /// Dictionary members in Rust field order: ancestors first, then declaration order.
+    pub fn dictionary_members(&self, name: &str) -> Vec<&DictionaryMember> {
+        self.dictionary_lineage(name)
+            .into_iter()
+            .flat_map(|dictionary| dictionary.members.iter())
+            .collect()
+    }
+
+    /// Dictionary members in Web IDL conversion order: ancestors first, then
+    /// lexicographical identifier order within each declaring dictionary.
+    pub fn dictionary_conversion_members(&self, name: &str) -> Vec<&DictionaryMember> {
+        self.dictionary_lineage(name)
+            .into_iter()
+            .flat_map(|dictionary| {
+                let mut members = dictionary.members.iter().collect::<Vec<_>>();
+                members.sort_unstable_by(|left, right| left.name.cmp(&right.name));
+                members
+            })
+            .collect()
     }
 }
 
@@ -300,6 +321,20 @@ pub struct Interface {
 }
 
 impl Interface {
+    /// Length of the interface object: the fewest required constructor arguments.
+    pub fn constructor_length(&self) -> Option<usize> {
+        self.constructors
+            .iter()
+            .map(|constructor| {
+                constructor
+                    .arguments
+                    .iter()
+                    .filter(|argument| !argument.optional && !argument.variadic)
+                    .count()
+            })
+            .min()
+    }
+
     /// The non-static attributes and operations, in definition order.
     pub fn instance_members(&self) -> impl Iterator<Item = &Member> {
         self.members.iter().filter(|m| !m.is_static())
@@ -521,6 +556,11 @@ pub struct Operation {
 }
 
 impl Operation {
+    /// The binding-only buffer-reference lowering applies to this operation.
+    pub fn buffer_references(&self) -> bool {
+        self.attrs.has("TentaBufferReferences")
+    }
+
     /// The number of arguments that must be supplied.
     pub fn required_argument_count(&self) -> usize {
         self.arguments

@@ -21,14 +21,14 @@
 //! timer armed from `setup`'s `timeout_multiplier`, and a `load` completion
 //! gated on there being no pending test.
 
-#![cfg(feature = "v8")]
+#![cfg(any(feature = "v8", feature = "quickjs"))]
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use tenta_browser::wpt::{Plan, PlanTest, Results};
+use tenta_browser::wpt::{Backend, Plan, PlanTest, Results};
 use tenta_testutil::{FixtureServer, FixtureServerConfig, TempDir};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -181,6 +181,11 @@ fn plan(server: &FixtureServer, tests: &[(&str, u64)]) -> Plan {
 /// The same plan against any base URL, for the hand-written servers below.
 fn plan_for(base: &str, tests: &[(&str, u64)]) -> Plan {
     Plan {
+        backend: if cfg!(feature = "v8") {
+            Backend::V8
+        } else {
+            Backend::QuickJs
+        },
         base: base.to_owned(),
         resolver_rules: false,
         jobs: 1,
@@ -211,6 +216,42 @@ fn subtest(results: &Results, index: usize) -> &tenta_browser::wpt::SubtestOutco
         .unwrap_or_else(|| panic!("subtest {index} of {:?}", test.subtests))
 }
 
+#[test]
+fn driver_binary_reads_plan_and_writes_backend_labelled_results() {
+    let temp = tenta_testutil::temp_dir("wpt-driver-files");
+    let plan_path = temp.path().join("plan.json");
+    let output_path = temp.path().join("results.json");
+    let backend = if cfg!(feature = "v8") {
+        "v8"
+    } else {
+        "quickjs"
+    };
+    std::fs::write(
+        &plan_path,
+        serde_json::json!({
+            "base": "http://example.test", "backend": backend, "jobs": 1, "tests": [],
+        })
+        .to_string(),
+    )
+    .expect("write plan");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_tenta-wpt-driver"))
+        .current_dir(temp.path())
+        .arg("plan.json")
+        .arg("results.json")
+        .output()
+        .expect("run driver");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let results: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&output_path).expect("read results"))
+            .expect("result JSON");
+    assert_eq!(results["browser"]["backend"], backend);
+    assert_eq!(results["tests"], serde_json::json!([]));
+}
+
 /// The whole transport in one test, asserted from the driver's own output.
 ///
 /// The harness status, both subtest names, both subtest statuses and the failing
@@ -232,7 +273,14 @@ async fn the_driver_reports_the_harness_status_and_every_subtest() {
         .await
         .expect("the run finishes");
 
-    assert_eq!(results.browser.name, "tentabrowser");
+    assert_eq!(
+        results.browser.name,
+        if cfg!(feature = "v8") {
+            "tentabrowser"
+        } else {
+            "tentabrowser-qjs"
+        }
+    );
     assert_eq!(results.tests.len(), 1);
     assert_eq!(results.tests[0].test, "/index.html");
     assert_eq!(
@@ -257,6 +305,31 @@ async fn the_driver_reports_the_harness_status_and_every_subtest() {
         "the document and the harness script: the report script was fulfilled by \
          the interceptor and the result POST never reached the server"
     );
+}
+
+/// Explicit QuickJS selection must work even when V8 is also compiled in.
+#[cfg(feature = "quickjs")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn quickjs_reports_real_harness_results_under_its_own_identity() {
+    let harness = harness(HARNESS_BUDGET_MS);
+    let (server, _temp) =
+        serve(&[("index.html", PAGE), ("resources/testharness.js", &harness)]).await;
+    let mut selected = plan(&server, &[("/index.html", 10_000)]);
+    selected.backend = Backend::QuickJs;
+    let results = tenta_browser::wpt::run(selected)
+        .await
+        .expect("QuickJS run");
+    assert_eq!(results.browser.name, "tentabrowser-qjs");
+    assert_eq!(results.browser.backend, Backend::QuickJs);
+    assert_eq!(results.tests[0].status, "OK");
+    assert_eq!(results.tests[0].subtests.len(), 2);
+    assert_eq!(subtest(&results, 0).status, "PASS");
+    assert_eq!(subtest(&results, 1).status, "FAIL");
+    assert_eq!(
+        subtest(&results, 1).message.as_deref(),
+        Some("sum: expected 3, got 2")
+    );
+    assert_eq!(server.requests_served(), 2);
 }
 
 /// A harness status that is not `OK` travels with its message, and its subtests

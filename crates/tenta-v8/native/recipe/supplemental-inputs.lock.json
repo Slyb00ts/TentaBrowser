@@ -1,0 +1,466 @@
+{
+  "scope": "Pinned inputs missing from the v8 152.2.0 package, discovered by the macOS arm64 default build. Other targets require their own leaf-input audit.",
+  "inputs": [
+    {
+      "name": "chromium-rust-calendrical_calculations-v0_2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/calendrical_calculations-v0_2",
+      "kind": "tar",
+      "sha256": "220cc85209324e1a4e398f56deb9110dc755409cf8389b18291fdea8aa868db4",
+      "bytes": 70275,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/calendrical_calculations-v0_2.tar.gz",
+      "git_tree_sha1": "fc651bf38a5f44db033e244c6fa810555718e329",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-core_maths-v0_1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/core_maths-v0_1",
+      "kind": "tar",
+      "sha256": "ee15f6888979d7cf39cb21d0c9a5ae5f284e83c426c0e59864319c12511c427d",
+      "bytes": 6891,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/core_maths-v0_1.tar.gz",
+      "git_tree_sha1": "effbfe789567777640cfa6401b2b6fd52f3d4d90",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-diplomat-runtime-v0_15.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/diplomat-runtime-v0_15",
+      "kind": "tar",
+      "sha256": "c9e9db7ca54575be1e7ad787514658c3a5ce88ed247f725d18603e8899f37d9d",
+      "bytes": 19047,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/diplomat-runtime-v0_15.tar.gz",
+      "git_tree_sha1": "6b404ee1777e359f9b1f62ff30dee5bc664cabec",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-diplomat-v0_15.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/diplomat-v0_15",
+      "kind": "tar",
+      "sha256": "42d208ef163e321ee11ee006cf2ee04a0919dbbb44fbefd03c743ad03603108c",
+      "bytes": 24262,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/diplomat-v0_15.tar.gz",
+      "git_tree_sha1": "11ce62bb2342b4471c432926f695d719bf8b9ca8",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-diplomat_core-v0_15.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/diplomat_core-v0_15",
+      "kind": "tar",
+      "sha256": "6dd64cb95752b05d7850efcc6b4790dbc7e1e0acaaaddf551ddef386647d55a7",
+      "bytes": 135577,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/diplomat_core-v0_15.tar.gz",
+      "git_tree_sha1": "80c0e2d2a43821c31b9e1d9e4872316d4df0a3e3",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-displaydoc-v0_2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/displaydoc-v0_2",
+      "kind": "tar",
+      "sha256": "1513468c90c7c32586e76d4b6d84954ae51a371548a55f74ee0cdaea0475dbd0",
+      "bytes": 23476,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/displaydoc-v0_2.tar.gz",
+      "git_tree_sha1": "cbfbf2926a99b5d0900e636e4a25e84353e5d9de",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-either-v1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/either-v1",
+      "kind": "tar",
+      "sha256": "1411e78e0dce84abfb801d77535e53fda351efbd0d953dcc1e30dd83983a2c64",
+      "bytes": 21981,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/either-v1.tar.gz",
+      "git_tree_sha1": "2a33c8f6329c2a976fe3972bb3a6053f1c85964e",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-icu_calendar-v2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/icu_calendar-v2",
+      "kind": "tar",
+      "sha256": "5b3e8cb55815a2f24167a52d5cff52d8a56d90ace8af7e84fd8a6bff06123019",
+      "bytes": 864712,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/icu_calendar-v2.tar.gz",
+      "git_tree_sha1": "708bf6b1a0fc84240503457f8edecbfbe7d55a4c",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-icu_calendar_data-v2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/icu_calendar_data-v2",
+      "kind": "tar",
+      "sha256": "a8f463d31d02baea47a7ff65e2cb33e9fc25e0ffc15e7e2ac38eeb4d0bc394c1",
+      "bytes": 5940,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/icu_calendar_data-v2.tar.gz",
+      "git_tree_sha1": "522795d5ba5ce6f21784f16984a3ba50999db56c",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-icu_collections-v2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/icu_collections-v2",
+      "kind": "tar",
+      "sha256": "4517a257d7b2326f2270ba29af75b180c54960afd19ef5fb8f5f0ae7423699cb",
+      "bytes": 94786,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/icu_collections-v2.tar.gz",
+      "git_tree_sha1": "7fa06d7650d3906cab7f39df695945aad023ab3e",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-icu_locale-v2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/icu_locale-v2",
+      "kind": "tar",
+      "sha256": "4c6da417b6db6a62dc59199d03870bf0e38b71c15bae8b83b5d76a05c5a5b994",
+      "bytes": 35858,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/icu_locale-v2.tar.gz",
+      "git_tree_sha1": "8b43dd524262dd836c4529ab760951103859f591",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-icu_locale_core-v2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/icu_locale_core-v2",
+      "kind": "tar",
+      "sha256": "563a8e7917e87b89653b2ea39c6e9287474c384ff62ab8a11b02f9f631dd5845",
+      "bytes": 84665,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/icu_locale_core-v2.tar.gz",
+      "git_tree_sha1": "48299d6f44568bb7fe0469f6e29f022fb0db9985",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-icu_locale_data-v2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/icu_locale_data-v2",
+      "kind": "tar",
+      "sha256": "177c75dd99ab390ca34712030caeb23af2ec01de9968c23b39299b9fecd69f3d",
+      "bytes": 118631,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/icu_locale_data-v2.tar.gz",
+      "git_tree_sha1": "cd66ce3ee394050a0f261161543fa4e290e7432a",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-icu_provider-v2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/icu_provider-v2",
+      "kind": "tar",
+      "sha256": "bd2e3dbd3ece7b1792a471aa105edc1a43dfbba4e67355b19250084e952048f4",
+      "bytes": 53535,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/icu_provider-v2.tar.gz",
+      "git_tree_sha1": "6fdbe19ce1132d9d90481620029a1098f4af60f7",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-ixdtf-v0_6.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/ixdtf-v0_6",
+      "kind": "tar",
+      "sha256": "8d446c5435b606ed67d0d11f3412c120b3c43035d171904d1f670b41cd7057f2",
+      "bytes": 37615,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/ixdtf-v0_6.tar.gz",
+      "git_tree_sha1": "17ec21c2fb8dc53fb6955bb1f78c57027e2cc9b6",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-libm-v0_2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/libm-v0_2",
+      "kind": "tar",
+      "sha256": "152c5c8b446f45aca1e2698734d6757c29ef62c048859c04efbf377b8cf05a80",
+      "bytes": 171816,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/libm-v0_2.tar.gz",
+      "git_tree_sha1": "477d61b137d7356b4696cdba6183f1f810910342",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-litemap-v0_8.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/litemap-v0_8",
+      "kind": "tar",
+      "sha256": "29304a0785caa6e4d4ec3d44f79697534a5a5ac8c9f508b0e37b8e22fa9cfdc5",
+      "bytes": 36862,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/litemap-v0_8.tar.gz",
+      "git_tree_sha1": "ab5bf05b709a57ac682686c3b71595bb3551abd8",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-num-traits-v0_2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/num-traits-v0_2",
+      "kind": "tar",
+      "sha256": "b0f9e4abd9abe1d38318a6145ad9ac51bf0f6b55f27dfef4e910e51e715dd2aa",
+      "bytes": 53603,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/num-traits-v0_2.tar.gz",
+      "git_tree_sha1": "30cff94c0926e5a3aa3090b87aebdfbc09c583be",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-potential_utf-v0_1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/potential_utf-v0_1",
+      "kind": "tar",
+      "sha256": "5d50fe1cc6707806cb4ae9e32f4c7eb4439ad3101d2976cc6486e3e16659867e",
+      "bytes": 10650,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/potential_utf-v0_1.tar.gz",
+      "git_tree_sha1": "24bf479b046a5ac6e27d34c419e5f2fa1893c03e",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-proc-macro2-v1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/proc-macro2-v1",
+      "kind": "tar",
+      "sha256": "34cfc3b59439527870b1adbd57565c2143eb69827dad550507131701a1a95c26",
+      "bytes": 61797,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/proc-macro2-v1.tar.gz",
+      "git_tree_sha1": "6229be031394a885a836bbef6c5097367eed975d",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-quote-v1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/quote-v1",
+      "kind": "tar",
+      "sha256": "0e6f9b81fb086edc24d88c0bec3e3e7e2d2afeb2182e549add6d1733648449c3",
+      "bytes": 34296,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/quote-v1.tar.gz",
+      "git_tree_sha1": "80ef67866dceb3401a281108fcd2ff6ac6e62617",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-resb-v0_1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/resb-v0_1",
+      "kind": "tar",
+      "sha256": "24ca746bbebf5fd13776c23c2fbd36e427fa286520eb8b5b3da13e430d24c217",
+      "bytes": 167537,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/resb-v0_1.tar.gz",
+      "git_tree_sha1": "c0a1e0fb769854acac55c4d84a67699e04c8440a",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-serde-v1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/serde-v1",
+      "kind": "tar",
+      "sha256": "87fe03a5695d59a03ea4e74dcb505f3698919b7abf5d1ace6b88233dfba1a1da",
+      "bytes": 86455,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/serde-v1.tar.gz",
+      "git_tree_sha1": "1208f4b09eab6e9f076d80ea6dfeacafc5579a1e",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-serde_core-v1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/serde_core-v1",
+      "kind": "tar",
+      "sha256": "102bc609fed968e2f21588b9bddebce7c6989e28a70651ab741b16b5166fef0f",
+      "bytes": 65126,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/serde_core-v1.tar.gz",
+      "git_tree_sha1": "040d4744b722c43d644eddbc486a0f0d5d1edddc",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-serde_derive-v1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/serde_derive-v1",
+      "kind": "tar",
+      "sha256": "265868db60b45612acaadef6200205d4b7b6a43d49cfdf44e49e245982a81549",
+      "bytes": 62249,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/serde_derive-v1.tar.gz",
+      "git_tree_sha1": "189fdd3f9368368f5a4fe3a9ca37a9f1c36d739c",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-smallvec-v1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/smallvec-v1",
+      "kind": "tar",
+      "sha256": "2c90f997a6a2e45ffe68f77775ed28038b4338e79c989d164ed1c30afd1a875b",
+      "bytes": 35833,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/smallvec-v1.tar.gz",
+      "git_tree_sha1": "2e504c0ba531005968b89fcc8e5a0a7fd013b64a",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-stable_deref_trait-v1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/stable_deref_trait-v1",
+      "kind": "tar",
+      "sha256": "e1daded6e1700e20075808ab030ec6a31a0f15f835c630347decf399e6699df3",
+      "bytes": 8595,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/stable_deref_trait-v1.tar.gz",
+      "git_tree_sha1": "5806767837ec27b1e454c2ce4c496332a621226c",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-strck-v1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/strck-v1",
+      "kind": "tar",
+      "sha256": "274072937c200279f08174afff9814c3d4fe0cd2fbc80aa4bf72d6ecbabdeaa0",
+      "bytes": 10801,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/strck-v1.tar.gz",
+      "git_tree_sha1": "ab1a3d05a90bcc3208a7b7cf374e1bc87e4571df",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-syn-v2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/syn-v2",
+      "kind": "tar",
+      "sha256": "88a9fd5b9ad84e5081d094848371cd59f0007d6fa1dab58c37892ad55b7397db",
+      "bytes": 315328,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/syn-v2.tar.gz",
+      "git_tree_sha1": "09ccbcd61792c12e10bdebdb6aeb052db366c454",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-synstructure-v0_13.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/synstructure-v0_13",
+      "kind": "tar",
+      "sha256": "68a686435d1a23f6ad842f3acc057146f3b446d37f398c8fa66dfc31d0e529fd",
+      "bytes": 19629,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/synstructure-v0_13.tar.gz",
+      "git_tree_sha1": "1cf96a4969dda038315e1c90cc12ac4302ad6b3b",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-temporal_capi-v0_2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/temporal_capi-v0_2",
+      "kind": "tar",
+      "sha256": "070df886353e850ed332ffdaeaf9e15d05674ec2541e65cc9bda6f694c4e44cd",
+      "bytes": 83841,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/temporal_capi-v0_2.tar.gz",
+      "git_tree_sha1": "0bdee69acc2aa5ca1b54877c77fd82c45810c2d2",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-temporal_rs-v0_2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/temporal_rs-v0_2",
+      "kind": "tar",
+      "sha256": "2e8deeabc62e5c24e19cf7280880a150e1687d4535473c9778cd21cac8ba6fb4",
+      "bytes": 193012,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/temporal_rs-v0_2.tar.gz",
+      "git_tree_sha1": "5bb137097bcde1579dce91b64a9c59e5e3fa7eed",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-timezone_provider-v0_2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/timezone_provider-v0_2",
+      "kind": "tar",
+      "sha256": "f51bda4eb03f96fd9345231371a2e1eb8b43876aaa4ecdd451b870de96f95b9e",
+      "bytes": 151254,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/timezone_provider-v0_2.tar.gz",
+      "git_tree_sha1": "b37ac2830c16a67ccac7d0b15c5a9b6f98273641",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-tinystr-v0_8.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/tinystr-v0_8",
+      "kind": "tar",
+      "sha256": "6dc2400ff7ccd69e6dfbbd1ff041e35aa9f9f293906f8bd4f5137ee65ddb5f5f",
+      "bytes": 25868,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/tinystr-v0_8.tar.gz",
+      "git_tree_sha1": "f3e59602fd2f9c62676a47cd50338dcbcf9b2d16",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-unicode-ident-v1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/unicode-ident-v1",
+      "kind": "tar",
+      "sha256": "a61534d9fc96761141d2fb960b9a5e7dbbe3c051eedbcf8c480a4d393f307d59",
+      "bytes": 51857,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/unicode-ident-v1.tar.gz",
+      "git_tree_sha1": "2a56ab32c5ec6dc7fdc4944a9cd2df61131d8f51",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-utf8_iter-v1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/utf8_iter-v1",
+      "kind": "tar",
+      "sha256": "575322d4cd1c658eed863d573ef7ad2e39bb9305c5304b2be21fdd94e20996ea",
+      "bytes": 11002,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/utf8_iter-v1.tar.gz",
+      "git_tree_sha1": "97dac87ea0ae3e97a99607e736231b718e44c187",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-writeable-v0_6.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/writeable-v0_6",
+      "kind": "tar",
+      "sha256": "67d4d18853492fa442bc3bd8b0514a71abe5a2ff17687dae783a86bd0bcb3bc2",
+      "bytes": 28058,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/writeable-v0_6.tar.gz",
+      "git_tree_sha1": "96165f6969addccac2e966058d1998991e4b1921",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-yoke-derive-v0_8.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/yoke-derive-v0_8",
+      "kind": "tar",
+      "sha256": "8a9328c38dfc3df5a20f173356aee61f6a4e162f4edd2d07ea27fa2b26a85963",
+      "bytes": 15728,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/yoke-derive-v0_8.tar.gz",
+      "git_tree_sha1": "82aef4986f7f796919598536f646ccb26e371d19",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-yoke-v0_8.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/yoke-v0_8",
+      "kind": "tar",
+      "sha256": "d9813408d56b7cc3897ea94f0565a6caf2e814c1925f13ff05bc7f79b9f8b4f7",
+      "bytes": 35001,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/yoke-v0_8.tar.gz",
+      "git_tree_sha1": "71f4570627f4c55b579e8a40b55b1bb28e6e1c31",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-zerofrom-derive-v0_1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/zerofrom-derive-v0_1",
+      "kind": "tar",
+      "sha256": "e321cbe8b13d71dbe15bbdeeb04a4c9f927fa6e94304bf8695c6d795bf3a6b04",
+      "bytes": 9308,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/zerofrom-derive-v0_1.tar.gz",
+      "git_tree_sha1": "f230cd9a79a91f854db8c8625154a8b97ceeba93",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-zerofrom-v0_1.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/zerofrom-v0_1",
+      "kind": "tar",
+      "sha256": "cc03fc9e1dc70049334f5d92610a11bae7a376c0096441ef6b254941842b043b",
+      "bytes": 6565,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/zerofrom-v0_1.tar.gz",
+      "git_tree_sha1": "a778452c5a4ac8b89535594d73e4e6854a1abef4",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-zerotrie-v0_2.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/zerotrie-v0_2",
+      "kind": "tar",
+      "sha256": "932efe7fbf9628202d75600eb6ae3de1e1760cfc12566cdc37234a416f7e9b0e",
+      "bytes": 86442,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/zerotrie-v0_2.tar.gz",
+      "git_tree_sha1": "3472dcb3ca5b0b0ee39d03d4ddd4f69a45e96d2d",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-zerovec-derive-v0_11.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/zerovec-derive-v0_11",
+      "kind": "tar",
+      "sha256": "4659257a5f3f188b63cc6a6a01d1c67c874e272c7b672db12b5de3c146f34c45",
+      "bytes": 23061,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/zerovec-derive-v0_11.tar.gz",
+      "git_tree_sha1": "d21f3dfcdf82f4d825cc77e0eb3175b5935c0744",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-zerovec-v0_11.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/zerovec-v0_11",
+      "kind": "tar",
+      "sha256": "f6bf9204831bbbd2aeb6489a57f0e34abb773fa0a9cfec23bb64ee636382fd35",
+      "bytes": 133934,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/zerovec-v0_11.tar.gz",
+      "git_tree_sha1": "7edc5b0e0bd765beb70afd42aba2e80f48f806b7",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "chromium-rust-zoneinfo64-v0_3.tar.gz",
+      "path": "third_party/rust/chromium_crates_io/vendor/zoneinfo64-v0_3",
+      "kind": "tar",
+      "sha256": "087142ef5ca75a2cd436b592305f9edd0e193dba76adae391433356cf3373c38",
+      "bytes": 83095,
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/rust/+archive/afbc96607d0e659715d803cc099607dd1737fc41/chromium_crates_io/vendor/zoneinfo64-v0_3.tar.gz",
+      "git_tree_sha1": "e8ad3acc5097ad4050fd6e624f10fd58113e3a8f",
+      "revision": "afbc96607d0e659715d803cc099607dd1737fc41"
+    },
+    {
+      "name": "icudtl.dat",
+      "path": "third_party/icu/common/icudtl.dat",
+      "kind": "file",
+      "sha256": "9f48c7f9c7c94d516a14870707e910ab94d75ae640ff6842c4af53276cd26ebe",
+      "bytes": 10876560,
+      "url": "https://chromium.googlesource.com/chromium/deps/icu/+/d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738/common/icudtl.dat?format=TEXT",
+      "encoding": "base64 in the source HTTP response; checksum is decoded bytes",
+      "git_blob_sha1": "9655a2e17f08c56d6dbbc47f6e52e3fd3ef2436e",
+      "revision": "d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738"
+    }
+  ]
+}

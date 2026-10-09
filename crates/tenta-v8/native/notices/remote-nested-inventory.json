@@ -1,0 +1,55 @@
+[
+  {
+    "name": "inspector_protocol",
+    "repository": "https://chromium.googlesource.com/v8/v8",
+    "revision": "refs/tags/15.2.124.1",
+    "subdirectory": "third_party/inspector_protocol",
+    "tree": "c48d0f2b24c6e09219cfc958c20e0a90fec52d91",
+    "notices": [
+      {
+        "mode": 33188,
+        "type": "blob",
+        "id": "1e5610962e92ddd84eaddb72486defbb82732f0d",
+        "name": "LICENSE"
+      }
+    ]
+  },
+  {
+    "name": "wasm-api",
+    "repository": "https://chromium.googlesource.com/v8/v8",
+    "revision": "refs/tags/15.2.124.1",
+    "subdirectory": "third_party/wasm-api",
+    "tree": "0256d0bd67ebbd3bebe25df4deefda14f797bac8",
+    "notices": [
+      {
+        "mode": 33188,
+        "type": "blob",
+        "id": "8f71f43fee3f78649d238238cbde51e6d7055c82",
+        "name": "LICENSE"
+      }
+    ]
+  },
+  {
+    "name": "valgrind",
+    "repository": "https://chromium.googlesource.com/v8/v8",
+    "revision": "refs/tags/15.2.124.1",
+    "subdirectory": "third_party/valgrind",
+    "tree": "42254edd463806ad4cb6852cb03020b8fed86188",
+    "notices": [
+      {
+        "mode": 33188,
+        "type": "blob",
+        "id": "0be0037ca2e9a4e5e46c48703b0c05a39a11c985",
+        "name": "LICENSE"
+      }
+    ]
+  },
+  {
+    "name": "partition_alloc",
+    "repository": "https://chromium.googlesource.com/chromium/src/base/allocator/partition_allocator",
+    "revision": "66df8ef636795eff70efc52a47d8f62612800054",
+    "subdirectory": "src/partition_alloc",
+    "tree": "6bc2fcecff0d82b295c3e5fbb6387a28b29494bc",
+    "notices": []
+  }
+]

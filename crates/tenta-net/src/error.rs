@@ -12,11 +12,22 @@ use tenta_core::Error;
 
 pub use crate::policy::error_names::ErrorName;
 
+/// A protocol guarantee that permits replay of a request on a reused connection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReplayHint {
+    None,
+    /// No request stream was opened.
+    Unsent,
+    H2RefusedStream,
+    H2GoAway,
+}
+
 /// A transport failure: a Chromium error name plus a human-readable detail.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NetError {
     pub name: ErrorName,
     pub message: String,
+    replay_hint: ReplayHint,
 }
 
 impl NetError {
@@ -24,7 +35,26 @@ impl NetError {
         Self {
             name,
             message: message.into(),
+            replay_hint: ReplayHint::None,
         }
+    }
+
+    pub(crate) fn with_replay_hint(mut self, hint: ReplayHint) -> Self {
+        self.replay_hint = hint;
+        self
+    }
+
+    /// A failed readiness check opened no stream, but must not erase a more
+    /// specific protocol guarantee such as remote GOAWAY.
+    pub(crate) fn mark_unsent_if_unknown(mut self) -> Self {
+        if self.replay_hint == ReplayHint::None {
+            self.replay_hint = ReplayHint::Unsent;
+        }
+        self
+    }
+
+    pub(crate) fn replay_hint(&self) -> ReplayHint {
+        self.replay_hint
     }
 
     /// The Chromium name of this failure.
@@ -178,5 +208,16 @@ mod tests {
         let err = NetError::from_policy(denied);
         assert_eq!(err.name, ErrorName::UnsafePort);
         assert!(err.message.contains("port 25"));
+    }
+
+    #[test]
+    fn readiness_failure_preserves_remote_goaway_for_pool_eviction() {
+        let goaway = NetError::new(ErrorName::Http2ProtocolError, "remote GOAWAY")
+            .with_replay_hint(ReplayHint::H2GoAway)
+            .mark_unsent_if_unknown();
+        assert_eq!(goaway.replay_hint(), ReplayHint::H2GoAway);
+
+        let closed = NetError::new(ErrorName::ConnectionClosed, "closed").mark_unsent_if_unknown();
+        assert_eq!(closed.replay_hint(), ReplayHint::Unsent);
     }
 }

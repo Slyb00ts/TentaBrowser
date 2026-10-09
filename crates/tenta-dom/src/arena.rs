@@ -235,7 +235,8 @@ impl AttrValue {
 }
 
 /// The node columns. All vectors have the same length; freed slots stay in
-/// place with a bumped generation and are chained through `next`.
+/// place with a bumped generation. Reusable slots are chained through `next`;
+/// exhausted identities remain unlinked tombstones.
 #[derive(Default)]
 pub struct Nodes {
     pub kind: Vec<NodeKind>,
@@ -372,7 +373,8 @@ pub struct PiData {
 }
 
 /// The whole node arena: columns plus per-kind side tables and their free
-/// lists. Freed node ids are recycled with a bumped generation
+/// lists. Freed node ids are recycled with a bumped generation until their
+/// sixteen-bit wrapper identity is exhausted, then retired permanently
 /// (`docs/spec/04-dom-and-css.md` §1.1).
 pub struct DomArena {
     pub nodes: Nodes,
@@ -401,6 +403,7 @@ pub struct DomArena {
     free_pis: Vec<u32>,
     free_doctypes: Vec<u32>,
     live: usize,
+    retired_nodes: usize,
 }
 
 impl Default for DomArena {
@@ -431,6 +434,7 @@ impl DomArena {
             free_pis: Vec::new(),
             free_doctypes: Vec::new(),
             live: 0,
+            retired_nodes: 0,
         }
     }
 
@@ -566,7 +570,8 @@ impl DomArena {
     }
 
     /// Releases the slot of `id`, bumping its generation and recycling the
-    /// per-kind payload. The caller has already unlinked the node.
+    /// per-kind payload. Identity slots are retired before the packed u16
+    /// generation can repeat. The caller has already unlinked the node.
     pub fn free(&mut self, id: NodeId) {
         let i = id.raw() as usize;
         let data = self.nodes.data[i];
@@ -597,7 +602,9 @@ impl DomArena {
             }
             NodeKind::Document | NodeKind::Fragment | NodeKind::ShadowRoot => {}
         }
-        self.nodes.generation[i] = self.nodes.generation[i].wrapping_add(1);
+        // Live generations fit the wrapper handle's sixteen-bit field. The
+        // final increment remains u32 so even the last NodeRef is invalidated.
+        self.nodes.generation[i] += 1;
         self.nodes.flags[i] = NodeFlags::default();
         self.nodes.kind[i] = NodeKind::Fragment;
         self.nodes.data[i] = DataIndex::NONE;
@@ -606,14 +613,19 @@ impl DomArena {
         self.nodes.last_child[i] = NodeId::NONE;
         self.nodes.prev[i] = NodeId::NONE;
         self.nodes.handles[i] = 0;
-        self.nodes.next[i] = self.free_nodes;
-        self.free_nodes = id;
+        if self.nodes.generation[i] <= u32::from(u16::MAX) {
+            self.nodes.next[i] = self.free_nodes;
+            self.free_nodes = id;
+        } else {
+            self.nodes.next[i] = NodeId::NONE;
+            self.retired_nodes += 1;
+        }
         self.live -= 1;
     }
 
     /// Number of recycled slots waiting for reuse.
     pub fn free_slots(&self) -> usize {
-        self.nodes.len() - self.live
+        self.nodes.len() - self.live - self.retired_nodes
     }
 
     /// Attributes of an element, as stored (including dead/tombstone slots).
@@ -793,14 +805,30 @@ impl DomArena {
         };
     }
 
-    /// Points one attribute of an element at a new value, leaving the rest of
-    /// its slice alone. The previous value bytes become garbage.
+    /// Updates one attribute's value in place, preserving its name and list
+    /// position. Old value bytes become garbage.
     pub fn replace_element_attr(&mut self, data: DataIndex, index: usize, value: AttrValue) {
         let range = self.elements.attrs[data.get()];
         debug_assert!(index < range.len as usize, "attribute index out of range");
         let slot = range.start as usize + index;
         self.attr_values_garbage += self.attrs[slot].1.len as usize;
         self.attrs[slot].1 = value;
+    }
+
+    /// Replaces an attribute node in place: unlike a value write, the incoming
+    /// Attr supplies the row's prefix as well as its value.
+    pub fn replace_element_attr_node(
+        &mut self,
+        data: DataIndex,
+        index: usize,
+        name: AttrName,
+        value: AttrValue,
+    ) {
+        let range = self.elements.attrs[data.get()];
+        debug_assert!(index < range.len as usize, "attribute index out of range");
+        let slot = range.start as usize + index;
+        self.attr_values_garbage += self.attrs[slot].1.len as usize;
+        self.attrs[slot] = (name, value);
     }
 
     /// Marks an attribute slot as dead (tombstone) in place without copying.
@@ -931,6 +959,36 @@ mod tests {
         assert_eq!(recycled, element, "the free list hands the slot back");
         assert_eq!(arena.generation(recycled), generation + 1);
         assert_eq!(arena.slots(), 1, "no new slot was allocated");
+    }
+
+    #[test]
+    fn exhausted_node_identity_retires_but_its_element_payload_is_reused() {
+        let mut arena = DomArena::new();
+        let first = arena.alloc_element(atoms::DIV, atoms::NS_HTML);
+        let payload = arena.nodes.data[first.raw() as usize];
+        let mut current = first;
+        for generation in 0..=u16::MAX {
+            assert_eq!(current, first);
+            assert_eq!(arena.generation(current), u32::from(generation));
+            arena.free(current);
+            if generation != u16::MAX {
+                current = arena.alloc_element(atoms::DIV, atoms::NS_HTML);
+            }
+        }
+        assert!(!arena.is_live(first));
+        assert_eq!(arena.generation(first), u32::from(u16::MAX) + 1);
+        assert_eq!(arena.live(), 0);
+        assert_eq!(arena.free_slots(), 0, "retired indices are not reusable");
+        assert_eq!(arena.slots(), 1);
+
+        let replacement = arena.alloc_element(atoms::SPAN, atoms::NS_HTML);
+        assert_ne!(replacement, first);
+        assert_eq!(arena.generation(replacement), 0);
+        assert_eq!(arena.nodes.data[replacement.raw() as usize], payload);
+        assert_eq!(arena.elements.len(), 1, "payload storage is still recycled");
+        assert_eq!(arena.live(), 1);
+        arena.free(replacement);
+        assert_eq!(arena.free_slots(), 1);
     }
 
     #[test]
