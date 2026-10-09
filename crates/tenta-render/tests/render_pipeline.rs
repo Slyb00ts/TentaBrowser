@@ -914,7 +914,10 @@ fn the_static_article_renders_with_its_style_sheet() {
     };
     assert!(rect.y > 800.0, "the paragraph is below the first screen");
     let (shot, img) = p.shoot(with(Capture::Element(paragraph)));
-    assert_eq!((shot.width, shot.height), (760, rect.h.ceil() as u32));
+    // The capture covers whole pixels around the border box, so a fractional
+    // top edge can cost one more row than the height alone suggests.
+    let rows = rect.bottom().ceil() - rect.y.floor();
+    assert_eq!((shot.width, shot.height), (760, rows as u32));
     assert!(img.ink(PAPER, 0..760, 0..shot.height) > 1500);
     assert!(
         img.ink(PAPER, 740..760, 0..shot.height) > 20,

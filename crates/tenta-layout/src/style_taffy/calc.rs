@@ -26,7 +26,7 @@ pub(super) fn length_percentage(calc: &CalcLengthPercentage) -> taffy::LengthPer
 ///
 /// The only place a handle is dereferenced. `handle` must come from [`length_percentage`], and the computed style it
 /// was made from must still be alive.
-pub(in crate::style_taffy) unsafe fn resolve(handle: *const (), basis: f32) -> f32 {
+pub(crate) unsafe fn resolve(handle: *const (), basis: f32) -> f32 {
     // SAFETY: the caller guarantees the handle points at a live
     // `CalcLengthPercentage`.
     let calc = unsafe { &*handle.cast::<CalcLengthPercentage>() };

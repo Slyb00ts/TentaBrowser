@@ -104,6 +104,7 @@ pub fn intrinsic_inline_sizes_of_block(cx: &mut LayoutCx, tree: &BoxTree, id: Bo
         return sizes;
     }
     let sizes = match (&b.kind, &b.ifc) {
+        (BoxKind::Flex, _) => crate::flex::intrinsic_inline_sizes(cx, tree, id),
         (BoxKind::Replaced(kind), _) => {
             let (w, _) = replaced_content_size(cx, b.node, *kind, (None, None), &SizeLimits::NONE);
             (w, w)

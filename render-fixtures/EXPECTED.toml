@@ -56,8 +56,8 @@
 "inherited reset border-box" = "pass"
 
 ["carousel-clip"]
-"visible translated slide" = "deferred:M5 positioned"
-"visible control slide" = "deferred:M5 positioned"
+"visible translated slide" = "pass"
+"visible control slide" = "pass"
 
 ["cascade-priority"]
 "important winners" = "pass"
@@ -81,15 +81,15 @@
 "both contextual gaps place the final cell" = "deferred:M4 flex and grid"
 
 ["direction-rtl"]
-"inherited RTL places first flex item at inline start" = "deferred:M4 flex"
-"inherited RTL reverses the flex row" = "deferred:M4 flex"
+"inherited RTL places first flex item at inline start" = "pass"
+"inherited RTL reverses the flex row" = "pass"
 "inherited RTL places first grid track at inline start" = "deferred:M4 grid"
 "inherited RTL reverses explicit grid track placement" = "deferred:M4 grid"
 "inherited RTL resolves block under-constraint from right" = "pass"
 
 ["display-contents-cascade"]
-"display contents overrides hidden responsive wrapper" = "deferred:M4 flex"
-"flattened sibling remains in parent flex flow" = "deferred:M4 flex"
+"display contents overrides hidden responsive wrapper" = "pass"
+"flattened sibling remains in parent flex flow" = "pass"
 
 ["eventtarget-lifecycle"]
 "framework lifecycle EventTarget completes" = "deferred:JS-on render path (no section 7 milestone; H1 --features v8 plus P2 streams/scroll)"
@@ -122,14 +122,14 @@
 ["flex-post-ratio-cross-size"]
 "absolute visual survives the ratio-sized overflow clip" = "deferred:M5 positioned"
 "final flex width sizes the media cross axis" = "deferred:M5 positioned"
-"sibling receives the other flexible share" = "deferred:M5 positioned"
-"following content starts after ratio height and column gap" = "deferred:M5 positioned"
+"sibling receives the other flexible share" = "pass"
+"following content starts after ratio height and column gap" = "pass"
 
 ["flex-whitespace-items"]
-"direct flex sidebar starts at container edge" = "deferred:M4 flex and grid"
-"direct flex body keeps its intended inset" = "deferred:M4 flex and grid"
-"display contents flex sidebar starts at container edge" = "deferred:M4 flex and grid"
-"display contents flex body keeps its intended inset" = "deferred:M4 flex and grid"
+"direct flex sidebar starts at container edge" = "pass"
+"direct flex body keeps its intended inset" = "pass"
+"display contents flex sidebar starts at container edge" = "pass"
+"display contents flex body keeps its intended inset" = "pass"
 
 ["float-bfc-continuation"]
 "float keeps its BFC band across wrappers" = "deferred:M1.1 floats"
@@ -197,9 +197,9 @@
 "overflow viewport retains its fixed border geometry" = "deferred:M2 images"
 
 ["inline-block-flex-items"]
-"inline block title keeps its max content width" = "deferred:M4 flex and grid"
-"inline block list shrink wraps and stacks children" = "deferred:M4 flex and grid"
-"table stand-in does not blockify inline-block list" = "deferred:M4 flex and grid"
+"inline block title keeps its max content width" = "pass"
+"inline block list shrink wraps and stacks children" = "pass"
+"table stand-in does not blockify inline-block list" = "pass"
 
 ["inline-replaced-flow"]
 "default image stays in its inline formatting context" = "deferred:M2 images"
@@ -210,15 +210,15 @@
 "mixed cell keeps block child full width and centered" = "deferred:M2 images"
 
 ["item-self-alignment"]
-"flex item centers itself on cross axis" = "deferred:M4 flex and grid"
-"flex item aligns itself to cross end" = "deferred:M4 flex and grid"
+"flex item centers itself on cross axis" = "pass"
+"flex item aligns itself to cross end" = "pass"
 "grid item aligns center and inline end" = "deferred:M4 flex and grid"
 "grid item aligns block end and inline center" = "deferred:M4 flex and grid"
 "place self sets both grid axes" = "deferred:M4 flex and grid"
 "place items aligns first grid child" = "deferred:M4 flex and grid"
 "place items aligns second grid child" = "deferred:M4 flex and grid"
-"align content distributes flex lines" = "deferred:M4 flex and grid"
-"align content reaches cross end" = "deferred:M4 flex and grid"
+"align content distributes flex lines" = "pass"
+"align content reaches cross end" = "pass"
 "place content aligns first grid track" = "deferred:M4 flex and grid"
 "place content aligns second grid track" = "deferred:M4 flex and grid"
 
@@ -239,12 +239,12 @@
 "ex padding follows font x height" = "deferred:M4 flex"
 
 ["logical-borders"]
-"RTL inline-start shorthand maps to physical right" = "deferred:M4 flex"
-"block-end shorthand maps to physical bottom" = "deferred:M4 flex"
-"later logical alias wins over physical right" = "deferred:M4 flex"
-"later physical right wins over logical alias" = "deferred:M4 flex"
-"inline pair start width maps to left" = "deferred:M4 flex"
-"inline pair end width maps to right" = "deferred:M4 flex"
+"RTL inline-start shorthand maps to physical right" = "pass"
+"block-end shorthand maps to physical bottom" = "pass"
+"later logical alias wins over physical right" = "pass"
+"later physical right wins over logical alias" = "pass"
+"inline pair start width maps to left" = "pass"
+"inline pair end width maps to right" = "pass"
 
 ["max-height-replaced"]
 "max height clamps intrinsic aspect transfer" = "deferred:M2 images"
@@ -354,8 +354,8 @@
 "content-box fixed cell column" = "deferred:M7 tables"
 
 ["text-align-flex-items"]
-"text alignment does not shrink a flex item" = "deferred:M4 flex and grid"
-"inherited text alignment centers inline content" = "deferred:M4 flex and grid"
+"text alignment does not shrink a flex item" = "pass"
+"inherited text alignment centers inline content" = "pass"
 
 ["transform-containing-block"]
 "absolute captured by transform" = "deferred:M5 positioned"

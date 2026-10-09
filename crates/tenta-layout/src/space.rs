@@ -35,6 +35,11 @@ pub struct ConstraintSpace {
     pub fixed_inline: bool,
     /// The block size is already decided.
     pub fixed_block: bool,
+    /// Measure the content: the box's own `height`, `min-height` and
+    /// `max-height` do not apply. A flex container asks for the height the
+    /// content alone would give, which is what an item's automatic minimum
+    /// size is made of.
+    pub content_block_size: bool,
     /// Position of this content box inside its block formatting context;
     /// floats use it to translate exclusions.
     pub bfc_offset: (f32, f32),
@@ -54,6 +59,7 @@ impl ConstraintSpace {
             percentage_base: (None, None),
             fixed_inline: false,
             fixed_block: false,
+            content_block_size: false,
             bfc_offset: (0.0, 0.0),
             direction: Direction::Ltr,
             writing_mode: WritingMode::HorizontalTb,
@@ -225,7 +231,7 @@ mod tests {
         assert_eq!(space.direction, Direction::Ltr);
         assert_eq!(space.writing_mode, WritingMode::HorizontalTb);
         assert_eq!(space.percentage_base, (None, None));
-        assert!(!space.fixed_inline && !space.fixed_block);
+        assert!(!space.fixed_inline && !space.fixed_block && !space.content_block_size);
     }
 
     #[test]

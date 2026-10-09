@@ -155,7 +155,8 @@ mod behaviour {
             <div id=plain style="height:5px"></div>
             <div id=clip style="overflow:hidden;height:5px"></div>
             <div id=root style="display:flow-root;height:5px"></div>
-            <div id=flex style="display:flex"><div id=item style="height:5px"></div></div>"#,
+            <div id=flex style="display:flex"><div id=item style="height:5px"></div></div>
+            <div id=grid style="display:grid"><div id=cell style="height:5px"></div></div>"#,
             (800.0, 600.0),
         );
         let flags = |id: &str| laid.frags.get(laid.frag(id)).flags;
@@ -163,9 +164,11 @@ mod behaviour {
         assert!(flags("clip").contains(FragFlags::CLIPS_OVERFLOW | FragFlags::ESTABLISHES_BFC));
         assert!(flags("root").contains(FragFlags::ESTABLISHES_BFC));
         assert!(!flags("root").contains(FragFlags::CLIPS_OVERFLOW));
-        // The container is laid out as a block, so its item is not atomic yet.
-        assert!(!flags("item").contains(FragFlags::PAINT_ATOMIC));
+        // A flex container really lays its items out, so they paint atomically;
+        // a grid container is still laid out as a block, so its items do not.
+        assert!(flags("item").contains(FragFlags::PAINT_ATOMIC));
         assert!(!flags("flex").contains(FragFlags::PAINT_ATOMIC));
+        assert!(!flags("cell").contains(FragFlags::PAINT_ATOMIC));
     }
 
     #[test]

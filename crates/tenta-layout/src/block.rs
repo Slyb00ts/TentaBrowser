@@ -15,7 +15,7 @@ use crate::fragment::{FragFlags, FragId, Fragment, FragmentBuilder, FragmentKind
 use crate::inline::layout_inline;
 use crate::space::{AvailableSize, BlockResult, ConstraintSpace, MarginStrut, NoFloats};
 use crate::types::{Edges, OverflowKind, PositionKind, Rect};
-use crate::{block_sizes, list, quirks, relative};
+use crate::{block_sizes, flex, list, quirks, relative};
 
 /// Lays out the block box `id` within `space`, pushing its fragment (and its
 /// descendants') into `out`.
@@ -41,11 +41,14 @@ pub fn layout_block(
                 .all(|&c| tree.get(c).flags.contains(BoxFlags::OUT_OF_FLOW)),
         "a block holds in-flow block children or an inline formatting context, not both"
     );
+    if matches!(b.kind, BoxKind::Flex) {
+        return flex::layout_flex(cx, tree, id, space, out);
+    }
     let m = constraint::resolve_box(cx, tree, id, space);
     let direction = constraint::own_direction(&b.style);
     let establishes_bfc = b.flags.contains(BoxFlags::ESTABLISHES_BFC);
     let replaced = matches!(b.kind, BoxKind::Replaced(_));
-    let constrained = constraint::has_block_size_constraints(&b.style);
+    let constrained = !space.content_block_size && constraint::has_block_size_constraints(&b.style);
 
     let definite_height = match m.content_height {
         Some(h) if constrained => Some(block_sizes::constrain_block_size(cx, tree, id, space, h)),
@@ -206,15 +209,7 @@ pub fn layout_block(
         m.border_box_width(),
         m.border_box_height(content_height),
     );
-    let (dx, dy) = if b.paint.position == PositionKind::Relative {
-        let containing_width = space.percentage_base.0.unwrap_or(match space.inline_size {
-            AvailableSize::Definite(w) => w,
-            _ => 0.0,
-        });
-        relative::relative_offset_in(tree, id, (containing_width, space.percentage_base.1))
-    } else {
-        (0.0, 0.0)
-    };
+    let (dx, dy) = relative_shift(tree, id, space);
     let kind = match b.kind {
         BoxKind::Replaced(kind) => FragmentKind::Replaced(kind),
         _ => FragmentKind::Box,
@@ -225,17 +220,7 @@ pub fn layout_block(
     fragment.padding = m.padding;
     fragment.margin = m.margin;
     fragment.flags = fragment_flags(cx, tree, id);
-    let mut overflow = overflow.union(&border_box);
-    for &kid in &kids {
-        let k = out.get(kid);
-        let contribution = if k.flags.contains(FragFlags::CLIPS_OVERFLOW) {
-            k.rect
-        } else {
-            k.overflow.translated(k.rect.x, k.rect.y)
-        };
-        overflow = overflow.union(&contribution);
-    }
-    fragment.overflow = overflow;
+    fragment.overflow = child_overflow(out, &kids, overflow.union(&border_box));
     fragment.children = kids;
     let frag = out.push(fragment);
 
@@ -251,12 +236,37 @@ pub fn layout_block(
     }
 }
 
-/// Whether flex and grid containers lay their items out as such rather than
-/// falling back to block flow.
-const FLEX_GRID_ITEMS_LAID_OUT: bool = false;
+/// The `position: relative` offset of box `id` inside the containing block
+/// described by `space`.
+pub(crate) fn relative_shift(tree: &BoxTree, id: BoxId, space: &ConstraintSpace) -> (f32, f32) {
+    if tree.get(id).paint.position != PositionKind::Relative {
+        return (0.0, 0.0);
+    }
+    let containing_width = space.percentage_base.0.unwrap_or(match space.inline_size {
+        AvailableSize::Definite(w) => w,
+        _ => 0.0,
+    });
+    relative::relative_offset_in(tree, id, (containing_width, space.percentage_base.1))
+}
+
+/// `own` grown by the scrollable overflow of the child fragments `kids`; a child
+/// that clips contributes only its border box.
+pub(crate) fn child_overflow(out: &FragmentBuilder, kids: &[FragId], own: Rect) -> Rect {
+    let mut overflow = own;
+    for &kid in kids {
+        let k = out.get(kid);
+        let contribution = if k.flags.contains(FragFlags::CLIPS_OVERFLOW) {
+            k.rect
+        } else {
+            k.overflow.translated(k.rect.x, k.rect.y)
+        };
+        overflow = overflow.union(&contribution);
+    }
+    overflow
+}
 
 /// The fragment flags that follow from the box alone.
-fn fragment_flags(cx: &LayoutCx, tree: &BoxTree, id: BoxId) -> FragFlags {
+pub(crate) fn fragment_flags(cx: &LayoutCx, tree: &BoxTree, id: BoxId) -> FragFlags {
     let b = tree.get(id);
     let mut flags = FragFlags::empty();
     if b.flags.contains(BoxFlags::ESTABLISHES_BFC) {
@@ -268,13 +278,12 @@ fn fragment_flags(cx: &LayoutCx, tree: &BoxTree, id: BoxId) -> FragFlags {
     {
         flags |= FragFlags::CLIPS_OVERFLOW;
     }
-    // Flex and grid containers are still laid out as blocks, so their items
-    // stack in normal flow and overflow into later siblings. Painting them
-    // atomically would put them above the later blocks' backgrounds, which
-    // no flow layout does; the flag applies once the items are really laid out
-    // as flex or grid items.
-    let atomic_item = tree.is_flex_grid_item(id);
-    if tree.is_paint_atomic(id) && (!atomic_item || FLEX_GRID_ITEMS_LAID_OUT) {
+    // Items of a flex or grid container paint atomically only when that
+    // container really laid them out as items, so the container's own layout
+    // sets the flag. A container still laid out as a block stacks its children
+    // in normal flow, and painting them atomically would put them above the
+    // backgrounds of later blocks, which no flow layout does.
+    if tree.is_paint_atomic(id) && !tree.is_flex_grid_item(id) {
         flags |= FragFlags::PAINT_ATOMIC;
     }
     flags

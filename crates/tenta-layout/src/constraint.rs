@@ -413,6 +413,9 @@ fn block_size(
     if let (true, AvailableSize::Definite(h)) = (space.fixed_block, space.block_size) {
         return Some((h - vertical_edges).max(0.0));
     }
+    if space.content_block_size {
+        return None;
+    }
     match height {
         Extent::Length(v) => Some(to_content_box(v, border_box_sizing, vertical_edges)),
         Extent::Content(v) => Some(v),
@@ -458,6 +461,7 @@ pub(crate) fn child_space(
         percentage_base: (Some(content_width), content_height),
         fixed_inline: false,
         fixed_block: false,
+        content_block_size: false,
         bfc_offset,
         direction,
         writing_mode: parent.writing_mode,

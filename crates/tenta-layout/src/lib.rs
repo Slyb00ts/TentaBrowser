@@ -15,6 +15,7 @@ mod boxes;
 mod constraint;
 #[cfg(feature = "embedded-fonts")]
 pub mod embedded_fonts;
+mod flex;
 mod float;
 mod font;
 mod fragment;
@@ -25,6 +26,7 @@ mod quirks;
 mod relative;
 mod space;
 mod style_taffy;
+mod taffy_tree;
 mod text;
 pub mod types;
 

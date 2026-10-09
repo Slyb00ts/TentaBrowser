@@ -357,6 +357,11 @@ pub(super) fn flex_wrap(input: stylo::FlexWrap) -> taffy::FlexWrap {
     }
 }
 
+/// The preferred aspect ratio (width over height) of a box, from `aspect-ratio`.
+pub(crate) fn preferred_aspect_ratio(style: &stylo::ComputedValues) -> Option<f32> {
+    aspect_ratio(style.get_position().aspect_ratio)
+}
+
 /// A converted style, bound to the computed values its `calc()` handles point into.
 pub(crate) struct ConvertedStyle<'a> {
     style: taffy::Style<stylo::Atom>,
@@ -372,6 +377,36 @@ impl core::ops::Deref for ConvertedStyle<'_> {
 }
 
 impl ConvertedStyle<'_> {
+    /// Marks the style as belonging to a replaced element, which the
+    /// conversion cannot know.
+    pub(crate) fn replaced(mut self, replaced: bool) -> Self {
+        self.style.item_is_replaced = replaced;
+        self
+    }
+
+    /// Drops the insets from the Taffy style. Taffy offsets every in-flow item
+    /// by its insets, but only `position: relative` boxes are offset by them.
+    pub(crate) fn without_insets(mut self) -> Self {
+        self.style.inset = taffy::Rect {
+            left: taffy::LengthPercentageAuto::AUTO,
+            right: taffy::LengthPercentageAuto::AUTO,
+            top: taffy::LengthPercentageAuto::AUTO,
+            bottom: taffy::LengthPercentageAuto::AUTO,
+        };
+        self
+    }
+
+    /// Drops the preferred aspect ratio from the Taffy style.
+    ///
+    /// Taffy applies the ratio to an item's style size up front, so a `width:
+    /// 1px` flex item with `flex: 1` would get a height of `1px / ratio` that
+    /// ignores the width flexing later gives it. The integration applies the
+    /// ratio to the used size instead.
+    pub(crate) fn without_aspect_ratio(mut self) -> Self {
+        self.style.aspect_ratio = None;
+        self
+    }
+
     /// The Taffy style. It still holds `calc()` handles, so it must not be
     /// used after the computed values it was converted from are gone.
     pub(crate) fn style(&self) -> &taffy::Style<stylo::Atom> {

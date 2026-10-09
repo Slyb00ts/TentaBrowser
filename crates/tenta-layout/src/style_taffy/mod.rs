@@ -9,15 +9,11 @@
 //! ([`calc::resolve`] turns one back into pixels). [`convert::ConvertedStyle`]
 //! borrows the `ComputedValues`, so a converted style cannot outlive them.
 
-// The flex and grid tree integration is the only consumer of these conversions;
-// until it lands, only the tests call them.
-#![allow(
-    dead_code,
-    reason = "consumed by the Taffy tree integration over the box tree"
-)]
-
 mod calc;
 mod convert;
 mod grid;
 #[cfg(test)]
 mod tests;
+
+pub(crate) use calc::resolve as resolve_calc;
+pub(crate) use convert::{ConvertedStyle, preferred_aspect_ratio, to_taffy_style};
