@@ -1525,6 +1525,7 @@ pub(crate) fn configure_stylo() {
         stylo_static_prefs::set_pref!("layout.css.nth-child-of.enabled", true);
         stylo_static_prefs::set_pref!("layout.container-queries.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.at-scope.enabled", true);
+        stylo_static_prefs::set_pref!("layout.unimplemented", true);
     });
 }
 

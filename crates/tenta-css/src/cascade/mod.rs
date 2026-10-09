@@ -48,6 +48,7 @@ mod ua;
 pub use atoms::AtomMaps;
 pub use engine::StyleEngine;
 pub use imports::import_urls;
+pub use pseudo::ResolveError;
 pub use types::{
     ChangeHint, FontMetrics, FontMetricsData, ImportedSheet, PseudoKind, Style, StyleDiff,
     StyleEnv, StyleSource,

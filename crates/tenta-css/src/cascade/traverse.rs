@@ -22,7 +22,7 @@ use style::traversal_flags::TraversalFlags;
 use super::dom::{Handle, NodeHandle};
 
 /// No paint worklets are ever registered.
-struct NoPainters;
+pub(super) struct NoPainters;
 
 impl RegisteredSpeculativePainters for NoPainters {
     fn get(&self, _: &Atom) -> Option<&dyn RegisteredSpeculativePainter> {
@@ -71,10 +71,10 @@ impl<'a, 'd> DomTraversal<Handle<'d>> for RecalcStyle<'a> {
 
 /// Holds `ThreadState::LAYOUT` for its lifetime, so the state is left again on
 /// unwind. Stylo reads it in debug assertions only, but they fire without it.
-struct LayoutThreadState;
+pub(super) struct LayoutThreadState;
 
 impl LayoutThreadState {
-    fn enter() -> Self {
+    pub(super) fn enter() -> Self {
         thread_state::enter(ThreadState::LAYOUT);
         Self
     }
@@ -83,6 +83,26 @@ impl LayoutThreadState {
 impl Drop for LayoutThreadState {
     fn drop(&mut self) {
         thread_state::exit(ThreadState::LAYOUT);
+    }
+}
+
+/// The context both the flush's traversal and on-demand resolution run in:
+/// no animations, no snapshots, no visited styles, no paint worklets.
+pub(super) fn shared_context<'a>(
+    stylist: &'a Stylist,
+    guard: &'a SharedRwLockReadGuard<'a>,
+    snapshots: &'a SnapshotMap,
+) -> SharedStyleContext<'a> {
+    SharedStyleContext {
+        stylist,
+        visited_styles_enabled: false,
+        options: StyleSystemOptions::default(),
+        guards: StylesheetGuards::same(guard),
+        current_time_for_animations: 0.0,
+        traversal_flags: TraversalFlags::empty(),
+        snapshot_map: snapshots,
+        animations: DocumentAnimationSet::default(),
+        registered_speculative_painters: &NoPainters,
     }
 }
 
@@ -103,17 +123,7 @@ pub(super) fn restyle(
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         let _state = LayoutThreadState::enter();
         let snapshots = SnapshotMap::new();
-        let shared = SharedStyleContext {
-            stylist,
-            visited_styles_enabled: false,
-            options: StyleSystemOptions::default(),
-            guards: StylesheetGuards::same(guard),
-            current_time_for_animations: 0.0,
-            traversal_flags: TraversalFlags::empty(),
-            snapshot_map: &snapshots,
-            animations: DocumentAnimationSet::default(),
-            registered_speculative_painters: &NoPainters,
-        };
+        let shared = shared_context(stylist, guard, &snapshots);
         let traversal = RecalcStyle { shared };
         let token = RecalcStyle::pre_traverse(root, traversal.shared_context());
         if token.should_traverse() {
