@@ -109,6 +109,11 @@ pub(super) enum AtomKind {
         src: Range<u32>,
     },
     Forced,
+    /// The place of an absolutely positioned box: no width, no effect on
+    /// breaking.
+    Static {
+        box_id: BoxId,
+    },
 }
 
 /// One unit of line breaking, in logical order.
@@ -155,7 +160,10 @@ struct Sink {
 
 impl Sink {
     fn push(&mut self, kind: AtomKind, width: f32, hang: f32) {
-        let opp = if matches!(kind, AtomKind::Close { .. } | AtomKind::Forced) {
+        let opp = if matches!(
+            kind,
+            AtomKind::Close { .. } | AtomKind::Forced | AtomKind::Static { .. }
+        ) {
             Opp::None
         } else {
             std::mem::replace(&mut self.pending, Opp::None)
@@ -204,6 +212,7 @@ fn push_event(sink: &mut Sink, infos: &Infos, event: Event) {
             };
             sink.push(AtomKind::Close { interrupted }, width, 0.0);
         }
+        Event::Static { box_id } => sink.push(AtomKind::Static { box_id }, 0.0, 0.0),
     }
 }
 

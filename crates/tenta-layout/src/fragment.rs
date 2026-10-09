@@ -6,12 +6,15 @@
 //! [`FragmentBuilder`] and is deterministic: the same pushes give the same
 //! ids and the same per-node lists.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
 use smallvec::SmallVec;
 use tenta_core::NodeId;
 
+use crate::box_tree::BoxId;
+use crate::positioned::Candidate;
 use crate::types::{Edges, GlyphRun, MarkerKind, PaintStyle, Rect, ReplacedKind};
 
 /// Index of a [`Fragment`] in its [`FragmentTree`].
@@ -50,6 +53,13 @@ bitflags::bitflags! {
         /// items and inline-blocks; its positioned and z-indexed descendants
         /// still belong to the enclosing stacking context.
         const PAINT_ATOMIC = 1 << 6;
+        /// The containing block of its absolutely positioned descendants:
+        /// the box is positioned or has a transform, filter, containment or
+        /// similar (CSS Positioned Layout 3, 2.1). Set by layout.
+        const ABSPOS_CB = 1 << 7;
+        /// The containing block of its `position: fixed` descendants: a
+        /// transform, filter, containment or similar, but not `position`.
+        const FIXED_CB = 1 << 8;
     }
 }
 
@@ -124,10 +134,37 @@ impl Fragment {
     }
 }
 
+/// The place of an absolutely positioned box in a line, in the coordinates of
+/// the inline formatting context's content box.
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct InlineStatic {
+    /// The block container whose context holds the placeholder.
+    pub(crate) root: BoxId,
+    /// The positioned box.
+    pub(crate) box_id: BoxId,
+    /// Inline offset of the placeholder from the content box's left edge.
+    pub(crate) x: f32,
+    /// Top of the line holding it.
+    pub(crate) y: f32,
+    /// Index of that line among the context's lines; a placeholder on a line
+    /// that was dropped as empty belongs to the next line.
+    pub(crate) line: usize,
+    /// The placeholder reads right to left, so the box is aligned by its right
+    /// edge.
+    pub(crate) rtl: bool,
+}
+
 /// Accumulates fragments while layout runs.
 #[derive(Debug, Default)]
 pub struct FragmentBuilder {
     frags: Vec<Fragment>,
+    /// Absolutely positioned boxes whose static parent is the fragment, laid
+    /// out once the whole tree is known (see `positioned`).
+    static_candidates: Vec<(FragId, Candidate)>,
+    /// Where inline layout met the placeholders of absolutely positioned boxes,
+    /// until block layout collects them.
+    inline_statics: Vec<InlineStatic>,
+    containing_blocks: HashMap<FragId, FragId>,
 }
 
 impl FragmentBuilder {
@@ -141,6 +178,39 @@ impl FragmentBuilder {
         let id = FragId(self.frags.len() as u32);
         self.frags.push(f);
         id
+    }
+
+    /// Records that `candidate`, an absolutely positioned box, has `parent` as
+    /// its static parent.
+    pub(crate) fn add_candidate(&mut self, parent: FragId, candidate: Candidate) {
+        self.static_candidates.push((parent, candidate));
+    }
+
+    /// Hands the recorded candidates to the positioned-layout pass.
+    pub(crate) fn take_candidates(&mut self) -> Vec<(FragId, Candidate)> {
+        std::mem::take(&mut self.static_candidates)
+    }
+
+    /// Records that the out-of-flow fragment `frag` has `block` as its
+    /// containing block although it hangs below another fragment.
+    pub(crate) fn set_containing_block(&mut self, frag: FragId, block: FragId) {
+        self.containing_blocks.insert(frag, block);
+    }
+
+    /// Records where inline layout of the context rooted at `root` met the
+    /// placeholder of an absolutely positioned box.
+    pub(crate) fn add_inline_static(&mut self, mark: InlineStatic) {
+        self.inline_statics.push(mark);
+    }
+
+    /// Removes and returns the placeholders recorded for the context rooted at
+    /// `root`, in the order the lines met them.
+    pub(crate) fn take_inline_statics(&mut self, root: BoxId) -> Vec<InlineStatic> {
+        let (mine, rest) = std::mem::take(&mut self.inline_statics)
+            .into_iter()
+            .partition(|m| m.root == root);
+        self.inline_statics = rest;
+        mine
     }
 
     /// Replaces the children of `id`.
@@ -198,6 +268,7 @@ impl FragmentBuilder {
             viewport,
             scroll_extent,
             frags: self.frags,
+            containing_blocks: self.containing_blocks,
             parents,
             node_frags,
         }
@@ -215,6 +286,7 @@ pub struct FragmentTree {
     pub scroll_extent: Rect,
     frags: Vec<Fragment>,
     parents: Vec<FragId>,
+    containing_blocks: HashMap<FragId, FragId>,
     /// Indexed by DOM arena slot; inline boxes split across lines have several.
     node_frags: Vec<SmallVec<[FragId; 1]>>,
 }
@@ -246,6 +318,15 @@ impl FragmentTree {
     pub fn parent(&self, id: FragId) -> Option<FragId> {
         let parent = self.parents[id.index()];
         (parent.0 != u32::MAX).then_some(parent)
+    }
+
+    /// The containing block of an absolutely positioned fragment, when it is
+    /// not the fragment's parent. Such a fragment hangs below the fragment
+    /// where its box sits in the box tree (so paint finds the stacking contexts
+    /// and effect groups around it), but its overflow clip is its containing
+    /// block's, not that of the ancestors in between.
+    pub fn containing_block_of(&self, id: FragId) -> Option<FragId> {
+        self.containing_blocks.get(&id).copied()
     }
 
     /// Border box in document coordinates, without scroll offsets.

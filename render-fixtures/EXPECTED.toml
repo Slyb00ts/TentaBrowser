@@ -9,21 +9,21 @@
 # is a deliberate edit. M1-GATE.toml is frozen and never edited here.
 
 ["abs-fill"]
-"blue fill" = "deferred:M5 positioned"
-"teal fill" = "deferred:M5 positioned"
-"purple fill" = "deferred:M5 positioned"
+"blue fill" = "pass"
+"teal fill" = "pass"
+"purple fill" = "pass"
 
 ["absolute-containing-block"]
-"nearest positioned ancestor" = "deferred:M5 positioned"
-"end insets use padding box" = "deferred:M5 positioned"
-"percent insets use padding box" = "deferred:M5 positioned"
-"fixed viewport containing block" = "deferred:M5 positioned"
+"nearest positioned ancestor" = "pass"
+"end insets use padding box" = "pass"
+"percent insets use padding box" = "pass"
+"fixed viewport containing block" = "pass"
 
 ["absolute-static-position"]
-"absolute top uses real containing block and keeps static inline position" = "deferred:M5 positioned"
-"absolute left uses real containing block and keeps static block position" = "deferred:M5 positioned"
-"outer static candidate is reparented after coordinate harvest" = "deferred:M5 positioned"
-"nested static candidate survives outer reparenting" = "deferred:M5 positioned"
+"absolute top uses real containing block and keeps static inline position" = "pass"
+"absolute left uses real containing block and keeps static block position" = "pass"
+"outer static candidate is reparented after coordinate harvest" = "pass"
+"nested static candidate survives outer reparenting" = "pass"
 
 ["animation-fill-forwards"]
 "finite forwards animation exposes final hidden state" = "deferred:M5 positioned"
@@ -120,8 +120,8 @@
 "CSS supports accepts only the shorthand grammar" = "deferred:M4 flex and grid"
 
 ["flex-post-ratio-cross-size"]
-"absolute visual survives the ratio-sized overflow clip" = "deferred:M5 positioned"
-"final flex width sizes the media cross axis" = "deferred:M5 positioned"
+"absolute visual survives the ratio-sized overflow clip" = "pass"
+"final flex width sizes the media cross axis" = "pass"
 "sibling receives the other flexible share" = "pass"
 "following content starts after ratio height and column gap" = "pass"
 
@@ -149,38 +149,38 @@
 "clear moves below float bottom" = "deferred:M1.1 floats"
 
 ["font-metric-line-height"]
-"small normal sans lines use grid-fitted metrics" = "deferred:M5 positioned"
-"medium normal sans lines round metrics independently" = "deferred:M5 positioned"
+"small normal sans lines use grid-fitted metrics" = "pass"
+"medium normal sans lines round metrics independently" = "pass"
 "normal serif lines use serif face metrics" = "deferred:M5 positioned"
-"normal mono lines use mono face metrics" = "deferred:M5 positioned"
-"explicit fractional line height accumulates fractionally" = "deferred:M5 positioned"
-"explicit line height may be smaller than font size" = "deferred:M5 positioned"
+"normal mono lines use mono face metrics" = "pass"
+"explicit fractional line height accumulates fractionally" = "pass"
+"explicit line height may be smaller than font size" = "pass"
 
 ["font-shorthand"]
 "custom property font shorthand sets em geometry" = "pass"
 "later font shorthand replaces prior longhands" = "pass"
 
 ["forced-line-breaks"]
-"break-only inline context contributes one line" = "deferred:M5 positioned"
-"trailing consecutive breaks preserve empty line" = "deferred:M5 positioned"
-"break-only run counts every forced line" = "deferred:M5 positioned"
-"mixed inline and block content retains break lines" = "deferred:M5 positioned"
+"break-only inline context contributes one line" = "pass"
+"trailing consecutive breaks preserve empty line" = "pass"
+"break-only run counts every forced line" = "pass"
+"mixed inline and block content retains break lines" = "pass"
 "forced break flex item uses inherited line height" = "deferred:M5 positioned"
-"forced break honors tight explicit line height" = "deferred:M5 positioned"
+"forced break honors tight explicit line height" = "pass"
 
 ["form-control-geometry"]
 "standards form contributes only native control height" = "deferred:M6 forms"
 "text input size attribute sets intrinsic inline width" = "deferred:M6 forms"
-"standards author dimensions use content box" = "deferred:M6 forms"
+"standards author dimensions use content box" = "pass"
 "checkbox uses native intrinsic border box and margins" = "deferred:M6 forms"
 "range uses native intrinsic border box and margins" = "deferred:M6 forms"
-"hidden input consumes no flex geometry" = "deferred:M6 forms"
+"hidden input consumes no flex geometry" = "pass"
 "textarea intrinsic box comes from rows and cols" = "deferred:M6 forms"
 "rows attribute scales the textarea intrinsic height" = "deferred:M6 forms"
 
 ["form-control-quirks"]
 "quirks form keeps legacy one-em bottom margin" = "deferred:M6 forms"
-"quirks author dimensions use border box" = "deferred:M6 forms"
+"quirks author dimensions use border box" = "pass"
 
 ["grid-auto-repeat"]
 "auto-fill creates all fitting tracks" = "pass"
@@ -202,12 +202,12 @@
 "table stand-in does not blockify inline-block list" = "pass"
 
 ["inline-replaced-flow"]
-"default image stays in its inline formatting context" = "deferred:M2 images"
-"following inline content remains on the image line" = "deferred:M2 images"
-"authored block image still starts a block row" = "deferred:M2 images"
-"content after authored block image follows below" = "deferred:M2 images"
-"atomic inline run retains its line-height strut" = "deferred:M2 images"
-"mixed cell keeps block child full width and centered" = "deferred:M2 images"
+"default image stays in its inline formatting context" = "pass"
+"following inline content remains on the image line" = "pass"
+"authored block image still starts a block row" = "pass"
+"content after authored block image follows below" = "pass"
+"atomic inline run retains its line-height strut" = "pass"
+"mixed cell keeps block child full width and centered" = "pass"
 
 ["item-self-alignment"]
 "flex item centers itself on cross axis" = "pass"
@@ -261,14 +261,14 @@
 "trailing right float shares the band" = "deferred:M1.1 floats"
 
 ["modern-containing-block-triggers"]
-"filter containing block" = "deferred:M5 positioned"
-"perspective containing block" = "deferred:M5 positioned"
-"contain layout containing block" = "deferred:M5 positioned"
+"filter containing block" = "pass"
+"perspective containing block" = "pass"
+"contain layout containing block" = "pass"
 "container-type negative control" = "deferred:M5 positioned"
-"will-change containing block" = "deferred:M5 positioned"
+"will-change containing block" = "pass"
 "content-visibility containing block" = "deferred:M5 positioned"
-"filter fixed containing block" = "deferred:M5 positioned"
-"contain fixed containing block" = "deferred:M5 positioned"
+"filter fixed containing block" = "pass"
+"contain fixed containing block" = "pass"
 
 ["modern-hydration-contracts"]
 "modern hydration contracts" = "deferred:JS-on render path (no section 7 milestone; H1 --features v8 plus P2 streams/scroll)"
@@ -342,12 +342,12 @@
 "auto column absorbs definite-table surplus" = "deferred:M7 tables"
 "cellpadding zero overrides the UA cell padding" = "deferred:M7 tables"
 "cellpadding keeps adjacent tracks contiguous" = "deferred:M7 tables"
-"author cell padding wins over cellpadding" = "deferred:M7 tables"
+"author cell padding wins over cellpadding" = "pass"
 "collapsed table suppresses declared spacing" = "deferred:M7 tables"
 "collapsed tracks share an edge" = "deferred:M7 tables"
 "row-group default vertically centers cell content" = "deferred:M7 tables"
 "row vertical-align inherits into its cells" = "deferred:M7 tables"
-"cell vertical-align overrides the row default" = "deferred:M7 tables"
+"cell vertical-align overrides the row default" = "pass"
 "UA cell padding is one pixel on every edge" = "deferred:M7 tables"
 
 ["tables"]
@@ -358,10 +358,10 @@
 "inherited text alignment centers inline content" = "pass"
 
 ["transform-containing-block"]
-"absolute captured by transform" = "deferred:M5 positioned"
-"fixed captured by transform" = "deferred:M5 positioned"
-"unsupported identity transform still establishes containing block" = "deferred:M5 positioned"
-"positioned ancestor does not capture fixed" = "deferred:M5 positioned"
+"absolute captured by transform" = "pass"
+"fixed captured by transform" = "pass"
+"unsupported identity transform still establishes containing block" = "pass"
+"positioned ancestor does not capture fixed" = "pass"
 
 ["video-poster"]
 "poster intrinsic width and first stripe" = "deferred:M2 images"
@@ -375,5 +375,5 @@
 "page JavaScript sees the screenshot viewport" = "deferred:M3 captures"
 
 ["z-index"]
-"positive layer" = "deferred:M5 positioned"
-"negative layer" = "deferred:M5 positioned"
+"positive layer" = "pass"
+"negative layer" = "pass"

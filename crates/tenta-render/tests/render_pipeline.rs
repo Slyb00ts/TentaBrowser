@@ -509,7 +509,6 @@ fn full_page_keeps_viewport_units_unchanged() {
 }
 
 #[test]
-#[ignore = "M5: position:fixed layout"]
 fn full_page_paints_fixed_boxes_once_where_the_first_screen_has_them() {
     let html = "<!doctype html><body style='margin:0'><div style='height:1000px'></div>\
                 <div style='position:fixed;bottom:0;left:0;width:50px;height:20px;\
@@ -922,5 +921,293 @@ fn the_static_article_renders_with_its_style_sheet() {
     assert!(
         img.ink(PAPER, 740..760, 0..shot.height) > 20,
         "justified lines reach the right edge"
+    );
+}
+
+fn abs_box(style: &str, color: &str) -> String {
+    format!(
+        "<div style='position:absolute;width:20px;height:20px;background:{color};{style}'></div>"
+    )
+}
+
+#[test]
+fn an_absolute_box_escapes_an_overflow_clip_it_is_not_contained_by() {
+    // The clipper is not positioned, so the box's containing block is the
+    // initial one and the clip does not apply to it.
+    let html = format!(
+        "<!doctype html><body style='margin:0'>\
+         <div style='overflow:hidden;width:50px;height:50px'>{}</div>",
+        abs_box("left:100px;top:0", "#f00")
+    );
+    let (_, img) = page(&html, 200, 100).viewport();
+    assert_eq!(img.count(RED, 0..200, 0..100), 400);
+    assert_eq!(img.px(110, 10), RED);
+}
+
+#[test]
+fn an_absolute_box_is_clipped_by_a_positioned_overflow_clip() {
+    let html = format!(
+        "<!doctype html><body style='margin:0'>\
+         <div style='position:relative;overflow:hidden;width:50px;height:50px'>{}</div>",
+        abs_box("left:40px;top:0", "#f00")
+    );
+    let (_, img) = page(&html, 200, 100).viewport();
+    assert_eq!(img.count(RED, 0..200, 0..100), 10 * 20);
+    assert_eq!(img.px(45, 10), RED);
+    assert_eq!(img.px(55, 10), WHITE);
+}
+
+#[test]
+fn positioned_boxes_paint_in_tree_order_wherever_their_containing_block_is() {
+    // The absolute box is earlier in the tree than the relative sibling, but
+    // belongs to the outer positioned ancestor. Both have `z-index: auto`, so
+    // the later one paints on top.
+    let html = format!(
+        "<!doctype html><body style='margin:0'><div style='position:relative'>\
+         <div>{}</div>\
+         <div style='position:relative;width:20px;height:20px;background:#00f'></div></div>",
+        abs_box("left:0;top:0", "#f00")
+    );
+    let (_, img) = page(&html, 100, 100).viewport();
+    assert_eq!(img.px(5, 5), BLUE);
+    assert_eq!(img.count(RED, 0..100, 0..100), 0);
+}
+
+#[test]
+fn z_index_orders_absolute_boxes_before_tree_order() {
+    let html = format!(
+        "<!doctype html><body style='margin:0'>{}{}{}",
+        abs_box("left:0;top:0;z-index:2", "#f00"),
+        abs_box("left:10px;top:0;z-index:1", "#0f0"),
+        abs_box("left:5px;top:0;z-index:-1", "#00f")
+    );
+    let (_, img) = page(&html, 100, 100).viewport();
+    // Red (z=2) over green (z=1) over blue (z=-1), whatever the tree order.
+    assert_eq!(img.px(15, 5), RED);
+    assert_eq!(img.px(25, 5), GREEN);
+    assert_eq!(img.px(22, 5), GREEN);
+    assert_eq!(img.px(2, 5), RED);
+    assert_eq!(img.count(BLUE, 0..100, 0..100), 0, "fully covered");
+}
+
+#[test]
+fn a_negative_z_index_paints_above_the_context_background_but_below_flow_content() {
+    let html = "<!doctype html><body style='margin:0;background:#ff0'>\
+                <div style='position:absolute;left:0;top:0;width:40px;height:40px;z-index:-1;background:#f00'></div>\
+                <div style='width:20px;height:20px;background:#00f'></div>";
+    let (_, img) = page(html, 100, 100).viewport();
+    assert_eq!(img.px(30, 30), RED, "above the canvas");
+    assert_eq!(img.px(10, 10), BLUE, "below in-flow content");
+}
+
+#[test]
+fn fixed_boxes_and_scroll_extent_do_not_move_the_canvas() {
+    let html = "<!doctype html><body style='margin:0'>\
+                <div style='position:fixed;left:150px;top:10px;width:20px;height:20px;background:#f00'></div>";
+    let mut p = page(html, 100, 50);
+    let (shot, _) = p.shoot(with(Capture::FullPage));
+    assert_eq!(
+        (shot.width, shot.height),
+        (100, 50),
+        "fixed boxes add no scroll extent"
+    );
+}
+
+#[test]
+fn a_flex_item_with_z_index_is_a_stacking_context_without_being_positioned() {
+    // The second item overlaps the first through a negative margin. Without
+    // z-index it would paint over it; with `z-index: 1` the first item wins.
+    let html = "<!doctype html><body style='margin:0'><div style='display:flex'>\
+                <div style='width:40px;height:40px;background:#f00;z-index:1'></div>\
+                <div style='width:40px;height:40px;background:#00f;margin-left:-20px'></div></div>";
+    let (_, img) = page(html, 100, 100).viewport();
+    assert_eq!(img.px(30, 10), RED);
+    assert_eq!(img.px(50, 10), BLUE);
+}
+
+#[test]
+fn an_inline_block_with_z_index_and_no_position_is_not_a_stacking_context() {
+    let html = "<!doctype html><body style='margin:0'>\
+                <span style='display:inline-block;width:40px;height:40px;background:#f00;z-index:1'></span>\
+                <span style='display:inline-block;width:40px;height:40px;background:#00f;margin-left:-60px'></span>";
+    let (_, img) = page(html, 100, 100).viewport();
+    assert_eq!(
+        img.px(10, 10),
+        BLUE,
+        "z-index does not apply to a static box"
+    );
+}
+
+/// Whether `actual` is within `tolerance` of `expected` on every channel.
+fn near(actual: [u8; 4], expected: [u8; 3], tolerance: u8) -> bool {
+    actual[..3]
+        .iter()
+        .zip(expected)
+        .all(|(a, e)| a.abs_diff(e) <= tolerance)
+}
+
+const ABS_RED: &str = "position:absolute;left:100px;top:0;width:80px;height:80px;background:#f00";
+
+#[test]
+fn an_opacity_wrapper_between_the_containing_block_and_an_absolute_box_applies_to_it() {
+    // The wrapper is not the containing block, yet its opacity group holds the box.
+    let html = format!(
+        "<!doctype html><body style='margin:0'><div style='position:relative;width:200px;\
+         height:200px;background:#ccc'><div style='opacity:.5;width:100px;height:100px;\
+         background:#00f'><div style='{ABS_RED}'></div></div></div>"
+    );
+    let (_, img) = page(&html, 300, 250).viewport();
+    assert!(
+        near(img.px(140, 40), [230, 102, 102], 3),
+        "{:?}",
+        img.px(140, 40)
+    );
+    assert!(
+        near(img.px(50, 50), [102, 102, 230], 3),
+        "{:?}",
+        img.px(50, 50)
+    );
+}
+
+#[test]
+fn a_transparent_wrapper_hides_the_absolute_boxes_inside_it() {
+    let html = format!(
+        "<!doctype html><body style='margin:0'><div style='position:relative;width:200px;\
+         height:200px;background:#ccc'><div style='opacity:0;width:100px;height:100px'>\
+         <div style='{ABS_RED}'></div></div></div>"
+    );
+    let (_, img) = page(&html, 300, 250).viewport();
+    assert_eq!(
+        img.count(RED, 0..300, 0..250),
+        0,
+        "the hidden-tooltip pattern"
+    );
+    assert!(near(img.px(140, 40), [204, 204, 204], 1));
+}
+
+#[test]
+fn an_opacity_wrapper_applies_to_a_fixed_box_inside_it() {
+    let html = format!(
+        "<!doctype html><body style='margin:0'><div style='opacity:.5;width:100px;height:100px;\
+         background:#00f'><div style='{}'></div></div>",
+        ABS_RED.replace("absolute", "fixed")
+    );
+    let (_, img) = page(&html, 300, 250).viewport();
+    assert!(
+        near(img.px(140, 40), [255, 128, 128], 3),
+        "{:?}",
+        img.px(140, 40)
+    );
+    let html = html.replace("opacity:.5", "opacity:0");
+    let (_, img) = page(&html, 300, 250).viewport();
+    assert_eq!(img.count(RED, 0..300, 0..250), 0);
+}
+
+#[test]
+fn an_isolating_wrapper_keeps_the_z_index_of_a_box_inside_its_own_group() {
+    // The red box is z-index 10, but inside the isolated wrapper's group, which
+    // is a z-index auto layer: the sibling at z-index 5 covers it.
+    let html = "<!doctype html><body style='margin:0'><div style='position:relative;width:240px;\
+                height:240px;background:#ddd'><div style='isolation:isolate;width:100px;height:100px;\
+                background:#00f'><div style='position:absolute;z-index:10;left:60px;top:0;width:80px;\
+                height:80px;background:#f00'></div></div>\
+                <div style='position:absolute;z-index:5;left:100px;top:40px;width:80px;height:80px;\
+                background:#0f0'></div></div>";
+    let (_, img) = page(html, 300, 250).viewport();
+    assert_eq!(img.px(120, 60), GREEN, "the green box covers the overlap");
+    assert_eq!(img.px(80, 20), RED, "red outside the overlap");
+}
+
+#[test]
+fn an_opacity_group_holds_a_positive_z_index_box_inside_it() {
+    let html = "<!doctype html><body style='margin:0'><div style='position:relative;width:240px;\
+                height:240px;background:#fff'><div style='opacity:.99;width:100px;height:100px'>\
+                <div style='position:absolute;z-index:10;left:60px;top:0;width:80px;height:80px;\
+                background:#f00'></div></div>\
+                <div style='position:absolute;z-index:5;left:100px;top:40px;width:80px;height:80px;\
+                background:#0f0'></div></div>";
+    let (_, img) = page(html, 300, 250).viewport();
+    assert_eq!(img.px(120, 60), GREEN);
+}
+
+#[test]
+#[ignore = "ST1: filter and clip-path are not painted yet, for in-flow children either"]
+fn a_filter_wrapper_is_the_containing_block_and_its_effect_applies() {
+    let html = "<!doctype html><body style='margin:0'><div style='position:relative;width:300px;\
+                height:200px;background:#fff'><div style='filter:opacity(.5);margin-left:20px;\
+                width:100px;height:100px'><div style='position:absolute;left:0;top:0;width:40px;\
+                height:40px;background:#f00'></div></div></div>";
+    let (_, img) = page(html, 300, 250).viewport();
+    assert!(
+        near(img.px(30, 10), [255, 128, 128], 3),
+        "{:?}",
+        img.px(30, 10)
+    );
+}
+
+#[test]
+#[ignore = "ST1: filter and clip-path are not painted yet, for in-flow children either"]
+fn a_clip_path_wrapper_cuts_an_absolute_box_inside_it() {
+    let html = "<!doctype html><body style='margin:0'><div style='position:relative;width:240px;\
+                height:240px;background:#fff'><div style='clip-path:inset(0);width:50px;height:50px;\
+                background:#00f'><div style='position:absolute;left:30px;top:100px;width:80px;\
+                height:80px;background:#f00'></div></div></div>";
+    let (_, img) = page(html, 300, 250).viewport();
+    assert_eq!(img.count(RED, 0..300, 0..250), 0);
+}
+
+#[test]
+fn an_effect_wrapper_does_not_free_a_box_from_its_containing_blocks_clip() {
+    let html = "<!doctype html><body style='margin:0'><div style='position:relative;overflow:hidden;\
+                width:50px;height:50px'><div style='opacity:.5'><div style='position:absolute;left:40px;\
+                top:0;width:40px;height:20px;background:#f00'></div></div></div>";
+    let (_, img) = page(html, 200, 100).viewport();
+    assert_eq!(img.count(RED, 0..200, 0..100), 0);
+    assert!(near(img.px(45, 10), [255, 128, 128], 3));
+    assert_eq!(img.px(60, 10), WHITE);
+}
+
+#[test]
+fn an_absolutely_positioned_root_still_gives_its_background_to_the_canvas() {
+    let html = "<!doctype html><html style='position:absolute;background:#eee'><body style='margin:0'>\
+                <div style='width:10px;height:10px;background:#f00'></div>";
+    let (_, img) = page(html, 100, 100).viewport();
+    assert!(
+        near(img.px(80, 80), [238, 238, 238], 0),
+        "{:?}",
+        img.px(80, 80)
+    );
+}
+
+#[test]
+fn a_fixed_box_without_a_transformed_ancestor_is_cut_by_no_overflow_clip_but_the_viewports() {
+    let html = "<!doctype html><body style='margin:0'><div style='overflow:hidden;width:50px;\
+                height:50px'><div style='position:fixed;left:100px;top:0;width:40px;height:20px;\
+                background:#f00'></div><div style='position:fixed;left:180px;top:0;width:40px;\
+                height:20px;background:#00f'></div></div>";
+    let (_, img) = page(html, 200, 100).viewport();
+    assert_eq!(
+        img.count(RED, 0..200, 0..100),
+        40 * 20,
+        "escapes the wrapper's clip"
+    );
+    assert_eq!(
+        img.count(BLUE, 0..200, 0..100),
+        20 * 20,
+        "cut by the viewport only"
+    );
+}
+
+#[test]
+#[ignore = "known gap: a box escaping an overflow clip inside an effect group opened under that clip (see As-built M5)"]
+fn a_fixed_box_in_an_opacity_group_inside_an_overflow_clip_is_drawn_at_half() {
+    let html = "<!doctype html><body style='margin:0'><div style='overflow:hidden;width:50px;\
+                height:50px'><div style='opacity:.5'><div style='position:fixed;left:100px;top:0;\
+                width:40px;height:20px;background:#f00'></div></div></div>";
+    let (_, img) = page(html, 200, 100).viewport();
+    assert!(
+        near(img.px(110, 10), [255, 128, 128], 3),
+        "{:?}",
+        img.px(110, 10)
     );
 }

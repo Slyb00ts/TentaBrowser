@@ -1,6 +1,6 @@
 //! Line breaking and line-box construction.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -16,7 +16,9 @@ use super::whitespace::{self, Prepared};
 use super::{align, bidi};
 use crate::box_tree::{BoxId, BoxTree, InlineFormattingContext, LayoutCx};
 use crate::font::VerticalMetrics;
-use crate::fragment::{FragId, Fragment, FragmentBuilder, FragmentKind, TextFragment};
+use crate::fragment::{
+    FragId, Fragment, FragmentBuilder, FragmentKind, InlineStatic, TextFragment,
+};
 use crate::relative;
 use crate::space::{AvailableSize, ConstraintSpace, FloatContext, InlineResult};
 use crate::text::chunk::ShapedChunk;
@@ -272,6 +274,7 @@ enum Tok {
     Text(usize),
     Atomic(usize),
     Tab(usize),
+    Static(usize),
 }
 
 /// What the line is made of, left to right.
@@ -282,6 +285,7 @@ enum Vis {
     Text(Range<usize>),
     Atomic(usize),
     Tab(usize),
+    Static(usize),
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -328,6 +332,10 @@ struct Line {
     content: f32,
     /// Bounds of everything on the line, in the line's coordinates.
     extent: Rect,
+    /// Absolutely positioned boxes whose placeholders sit on the line, with
+    /// the inline offset of each from the line's left edge and whether content
+    /// precedes it on the line.
+    statics: Vec<(BoxId, f32, bool, bool)>,
 }
 
 /// The right edges, from the atom's left edge, of the separators of `text`
@@ -723,14 +731,29 @@ fn assemble(ctx: &Ctx, out: &mut FragmentBuilder, carry: &mut Vec<BoxId>, input:
         .iter()
         .rev()
         .take_while(|a| match a.kind {
-            AtomKind::Open { .. } | AtomKind::Close { .. } => true,
+            AtomKind::Open { .. } | AtomKind::Close { .. } | AtomKind::Static { .. } => true,
             AtomKind::Text(_) => a.hang > 0.0 && a.width - a.hang <= EPSILON,
             _ => false,
         })
         .count();
     let mut has_text = false;
     let mut needs_valign = carry.iter().any(|&b| !infos.get(b).baseline_aligned);
+    // Placeholders that follow content in logical order, whatever the order
+    // the line ends up displayed in.
+    let mut after_content: HashSet<usize> = HashSet::new();
+    let mut content_before = false;
     for index in input.range.clone() {
+        content_before |= match &atoms[index].kind {
+            AtomKind::Text(_) | AtomKind::Atomic(_) | AtomKind::Tab { .. } => true,
+            AtomKind::Open { .. } | AtomKind::Close { .. } => atoms[index].width > 0.0,
+            AtomKind::Static { .. } => {
+                if content_before {
+                    after_content.insert(index);
+                }
+                false
+            }
+            AtomKind::Forced => false,
+        };
         match &atoms[index].kind {
             AtomKind::Open { box_id, resumes } => {
                 frames.push(Frame {
@@ -789,6 +812,7 @@ fn assemble(ctx: &Ctx, out: &mut FragmentBuilder, carry: &mut Vec<BoxId>, input:
                 }
                 tokens.push(Tok::Tab(index));
             }
+            AtomKind::Static { .. } => tokens.push(Tok::Static(index)),
             AtomKind::Forced => {}
         }
     }
@@ -868,6 +892,7 @@ fn assemble(ctx: &Ctx, out: &mut FragmentBuilder, carry: &mut Vec<BoxId>, input:
             Tok::Close(f) => visual.push(Vis::Close(f)),
             Tok::Atomic(i) => visual.push(Vis::Atomic(i)),
             Tok::Tab(i) => visual.push(Vis::Tab(i)),
+            Tok::Static(i) => visual.push(Vis::Static(i)),
             Tok::Text(i) => match visual.last_mut() {
                 Some(Vis::Text(range))
                     if order.get(range.end - 1).map(|&p| owner_of(p)) == Some(owner_of(i)) =>
@@ -943,6 +968,7 @@ fn assemble(ctx: &Ctx, out: &mut FragmentBuilder, carry: &mut Vec<BoxId>, input:
             }
             Vis::Text(range) => leaf_width(range, 0.0),
             Vis::Atomic(i) | Vis::Tab(i) => width_of(*i),
+            Vis::Static(_) => 0.0,
         };
     }
 
@@ -990,6 +1016,7 @@ fn assemble(ctx: &Ctx, out: &mut FragmentBuilder, carry: &mut Vec<BoxId>, input:
     let mut members: Vec<(FragId, Member)> = Vec::new();
     let truncating = ctx.ellipsis.is_some() && content > input.avail - input.indent + EPSILON;
     let mut cuts: HashMap<FragId, Vec<Cut>> = HashMap::new();
+    let mut statics: Vec<(BoxId, f32, bool, bool)> = Vec::new();
     for v in &visual {
         match v {
             Vis::Open(f) => {
@@ -1039,6 +1066,7 @@ fn assemble(ctx: &Ctx, out: &mut FragmentBuilder, carry: &mut Vec<BoxId>, input:
                 fragment.padding = padding;
                 fragment.border = border;
                 fragment.margin = margin;
+                fragment.flags |= crate::positioned::containing_block_flags(&b.style);
                 let id = out.push(fragment);
                 if needs_valign {
                     members.push((
@@ -1127,6 +1155,28 @@ fn assemble(ctx: &Ctx, out: &mut FragmentBuilder, carry: &mut Vec<BoxId>, input:
                     cuts.insert(id, leaf_cuts(ctx, &leaf));
                 }
                 push_child(&mut open, &mut top, id);
+            }
+            Vis::Static(index) => {
+                if let AtomKind::Static { box_id } = &atoms[*index].kind {
+                    // The placeholder reads in the direction its bidi level gives,
+                    // which decides the edge the box is aligned by.
+                    let level_of = |a: &Atom| match &a.kind {
+                        AtomKind::Text(t) => Some(t.level),
+                        _ => None,
+                    };
+                    let before = atoms[input.range.start..*index]
+                        .iter()
+                        .rev()
+                        .find_map(level_of);
+                    let after = atoms[*index + 1..input.range.end].iter().find_map(level_of);
+                    let level = bidi::object_level(ctx.block.direction, before, after);
+                    statics.push((
+                        *box_id,
+                        cursor,
+                        after_content.contains(index),
+                        level & 1 == 1,
+                    ));
+                }
             }
             Vis::Tab(index) => {
                 let AtomKind::Tab { box_id, node, src } = &atoms[*index].kind else {
@@ -1227,6 +1277,7 @@ fn assemble(ctx: &Ctx, out: &mut FragmentBuilder, carry: &mut Vec<BoxId>, input:
         ascent,
         content: content + input.indent,
         extent: out.get(line_id).overflow,
+        statics,
     }
 }
 
@@ -1249,6 +1300,14 @@ fn atomic_extent(atomic: &atoms::AtomicAtom) -> (f32, f32) {
 }
 
 /// Breaks `ifc` into lines and builds their fragments.
+/// Whether the out-of-flow box was block-level before it was blockified, which
+/// puts its static position at the inline start of the line below the content
+/// before it.
+fn is_block_level(tree: &BoxTree, id: BoxId) -> bool {
+    use style::values::specified::box_::DisplayOutside;
+    tree.get(id).style.get_box().original_display.outside() != DisplayOutside::Inline
+}
+
 pub(super) fn build_lines(
     cx: &mut LayoutCx,
     tree: &BoxTree,
@@ -1324,9 +1383,30 @@ pub(super) fn build_lines(
         );
         let empty = carry.is_empty()
             && built.atoms[start..fit.end].iter().all(|a| {
-                matches!(a.kind, AtomKind::Open { .. } | AtomKind::Close { .. }) && a.width == 0.0
+                matches!(
+                    a.kind,
+                    AtomKind::Open { .. } | AtomKind::Close { .. } | AtomKind::Static { .. }
+                ) && a.width == 0.0
             });
         if empty {
+            // A line with nothing in it takes no room, but an absolutely
+            // positioned box in it still has its place.
+            for atom in &built.atoms[start..fit.end] {
+                if let AtomKind::Static { box_id } = atom.kind {
+                    let x = match block.direction {
+                        Direction::Ltr => band.left,
+                        Direction::Rtl => band.left + avail,
+                    };
+                    out.add_inline_static(InlineStatic {
+                        root: ifc.root,
+                        box_id,
+                        x,
+                        y,
+                        line: lines.len(),
+                        rtl: block.direction == Direction::Rtl,
+                    });
+                }
+            }
             start = fit.end;
             continue;
         }
@@ -1354,6 +1434,33 @@ pub(super) fn build_lines(
         };
         let line = assemble(&ctx, out, &mut carry, &input);
         lines.push(line.frag);
+        for &(box_id, x, after_content, rtl) in &line.statics {
+            // A block-level box sits at the inline start, below the content
+            // that precedes it on the line.
+            let block_level = is_block_level(tree, box_id);
+            let rtl = if block_level {
+                block.direction == Direction::Rtl
+            } else {
+                rtl
+            };
+            let (x, y) = if block_level {
+                let start = match block.direction {
+                    Direction::Ltr => band.left,
+                    Direction::Rtl => band.left + avail,
+                };
+                (start, if after_content { y + line.height } else { y })
+            } else {
+                (band.left + x, y)
+            };
+            out.add_inline_static(InlineStatic {
+                root: ifc.root,
+                box_id,
+                x,
+                y,
+                line: lines.len() - 1,
+                rtl,
+            });
+        }
         if first {
             result.first_baseline = Some(y + line.ascent);
         }

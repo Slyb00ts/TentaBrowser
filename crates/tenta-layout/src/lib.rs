@@ -24,6 +24,7 @@ mod grid;
 mod inline;
 mod layout;
 mod list;
+mod positioned;
 mod quirks;
 mod relative;
 mod space;

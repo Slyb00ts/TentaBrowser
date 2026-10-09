@@ -5,9 +5,10 @@ use taffy::{AvailableSpace, LayoutInput, Line, RequestedAxis, RunMode, Size, Siz
 
 use crate::block::{child_overflow, fragment_flags, relative_shift};
 use crate::block_sizes;
-use crate::box_tree::{BoxId, BoxKind, BoxTree, LayoutCx};
+use crate::box_tree::{BoxFlags, BoxId, BoxKind, BoxTree, InlineItem, LayoutCx};
 use crate::constraint;
 use crate::fragment::{Fragment, FragmentBuilder, FragmentKind};
+use crate::positioned;
 use crate::space::{AvailableSize, BlockResult, ConstraintSpace, MarginStrut};
 use crate::taffy_tree::TreeView;
 use crate::types::Rect;
@@ -92,8 +93,31 @@ pub(crate) fn layout_container(
     fragment.margin = m.margin;
     fragment.flags = fragment_flags(cx, tree, id);
     fragment.overflow = child_overflow(out, &kids, border_box);
+    let content_box = Rect::new(
+        m.border.left + m.padding.left,
+        m.border.top + m.padding.top,
+        (border_box.w - m.border.horizontal() - m.padding.horizontal()).max(0.0),
+        (border_box.h - m.border.vertical() - m.padding.vertical()).max(0.0),
+    );
+    let at = kids.len();
     fragment.children = kids;
     let frag = out.push(fragment);
+    // A container with no in-flow child holds its out-of-flow boxes as the
+    // placeholders of an inline formatting context.
+    let placeholders = b
+        .ifc
+        .iter()
+        .flat_map(|ifc| &ifc.items)
+        .filter_map(|item| match item {
+            InlineItem::AbsPos { box_id } => Some(box_id),
+            _ => None,
+        });
+    for &child in b.children.iter().chain(placeholders) {
+        if tree.get(child).flags.contains(BoxFlags::ABSPOS) {
+            let candidate = positioned::container_candidate(tree, id, child, content_box, at);
+            out.add_candidate(frag, candidate);
+        }
+    }
 
     let mut margin_before = MarginStrut::default();
     margin_before.append(m.margin.top);

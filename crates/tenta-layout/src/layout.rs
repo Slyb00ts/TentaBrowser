@@ -4,6 +4,7 @@ use crate::block::layout_block;
 use crate::box_tree::{BoxTree, LayoutCx};
 use crate::constraint::own_direction;
 use crate::fragment::{FragFlags, FragId, FragmentBuilder, FragmentKind, FragmentTree};
+use crate::positioned;
 use crate::space::{AvailableSize, ConstraintSpace};
 use crate::types::Rect;
 
@@ -30,6 +31,8 @@ pub fn layout(cx: &mut LayoutCx, tree: &BoxTree) -> FragmentTree {
     let root_fragment = out.get_mut(root);
     root_fragment.rect.y += result.margin_before.collapsed();
     root_fragment.flags |= FragFlags::STACKING_CONTEXT;
+    positioned::place_all(cx, tree, &mut out, root, (width, height));
+    let root_fragment = out.get_mut(root);
     let extent = root_fragment
         .overflow
         .translated(root_fragment.rect.x, root_fragment.rect.y);

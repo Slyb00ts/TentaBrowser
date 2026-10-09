@@ -370,6 +370,129 @@ pub(crate) fn resolve_box(
     }
 }
 
+/// What an absolutely positioned box asks for along both axes, resolved against
+/// its containing block (CSS Positioned Layout 3, 5.2 and CSS 2.1 10.3.7).
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub(crate) struct AbsInputs {
+    pub(crate) border: Edges,
+    pub(crate) padding: Edges,
+    /// Specified margins; `None` is `auto`.
+    pub(crate) margin_left: Option<f32>,
+    pub(crate) margin_right: Option<f32>,
+    pub(crate) margin_top: Option<f32>,
+    pub(crate) margin_bottom: Option<f32>,
+    /// Content-box width from `width` (or the replaced size); `None` is `auto`.
+    pub(crate) width: Option<f32>,
+    /// `min-width` and `max-width` as content-box widths.
+    pub(crate) min_width: f32,
+    pub(crate) max_width: f32,
+    /// Content-box height from `height` (or the replaced size); `None` when
+    /// the used height comes from the content (`height: auto` and friends).
+    pub(crate) height: Option<f32>,
+    /// `aspect-ratio` of a non-replaced box, width over height.
+    pub(crate) aspect_ratio: Option<f32>,
+    /// `box-sizing: border-box`.
+    pub(crate) border_box_sizing: bool,
+}
+
+/// Resolves the box model inputs of the absolutely positioned box `id` whose
+/// containing block has the padding box `(cb_width, cb_height)`.
+pub(crate) fn abspos_inputs(
+    cx: &mut LayoutCx,
+    tree: &BoxTree,
+    id: BoxId,
+    (cb_width, cb_height): (f32, f32),
+) -> AbsInputs {
+    let b = tree.get(id);
+    let style = &*b.style;
+    let padding_style = style.get_padding();
+    let padding_of = |lp: &LengthPercentage| {
+        length_percentage(lp, Some(cb_width))
+            .unwrap_or(0.0)
+            .max(0.0)
+    };
+    let padding = Edges {
+        top: padding_of(&padding_style.padding_top.0),
+        right: padding_of(&padding_style.padding_right.0),
+        bottom: padding_of(&padding_style.padding_bottom.0),
+        left: padding_of(&padding_style.padding_left.0),
+    };
+    let border = b.paint.border.widths;
+    let margin_style = style.get_margin();
+    let margin = |m: &Margin| margin_value(m, cb_width);
+    let (margin_left, margin_right) = (
+        margin(&margin_style.margin_left),
+        margin(&margin_style.margin_right),
+    );
+    let (margin_top, margin_bottom) = (
+        margin(&margin_style.margin_top),
+        margin(&margin_style.margin_bottom),
+    );
+    let horizontal_edges = padding.horizontal() + border.horizontal();
+    let vertical_edges = padding.vertical() + border.vertical();
+    let pos = style.get_position();
+    let border_box_sizing = matches!(pos.box_sizing, BoxSizing::BorderBox);
+
+    let mut width = extent_of_size(&pos.width, Some(cb_width));
+    let mut height = extent_of_size(&pos.height, Some(cb_height));
+    if let BoxKind::Replaced(kind) = b.kind {
+        let limits = replaced_limits(
+            style,
+            (Some(cb_width), Some(cb_height)),
+            border_box_sizing,
+            (horizontal_edges, vertical_edges),
+        );
+        let (w, h) = replaced_size(
+            cx,
+            b.node,
+            kind,
+            (width, height),
+            border_box_sizing,
+            (horizontal_edges, vertical_edges),
+            &limits,
+        );
+        width = Extent::Content(w);
+        height = Extent::Content(h);
+    }
+    let fit_limit =
+        (cb_width - horizontal_edges - margin_left.unwrap_or(0.0) - margin_right.unwrap_or(0.0))
+            .max(0.0);
+    let mut sizes = InlineSizes {
+        tree,
+        id,
+        border_box_sizing,
+        edges: horizontal_edges,
+        fit_limit,
+        intrinsic: None,
+    };
+    let specified = sizes.content_size(cx, width);
+    let min_width = sizes
+        .content_size(cx, extent_of_size(&pos.min_width, Some(cb_width)))
+        .unwrap_or(0.0);
+    let max_width = sizes
+        .content_size(cx, extent_of_max(&pos.max_width, Some(cb_width)))
+        .unwrap_or(f32::INFINITY);
+    AbsInputs {
+        border,
+        padding,
+        margin_left,
+        margin_right,
+        margin_top,
+        margin_bottom,
+        width: specified,
+        min_width,
+        max_width,
+        height: match height {
+            Extent::Length(v) => Some(to_content_box(v, border_box_sizing, vertical_edges)),
+            Extent::Content(v) => Some(v),
+            _ => None,
+        },
+        aspect_ratio: crate::style_taffy::preferred_aspect_ratio(style)
+            .filter(|ratio| *ratio > 0.0 && !matches!(b.kind, BoxKind::Replaced(_))),
+        border_box_sizing,
+    }
+}
+
 /// Turns requested inline extents into content-box widths, asking for the box's
 /// intrinsic sizes at most once.
 struct InlineSizes<'a> {

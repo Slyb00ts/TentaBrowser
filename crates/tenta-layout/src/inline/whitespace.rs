@@ -156,8 +156,18 @@ pub(super) struct SpanRec {
 /// An inline box edge that sits between pieces of text.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub(super) enum Event {
-    Open { box_id: BoxId, resumes: bool },
-    Close { box_id: BoxId, interrupted: bool },
+    Open {
+        box_id: BoxId,
+        resumes: bool,
+    },
+    Close {
+        box_id: BoxId,
+        interrupted: bool,
+    },
+    /// The place of an absolutely positioned box in the flow of text.
+    Static {
+        box_id: BoxId,
+    },
 }
 
 /// Processed text shaped as one paragraph.
@@ -254,7 +264,8 @@ pub(super) fn prepare(doc: &Document, infos: &Infos, ifc: &InlineFormattingConte
                 b.end_chunk();
                 b.out.entries.push(Entry::Soft);
             }
-            InlineItem::Float { .. } | InlineItem::AbsPos { .. } => {}
+            InlineItem::AbsPos { box_id } => b.event(Event::Static { box_id: *box_id }),
+            InlineItem::Float { .. } => {}
         }
     }
     b.trim_trailing(&mut Seg::default());

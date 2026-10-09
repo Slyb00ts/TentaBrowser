@@ -15,7 +15,7 @@ use crate::fragment::{FragFlags, FragId, Fragment, FragmentBuilder, FragmentKind
 use crate::inline::layout_inline;
 use crate::space::{AvailableSize, BlockResult, ConstraintSpace, MarginStrut, NoFloats};
 use crate::types::{Edges, OverflowKind, PositionKind, Rect};
-use crate::{block_sizes, container, list, quirks, relative};
+use crate::{block_sizes, container, list, positioned, quirks, relative};
 
 /// Lays out the block box `id` within `space`, pushing its fragment (and its
 /// descendants') into `out`.
@@ -24,8 +24,10 @@ use crate::{block_sizes, container, list, quirks, relative};
 /// the box's offset from the containing block's content-box left edge (its
 /// used left margin) and `rect.y` is only the `position: relative` offset; the
 /// caller adds the in-flow position and the containing block's content origin.
-/// Out-of-flow children are skipped until the float and positioned-layout
-/// algorithms exist.
+/// Floats are skipped until float layout exists. Absolutely positioned children
+/// get no fragment here: their static position is recorded on this box's
+/// fragment and [`positioned::place_all`] lays them out against their
+/// containing block once the whole tree is known.
 pub fn layout_block(
     cx: &mut LayoutCx,
     tree: &BoxTree,
@@ -86,9 +88,21 @@ pub fn layout_block(
     let has_marker = marker.is_some();
 
     let mut has_lines = false;
+    let mut statics: SmallVec<[positioned::Candidate; 2]> = SmallVec::new();
     if !replaced {
         for &child in &b.children {
-            if tree.get(child).flags.contains(BoxFlags::OUT_OF_FLOW) {
+            let flags = tree.get(child).flags;
+            if flags.contains(BoxFlags::OUT_OF_FLOW) {
+                if flags.contains(BoxFlags::ABSPOS) && b.ifc.is_none() {
+                    statics.push(positioned::flow_candidate(
+                        child,
+                        (content_origin.left, content_origin.top),
+                        flow.cursor + flow.pending.collapsed(),
+                        m.content_width,
+                        direction,
+                        kids.len(),
+                    ));
+                }
                 continue;
             }
             let mut space_for_child = child_space;
@@ -123,7 +137,20 @@ pub fn layout_block(
                 f.rect.x += content_origin.left;
                 f.rect.y += content_origin.top;
             }
+            let first_line = kids.len();
             kids.extend(inline.lines.iter().copied());
+            let marks = out.take_inline_statics(id);
+            if !marks.is_empty() {
+                let containing = positioned::inline_containing_blocks(tree, ifc);
+                for mark in marks {
+                    statics.push(positioned::inline_candidate(
+                        &mark,
+                        (content_origin.left, content_origin.top),
+                        first_line + mark.line + 1,
+                        containing.get(&mark.box_id).copied(),
+                    ));
+                }
+            }
             overflow = overflow.union(
                 &inline
                     .overflow
@@ -223,6 +250,10 @@ pub fn layout_block(
     fragment.overflow = child_overflow(out, &kids, overflow.union(&border_box));
     fragment.children = kids;
     let frag = out.push(fragment);
+    for mut candidate in statics {
+        candidate.at += usize::from(has_marker);
+        out.add_candidate(frag, candidate);
+    }
 
     BlockResult {
         frag,
@@ -286,7 +317,12 @@ pub(crate) fn fragment_flags(cx: &LayoutCx, tree: &BoxTree, id: BoxId) -> FragFl
     if tree.is_paint_atomic(id) && !tree.is_flex_grid_item(id) {
         flags |= FragFlags::PAINT_ATOMIC;
     }
-    flags
+    // `z-index` applies to flex and grid items although they are not
+    // positioned, and then makes them stacking contexts.
+    if b.paint.z_index.is_some() && tree.is_flex_grid_item(id) {
+        flags |= FragFlags::STACKING_CONTEXT;
+    }
+    flags | crate::positioned::containing_block_flags(&b.style)
 }
 
 /// CSS Overflow 3 section 3.3: when the root's overflow is `visible`, the

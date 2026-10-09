@@ -19,6 +19,8 @@
 //! outline comes last. This follows Blink's outline phases rather than the
 //! single end-of-context step of CSS 2.1.
 
+use std::collections::HashMap;
+
 use tenta_layout::{
     BlendMode, FragFlags, FragId, Fragment, FragmentKind, FragmentTree, PositionKind, Rect,
 };
@@ -156,6 +158,9 @@ struct Painter<'a, S> {
     barrier: usize,
     /// The fragment whose background went to the canvas instead.
     propagated: Option<FragId>,
+    /// The clip a containing block's content sits under, kept for the
+    /// absolutely positioned boxes it contains.
+    content_clips: HashMap<FragId, ClipRef>,
 }
 
 /// Paints the whole tree in Appendix E order.
@@ -173,6 +178,7 @@ pub(super) fn paint_with<S: Seams>(frags: &FragmentTree, cx: &PaintContext, seam
         open: Vec::new(),
         barrier: 0,
         propagated: None,
+        content_clips: HashMap::new(),
     };
     let root = frags.get(frags.root);
     let root_box = root.rect;
@@ -224,9 +230,24 @@ impl<'a, S: Seams> Painter<'a, S> {
     /// is then not painted again by its element.
     fn paint_canvas(&mut self, root_box: Rect) {
         let frags = self.frags;
-        let root = frags.get(frags.root);
+        // A root element taken out of flow (`position: absolute`) hangs below a
+        // synthetic root box; the element is what the canvas takes from.
+        let synthetic = frags.get(frags.root);
+        let (root_id, root_box) = if !synthetic.node.is_some() {
+            synthetic
+                .children
+                .iter()
+                .copied()
+                .find(|&child| frags.get(child).node.is_some())
+                .map_or((frags.root, root_box), |element| {
+                    (element, frags.absolute_border_box(element))
+                })
+        } else {
+            (frags.root, root_box)
+        };
+        let root = frags.get(root_id);
         let source = if background::paints(&root.paint) {
-            Some(frags.root)
+            Some(root_id)
         } else {
             root.children.iter().copied().find(|&child| {
                 let frag = frags.get(child);
@@ -277,10 +298,13 @@ impl<'a, S: Seams> Painter<'a, S> {
             .zip(&chain)
             .take_while(|((open, _), want)| open == *want)
             .count();
-        debug_assert!(
-            common >= self.barrier,
-            "a clip opened outside an effect group must be an ancestor of every clip inside it"
-        );
+        if common < self.barrier {
+            // The box wants a clip chain that leaves clips open outside the
+            // effect group it is painted in; a display list nests them, so the
+            // group's outer clips stay (a known gap for an escaping box).
+            self.close_clips_to(self.barrier);
+            return;
+        }
         self.close_clips_to(common);
         for &index in &chain[common..] {
             let node = self.clips[index as usize];
@@ -305,6 +329,14 @@ impl<'a, S: Seams> Painter<'a, S> {
                 frag.rect.w,
                 frag.rect.h,
             );
+            // An absolutely positioned box hangs below the fragment where it sits
+            // in the tree, so it joins that fragment's stacking context and
+            // effect groups, but only its containing block's overflow clips cut
+            // it.
+            let clip = frags
+                .containing_block_of(child)
+                .and_then(|block| self.content_clips.get(&block).copied())
+                .unwrap_or(clip);
             let float = frag.flags.contains(FragFlags::FLOAT);
             let atomic = frag.flags.contains(FragFlags::PAINT_ATOMIC);
             let blockified = float
@@ -331,6 +363,12 @@ impl<'a, S: Seams> Painter<'a, S> {
                 continue;
             }
             let inner = self.clip_node(child, border_box, clip);
+            if frag
+                .flags
+                .intersects(FragFlags::ABSPOS_CB | FragFlags::FIXED_CB)
+            {
+                self.content_clips.insert(child, inner);
+            }
             let positioned = frag.paint.position != PositionKind::Static;
             if atomic || float || positioned {
                 let slot = positioned.then(|| {
@@ -454,6 +492,10 @@ impl<'a, S: Seams> Painter<'a, S> {
     fn paint_context_content(&mut self, placed: Placed) {
         self.paint_self(placed);
         let own = self.clip_node(placed.id, placed.border_box, placed.clip);
+        let block_flags = FragFlags::ABSPOS_CB | FragFlags::FIXED_CB;
+        if placed.id == self.frags.root || self.frags.get(placed.id).flags.intersects(block_flags) {
+            self.content_clips.insert(placed.id, own);
+        }
         let mut hoisted = Hoisted::default();
         let mut flow = Flow::default();
         self.collect(placed, own, &mut hoisted, &mut flow);

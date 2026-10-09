@@ -8,7 +8,7 @@ use crate::types::Direction;
 
 /// An inset in CSS pixels, or `None` for `auto` (and for anchor functions,
 /// which have no meaning without anchor positioning).
-fn resolve(inset: &Inset, basis: Option<f32>) -> Option<f32> {
+pub(crate) fn resolve(inset: &Inset, basis: Option<f32>) -> Option<f32> {
     match inset {
         Inset::LengthPercentage(lp) if lp.has_percentage() => {
             basis.map(|b| lp.resolve(Length::new(b)).px())

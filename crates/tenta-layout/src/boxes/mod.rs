@@ -25,9 +25,9 @@ impl BoxTree {
     /// document's mutation generation.
     ///
     /// Elements whose style is `display: none` and their descendants generate
-    /// no box. Flex, grid and table containers are recognised by kind but
-    /// their children are built as for a block container, so they lay out as
-    /// blocks until their own algorithms exist.
+    /// no box. Flex, grid and table containers are recognised by kind and
+    /// their children are built as for a block container; flex and grid lay
+    /// out through Taffy, tables as blocks until their own algorithm exists.
     pub fn build(cx: &LayoutCx) -> BoxTree {
         Builder::new(cx).run()
     }
