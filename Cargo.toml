@@ -71,6 +71,23 @@ v8 = { package = "tenta-v8", path = "crates/tenta-v8", version = "=152.2.0" }
 rquickjs = { package = "tenta-quickjs-core", path = "crates/tenta-quickjs-core", version = "=0.12.2" }
 precomputed-hash = "0.1"
 unicode-normalization = "0.1"
+# Render stack (docs/dev/p3-plan.md §2). The Linebender text set and skrifa are
+# version-locked: parley 0.11 uses skrifa 0.44, so skrifa stays at 0.44.
+parley = { version = "0.11", default-features = false, features = ["libm"] }
+skrifa = "=0.44.0"
+taffy = { version = "0.14", default-features = false, features = ["std", "flexbox", "grid", "calc", "content_size"] }
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
+png = "0.18"
+zune-jpeg = "=0.5.15"
+jpeg-encoder = "0.7"
+gif = "0.14"
+image-webp = "0.2"
+resvg = { version = "0.48", default-features = false, features = ["text", "raster-images"] }
+usvg = { version = "0.48", default-features = false, features = ["text"] }
+fontdb = { version = "0.24", default-features = false, features = ["std"] }
+bytemuck = "1"
+bitflags = "2"
+atomic_refcell = "0.1"
 
 [profile.release]
 # Native boundaries are wrapped in catch_unwind (docs/spec/02-architecture.md §8); unwinding must stay on.

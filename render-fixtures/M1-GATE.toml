@@ -1,0 +1,208 @@
+# M1 corpus gate: FROZEN. Written by package GATE (critic), read-only for X1.
+#
+# This file may only be changed by a critic, with a written reason in the
+# commit message. Layout authors and the X1 author must not edit it. A check
+# that fails in the engine is fixed in the engine, never removed from here.
+#
+# Scope of M1 (docs/dev/p3-plan.md section 6): block and inline layout with
+# parley text, backgrounds, borders, UA stylesheet, <style>/<link>/style="",
+# inline-block, list items, position: relative, logical-property mapping,
+# direction: rtl on blocks. No floats, flex, grid, table, absolute/fixed
+# positioning, images, ::first-line, ::first-letter. Note that L1 routes
+# flex/grid/table to block layout until M4/M7; a check whose sampled box has a
+# flex/grid/table ancestor or sibling that decides its position is therefore
+# NOT admitted even if it would pass by accident.
+#
+# A check is identified by (fixture, name) with `name` copied verbatim from
+# render-fixtures/<fixture>/color-checks.json. Admission rule: the sampled
+# element and every ancestor and preceding sibling that determines its
+# geometry use only block / inline / inline-block / list-item / relative
+# layout; checks without x/y (size only) are judged on the same basis.
+#
+# Count: 23 checks from the 7 pure fixtures + 12 individually admitted checks
+# from mixed fixtures = 35 gate checks.
+
+# ---------------------------------------------------------------------------
+# (a) The 7 pure fixtures: every colour check (23)
+# ---------------------------------------------------------------------------
+
+[background-shorthand-reset]
+checks = [
+  { name = "reset shorthand exposes the underlay through padding", reason = "nested blocks; `background: 0` resets the earlier background longhands so the orange underlay ring shows through padding" },
+  { name = "content remains inside the transparent padding", reason = "`#reset{padding:50px;box-sizing:border-box}` block; 200x100 child at (50,50)" },
+]
+deferred = []
+
+[block-auto-margins]
+checks = [
+  { name = "two auto margins center a fixed-width block", reason = "`width:300px;margin-left/right:auto` in a 900px block; `.row{overflow:hidden}` only needs BFC (L2a), not clipping" },
+  { name = "two auto margins center a max-width block", reason = "`width:70%;max-width:500px` auto margins: 630 capped to 500, x=200" },
+  { name = "start auto margin absorbs free space", reason = "`margin-left:auto;margin-right:50px;width:200px` gives x=650" },
+  { name = "end auto margin absorbs free space", reason = "`margin-left:50px;margin-right:auto` gives x=50" },
+  { name = "auto width leaves auto margins at zero", reason = "`width:auto` with auto margins fills 900px" },
+]
+deferred = []
+
+[cascade-priority]
+checks = [
+  { name = "important winners", reason = "six `.case{height:36px;margin:8px}` blocks; pure cascade (!important, specificity, inline style, custom property); needs count=6 distinct #008000 components, text inside bars cannot split the exact-colour component" },
+]
+deferred = []
+
+[contextual-css-math]
+checks = [
+  { name = "min width uses actual viewport", reason = "`width:min(25vw,350px)` = 225 in a block row" },
+  { name = "min margin uses actual viewport", reason = "`margin-left:min(25vw,350px)` block" },
+  { name = "clamp width uses actual viewport", reason = "`width:clamp(200px,30vw,320px)` = 270" },
+  { name = "calc combines viewport and root font units", reason = "`margin-left:calc(10vw + 2rem)` = 122" },
+  { name = "max padding uses actual viewport", reason = "`padding-left:max(5vw,60px)` on a border-box block, child at x=60" },
+  { name = "round quantizes nested custom property math", reason = "`width:calc(round(var(--media-width)*1,10px))` = 250; borderline: depends on the pinned Stylo parsing `round()`, a cascade concern inside M1 (C2a), not layout" },
+]
+deferred = []
+
+[font-shorthand]
+checks = [
+  { name = "custom property font shorthand sets em geometry", reason = "`font:var(--hero-font)` 40px, `width:5em;height:2em` blocks; only font-size reaches layout" },
+  { name = "later font shorthand replaces prior longhands", reason = "`font:20px/30px sans-serif` resets weight/style/line-height; `10em x 2em` block at y=80" },
+]
+deferred = []
+
+[relative-box-edges]
+checks = [
+  { name = "vh margin resolves against viewport height", reason = "`margin-top:15vh` = 150 inside a BFC row (`overflow:hidden`)" },
+  { name = "vw margin resolves against viewport width", reason = "`margin-left:10vw` = 90" },
+  { name = "em padding resolves against element font size", reason = "`padding-left:2em` at font-size 20px on a border-box block, inner at x=40" },
+  { name = "rem padding resolves against root font size", reason = "`padding-left:2rem`, root 18px, inner at x=36" },
+  { name = "vmin margin resolves against smaller viewport axis", reason = "`margin-left:10vmin` = 90 (900x1000 viewport)" },
+  { name = "vmax margin resolves against larger viewport axis", reason = "`margin-left:10vmax` = 100" },
+]
+deferred = []
+
+[supports-var-feature-query]
+checks = [
+  { name = "variable feature query enables implemented grid support", reason = "single block `#probe`; `@supports (grid: var(--tw))` is a cascade decision, no grid layout is performed" },
+]
+deferred = []
+
+# ---------------------------------------------------------------------------
+# (b) Individually admitted checks from mixed fixtures (12)
+# ---------------------------------------------------------------------------
+
+[box-sizing]
+checks = [
+  { name = "content-box percent", reason = "`.parent{display:block;width:400px}` > `.half{width:50%;height:50px;padding:10px;border:5px}` content-box: padding box 220x70; stacked blocks, no flex ancestor" },
+  { name = "border-box percent", reason = "same parent, `.border` border-box: 50% = 200 outer, padding box 190x40; blocks only" },
+  { name = "inherited reset border-box", reason = "`.reset` is a plain block with `box-sizing:inherit` chain from html: 190x60 padding box" },
+]
+deferred = [
+  { name = "content-box fixed", milestone = "M4 flex", reason = "box is a flex item of `.row{display:flex;gap:20px}`; M1 would pass it only by block-stacking accident" },
+  { name = "border-box fixed", milestone = "M4 flex", reason = "box is a flex item of `.row{display:flex;gap:20px}`" },
+]
+
+[list-indentation]
+checks = [
+  { name = "default list keeps UA indentation", reason = "`.host` block > `ul` (UA padding-left 40) > `li{height:20px}` list-item; outside marker does not alter the background rect" },
+  { name = "unordered list reset removes indentation", reason = "`ul{padding:0;list-style:none}` inside a block host" },
+  { name = "ordered list reset removes indentation", reason = "`ol{padding:0;list-style:none}` inside a block host" },
+]
+deferred = [
+  { name = "ex padding follows font x height", milestone = "M4 flex", reason = "sampled box is a child of `#font-relative{display:flex}`" },
+]
+
+[block-whitespace-margin-collapse]
+checks = [
+  { name = "first block keeps its declared geometry", reason = "`.first` is the first block child of body at (0,0) 900x20; nothing before it, and the grid sibling follows it so cannot move it; borderline but the sampled region is independent of the grid" },
+]
+deferred = [
+  { name = "formatting whitespace does not interrupt sibling margin collapse", milestone = "M4 grid", reason = "sampled box is `.second{display:grid}`; its collapse behaviour as a grid container is the point of the check" },
+]
+
+[legacy-center]
+checks = [
+  { name = "auto width block remains fill available", reason = "`.auto-block` width:auto in a block host, 400x20 at y=60; preceding siblings are an inline-block line (font-size 0) and fixed-height blocks. Does not rely on `-webkit-center`; the later table does not affect it" },
+  { name = "author text alignment overrides the UA rule", reason = "`#override{text-align:left}` with one inline-block: x=0, y=120; inline-block baseline placement is L3b" },
+  { name = "pure text center remains fill available", reason = "`#pure-center` is a block `center` of height 20 in the third host at y=240; positions come from two fixed-height hosts" },
+]
+deferred = [
+  { name = "legacy center aligns inline content", milestone = "M1b", reason = "needs `<center>` UA `text-align:-webkit-center`; L3a's text-align list (left/right/center/justify/start/end) does not include it. Promote to the gate by critic decision if L3a/C2b adopt -webkit-center" },
+  { name = "legacy center preserves block stacking", milestone = "M1b", reason = "a 100px block centred inside `<center>` is the `-webkit-center` block alignment rule, not plain text-align" },
+  { name = "legacy alignment is inherited by nested content", milestone = "M1b", reason = "inherits `-webkit-center` into a block and centres a nested inline-block; same unscheduled legacy keyword" },
+  { name = "centered table resets legacy alignment internally", milestone = "M7 tables", reason = "inline-block inside a `td` of `<table>` in `<center>`" },
+  { name = "center in table cell fills the cell", milestone = "M7 tables", reason = "`<center>` inside a table cell" },
+]
+
+[direction-rtl]
+checks = [
+  { name = "inherited RTL resolves block under-constraint from right", reason = "`.block > div{width:50px}` in `body{direction:rtl}`: x=850. The two preceding siblings are `display:flex/grid` boxes but with declared `height:40px;margin-bottom:20px`, so y=120 does not depend on their inner layout; borderline, admitted because L1 lays them out as plain blocks of that height" },
+]
+deferred = [
+  { name = "inherited RTL places first flex item at inline start", milestone = "M4 flex", reason = "flex item of `.case.flex`" },
+  { name = "inherited RTL reverses the flex row", milestone = "M4 flex", reason = "flex item of `.case.flex`" },
+  { name = "inherited RTL places first grid track at inline start", milestone = "M4 grid", reason = "grid item with `grid-template-columns`" },
+  { name = "inherited RTL reverses explicit grid track placement", milestone = "M4 grid", reason = "grid item with `grid-template-columns`" },
+]
+
+[mixed-content-block]
+checks = [
+  { name = "full-width block child", reason = "size-only check (no x/y) of `<div style=background:#cdf>` inside `.box{width:400px}` mixed inline/block content: anonymous box fixup plus fill-available width. The later `position:relative`/`absolute` sibling follows it and cannot affect it" },
+]
+deferred = []
+
+# Fixtures with a candidate listing whose checks are all deferred.
+
+[logical-borders]
+checks = []
+deferred = [
+  { name = "RTL inline-start shorthand maps to physical right", milestone = "M4 flex", reason = "`body{display:flex}` makes every box a flex item; position and width come from the flex algorithm" },
+  { name = "block-end shorthand maps to physical bottom", milestone = "M4 flex", reason = "box is a flex item of `body{display:flex}`" },
+  { name = "later logical alias wins over physical right", milestone = "M4 flex", reason = "second flex item, x=408 comes from flex gap" },
+  { name = "later physical right wins over logical alias", milestone = "M4 flex", reason = "third flex item, x=636 comes from flex gap" },
+  { name = "inline pair start width maps to left", milestone = "M4 flex", reason = "fourth flex item, x=660 comes from flex gap" },
+  { name = "inline pair end width maps to right", milestone = "M4 flex", reason = "fourth flex item, x=851 comes from flex gap" },
+]
+
+[font-metric-line-height]
+checks = []
+deferred = [
+  { name = "small normal sans lines use grid-fitted metrics", milestone = "M5 positioned", reason = "`.column{position:absolute}`; x and containing block come from absolute positioning" },
+  { name = "medium normal sans lines round metrics independently", milestone = "M5 positioned", reason = "`.column{position:absolute;left:150px}`" },
+  { name = "normal serif lines use serif face metrics", milestone = "M5 positioned", reason = "`.column{position:absolute;left:300px}`" },
+  { name = "normal mono lines use mono face metrics", milestone = "M5 positioned", reason = "`.column{position:absolute;left:450px}`" },
+  { name = "explicit fractional line height accumulates fractionally", milestone = "M5 positioned", reason = "`.column{position:absolute;left:600px}`" },
+  { name = "explicit line height may be smaller than font size", milestone = "M5 positioned", reason = "`.column{position:absolute;left:750px}`" },
+]
+
+[forced-line-breaks]
+checks = []
+deferred = [
+  { name = "break-only inline context contributes one line", milestone = "M5 positioned", reason = "`.column{position:absolute}`" },
+  { name = "trailing consecutive breaks preserve empty line", milestone = "M5 positioned", reason = "`.column{position:absolute;left:150px}`" },
+  { name = "break-only run counts every forced line", milestone = "M5 positioned", reason = "`.column{position:absolute;left:300px}`" },
+  { name = "mixed inline and block content retains break lines", milestone = "M5 positioned", reason = "`.column{position:absolute;left:450px}`" },
+  { name = "forced break flex item uses inherited line height", milestone = "M5 positioned", reason = "absolute column that is also a flex container (M4 flex)" },
+  { name = "forced break honors tight explicit line height", milestone = "M5 positioned", reason = "`.column{position:absolute;left:750px}`" },
+]
+
+[display-contents-cascade]
+checks = []
+deferred = [
+  { name = "display contents overrides hidden responsive wrapper", milestone = "M4 flex", reason = "items are children of `nav{display:flex}` through a `display:contents` wrapper; borderline (item sits at 0,0 under block fallback too) but the parent is a flex container" },
+  { name = "flattened sibling remains in parent flex flow", milestone = "M4 flex", reason = "x=200 requires a flex row" },
+]
+
+# ---------------------------------------------------------------------------
+# Every other fixture: deferred as a whole (no check enters the M1 gate).
+# X1 seeds EXPECTED.toml `deferred:<milestone>` for all their checks.
+# ---------------------------------------------------------------------------
+
+[deferred_fixtures]
+list = [
+  { milestone = "M1.1 floats", fixtures = ["bootstrap-float-clearfix", "clear-float", "float-bfc-continuation", "float-flow-bands", "mixed-float-run", "nested-float-clearance", "opposing-header-floats", "right-float-navigation"], reason = "floats and clearance" },
+  { milestone = "M4 flex and grid", fixtures = ["contextual-grid-gap", "flex-flow", "flex-whitespace-items", "grid-auto-repeat", "grid-shorthand", "inline-block-flex-items", "item-self-alignment", "percentage-height-indefinite-parent", "text-align-flex-items"], reason = "flex or grid containers decide the sampled geometry" },
+  { milestone = "M5 positioned", fixtures = ["abs-fill", "absolute-containing-block", "absolute-static-position", "animation-fill-forwards", "box-shadow-outset", "carousel-clip", "flex-post-ratio-cross-size", "modern-containing-block-triggers", "transform-containing-block", "z-index"], reason = "absolute/fixed positioning, transforms, clipping, stacking, animation timeline" },
+  { milestone = "M2 images", fixtures = ["img-density-and-alt", "inline-replaced-flow", "max-height-replaced", "media-text-track", "ratio-only-inline-images", "replaced-block-wrapper", "replaced-grid-order", "video-poster"], reason = "image or media replaced elements" },
+  { milestone = "M6 forms", fixtures = ["form-control-geometry", "form-control-quirks"], reason = "form control intrinsic sizes" },
+  { milestone = "M7 tables", fixtures = ["fixed-table-layout", "table-row-geometry", "table-track-geometry", "tables"], reason = "table layout" },
+  { milestone = "M3 captures", fixtures = ["long-full-page-capture", "pdf-print-media", "viewport-consistency"], reason = "full-page and PDF capture semantics; viewport-consistency also uses absolute positioning" },
+  { milestone = "JS-on render path (no section 7 milestone; H1 --features v8 plus P2 streams/scroll)", fixtures = ["eventtarget-lifecycle", "modern-hydration-contracts", "modern-streams"], reason = "colour result is produced by script, not by layout; eventtarget-lifecycle is layout-pure but needs the JS-on screenshot path" },
+]

@@ -8,8 +8,17 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = ["embedded-fonts"]
+# Compiles the bundled Liberation and DejaVu fonts into the crate (D-028). Without
+# it the crate carries no font data and a caller must supply its own.
+embedded-fonts = []
+
 [dependencies]
 tenta-core = { workspace = true }
 tenta-dom = { workspace = true }
 tenta-css = { workspace = true }
 tenta-js = { workspace = true }
+parley = { workspace = true }
+skrifa = { workspace = true }
+taffy = { workspace = true }

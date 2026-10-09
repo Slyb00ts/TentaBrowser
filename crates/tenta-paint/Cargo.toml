@@ -11,3 +11,13 @@ publish = false
 [dependencies]
 tenta-core = { workspace = true }
 tenta-layout = { workspace = true }
+fontdb = { workspace = true }
+gif = { workspace = true }
+image-webp = { workspace = true }
+jpeg-encoder = { workspace = true }
+png = { workspace = true }
+resvg = { workspace = true }
+skrifa = { workspace = true }
+tiny-skia = { workspace = true }
+usvg = { workspace = true }
+zune-jpeg = { workspace = true }

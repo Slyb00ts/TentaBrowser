@@ -29,6 +29,8 @@ allow = [
     "OFL-1.1",
     "CC0-1.0",
     "OpenSSL",
+    # jpeg-encoder's IJG terms: a BSD-style attribution licence (p3-plan §2).
+    "IJG",
 ]
 # The Mozilla CA bundle ships under CDLA-Permissive-2.0; the licence covers the
 # certificate data, not code, and applies only to the root store crate.

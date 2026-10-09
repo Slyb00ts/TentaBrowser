@@ -10,7 +10,7 @@ publish = false
 
 [features]
 # The feature set of `docs/spec/11-library-api.md` §1. The flags that still
-# name no dependency are no-ops: the crates behind them (render, media, WebRTC,
+# name no dependency are no-ops: the crates behind them (gpu, media, WebRTC,
 # the protocol hosts, HTTP/3 and the TLS variants) land in P2 and later, and
 # each will gate its dependency here when it does. They exist now so hosts can
 # pin the feature names they will build with.
@@ -19,7 +19,8 @@ default = []
 # engine reports JavaScript as unsupported rather than pretending to run it.
 v8 = ["tenta-browser/v8"]
 quickjs = ["tenta-browser/quickjs"]
-render = []
+# Screenshots and geometry through tenta-render; opt-in (D-030).
+render = ["tenta-browser/render", "tenta-page/render"]
 gpu = []
 media = []
 webrtc = []

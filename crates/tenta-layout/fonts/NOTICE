@@ -1,0 +1,19 @@
+Bundled font software for tenta-layout (feature `embedded-fonts`, D-028).
+The font files are unmodified upstream TTFs.
+
+The attribution below is the "Bundled fonts" section of `about.hbs`, which
+`cargo xtask notices` renders into `THIRD_PARTY_NOTICES.md`. Edit it there, not
+here, and keep this file in step with it.
+
+Liberation Fonts 2.1.5 (LiberationSans, LiberationSerif, LiberationMono;
+Regular and Bold faces)
+  Digitized data copyright (c) 2010 Google Corporation with Reserved Font
+  Arimo, Tinos and Cousine.
+  Copyright (c) 2012 Red Hat, Inc. with Reserved Font Name Liberation.
+  License: SIL Open Font License 1.1, full text in LICENSE-Liberation.txt.
+
+DejaVu Sans 2.37 (DejaVuSans.ttf)
+  Fonts are (c) Bitstream (Bitstream Vera Fonts Copyright, 2003); DejaVu
+  changes are in the public domain; glyphs imported from Arev fonts are
+  (c) Tavmjong Bah.
+  License: Bitstream Vera and DejaVu licence, full text in LICENSE-DejaVu.txt.

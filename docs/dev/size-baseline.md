@@ -223,3 +223,48 @@ Asset names follow `librusty_v8_[ptrcomp_]{release,debug}_<target>.a.gz`
    has no Linux/Windows toolchain for the native builds, and for Linux and
    Android the result is already known from the dependency graph (finding 1).
    iOS and Android builds of the ladder are CI work (nightly, `12` §7).
+
+## Fonts bundle (A0, D-028)
+
+Measured 2026-10-09 on the A0 tree. Byte counts are the file sizes of
+`crates/tenta-layout/fonts/`, and the threshold is the 3 MiB rule of
+`docs/dev/p3-plan.md` §2 (3,145,728 bytes).
+
+| Set | Files | Bytes | MiB |
+|-----|-------|-------|-----|
+| Full set: Liberation Sans, Serif and Mono in Regular, Bold, Italic and BoldItalic, plus DejaVu Sans | 13 | 5,116,240 | 4.88 |
+| Dropped: the six Italic and BoldItalic faces | 6 | 2,142,820 | 2.04 |
+| Shipped: the six Liberation Regular and Bold faces plus DejaVu Sans | 7 | 2,973,420 | 2.84 |
+
+The full set exceeds 3 MiB, so the Italic and BoldItalic faces are not shipped and
+italic text uses synthetic oblique (D-028 and the plan's rule). The shipped set is
+under the threshold. Against the `21` §4 fonts budget (<= 6 MiB ⓣ, which includes
+the Noto CJK subset and COLRv1 emoji not yet bundled), 2.84 MiB leaves about
+3.16 MiB for those two.
+
+Library level, `cargo build --release -p tenta-layout --locked` against
+`--no-default-features` (`rustc 1.98.0`, `aarch64-apple-darwin`; the rlib is
+the `libtenta_layout.rlib` file size):
+
+| Build | rlib size |
+|-------|-----------|
+| `tenta-layout`, default (`embedded-fonts`) | 5,968,960 B (5.69 MiB) |
+| `tenta-layout`, `--no-default-features` | 14,600 B |
+
+The rlib carries the font bytes because `EMBEDDED_FONTS` is a `pub static`,
+which every library build emits.
+
+Binary level, `cargo build --release -p tentabrowser-cli --features render --locked`
+(the release profile keeps debug line tables and does not strip, so this is not
+comparable with the stripped ladder above):
+
+| Build | Size | Shipped font bytes found in the binary |
+|-------|------|----------------------------------------|
+| `tentabrowser` CLI, `render`, default `embedded-fonts` | 17,971,008 B (17.14 MiB) | 0 of 7 (a 64-byte slice of each file, checked by byte search) |
+
+The embedded-fonts delta in the binary is therefore 0 B at A0. Nothing in the
+binary references `EMBEDDED_FONTS` outside the tests, and the linker drops
+unreferenced data, so the bytes in the rlib do not reach the CLI. The "without
+`embedded-fonts`" CLI arm cannot be built: `tenta-render` depends on
+`tenta-layout` with its default features, and no feature path turns them off.
+Re-measure when T1a makes the fonts reachable from the binary.

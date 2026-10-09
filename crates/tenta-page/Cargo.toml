@@ -8,12 +8,18 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# Screenshots and geometry through tenta-render. Opt-in so the default build keeps
+# the Tier 1 graph (D-030).
+render = ["dep:tenta-render"]
+
 [dependencies]
 tenta-core = { workspace = true }
 tenta-net = { workspace = true }
 tenta-html = { workspace = true }
 tenta-dom = { workspace = true }
 tenta-js = { workspace = true }
+tenta-render = { workspace = true, optional = true }
 
 bytes = { workspace = true }
 hashbrown = { workspace = true }

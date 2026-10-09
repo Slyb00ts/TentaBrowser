@@ -23,6 +23,15 @@ const FORBIDDEN: &[&str] = &[
     "quickjs",
     "rquickjs",
     "servo-fontconfig",
+    "tenta-render",
+    "tenta-layout",
+    "tenta-paint",
+    "parley",
+    "taffy",
+    "resvg",
+    "usvg",
+    "tiny-skia",
+    "skrifa",
 ];
 
 #[test]

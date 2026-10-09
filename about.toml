@@ -15,6 +15,8 @@ accepted = [
     "OFL-1.1",
     "CC0-1.0",
     "OpenSSL",
+    # jpeg-encoder's IJG terms (docs/dev/p3-plan.md §2); mirrors deny.toml.
+    "IJG",
 ]
 
 # Private workspace packages are omitted from the generated crate inventory.

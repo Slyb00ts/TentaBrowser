@@ -16,6 +16,8 @@ v8 = ["dep:tenta-js-v8", "wpt-driver"]
 quickjs = ["dep:tenta-js-qjs", "wpt-driver"]
 # Shared target gate: Cargo's required-features cannot express V8 OR QuickJS.
 wpt-driver = []
+# Forwards to tenta-page: screenshots and geometry, opt-in (D-030).
+render = ["tenta-page/render"]
 
 [dependencies]
 tenta-core = { workspace = true }
