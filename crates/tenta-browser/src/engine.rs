@@ -222,6 +222,7 @@ impl EngineBuilder {
                 pool: Mutex::new(pool),
                 contexts: Mutex::new(Vec::new()),
                 next_context: AtomicU64::new(1),
+                next_page: AtomicU64::new(1),
                 closed: AtomicBool::new(false),
                 extensions: Extensions::default(),
                 options,
@@ -236,6 +237,11 @@ pub(crate) struct EngineInner {
     pub(crate) options: EngineOptions,
     contexts: Mutex<Vec<std::sync::Weak<ContextInner>>>,
     next_context: AtomicU64,
+    /// Page ids are unique across the engine's contexts, not per context: a
+    /// page thread serves pages of every context, and the state it keeps
+    /// thread-locally is keyed by the id, so two contexts counting from 1
+    /// would hand one thread two pages with the same key.
+    pub(crate) next_page: AtomicU64,
     closed: AtomicBool,
     extensions: Extensions,
 }

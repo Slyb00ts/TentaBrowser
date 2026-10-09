@@ -122,7 +122,6 @@ pub(crate) struct ContextInner {
     observers: Arc<ObserverHub>,
     budgets: Budgets,
     extra_headers: Vec<(String, String)>,
-    next_page: AtomicU64,
     next_group: AtomicU64,
     groups: Mutex<Vec<GroupRecord>>,
     closed: AtomicBool,
@@ -220,7 +219,6 @@ impl ContextInner {
                 observers,
                 budgets,
                 extra_headers,
-                next_page: AtomicU64::new(1),
                 next_group: AtomicU64::new(1),
                 groups: Mutex::new(Vec::new()),
                 closed: AtomicBool::new(false),
@@ -447,7 +445,7 @@ impl BrowserContext {
         // whether its page got one, which `group_threads` reports.
         let has_engine = engine.is_some();
         let thread = self.inner.engine.pool.lock().assign();
-        let id = PageId(self.inner.next_page.fetch_add(1, Ordering::Relaxed));
+        let id = PageId(self.inner.engine.next_page.fetch_add(1, Ordering::Relaxed));
         let page = Page::new(PageConfig {
             id,
             context: self.inner.id,

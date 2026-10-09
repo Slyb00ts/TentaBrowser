@@ -1060,11 +1060,12 @@ pub(crate) fn take_runtime_for(page: PageId, document: &SharedDocument) -> Optio
 ///
 /// Called at every script pause: the first one builds the engine, and the rest
 /// find it already bound to the same tree. A runtime bound to a *different*
-/// tree can only mean the parse restarted after an engine was built, which the
-/// parser forbids — it makes the encoding certain as soon as it hands a script
-/// out, so a restart can only happen before the first script. If it happens
-/// anyway the engine is rebuilt, because the tree it holds is no longer the one
-/// being parsed.
+/// tree means the parse restarted after an engine was built, which the parser
+/// forbids — it makes the encoding certain as soon as it hands a script out, so
+/// a restart can only happen before the first script — or that two pages share
+/// an id on this thread, which the browser layer rules out by numbering pages
+/// engine-wide. If it happens anyway the engine is rebuilt, because the tree it
+/// holds is no longer the one being parsed.
 pub(crate) fn ensure_runtime(
     page: PageId,
     document: SharedDocument,
