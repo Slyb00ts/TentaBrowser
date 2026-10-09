@@ -119,9 +119,13 @@ mod tests {
 
     #[test]
     fn paint_errors_convert_and_chain() {
-        let err: RenderError = PaintError::Unsupported("Image").into();
+        let err: RenderError = PaintError::InvalidSize {
+            width: 0,
+            height: 0,
+        }
+        .into();
         assert!(err.source().is_some());
-        assert!(err.to_string().contains("unsupported display item"));
+        assert!(err.to_string().contains("cannot rasterise a 0x0 image"));
         assert!(RenderError::NoRoot.source().is_none());
     }
 

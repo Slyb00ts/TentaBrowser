@@ -19,7 +19,7 @@ pub use build::{PaintContext, build};
 pub use dl::{DisplayList, Item, Radii};
 pub use encode::{PngProfile, encode_jpeg, encode_png};
 pub use image::{DecodedImage, ImageId, ImageQuality, ImageStore};
-pub use raster::{Pixmap, RasterOptions, rasterize};
+pub use raster::{Pixmap, RasterOptions, RasterOutput, RasterStats, rasterize};
 pub use tenta_layout::types::{
     Affine, BackgroundContent, BackgroundLayer, BackgroundSize, BlendMode, BorderPaint,
     BorderStyle, BoxArea, Color, ColorStop, DecorationPaint, Edges, FilterOp, FontBlob, FontRef,
@@ -31,8 +31,6 @@ pub use tenta_layout::types::{
 /// Why rasterisation failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaintError {
-    /// A display-list item the rasteriser does not implement.
-    Unsupported(&'static str),
     /// The requested output size is zero or too large to allocate.
     InvalidSize {
         /// Requested width in device pixels.
@@ -45,7 +43,6 @@ pub enum PaintError {
 impl fmt::Display for PaintError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PaintError::Unsupported(kind) => write!(f, "unsupported display item: {kind}"),
             PaintError::InvalidSize { width, height } => {
                 write!(f, "cannot rasterise a {width}x{height} image")
             }
@@ -61,10 +58,6 @@ mod tests {
 
     #[test]
     fn errors_describe_themselves() {
-        assert_eq!(
-            PaintError::Unsupported("Image").to_string(),
-            "unsupported display item: Image"
-        );
         assert_eq!(
             PaintError::InvalidSize {
                 width: 0,
