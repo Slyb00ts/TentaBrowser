@@ -17,8 +17,14 @@ embedded-fonts = []
 [dependencies]
 tenta-core = { workspace = true }
 tenta-dom = { workspace = true }
-tenta-css = { workspace = true }
+# Layout reads Stylo's ComputedValues directly; the whole render graph is
+# already opt-in through the `render` feature above this crate (D-030).
+tenta-css = { workspace = true, features = ["stylo"] }
 tenta-js = { workspace = true }
+style = { workspace = true }
+servo_arc = { workspace = true }
+smallvec = { workspace = true }
+bitflags = { workspace = true }
 parley = { workspace = true }
 skrifa = { workspace = true }
 taffy = { workspace = true }

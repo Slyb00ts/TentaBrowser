@@ -64,6 +64,9 @@ style = { package = "stylo", version = "=0.21.0" }
 style_traits = { package = "stylo_traits", version = "=0.21.0" }
 servo_arc = "0.4.3"
 stylo_static_prefs = "=0.21.0"
+# Stylo's own geometry and element-state crates, named by the cascade adapter.
+stylo_dom = "=0.21.0"
+euclid = "0.22"
 # V8 (rusty_v8), pinned to the release the snapshot and ICU data pack target
 # (docs/spec/05-javascript.md §1). Requires its matched, reviewed native artifact.
 v8 = { package = "tenta-v8", path = "crates/tenta-v8", version = "=152.2.0" }

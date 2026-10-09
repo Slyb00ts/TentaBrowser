@@ -3395,8 +3395,12 @@ dependencies = [
 name = "tenta-layout"
 version = "0.0.1"
 dependencies = [
+ "bitflags",
  "parley",
+ "servo_arc",
  "skrifa",
+ "smallvec",
+ "stylo",
  "taffy",
  "tenta-core",
  "tenta-css",
