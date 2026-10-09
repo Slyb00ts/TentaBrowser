@@ -1,0 +1,379 @@
+# Ratchet of the render corpus: one status per colour check.
+#
+# pass            the test fails if this check stops passing
+# fail            known failing, not yet scheduled
+# deferred:<M>    belongs to milestone <M> (see M1-GATE.toml)
+# informational   reported only
+#
+# Checks that start passing are listed by the test; moving them to `pass`
+# is a deliberate edit. M1-GATE.toml is frozen and never edited here.
+
+["abs-fill"]
+"blue fill" = "deferred:M5 positioned"
+"teal fill" = "deferred:M5 positioned"
+"purple fill" = "deferred:M5 positioned"
+
+["absolute-containing-block"]
+"nearest positioned ancestor" = "deferred:M5 positioned"
+"end insets use padding box" = "deferred:M5 positioned"
+"percent insets use padding box" = "deferred:M5 positioned"
+"fixed viewport containing block" = "deferred:M5 positioned"
+
+["absolute-static-position"]
+"absolute top uses real containing block and keeps static inline position" = "deferred:M5 positioned"
+"absolute left uses real containing block and keeps static block position" = "deferred:M5 positioned"
+"outer static candidate is reparented after coordinate harvest" = "deferred:M5 positioned"
+"nested static candidate survives outer reparenting" = "deferred:M5 positioned"
+
+["animation-fill-forwards"]
+"finite forwards animation exposes final hidden state" = "deferred:M5 positioned"
+
+["background-shorthand-reset"]
+"reset shorthand exposes the underlay through padding" = "pass"
+"content remains inside the transparent padding" = "pass"
+
+["block-auto-margins"]
+"two auto margins center a fixed-width block" = "pass"
+"two auto margins center a max-width block" = "pass"
+"start auto margin absorbs free space" = "pass"
+"end auto margin absorbs free space" = "pass"
+"auto width leaves auto margins at zero" = "pass"
+
+["block-whitespace-margin-collapse"]
+"first block keeps its declared geometry" = "pass"
+"formatting whitespace does not interrupt sibling margin collapse" = "deferred:M4 grid"
+
+["bootstrap-float-clearfix"]
+"percentage float keeps the block containing width" = "deferred:M1.1 floats"
+"viewport-height float continues below its child" = "deferred:M1.1 floats"
+"clearfix keeps centered float content in the first band" = "deferred:M1.1 floats"
+
+["box-sizing"]
+"content-box fixed" = "deferred:M4 flex"
+"border-box fixed" = "deferred:M4 flex"
+"content-box percent" = "pass"
+"border-box percent" = "pass"
+"inherited reset border-box" = "pass"
+
+["carousel-clip"]
+"visible translated slide" = "deferred:M5 positioned"
+"visible control slide" = "deferred:M5 positioned"
+
+["cascade-priority"]
+"important winners" = "pass"
+
+["clear-float"]
+"float" = "deferred:M1.1 floats"
+"cleared block" = "deferred:M1.1 floats"
+
+["contextual-css-math"]
+"min width uses actual viewport" = "pass"
+"min margin uses actual viewport" = "pass"
+"clamp width uses actual viewport" = "pass"
+"calc combines viewport and root font units" = "pass"
+"max padding uses actual viewport" = "pass"
+"round quantizes nested custom property math" = "pass"
+
+["contextual-grid-gap"]
+"first cell starts at the grid origin" = "deferred:M4 flex and grid"
+"functional column gap uses root and viewport context" = "deferred:M4 flex and grid"
+"rem row gap uses the computed root font size" = "deferred:M4 flex and grid"
+"both contextual gaps place the final cell" = "deferred:M4 flex and grid"
+
+["direction-rtl"]
+"inherited RTL places first flex item at inline start" = "deferred:M4 flex"
+"inherited RTL reverses the flex row" = "deferred:M4 flex"
+"inherited RTL places first grid track at inline start" = "deferred:M4 grid"
+"inherited RTL reverses explicit grid track placement" = "deferred:M4 grid"
+"inherited RTL resolves block under-constraint from right" = "pass"
+
+["display-contents-cascade"]
+"display contents overrides hidden responsive wrapper" = "deferred:M4 flex"
+"flattened sibling remains in parent flex flow" = "deferred:M4 flex"
+
+["eventtarget-lifecycle"]
+"framework lifecycle EventTarget completes" = "deferred:JS-on render path (no section 7 milestone; H1 --features v8 plus P2 streams/scroll)"
+
+["fixed-table-layout"]
+"first-row length fixes collapsed first track" = "deferred:M7 tables"
+"unresolved collapsed track receives remainder" = "deferred:M7 tables"
+"later content cannot resize fixed first track" = "deferred:M7 tables"
+"later collapsed row preserves shared tracks" = "deferred:M7 tables"
+"separate model charges outer spacing before first track" = "deferred:M7 tables"
+"separate model removes border and all spacing from track space" = "deferred:M7 tables"
+"later separate row cannot resize first track" = "deferred:M7 tables"
+"later separate row preserves remaining track" = "deferred:M7 tables"
+"content-box table keeps spacing inside declared width" = "deferred:M7 tables"
+"content-box remaining track excludes borders and spacing" = "deferred:M7 tables"
+
+["flex-flow"]
+"direction-first shorthand starts a column" = "deferred:M4 flex and grid"
+"direction-first shorthand keeps column flow" = "deferred:M4 flex and grid"
+"wrap-first shorthand starts a column" = "deferred:M4 flex and grid"
+"wrap-first shorthand keeps column flow" = "deferred:M4 flex and grid"
+"direction-only shorthand resets nowrap" = "deferred:M4 flex and grid"
+"reset nowrap keeps the second item on the row" = "deferred:M4 flex and grid"
+"wrap-only shorthand resets row direction" = "deferred:M4 flex and grid"
+"reset row direction wraps the second item" = "deferred:M4 flex and grid"
+"invalid later shorthand retains the column" = "deferred:M4 flex and grid"
+"invalid shorthand does not partially mutate" = "deferred:M4 flex and grid"
+"CSS supports accepts only the shorthand grammar" = "deferred:M4 flex and grid"
+
+["flex-post-ratio-cross-size"]
+"absolute visual survives the ratio-sized overflow clip" = "deferred:M5 positioned"
+"final flex width sizes the media cross axis" = "deferred:M5 positioned"
+"sibling receives the other flexible share" = "deferred:M5 positioned"
+"following content starts after ratio height and column gap" = "deferred:M5 positioned"
+
+["flex-whitespace-items"]
+"direct flex sidebar starts at container edge" = "deferred:M4 flex and grid"
+"direct flex body keeps its intended inset" = "deferred:M4 flex and grid"
+"display contents flex sidebar starts at container edge" = "deferred:M4 flex and grid"
+"display contents flex body keeps its intended inset" = "deferred:M4 flex and grid"
+
+["float-bfc-continuation"]
+"float keeps its BFC band across wrappers" = "deferred:M1.1 floats"
+"direct flow uses the first available band" = "deferred:M1.1 floats"
+"later wrapper heading remains beside float" = "deferred:M1.1 floats"
+"later wrapper block remains beside float" = "deferred:M1.1 floats"
+"band widens after float bottom" = "deferred:M1.1 floats"
+
+["float-flow-bands"]
+"right float occupies its band" = "deferred:M1.1 floats"
+"float-avoiding intro uses available band" = "deferred:M1.1 floats"
+"heading remains beside float" = "deferred:M1.1 floats"
+"first inline atomic box shares one line" = "deferred:M1.1 floats"
+"second inline atomic box shares one line" = "deferred:M1.1 floats"
+"hidden duplicate consumes no flow height" = "deferred:M1.1 floats"
+"later block remains in float band" = "deferred:M1.1 floats"
+"clear moves below float bottom" = "deferred:M1.1 floats"
+
+["font-metric-line-height"]
+"small normal sans lines use grid-fitted metrics" = "deferred:M5 positioned"
+"medium normal sans lines round metrics independently" = "deferred:M5 positioned"
+"normal serif lines use serif face metrics" = "deferred:M5 positioned"
+"normal mono lines use mono face metrics" = "deferred:M5 positioned"
+"explicit fractional line height accumulates fractionally" = "deferred:M5 positioned"
+"explicit line height may be smaller than font size" = "deferred:M5 positioned"
+
+["font-shorthand"]
+"custom property font shorthand sets em geometry" = "pass"
+"later font shorthand replaces prior longhands" = "pass"
+
+["forced-line-breaks"]
+"break-only inline context contributes one line" = "deferred:M5 positioned"
+"trailing consecutive breaks preserve empty line" = "deferred:M5 positioned"
+"break-only run counts every forced line" = "deferred:M5 positioned"
+"mixed inline and block content retains break lines" = "deferred:M5 positioned"
+"forced break flex item uses inherited line height" = "deferred:M5 positioned"
+"forced break honors tight explicit line height" = "deferred:M5 positioned"
+
+["form-control-geometry"]
+"standards form contributes only native control height" = "deferred:M6 forms"
+"text input size attribute sets intrinsic inline width" = "deferred:M6 forms"
+"standards author dimensions use content box" = "deferred:M6 forms"
+"checkbox uses native intrinsic border box and margins" = "deferred:M6 forms"
+"range uses native intrinsic border box and margins" = "deferred:M6 forms"
+"hidden input consumes no flex geometry" = "deferred:M6 forms"
+"textarea intrinsic box comes from rows and cols" = "deferred:M6 forms"
+"rows attribute scales the textarea intrinsic height" = "deferred:M6 forms"
+
+["form-control-quirks"]
+"quirks form keeps legacy one-em bottom margin" = "deferred:M6 forms"
+"quirks author dimensions use border box" = "deferred:M6 forms"
+
+["grid-auto-repeat"]
+"auto-fill creates all fitting tracks" = "deferred:M4 flex and grid"
+"auto-fit collapses empty tracks" = "deferred:M4 flex and grid"
+
+["grid-shorthand"]
+"grid shorthand creates explicit columns" = "deferred:M4 flex and grid"
+"custom property grid shorthand creates explicit columns" = "deferred:M4 flex and grid"
+
+["img-density-and-alt"]
+"raw intrinsic image keeps its 648 CSS pixel width" = "deferred:M2 images"
+"2x density descriptor halves the intrinsic CSS width" = "deferred:M2 images"
+"width descriptor and sizes establish a 300 pixel source size" = "deferred:M2 images"
+"overflow viewport retains its fixed border geometry" = "deferred:M2 images"
+
+["inline-block-flex-items"]
+"inline block title keeps its max content width" = "deferred:M4 flex and grid"
+"inline block list shrink wraps and stacks children" = "deferred:M4 flex and grid"
+"table stand-in does not blockify inline-block list" = "deferred:M4 flex and grid"
+
+["inline-replaced-flow"]
+"default image stays in its inline formatting context" = "deferred:M2 images"
+"following inline content remains on the image line" = "deferred:M2 images"
+"authored block image still starts a block row" = "deferred:M2 images"
+"content after authored block image follows below" = "deferred:M2 images"
+"atomic inline run retains its line-height strut" = "deferred:M2 images"
+"mixed cell keeps block child full width and centered" = "deferred:M2 images"
+
+["item-self-alignment"]
+"flex item centers itself on cross axis" = "deferred:M4 flex and grid"
+"flex item aligns itself to cross end" = "deferred:M4 flex and grid"
+"grid item aligns center and inline end" = "deferred:M4 flex and grid"
+"grid item aligns block end and inline center" = "deferred:M4 flex and grid"
+"place self sets both grid axes" = "deferred:M4 flex and grid"
+"place items aligns first grid child" = "deferred:M4 flex and grid"
+"place items aligns second grid child" = "deferred:M4 flex and grid"
+"align content distributes flex lines" = "deferred:M4 flex and grid"
+"align content reaches cross end" = "deferred:M4 flex and grid"
+"place content aligns first grid track" = "deferred:M4 flex and grid"
+"place content aligns second grid track" = "deferred:M4 flex and grid"
+
+["legacy-center"]
+"legacy center aligns inline content" = "deferred:M1b"
+"legacy center preserves block stacking" = "deferred:M1b"
+"legacy alignment is inherited by nested content" = "deferred:M1b"
+"auto width block remains fill available" = "pass"
+"centered table resets legacy alignment internally" = "deferred:M7 tables"
+"center in table cell fills the cell" = "deferred:M7 tables"
+"author text alignment overrides the UA rule" = "pass"
+"pure text center remains fill available" = "pass"
+
+["list-indentation"]
+"default list keeps UA indentation" = "pass"
+"unordered list reset removes indentation" = "pass"
+"ordered list reset removes indentation" = "pass"
+"ex padding follows font x height" = "deferred:M4 flex"
+
+["logical-borders"]
+"RTL inline-start shorthand maps to physical right" = "deferred:M4 flex"
+"block-end shorthand maps to physical bottom" = "deferred:M4 flex"
+"later logical alias wins over physical right" = "deferred:M4 flex"
+"later physical right wins over logical alias" = "deferred:M4 flex"
+"inline pair start width maps to left" = "deferred:M4 flex"
+"inline pair end width maps to right" = "deferred:M4 flex"
+
+["max-height-replaced"]
+"max height clamps intrinsic aspect transfer" = "deferred:M2 images"
+
+["media-text-track"]
+"media text track exposes parsed cues" = "deferred:M2 images"
+
+["mixed-content-block"]
+"full-width block child" = "pass"
+
+["mixed-float-run"]
+"first left float starts the band" = "deferred:M1.1 floats"
+"same-side floats remain adjacent" = "deferred:M1.1 floats"
+"trailing right float shares the band" = "deferred:M1.1 floats"
+
+["modern-containing-block-triggers"]
+"filter containing block" = "deferred:M5 positioned"
+"perspective containing block" = "deferred:M5 positioned"
+"contain layout containing block" = "deferred:M5 positioned"
+"container-type negative control" = "deferred:M5 positioned"
+"will-change containing block" = "deferred:M5 positioned"
+"content-visibility containing block" = "deferred:M5 positioned"
+"filter fixed containing block" = "deferred:M5 positioned"
+"contain fixed containing block" = "deferred:M5 positioned"
+
+["modern-hydration-contracts"]
+"modern hydration contracts" = "deferred:JS-on render path (no section 7 milestone; H1 --features v8 plus P2 streams/scroll)"
+
+["modern-streams"]
+"streamed hydration contracts" = "deferred:JS-on render path (no section 7 milestone; H1 --features v8 plus P2 streams/scroll)"
+
+["nested-float-clearance"]
+"earlier tall float keeps its full shared-BFC endpoint" = "deferred:M1.1 floats"
+"later shorter descendant float shares the remaining band" = "deferred:M1.1 floats"
+"clearfix advances following flow below the tallest float" = "deferred:M1.1 floats"
+
+["opposing-header-floats"]
+"inline wrapper exposes left float to header BFC" = "deferred:M1.1 floats"
+"opposing float shares the same band" = "deferred:M1.1 floats"
+"cleared navigation follows the float band" = "deferred:M1.1 floats"
+
+["percentage-height-indefinite-parent"]
+"content sizes the indefinite percentage-height chain" = "deferred:M4 flex and grid"
+"following flow starts after the content-sized chain" = "deferred:M4 flex and grid"
+
+["ratio-only-inline-images"]
+"native image stretch-fits its definite line width" = "deferred:M2 images"
+"inline anchor preserves ratio-only replaced sizing" = "deferred:M2 images"
+"authored inline image remains an atomic replaced box" = "deferred:M2 images"
+"authored block image uses the same ratio-only branch" = "deferred:M2 images"
+"authored inline-block image keeps replaced sizing" = "deferred:M2 images"
+
+["relative-box-edges"]
+"vh margin resolves against viewport height" = "pass"
+"vw margin resolves against viewport width" = "pass"
+"em padding resolves against element font size" = "pass"
+"rem padding resolves against root font size" = "pass"
+"vmin margin resolves against smaller viewport axis" = "pass"
+"vmax margin resolves against larger viewport axis" = "pass"
+
+["replaced-block-wrapper"]
+"text alignment leaves the block frame at available width" = "deferred:M2 images"
+"auto block wrapper contains its percentage image" = "deferred:M2 images"
+
+["replaced-grid-order"]
+"order-modified description occupies the first grid cell" = "deferred:M2 images"
+"media wrapper shares the first row" = "deferred:M2 images"
+"percentage image uses the wrapper content box" = "deferred:M2 images"
+
+["right-float-navigation"]
+"first inline item stays at band start" = "deferred:M1.1 floats"
+"second inline item keeps source order" = "deferred:M1.1 floats"
+"last right float is visually first" = "deferred:M1.1 floats"
+"middle right float follows inward" = "deferred:M1.1 floats"
+"first right float reaches band end" = "deferred:M1.1 floats"
+
+["supports-var-feature-query"]
+"variable feature query enables implemented grid support" = "pass"
+
+["table-row-geometry"]
+"cell height remains a minimum below block content" = "deferred:M7 tables"
+"sibling cell stretches to the content-sized row" = "deferred:M7 tables"
+"text line box grows beyond the cell height" = "deferred:M7 tables"
+"row height remains a minimum above short content" = "deferred:M7 tables"
+"rowspan content sizes the complete span" = "deferred:M7 tables"
+"rowspan excess reaches the first row" = "deferred:M7 tables"
+"rowspan excess reaches the second row" = "deferred:M7 tables"
+"final-width nested table determines header row height" = "deferred:M7 tables"
+"later nested row starts after the final header height" = "deferred:M7 tables"
+
+["table-track-geometry"]
+"separate spacing reserves the outer table edges" = "deferred:M7 tables"
+"auto column receives max-content width" = "deferred:M7 tables"
+"percentage column resolves against track space" = "deferred:M7 tables"
+"auto column absorbs definite-table surplus" = "deferred:M7 tables"
+"cellpadding zero overrides the UA cell padding" = "deferred:M7 tables"
+"cellpadding keeps adjacent tracks contiguous" = "deferred:M7 tables"
+"author cell padding wins over cellpadding" = "deferred:M7 tables"
+"collapsed table suppresses declared spacing" = "deferred:M7 tables"
+"collapsed tracks share an edge" = "deferred:M7 tables"
+"row-group default vertically centers cell content" = "deferred:M7 tables"
+"row vertical-align inherits into its cells" = "deferred:M7 tables"
+"cell vertical-align overrides the row default" = "deferred:M7 tables"
+"UA cell padding is one pixel on every edge" = "deferred:M7 tables"
+
+["tables"]
+"content-box fixed cell column" = "deferred:M7 tables"
+
+["text-align-flex-items"]
+"text alignment does not shrink a flex item" = "deferred:M4 flex and grid"
+"inherited text alignment centers inline content" = "deferred:M4 flex and grid"
+
+["transform-containing-block"]
+"absolute captured by transform" = "deferred:M5 positioned"
+"fixed captured by transform" = "deferred:M5 positioned"
+"unsupported identity transform still establishes containing block" = "deferred:M5 positioned"
+"positioned ancestor does not capture fixed" = "deferred:M5 positioned"
+
+["video-poster"]
+"poster intrinsic width and first stripe" = "deferred:M2 images"
+"poster intrinsic geometry retains middle stripe" = "deferred:M2 images"
+"poster intrinsic geometry retains final stripe" = "deferred:M2 images"
+"right object-position selects the final stripe" = "deferred:M2 images"
+
+["viewport-consistency"]
+"width media query uses the screenshot viewport" = "deferred:M3 captures"
+"height media query uses the screenshot viewport" = "deferred:M3 captures"
+"page JavaScript sees the screenshot viewport" = "deferred:M3 captures"
+
+["z-index"]
+"positive layer" = "deferred:M5 positioned"
+"negative layer" = "deferred:M5 positioned"

@@ -84,6 +84,45 @@ python3 -m venv .venv && .venv/bin/pip install numpy scipy pillow   # once, outs
 `check.py` evaluates `color-checks.json` for both captures (the behaviour
 assertions; exit status 1 on any failure) and prints pixel-distance metrics
 (`rgb_mae`, `pixels_gt_50`, edge bounding-box delta, bidirectional edge
-distance) as regression tripwires. Structural checks from `checks.json`
-(element and text rects) are consumed by the Rust structural test in
-`tenta-render` once P3 lands. Generated engine captures are not committed.
+distance) as regression tripwires. Generated engine captures are not committed.
+
+## The corpus test and its ratchet
+
+```bash
+cargo nextest run -p tenta-render --test corpus
+```
+
+`crates/tenta-render/tests/corpus.rs` renders every fixture through the Tier-1
+pipeline at 900x1000, DPR 1, writes `<name>/tentabrowser.png` and grades each
+`color-checks.json` entry natively (the same component labelling and
+thresholds as `check.py`, no Python needed). Fixtures in the `SCRIPTED` list of
+`corpus.rs` need the JavaScript page path, which `tenta-render` cannot depend on,
+and are skipped by name; the test fails if a fixture with `<script>` is not in
+the list. One difference from `check.py`: it counts a component's area as the
+colour pixels inside its bounding box (which can include other components),
+the native check counts the component's own pixels. Only the 20 pixel noise
+floor is affected.
+
+- `EXPECTED.toml` maps every colour check to `pass`, `fail`,
+  `deferred:<milestone>` or `informational`. The test fails when a `pass`
+  check fails, or when a check is missing from the file. Checks that start
+  passing are listed in the summary; moving one to `pass` is a deliberate edit.
+  `UPDATE_EXPECTED` rewrites the file; existing `pass` entries always stay and
+  new checks take their milestone from the gate file. `UPDATE_EXPECTED=1`
+  promotes the passing `M1-GATE.toml` checks, `UPDATE_EXPECTED=all` every
+  passing check, `UPDATE_EXPECTED=a,b` every passing check of fixtures `a`, `b`.
+- `M1-GATE.toml` is frozen; the corpus test only reads it. The M1 exit is the
+  test `m1_gate_is_green`, which runs by default.
+- `RENDER_CORPUS_PYCHECK=1` also runs `tools/check.py` on our captures and
+  fails on any per-check verdict difference. Missing numpy, scipy or pillow
+  is a failure, never a skip; `RENDER_CORPUS_PYTHON` selects the interpreter.
+- Output is `target/render-corpus/report.json` (per check verdicts and
+  failure detail, element-rect agreement per tolerance class, pixel metrics)
+  and `summary.txt`. The pixel metrics split the reference's text rects from
+  the rest: `text_mae`, `non_text_mae`, `text_ink_ratio` (our ink over
+  Chromium's, below 1 means lighter glyphs) and `text_centroid_dx/dy`
+  (ink offset per text rect); these drive text contrast and positioning
+  calibration.
+- Element rects from `checks.json` use tolerance 0.02 px (integer-valued
+  expectations), 0.05 px (others) and 1 px position / 2 px or 3% size for
+  elements that hold inline text. They are reported, not graded.

@@ -239,11 +239,15 @@ def main():
                     )
         report["fixtures"][name] = fixture
         metrics = fixture["metrics"]
+        # Metrics are None when a capture has no edges or no ink.
+        def cell(key, default="-"):
+            return str(metrics.get(key, default))
+
         print(
-            f"{name:36} rgb_mae={metrics.get('rgb_mae', 'size-mismatch'):>8} "
-            f"p>50={metrics.get('pixels_gt_50', '-'):>8} "
-            f"edge_bbox={metrics.get('edge_bbox_max_delta', '-'):>3} "
-            f"edge_2d={metrics.get('edge_bidirectional_mean_distance_px', '-'):>8}"
+            f"{name:36} rgb_mae={cell('rgb_mae', 'size-mismatch'):>8} "
+            f"p>50={cell('pixels_gt_50'):>8} "
+            f"edge_bbox={cell('edge_bbox_max_delta'):>4} "
+            f"edge_2d={cell('edge_bidirectional_mean_distance_px'):>8}"
         )
     report["failures"] = failures
     if args.report:
