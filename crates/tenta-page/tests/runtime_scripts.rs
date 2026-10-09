@@ -240,6 +240,36 @@ async fn an_empty_script_runs_nothing() {
     assert!(harness.has("#tail"), "the parse resumed past both");
 }
 
+/// A page with no declared charset whose first non-ASCII byte lies past the
+/// 1 KiB prescan is still decoded as UTF-8, because the parser looks further;
+/// `characterSet` must say what the text was decoded with.
+#[tokio::test(flavor = "current_thread")]
+async fn a_utf8_page_with_late_non_ascii_text_reports_utf8() {
+    let padding = "x".repeat(1500);
+    let page = format!(
+        "<!doctype html><html><head><title>t</title></head><body>\
+         <div data-pad=\"{padding}\"></div><p id=\"t\">za\u{17c}\u{f3}\u{142}\u{107}</p></body></html>"
+    );
+    let harness = Harness::new(&page);
+    let navigation = harness.settle(Settle::Load).await.expect("navigation");
+
+    assert_eq!(navigation.encoding, "UTF-8");
+    let text = harness.document(|document| support::text_of(document, "#t"));
+    assert_eq!(text.as_deref(), Some("za\u{17c}\u{f3}\u{142}\u{107}"));
+}
+
+/// A declaration inside the prescan window still decides the encoding.
+#[tokio::test(flavor = "current_thread")]
+async fn a_declared_windows_1250_page_still_reports_windows_1250() {
+    let harness = Harness::new(
+        "<!doctype html><html><head><meta charset=\"windows-1250\"></head>\
+         <body><p id=\"t\">plain</p></body></html>",
+    );
+    let navigation = harness.settle(Settle::Load).await.expect("navigation");
+
+    assert_eq!(navigation.encoding, "windows-1250");
+}
+
 /// A `<meta charset>` past the sniff window would restart the parse — and run
 /// every script a second time — if the encoding were still tentative when the
 /// script was handed out. Handing a script out makes it certain, so the

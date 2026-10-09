@@ -533,18 +533,23 @@ fn console_call(message: &Value, realm: u64) -> Option<ConsoleCall> {
     })
 }
 
+fn failure_of(out: &Value) -> Option<InspectError> {
+    let fail = out.get("fail")?;
+    let code = fail
+        .get("code")
+        .and_then(Value::as_str)
+        .unwrap_or("internal");
+    let message = fail
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    Some(InspectError::from_code(code, message.to_owned()))
+}
+
 fn completion_of(out: &Value) -> Result<Completion, InspectError> {
     let malformed = || InspectError::new(InspectErrorKind::Internal, "malformed inspector reply");
-    if let Some(fail) = out.get("fail") {
-        let code = fail
-            .get("code")
-            .and_then(Value::as_str)
-            .unwrap_or("internal");
-        let message = fail
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        return Err(InspectError::from_code(code, message.to_owned()));
+    if let Some(error) = failure_of(out) {
+        return Err(error);
     }
     if let Some(thrown) = out.get("x") {
         return ExceptionDetails::from_json(thrown)
@@ -754,4 +759,92 @@ pub fn unbind(
     timeout: Duration,
 ) -> Result<(), InspectError> {
     invoke(engine, "unbind", &json!({ "name": name }), timeout).map(|_| ())
+}
+
+/// Which members [`properties`] lists.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PropertyQuery {
+    /// Stop at the object itself instead of walking its prototype chain.
+    pub own_only: bool,
+    /// List accessors only.
+    pub accessors_only: bool,
+    /// Attach a preview to the handles of object values.
+    pub preview: bool,
+}
+
+/// One member of an object, as `Runtime.getProperties` describes it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PropertyDescriptor {
+    pub name: String,
+    /// The value of a data property.
+    pub value: Option<RemoteValue>,
+    pub getter: Option<RemoteValue>,
+    pub setter: Option<RemoteValue>,
+    /// Set for a data property only.
+    pub writable: Option<bool>,
+    pub configurable: bool,
+    pub enumerable: bool,
+    /// Defined on the object itself rather than inherited.
+    pub is_own: bool,
+}
+
+impl PropertyDescriptor {
+    fn from_json(value: &Value) -> Option<PropertyDescriptor> {
+        // A member that is present but unreadable makes the entry malformed.
+        let remote = |key: &str| match value.get(key) {
+            None => Some(None),
+            Some(raw) => RemoteValue::from_json(raw).map(Some),
+        };
+        Some(PropertyDescriptor {
+            name: value.get("n")?.as_str()?.to_owned(),
+            value: remote("v")?,
+            getter: remote("g")?,
+            setter: remote("s")?,
+            writable: value.get("w").and_then(Value::as_bool),
+            configurable: value.get("c")?.as_bool()?,
+            enumerable: value.get("e")?.as_bool()?,
+            is_own: value.get("own")?.as_bool()?,
+        })
+    }
+}
+
+/// The handle `id` names has members; lists them without running any getter
+/// of the page. A symbol has none.
+pub fn properties(
+    engine: &mut dyn PageEngine,
+    id: &str,
+    query: PropertyQuery,
+    timeout: Duration,
+) -> Result<Vec<PropertyDescriptor>, InspectError> {
+    let reply = invoke(
+        engine,
+        "props",
+        &json!({
+            "id": id,
+            "own": query.own_only,
+            "accessors": query.accessors_only,
+            "preview": query.preview,
+        }),
+        timeout,
+    )?;
+    if let Some(error) = failure_of(&reply) {
+        return Err(error);
+    }
+    let malformed = || InspectError::new(InspectErrorKind::Internal, "malformed inspector reply");
+    reply
+        .get("r")
+        .and_then(Value::as_array)
+        .ok_or_else(malformed)?
+        .iter()
+        .map(|entry| PropertyDescriptor::from_json(entry).ok_or_else(malformed))
+        .collect()
+}
+
+/// The number of the realm the engine runs, the one ids and events carry.
+pub fn realm(engine: &mut dyn PageEngine, timeout: Duration) -> Result<u64, InspectError> {
+    let reply = invoke(engine, "realm", &Value::Null, timeout)?;
+    reply
+        .get("r")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| InspectError::new(InspectErrorKind::Internal, "malformed inspector reply"))
 }

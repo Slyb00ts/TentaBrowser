@@ -17,6 +17,7 @@ mod http;
 mod ids;
 mod names;
 mod options;
+mod page_runtime;
 mod server;
 mod session;
 mod wire;

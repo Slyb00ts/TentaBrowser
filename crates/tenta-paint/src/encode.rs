@@ -71,8 +71,51 @@ fn unpremultiply_row(premultiplied: &[u8], straight: &mut [u8]) {
     }
 }
 
-/// Encodes `pix` as a JPEG at `quality` (1-100) over an opaque background.
+/// Encodes `pix` as a JPEG at `quality` (1-100) over an opaque white
+/// background, since the format has no alpha channel.
+///
+/// # Panics
+///
+/// Panics if `quality` is outside 1-100 or a side exceeds 65535 pixels; the
+/// render session rejects both before it gets here.
 pub fn encode_jpeg(pix: &Pixmap, quality: u8) -> Vec<u8> {
-    let _ = (pix, quality);
-    todo!("M3 JPEG encode")
+    assert!((1..=100).contains(&quality), "JPEG quality is 1 to 100");
+    let (width, height) = (
+        u16::try_from(pix.width()).expect("a JPEG side fits 16 bits"),
+        u16::try_from(pix.height()).expect("a JPEG side fits 16 bits"),
+    );
+    let mut rgb = Vec::with_capacity(pix.data().len() / 4 * 3);
+    for pixel in pix.data().as_chunks::<4>().0 {
+        // Premultiplied over white: the missing coverage is white.
+        let uncovered = 255 - pixel[3];
+        rgb.extend(pixel[..3].iter().map(|&c| c.saturating_add(uncovered)));
+    }
+    let mut out = Vec::new();
+    jpeg_encoder::Encoder::new(&mut out, quality)
+        .encode(&rgb, width, height, jpeg_encoder::ColorType::Rgb)
+        .expect("encoding a valid pixmap into memory cannot fail");
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_jpeg_flattens_transparency_onto_white() {
+        let pix = Pixmap::new(16, 8).expect("a pixmap");
+        let bytes = encode_jpeg(&pix, 90);
+        assert_eq!(&bytes[..2], [0xff, 0xd8], "a JPEG start marker");
+        let mut decoder =
+            zune_jpeg::JpegDecoder::new(zune_jpeg::zune_core::bytestream::ZCursor::new(&bytes));
+        let rgb = decoder.decode().expect("a decodable JPEG");
+        assert_eq!(decoder.dimensions(), Some((16, 8)));
+        assert!(rgb.iter().all(|&c| c >= 253), "white, within codec error");
+    }
+
+    #[test]
+    #[should_panic(expected = "JPEG quality")]
+    fn a_quality_of_zero_is_a_caller_bug() {
+        let _ = encode_jpeg(&Pixmap::new(1, 1).expect("a pixmap"), 0);
+    }
 }

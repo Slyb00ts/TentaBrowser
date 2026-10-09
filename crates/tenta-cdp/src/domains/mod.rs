@@ -47,6 +47,8 @@ mod tests {
         "Inspector.enable",
         "Inspector.disable",
         "Log.disable",
+        "Runtime.releaseObjectGroup",
+        "Runtime.discardConsoleEntries",
         "Security.enable",
         "Security.disable",
     ];

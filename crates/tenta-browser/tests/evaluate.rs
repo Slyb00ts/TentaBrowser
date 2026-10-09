@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use tenta_browser::{
     BrowserContext, CallArgument, Completion, ConsoleCall, ContextOptions, Engine, EvalOptions,
-    ExceptionEvent, Goto, JsEngine, Page, PageEvent, PageEvents, PageOptions, RemoteKind,
-    RemoteObject, RemoteValue, Settle, World,
+    ExceptionEvent, Goto, JsEngine, Page, PageEvent, PageEvents, PageOptions, PropertyQuery,
+    RemoteKind, RemoteObject, RemoteValue, Settle, World,
 };
 use tenta_core::{Budgets, Error, Tier};
 use tenta_testutil::{FixtureServer, FixtureServerConfig, TempDir};
@@ -1059,11 +1059,6 @@ async fn values_that_cannot_be_copied_and_worlds_that_do_not_exist_are_refused()
             matches!(isolated, Err(Error::Unsupported { .. })),
             "{name}: {isolated:?}"
         );
-        let unloaded = rig.page().await;
-        assert!(
-            unloaded.evaluate("1").await.is_err(),
-            "{name}: no document, no realm"
-        );
         let completion = page.evaluate("1").await.expect("ran").into_completion();
         assert!(matches!(completion, Completion::Value(_)), "{name}");
         rig.finish(page).await;
@@ -1383,6 +1378,143 @@ async fn stacks_the_host_sees_or_the_page_creates_hold_no_inspector_frames() {
             "{name}: {:?}",
             details.frames
         );
+        rig.finish(page).await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn properties_are_listed_without_running_page_code_and_realms_are_numbered() {
+    each_backend(|rig| async move {
+        let page = rig.loaded("/index.html").await;
+        let name = rig.name;
+        let realm = page.execution_context().await.expect("a realm");
+        assert_eq!(
+            page.execution_context().await.expect("again"),
+            realm,
+            "{name}"
+        );
+
+        let object = handle(
+            &page,
+            "({ plain: 1, nested: { x: 2 }, get lazy() { globalThis.ran = true; return 3; } })",
+            previewed("props"),
+        )
+        .await;
+        assert!(
+            object.id.starts_with(&format!("{realm}.")),
+            "{name}: {}",
+            object.id
+        );
+
+        let own = page
+            .get_properties(
+                &object.id,
+                PropertyQuery {
+                    own_only: true,
+                    ..PropertyQuery::default()
+                },
+            )
+            .await
+            .expect("properties");
+        let names: Vec<&str> = own.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["plain", "nested", "lazy", "__proto__"], "{name}");
+        assert_eq!(own[0].value, Some(RemoteValue::Number(1.0)), "{name}");
+        assert_eq!(own[0].writable, Some(true), "{name}");
+        assert!(
+            own[1]
+                .value
+                .as_ref()
+                .unwrap()
+                .clone()
+                .into_handle()
+                .is_some(),
+            "{name}"
+        );
+        assert!(
+            own[2].getter.is_some() && own[2].value.is_none(),
+            "{name}: an accessor"
+        );
+        assert!(own.iter().all(|p| p.is_own), "{name}");
+        assert_eq!(
+            value(&page, "typeof globalThis.ran").await,
+            RemoteValue::String("undefined".into()),
+            "{name}: the getter did not run"
+        );
+
+        let accessors = page
+            .get_properties(
+                &object.id,
+                PropertyQuery {
+                    accessors_only: true,
+                    ..PropertyQuery::default()
+                },
+            )
+            .await
+            .expect("accessors");
+        assert!(
+            accessors
+                .iter()
+                .all(|p| p.getter.is_some() || p.setter.is_some()),
+            "{name}"
+        );
+        assert!(accessors.iter().any(|p| p.name == "lazy"), "{name}");
+
+        // The members belong to the group of the object they came from.
+        page.release_object_group("props").await.expect("release");
+        let released = page
+            .get_properties(&object.id, PropertyQuery::default())
+            .await;
+        assert!(released.is_err(), "{name}: the object is gone");
+
+        // A navigation is a new realm with a new number.
+        rig.load(&page, "/other.html").await;
+        assert_ne!(
+            page.execution_context().await.expect("new realm"),
+            realm,
+            "{name}"
+        );
+        rig.finish(page).await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_page_runs_script_in_a_blank_document() {
+    each_backend(|rig| async move {
+        let name = rig.name;
+        let page = rig.page().await;
+        assert_eq!(
+            value(&page, "1 + 1").await,
+            RemoteValue::Number(2.0),
+            "{name}"
+        );
+        assert_eq!(
+            value(
+                &page,
+                "document.URL + document.readyState + document.body.childNodes.length"
+            )
+            .await,
+            RemoteValue::String("about:blankcomplete0".into()),
+            "{name}"
+        );
+        let realm = page.execution_context().await.expect("a realm");
+        rig.load(&page, "/index.html").await;
+        assert_ne!(
+            page.execution_context().await.expect("new realm"),
+            realm,
+            "{name}"
+        );
+
+        // A page that runs no script keeps the blank document and no engine.
+        let plain = rig
+            .context
+            .new_page(PageOptions::tier1())
+            .await
+            .expect("tier 1 page");
+        assert!(plain.document().is_some(), "{name}");
+        assert!(plain.evaluate("1").await.is_err(), "{name}");
+        plain.close().await.expect("close");
         rig.finish(page).await;
     })
     .await;

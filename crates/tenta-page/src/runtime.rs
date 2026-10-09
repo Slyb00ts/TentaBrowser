@@ -1378,6 +1378,10 @@ pub(crate) fn adopt_loaded_document(
 /// down: a runtime left to thread-local destruction would be dropped during
 /// thread exit instead, after the tasks that used it are gone.
 pub fn drop_thread_runtimes() {
+    // A session never outlives the document it renders, which the runtimes
+    // below may still own.
+    #[cfg(feature = "render")]
+    crate::render::release_all();
     let runtimes: Vec<(PageId, PageRuntime)> =
         RUNTIMES.with(|cell| cell.borrow_mut().drain().collect());
     // One at a time, so a runtime whose teardown panics does not leave the rest

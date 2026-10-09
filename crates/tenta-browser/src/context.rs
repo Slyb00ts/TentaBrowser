@@ -462,6 +462,7 @@ impl BrowserContext {
             locale: self.inner.engine.options.locale.clone(),
             extra_headers: self.inner.extra_headers.clone(),
             viewport: options.viewport,
+            fs_policy: self.inner.engine.options.fs_policy.clone(),
             cookies: self.inner.cookies.clone(),
             storage: self.inner.storage.new_page(),
             on_close: Some({

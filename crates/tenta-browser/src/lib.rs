@@ -34,6 +34,11 @@ pub use tenta_page::page::{Goto, Navigation, Page, Viewport};
 pub use tenta_page::settle::{Settle, SettleConfig, SettleState};
 pub use tenta_page::{
     BindingCall, CallArgument, Completion, ConsoleCall, EvalOptions, Evaluation, ExceptionDetails,
-    ExceptionEvent, FromRemote, ObjectPreview, PageEvent, PageEvents, PropertyPreview, RemoteKind,
-    RemoteObject, RemoteValue, StackFrame, World,
+    ExceptionEvent, FromRemote, ObjectPreview, PageEvent, PageEvents, PropertyDescriptor,
+    PropertyPreview, PropertyQuery, RemoteKind, RemoteObject, RemoteValue, StackFrame, World,
+};
+#[cfg(feature = "render")]
+pub use tenta_page::{
+    Capture, Clip, ImageFormat, RasterStats, Screenshot, ScreenshotOptions, StageTimes,
+    WorkCounters,
 };

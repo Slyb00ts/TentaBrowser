@@ -7,8 +7,8 @@ use tenta_css::cascade::{StyleDiff, StyleEngine, StyleEnv, StyleSource};
 use tenta_dom::Document;
 use tenta_layout::{BoxTree, FontSystem, FragmentTree, LayoutCx, NoImages, Rect, layout};
 use tenta_paint::{
-    Color, DisplayList, ImageStore, PaintContext, PngProfile, RasterOptions, build, encode_png,
-    rasterize,
+    Color, DisplayList, ImageStore, PaintContext, PngProfile, RasterOptions, build, encode_jpeg,
+    encode_png, rasterize,
 };
 
 use crate::screenshot::{
@@ -161,8 +161,13 @@ impl RenderSession {
         doc: &Document,
         opts: &ScreenshotOptions,
     ) -> Result<Screenshot, RenderError> {
-        if !matches!(opts.format, ImageFormat::Png) {
-            return Err(RenderError::UnsupportedFormat(opts.format));
+        match opts.format {
+            ImageFormat::Png => {}
+            ImageFormat::Jpeg { quality } if (1..=100).contains(&quality) => {}
+            ImageFormat::Jpeg { .. } => {
+                return Err(RenderError::InvalidOption("JPEG quality is 1 to 100"));
+            }
+            ImageFormat::Webp => return Err(RenderError::UnsupportedFormat(opts.format)),
         }
         let clip_scale = opts.scale.unwrap_or(1.0);
         if !(clip_scale.is_finite() && clip_scale > 0.0) {
@@ -209,7 +214,10 @@ impl RenderSession {
         times.raster = started.elapsed();
 
         let started = Instant::now();
-        let bytes = encode_png(&output.pixmap, PngProfile::Fast);
+        let bytes = match opts.format {
+            ImageFormat::Jpeg { quality } => encode_jpeg(&output.pixmap, quality),
+            _ => encode_png(&output.pixmap, PngProfile::Fast),
+        };
         times.encode = started.elapsed();
 
         Ok(Screenshot {

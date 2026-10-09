@@ -43,6 +43,7 @@
   const apply = Reflect.apply;
   const defineProperty = Object.defineProperty;
   const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+  const getOwnPropertyNames = Object.getOwnPropertyNames;
   const getPrototypeOf = Object.getPrototypeOf;
   const objectCreate = Object.create;
   const keysOf = Object.keys;
@@ -656,6 +657,65 @@
     };
   }
 
+  // ------------------------------------------------------------- properties
+
+  function hasOwn(object, key) {
+    return getOwnPropertyDescriptor(object, key) !== undefined;
+  }
+
+  // The members of the object `id` names, read through own property
+  // descriptors so no getter, setter or trap of the page runs. The handles it
+  // makes join the group of the object they were read from, as in Chromium.
+  function properties(a) {
+    const id = own(a, "id");
+    const root = lookup(id);
+    const o = {
+      group: table[id].group,
+      implicit: false,
+      preview: own(a, "preview") === true,
+      value: false,
+    };
+    const ownOnly = own(a, "own") === true;
+    const accessorsOnly = own(a, "accessors") === true;
+    const out = [];
+    if (!isObjectLike(root) || isProxy(root)) return out;
+    let holder = root;
+    for (let depth = 0; holder !== null && depth < 100; depth++) {
+      if (isProxy(holder)) break;
+      const names = getOwnPropertyNames(holder);
+      for (let i = 0; i < names.length; i++) {
+        const d = getOwnPropertyDescriptor(holder, names[i]);
+        if (d === undefined) continue;
+        const entry = {
+          n: names[i],
+          own: depth === 0,
+          c: own(d, "configurable") === true,
+          e: own(d, "enumerable") === true,
+        };
+        if (hasOwn(d, "get") || hasOwn(d, "set")) {
+          const getter = own(d, "get");
+          const setter = own(d, "set");
+          if (getter !== undefined) entry.g = describeRemote(getter, o);
+          if (setter !== undefined) entry.s = describeRemote(setter, o);
+        } else {
+          if (accessorsOnly) continue;
+          entry.w = own(d, "writable") === true;
+          entry.v = describeRemote(own(d, "value"), o);
+        }
+        add(out, entry);
+      }
+      if (depth === 0 && !accessorsOnly) {
+        const proto = getPrototypeOf(holder);
+        if (proto !== null) {
+          add(out, { n: "__proto__", own: true, c: true, e: false, w: true, v: describeRemote(proto, o) });
+        }
+      }
+      if (ownOnly) break;
+      holder = getPrototypeOf(holder);
+    }
+    return out;
+  }
+
   // ----------------------------------------------------------- finish a result
 
   function settings(o) {
@@ -901,6 +961,8 @@
           releaseGroup(own(a, "group"));
           return ser({ r: true });
         case "live": return ser({ r: live });
+        case "realm": return ser({ r: realm });
+        case "props": return ser({ r: properties(a) });
         case "bind":
           bind(own(a, "name"));
           return ser({ r: true });

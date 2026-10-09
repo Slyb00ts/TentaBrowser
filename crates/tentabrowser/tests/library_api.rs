@@ -147,11 +147,14 @@ async fn tiers_above_dom_are_refused_through_the_public_api() {
     // assertions are made against. QuickJS has no implementation in either.
     const _: () = assert!(!cfg!(feature = "quickjs"));
 
-    let error = Engine::builder()
-        .max_tier(Tier::Render)
-        .build()
-        .expect_err("render lands in a later phase");
-    assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
+    #[cfg(not(feature = "render"))]
+    {
+        let error = Engine::builder()
+            .max_tier(Tier::Render)
+            .build()
+            .expect_err("render is not compiled in");
+        assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
+    }
 
     let engine = Engine::builder().page_threads(1).build().expect("engine");
     let ctx = context(&engine);

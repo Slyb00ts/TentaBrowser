@@ -58,6 +58,9 @@ pub enum PageEvent {
     Exception(ExceptionEvent),
     /// Page script called a function installed by [`crate::Page::add_binding`].
     BindingCalled(BindingCall),
+    /// A stylesheet the render could not load, or a limit that cut an import
+    /// tree short. The page renders without it.
+    StylesheetFailed { url: Url, reason: String },
 }
 
 /// The receiving end of [`crate::Page::events`].

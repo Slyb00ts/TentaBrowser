@@ -3245,6 +3245,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "zune-jpeg",
 ]
 
 [[package]]

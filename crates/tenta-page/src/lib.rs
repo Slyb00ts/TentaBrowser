@@ -16,8 +16,8 @@ pub mod page;
 // Private: the runtime is page-thread-local state the page owns, not an API
 // (`crates/tenta-page/src/runtime.rs`).
 mod runtime;
-// Private: the render session is page-thread state the page owns, not an API
-// (`crates/tenta-page/src/render.rs`).
+// Private module: the render session is page-thread state the page owns. Its
+// option and result types are re-exported below (`crates/tenta-page/src/render.rs`).
 #[cfg(feature = "render")]
 mod render;
 // Private: the page's cumulative script budget is page-thread state the page
@@ -42,6 +42,11 @@ pub use page::{
     EvalOptions, Evaluation, FromRemote, Goto, Navigation, Page, PageConfig, TestHooks, Viewport,
     World,
 };
+#[cfg(feature = "render")]
+pub use render::{
+    Capture, Clip, ImageFormat, RasterStats, Screenshot, ScreenshotOptions, StageTimes,
+    WorkCounters,
+};
 pub use runtime::drop_thread_runtimes;
 pub use settle::{
     Origin, PendingSources, RequestClass, Settle, SettleConfig, SettleState, SettleTracker,
@@ -49,7 +54,8 @@ pub use settle::{
 pub use task::{catch_unwind_future, catch_unwind_task, panic_message};
 pub use tenta_js::inspect::{
     BindingCall, CallArgument, Completion, ConsoleCall, ExceptionDetails, ExceptionEvent,
-    ObjectPreview, PropertyPreview, RemoteKind, RemoteObject, RemoteValue, StackFrame,
+    ObjectPreview, PropertyDescriptor, PropertyPreview, PropertyQuery, RemoteKind, RemoteObject,
+    RemoteValue, StackFrame,
 };
 pub use tenta_net::RedirectHop;
 pub use thread::{PageJob, PageTask, PageThread};

@@ -198,6 +198,8 @@ pub(super) fn release(inner: &PageInner) {
 /// on the page here.
 pub(super) fn teardown(inner: &Arc<PageInner>) {
     let outcome = catch_unwind_task(|| {
+        #[cfg(feature = "render")]
+        crate::render::release(inner.config.id);
         drop(runtime::take_runtime(inner.config.id));
         let document = {
             let mut state = inner.state.lock();

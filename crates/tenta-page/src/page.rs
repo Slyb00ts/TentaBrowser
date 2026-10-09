@@ -44,6 +44,8 @@ use crate::thread::PageThread;
 
 mod evaluate;
 mod retained;
+#[cfg(feature = "render")]
+mod screenshot;
 
 pub use evaluate::{EvalOptions, Evaluation, FromRemote, World};
 
@@ -268,6 +270,9 @@ pub struct PageConfig {
     /// `Accept-Language` overrides).
     pub extra_headers: Vec<(String, String)>,
     pub viewport: Viewport,
+    /// Gates every host file the page reads on its own behalf, such as the
+    /// stylesheets of a `file:` document. Never widened by the page.
+    pub fs_policy: tenta_core::FsPolicy,
     /// The browsing context's cookie jar, handed to the engine so
     /// `document.cookie` writes into the same store the network client sends
     /// from. It is a clone of one `Rc`-shared handle; see
@@ -300,6 +305,9 @@ struct PageState {
     /// Whether the page keeps a live engine bound to its document. While it
     /// does, the tree is the engine's and `document` is empty.
     engine_held: bool,
+    /// Whether a render has the document out of `document` right now. Another
+    /// thread that asks for the tree meanwhile is told the page is busy.
+    document_lent: bool,
     /// Navigations running on the page thread right now. A navigation builds
     /// its own engine at its first script, so a host entry may not build one
     /// for the document it is replacing.
@@ -333,6 +341,9 @@ struct PageInner {
     // Notified when the generation changes (cancelled by goto or close).
     // Wakes settle waiters so they check the generation immediately (B-R3-1).
     generation_changed: Notify,
+    /// Notified when a navigation stops being in flight, however it ends, for
+    /// callers that need the document it installs to be settled in place.
+    navigation_done: Notify,
     /// The page's cumulative script time. It lives here, not on a runtime,
     /// because a runtime is rebuilt for every navigation and the budget is a
     /// property of the page (`crate::script_cpu`).
@@ -485,6 +496,32 @@ impl std::fmt::Debug for Page {
     }
 }
 
+/// The `about:blank` document every page starts with, so a script can run
+/// before the first navigation. The engine for it is built on first use, not
+/// at creation: most pages navigate at once, which would discard it unused.
+fn initial_document(javascript: bool) -> DomDocument {
+    let url = Url::parse("about:blank").expect("a valid URL");
+    let (sink, shared) = SharedSink::with_new_document();
+    shared.borrow_mut().set_url(Some(url.clone()));
+    let mut parser = Parser::new(
+        sink,
+        ParserOptions {
+            scripting_enabled: javascript,
+            ..ParserOptions::default()
+        },
+    );
+    parser.feed_last(b"<html><head></head><body></body></html>");
+    drop(parser.finish());
+    let mut document = match Rc::try_unwrap(shared) {
+        Ok(cell) => cell.into_inner(),
+        // The parser's sink is gone, so this is the only owner; the fallback
+        // keeps a page usable (without `<body>`) rather than panicking.
+        Err(_) => DomDocument::with_url(url),
+    };
+    document.set_ready_state(tenta_dom::ReadyState::Complete);
+    document
+}
+
 impl Page {
     /// Builds a page pinned to the thread in `config`.
     pub fn new(config: PageConfig) -> Page {
@@ -492,7 +529,7 @@ impl Page {
             inner: Arc::new(PageInner {
                 frame: next_frame_id(),
                 state: Mutex::new(PageState {
-                    document: None,
+                    document: Some(initial_document(config.javascript)),
                     navigation: None,
                     hints: Vec::new(),
                     settle: None,
@@ -503,6 +540,7 @@ impl Page {
                     navigation_generation: 0,
                     document_navigation_id: 0,
                     engine_held: false,
+                    document_lent: false,
                     navigations_in_flight: 0,
                     title: None,
                     title_generation: None,
@@ -511,6 +549,7 @@ impl Page {
                 events: Mutex::new(None),
                 // Notified when generation changes (B-R3-1)
                 generation_changed: Notify::new(),
+                navigation_done: Notify::new(),
                 script_cpu: ScriptCpu::new(config.budgets.script_cpu, SCRIPT_CPU_WINDOW),
                 native_memory: NativeMemoryBudget::for_page(config.budgets.page_memory_mb),
                 settle_gate: tokio::sync::Mutex::new(()),
@@ -630,9 +669,15 @@ impl Page {
                 reason: reason.clone(),
             });
         }
-        let dom = state.document.take().ok_or(Error::InvalidArgument {
-            reason: "the page has no document yet".to_owned(),
-        })?;
+        let dom = match state.document.take() {
+            Some(dom) => dom,
+            None if state.document_lent => return Err(Error::Busy),
+            None => {
+                return Err(Error::InvalidArgument {
+                    reason: "the page has no document yet".to_owned(),
+                });
+            }
+        };
         let navigation = state
             .navigation
             .clone()
@@ -789,6 +834,8 @@ impl Page {
         if engine_held {
             retained::teardown_later(&self.inner);
         }
+        #[cfg(feature = "render")]
+        screenshot::release_later(&self.inner);
         // Area wrappers may outlive the page runtime; close the session here
         // so they cannot retain or write page data after terminal close.
         self.inner.config.storage.close_session();
@@ -836,6 +883,7 @@ impl InFlight {
 impl Drop for InFlight {
     fn drop(&mut self) {
         self.0.state.lock().navigations_in_flight -= 1;
+        self.0.navigation_done.notify_waiters();
     }
 }
 
@@ -1887,6 +1935,23 @@ async fn drive_parse(
     })
 }
 
+/// The encoding the document's text was decoded with, for `characterSet`.
+///
+/// It is the parser's choice (or the restart's), not a second sniff of the
+/// first bytes: the parser may have decided from more bytes than the prescan
+/// window. A parser that never decided had no bytes to go by, so the transport
+/// and the locale are all there is.
+fn decoded_encoding(
+    chosen: Option<&'static tenta_html::Encoding>,
+    transport_charset: Option<&str>,
+    locale: &str,
+) -> String {
+    chosen
+        .unwrap_or_else(|| tenta_html::sniff(&[], transport_charset, locale).encoding)
+        .name()
+        .to_owned()
+}
+
 /// What the response head told the parse about the body it is about to read.
 ///
 /// Separate from [`Response`] because the body stream is consumed while these
@@ -1963,7 +2028,6 @@ async fn parse_body(
     let mut parser = Parser::new(sink, make_options(None));
     let mut body = response.body;
     let mut total: u64 = 0;
-    let mut head: Vec<u8> = Vec::new();
     let mut restart_buffer: Option<Vec<Bytes>> = Some(Vec::new());
     let mut buffered = 0usize;
     let mut restarted: Option<&'static tenta_html::Encoding> = None;
@@ -2028,16 +2092,12 @@ async fn parse_body(
                 }
                 // The parse is over, whatever the body did: the tree it built
                 // so far is the page's, and no parser writes into it again.
+                let chosen = restarted.or(parser.encoding());
                 document = parser.finish();
                 document.borrow().check_observer_health()?;
                 runtime::note_parse_finished(inner.config.id, &document);
-                let encoding = match restarted {
-                    Some(encoding) => encoding.name().to_owned(),
-                    None => tenta_html::sniff(&head, transport_charset.as_deref(), &config.locale)
-                        .encoding
-                        .name()
-                        .to_owned(),
-                };
+                let encoding =
+                    decoded_encoding(chosen, transport_charset.as_deref(), &config.locale);
                 // Apply the same post-parse fix-ups as the full parse (N-R3-2)
                 {
                     let mut document = document.borrow_mut();
@@ -2074,10 +2134,6 @@ async fn parse_body(
         total += chunk.len() as u64;
         if total > max_bytes {
             return Err(over_budget(max_bytes));
-        }
-        if head.len() < tenta_html::encoding::PRESCAN_LIMIT {
-            let wanted = tenta_html::encoding::PRESCAN_LIMIT - head.len();
-            head.extend_from_slice(&chunk[..wanted.min(chunk.len())]);
         }
         if let Some(buffer) = &mut restart_buffer {
             buffered += chunk.len();
@@ -2193,16 +2249,11 @@ async fn parse_body(
         }
     }
 
+    let chosen = restarted.or(parser.encoding());
     document = parser.finish();
     document.borrow().check_observer_health()?;
     runtime::note_parse_finished(inner.config.id, &document);
-    let encoding = match restarted {
-        Some(encoding) => encoding.name().to_owned(),
-        None => tenta_html::sniff(&head, transport_charset.as_deref(), &config.locale)
-            .encoding
-            .name()
-            .to_owned(),
-    };
+    let encoding = decoded_encoding(chosen, transport_charset.as_deref(), &config.locale);
     {
         let mut document = document.borrow_mut();
         document.set_scripting_enabled(config.javascript);

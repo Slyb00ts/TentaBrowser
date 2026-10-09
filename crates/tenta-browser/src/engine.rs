@@ -186,23 +186,20 @@ impl EngineBuilder {
 
     pub fn build(self) -> Result<Engine> {
         let options = self.options;
-        // Tier 2 needs a compiled-in backend. Without one the ceiling stays at
-        // Tier 1 and a higher `max_tier` is refused rather than silently
-        // ignored; the `v8` feature is what raises it.
-        #[cfg(not(any(feature = "v8", feature = "quickjs")))]
-        if options.max_tier > Tier::Dom {
+        // The ceiling is what this build implements: Tier 3 needs the `render`
+        // feature, Tier 2 a compiled-in backend. A higher `max_tier` is refused
+        // rather than silently ignored.
+        let ceiling = if cfg!(feature = "render") {
+            Tier::Render
+        } else if cfg!(any(feature = "v8", feature = "quickjs")) {
+            Tier::Js
+        } else {
+            Tier::Dom
+        };
+        if options.max_tier > ceiling {
             return Err(Error::unsupported(format!(
-                "max_tier {} needs a JavaScript engine; P1 implements up to {}",
+                "max_tier {} is above what this build implements: {ceiling}",
                 options.max_tier,
-                Tier::Dom
-            )));
-        }
-        #[cfg(any(feature = "v8", feature = "quickjs"))]
-        if options.max_tier > Tier::Js {
-            return Err(Error::unsupported(format!(
-                "max_tier {} needs a JavaScript engine; this build implements up to {}",
-                options.max_tier,
-                Tier::Js
             )));
         }
         #[cfg(not(feature = "v8"))]
@@ -396,8 +393,9 @@ mod tests {
 
     #[test]
     fn the_tier_ceiling_follows_the_compiled_in_backend() {
-        // Tier 2 is reachable only when a backend can serve it.
-        #[cfg(not(any(feature = "v8", feature = "quickjs")))]
+        // Tier 2 is reachable only when a backend can serve it, or when the
+        // render feature raises the ceiling past it.
+        #[cfg(not(any(feature = "v8", feature = "quickjs", feature = "render")))]
         {
             let error = Engine::builder()
                 .max_tier(Tier::Js)
@@ -416,11 +414,25 @@ mod tests {
             assert_eq!(engine.max_tier(), Tier::Js);
             engine.close();
         }
-        let error = Engine::builder()
-            .max_tier(Tier::Render)
-            .build()
-            .expect_err("Tier 3 does not exist yet");
-        assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
+        #[cfg(not(feature = "render"))]
+        {
+            let error = Engine::builder()
+                .max_tier(Tier::Render)
+                .build()
+                .expect_err("Tier 3 needs the render feature");
+            assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
+        }
+        #[cfg(feature = "render")]
+        {
+            let engine = Engine::builder()
+                .io_threads(1)
+                .page_threads(1)
+                .max_tier(Tier::Render)
+                .build()
+                .expect("the render feature serves Tier 3");
+            assert_eq!(engine.max_tier(), Tier::Render);
+            engine.close();
+        }
         // A selector naming a backend this build did not compile in is refused;
         // one naming a backend no build serves yet is refused in every build.
         #[cfg(not(feature = "v8"))]

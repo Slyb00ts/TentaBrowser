@@ -552,9 +552,30 @@ fn element_capture_uses_the_untransformed_layout_box() {
 }
 
 #[test]
+fn a_jpeg_capture_has_the_capture_size_and_a_valid_quality() {
+    let mut p = page(BOXES, 50, 40);
+    let shot = p
+        .try_shoot(ScreenshotOptions {
+            format: ImageFormat::Jpeg { quality: 80 },
+            ..ScreenshotOptions::default()
+        })
+        .expect("a JPEG capture");
+    assert_eq!((shot.width, shot.height), (50, 40));
+    assert_eq!(&shot.bytes[..2], [0xff, 0xd8]);
+    for quality in [0, 101] {
+        let result = p.try_shoot(ScreenshotOptions {
+            format: ImageFormat::Jpeg { quality },
+            ..ScreenshotOptions::default()
+        });
+        assert!(matches!(result, Err(RenderError::InvalidOption(_))));
+    }
+}
+
+#[test]
 fn unsupported_and_invalid_options_are_typed_errors() {
     let mut p = page(BOXES, 50, 50);
-    for format in [ImageFormat::Jpeg { quality: 80 }, ImageFormat::Webp] {
+    let format = ImageFormat::Webp;
+    {
         let opts = ScreenshotOptions {
             format,
             ..ScreenshotOptions::default()

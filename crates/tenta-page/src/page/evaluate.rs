@@ -23,8 +23,8 @@ use std::time::Duration;
 
 use tenta_core::{Error, Result};
 use tenta_js::inspect::{
-    self, CallArgument, Completion, ExceptionDetails, InspectError, InspectErrorKind, RemoteObject,
-    RemoteValue, Settings,
+    self, CallArgument, Completion, ExceptionDetails, InspectError, InspectErrorKind,
+    PropertyDescriptor, PropertyQuery, RemoteObject, RemoteValue, Settings,
 };
 use tokio::sync::oneshot;
 
@@ -210,12 +210,84 @@ impl Page {
         arguments: Vec<CallArgument>,
         options: EvalOptions,
     ) -> Result<Evaluation> {
+        self.call_function_on_id(
+            target.map(|object| object.id.as_str()),
+            function,
+            arguments,
+            options,
+        )
+        .await
+    }
+
+    /// [`Page::call_function_on`] for a receiver known only by its id, such as
+    /// one a remote client names.
+    pub async fn call_function_on_id(
+        &self,
+        target: Option<&str>,
+        function: &str,
+        arguments: Vec<CallArgument>,
+        options: EvalOptions,
+    ) -> Result<Evaluation> {
         let job = Job::Call {
-            target: target.map(|object| object.id.clone()),
+            target: target.map(str::to_owned),
             function: function.to_owned(),
             arguments,
         };
         self.run(job, options).await
+    }
+
+    /// The members of the object `id` names, read without running any getter of
+    /// the page. The handles in the result join the object's group.
+    pub async fn get_properties(
+        &self,
+        id: &str,
+        query: PropertyQuery,
+    ) -> Result<Vec<PropertyDescriptor>> {
+        let id = id.to_owned();
+        let timeout = self.entry_timeout();
+        self.with_engine(move |engine| inspect::properties(engine, &id, query, timeout))
+            .await?
+            .map_err(inspect_error)
+    }
+
+    /// Whether a navigation is replacing the document right now. Script cannot
+    /// run in the page until it finishes installing it.
+    pub fn navigation_in_flight(&self) -> bool {
+        self.inner.state.lock().navigations_in_flight > 0
+    }
+
+    /// Resolves once no navigation is in flight. The caller bounds the wait.
+    pub async fn navigation_settled(&self) {
+        loop {
+            let done = self.inner.navigation_done.notified();
+            tokio::pin!(done);
+            done.as_mut().enable();
+            if !self.navigation_in_flight() {
+                return;
+            }
+            done.await;
+        }
+    }
+
+    /// The number of the script realm the page runs now: the number remote
+    /// object ids, console calls and binding calls carry. A realm lives as long
+    /// as its document, so a new number means the old context is gone.
+    ///
+    /// Builds the engine of a document that has none yet, and waits for a
+    /// navigation in flight to finish installing its document first.
+    pub async fn execution_context(&self) -> Result<u64> {
+        loop {
+            self.navigation_settled().await;
+            let timeout = self.entry_timeout();
+            let realm = self
+                .with_engine(move |engine| inspect::realm(engine, timeout))
+                .await;
+            match realm {
+                // A navigation began between the wait and the entry.
+                Err(Error::InvalidArgument { .. }) if self.navigation_in_flight() => {}
+                other => return other?.map_err(inspect_error),
+            }
+        }
     }
 
     /// Releases one remote object by id. Reports whether it was still held.

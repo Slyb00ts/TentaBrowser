@@ -6,29 +6,23 @@
 //! (the engine's Stylo loader serves those from [`StyleSource::imports`]), and
 //! tells the caller when the list may have changed ([`StyleSignature`]).
 //!
-//! Fetching is separated from assembling. [`collect_style_sources`] fetches
-//! whatever the cache lacks and then assembles; [`StyleState::cached_sources`]
-//! only assembles. A `<link>` whose body has not arrived is therefore absent
+//! Fetching is separated from assembling, and listing from fetching.
+//! [`plan_fetches`] copies what a fetch needs out of the document,
+//! [`fetch_planned`] fetches whatever the cache lacks without borrowing the
+//! document, and [`StyleState::cached_sources`] only assembles. A `<link>`
+//! whose body has not arrived is therefore absent
 //! from the list rather than blocking it, and its arrival bumps
 //! [`StyleState::completed_fetches`], which is part of the signature.
 //!
 //! Fetches are sequential and share the navigation's deadline. They are not
-//! registered with the settle tracker: whoever calls into this module (the
-//! screenshot and geometry paths) holds the settle itself. Scripts are only
+//! registered with the settle tracker: the screenshot path waits for them
+//! itself, and a concurrent settle call does not count them. Scripts are only
 //! bounded per request; the page keeps no cumulative network ledger, so the
 //! byte and request counters here are the only cumulative charge against
 //! `Budgets::network_bytes` and `Budgets::network_requests` per navigation.
 //! A preferred-set choice by `title` is not modelled: every non-alternate
 //! sheet applies. `crossorigin` is not sent (the script path does not either),
 //! so it is not part of the signature.
-
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the page's render entry points are the only callers"
-    )
-)]
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -294,7 +288,7 @@ impl StyleState {
     }
 
     pub(crate) fn signature(&self, doc: &Document) -> StyleSignature {
-        StyleSignature::of(doc, self.completed)
+        StyleSignature::of(doc, self.completed_fetches())
     }
 
     /// Failures since the last call, for the page to report as events.
@@ -516,46 +510,99 @@ impl StyleState {
     }
 }
 
-/// Collects the sheets of `doc`, fetching the linked ones and every import the
-/// cache lacks.
+/// What fetching the sheets of a document needs from the document, copied out
+/// so the document is not borrowed while the fetches are awaited.
+pub(crate) struct FetchPlan {
+    env: Env,
+    candidates: Vec<Candidate>,
+}
+
+/// Lists what a fetch for `doc` would load. `None` when the tier only records
+/// style hints and leaves the sheets for the upgrade.
+pub(crate) fn plan_fetches(
+    doc: &Document,
+    base_url: &Url,
+    ctx: &StyleContext<'_>,
+) -> Option<FetchPlan> {
+    if ctx.fetch_policy.disposition(PreloadKind::Style) != HintDisposition::Issue {
+        return None;
+    }
+    Some(FetchPlan {
+        env: Env {
+            fallback: Encoding::for_label(doc.encoding().as_bytes()).unwrap_or_else(utf8),
+            quirks: doc.quirks_mode() == QuirksMode::Quirks,
+        },
+        candidates: candidates(doc, base_url),
+    })
+}
+
+impl FetchPlan {
+    /// The linked sheets of the plan that `state` neither holds nor has given
+    /// up on: what a fetch would still load.
+    pub(crate) fn unfetched(&self, state: &StyleState) -> Vec<Url> {
+        self.candidates
+            .iter()
+            .filter_map(|candidate| match candidate {
+                Candidate::Link {
+                    url,
+                    disabled: false,
+                    ..
+                } if !state.sheets.contains_key(url) => Some(url.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// Fetches the linked sheets of `plan` and every import the cache lacks.
 ///
 /// A fetch failure is recorded in `state` (see [`StyleState::take_failures`])
-/// and leaves that sheet out; it never fails the collection. Sheets are fetched
-/// one at a time in document order.
+/// and leaves that sheet out; it never fails the fetch. Sheets are fetched one
+/// at a time in document order.
+pub(crate) async fn fetch_planned(
+    plan: FetchPlan,
+    base_url: &Url,
+    ctx: &StyleContext<'_>,
+    state: &mut StyleState,
+) {
+    let FetchPlan { env, candidates } = plan;
+    for candidate in candidates {
+        match candidate {
+            Candidate::Inline { text, .. } => {
+                let direct = direct_imports(&text, base_url);
+                state
+                    .load_imports(ctx, &env, base_url, direct, env.fallback)
+                    .await;
+            }
+            Candidate::Link {
+                url,
+                disabled: false,
+                ..
+            } => {
+                state.ensure(ctx, &env, &url, env.fallback).await;
+                if let Some(Some(sheet)) = state.sheets.get(&url) {
+                    let (direct, encoding) = (sheet.imports.clone(), sheet.encoding);
+                    state.load_imports(ctx, &env, &url, direct, encoding).await;
+                }
+            }
+            Candidate::Link { .. } => {}
+        }
+    }
+}
+
+/// Collects the sheets of `doc` in one call, for tests that hold the document
+/// across the fetches. The page fetches through [`plan_fetches`] and
+/// [`fetch_planned`] and assembles with [`StyleState::cached_sources`], so a
+/// script engine's document is never borrowed across an await.
+#[cfg(test)]
 pub(crate) async fn collect_style_sources(
     doc: &Document,
     base_url: &Url,
     ctx: &StyleContext<'_>,
     state: &mut StyleState,
 ) -> Vec<StyleSource> {
-    // A tier that only records style hints leaves the sheets for the upgrade.
-    if ctx.fetch_policy.disposition(PreloadKind::Style) == HintDisposition::Issue {
-        let env = Env {
-            fallback: Encoding::for_label(doc.encoding().as_bytes()).unwrap_or_else(utf8),
-            quirks: doc.quirks_mode() == QuirksMode::Quirks,
-        };
-        for candidate in candidates(doc, base_url) {
-            match candidate {
-                Candidate::Inline { text, .. } => {
-                    let direct = direct_imports(&text, base_url);
-                    state
-                        .load_imports(ctx, &env, base_url, direct, env.fallback)
-                        .await;
-                }
-                Candidate::Link {
-                    url,
-                    disabled: false,
-                    ..
-                } => {
-                    state.ensure(ctx, &env, &url, env.fallback).await;
-                    if let Some(Some(sheet)) = state.sheets.get(&url) {
-                        let (direct, encoding) = (sheet.imports.clone(), sheet.encoding);
-                        state.load_imports(ctx, &env, &url, direct, encoding).await;
-                    }
-                }
-                Candidate::Link { .. } => {}
-            }
-        }
+    if let Some(plan) = plan_fetches(doc, base_url, ctx) {
+        fetch_planned(plan, base_url, ctx, state).await;
     }
     state.cached_sources(doc, base_url)
 }

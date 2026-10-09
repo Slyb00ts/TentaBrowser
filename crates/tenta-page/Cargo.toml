@@ -11,7 +11,7 @@ publish = false
 [features]
 # Screenshots and geometry through tenta-render. Opt-in so the default build keeps
 # the Tier 1 graph (D-030).
-render = ["dep:tenta-render", "dep:tenta-css"]
+render = ["dep:tenta-render", "dep:tenta-css", "dep:tenta-layout"]
 
 [dependencies]
 tenta-core = { workspace = true }
@@ -20,6 +20,8 @@ tenta-html = { workspace = true }
 tenta-dom = { workspace = true }
 tenta-js = { workspace = true }
 tenta-render = { workspace = true, optional = true }
+# Only for the clip rectangle a capture hands to the render session.
+tenta-layout = { workspace = true, optional = true }
 # Stylesheet sources handed to the render session are tenta-css cascade types.
 tenta-css = { workspace = true, optional = true, features = ["stylo"] }
 

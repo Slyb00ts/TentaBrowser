@@ -74,13 +74,18 @@ pub enum Error {
     /// Anything else, with a stable machine-readable `code`.
     #[error("{code}: {message}")]
     Other { code: String, message: String },
+
+    /// The page lent its document to another operation, such as a render, and
+    /// has it back as soon as that operation ends.
+    #[error("the page's document is in use by another operation")]
+    Busy,
 }
 
 impl Error {
     /// Whether a caller may reasonably retry the same operation.
     pub fn retryable(&self) -> bool {
         match self {
-            Error::Timeout { .. } | Error::Net { .. } => true,
+            Error::Timeout { .. } | Error::Net { .. } | Error::Busy => true,
             Error::Io(e) => matches!(
                 e.kind(),
                 std::io::ErrorKind::Interrupted

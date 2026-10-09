@@ -12,6 +12,7 @@ use tokio::sync::{broadcast, watch};
 use crate::error::CdpError;
 use crate::ids::random_id;
 use crate::options::CdpOptions;
+use crate::page_runtime::{ConsoleRing, ContextIds};
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // A handler that panicked must not take every other connection with it.
@@ -33,6 +34,8 @@ pub struct Target {
     context_id: String,
     page: Page,
     attached: AtomicUsize,
+    contexts: ContextIds,
+    console: Arc<ConsoleRing>,
 }
 
 impl Target {
@@ -46,6 +49,14 @@ impl Target {
 
     pub fn page(&self) -> &Page {
         &self.page
+    }
+
+    pub(crate) fn contexts(&self) -> &ContextIds {
+        &self.contexts
+    }
+
+    pub(crate) fn console(&self) -> &Arc<ConsoleRing> {
+        &self.console
     }
 
     pub fn url(&self) -> String {
@@ -235,6 +246,17 @@ impl Backend {
             context_id: context_id.to_owned(),
             page,
             attached: AtomicUsize::new(0),
+            contexts: ContextIds::default(),
+            console: Arc::new(ConsoleRing::new()),
+        });
+        // Subscribed before the page does anything: a session that enables
+        // Runtime later is owed what the page logged meanwhile. The task holds
+        // the ring, not the target, so it ends with the page's event stream.
+        let (ring, mut events) = (Arc::clone(&target.console), target.page.events());
+        tokio::spawn(async move {
+            while let Some(event) = events.next().await {
+                ring.record(event);
+            }
         });
         lock(&self.targets).push(Arc::clone(&target));
         let _ = self.events.send(TargetEvent::Created(Arc::clone(&target)));

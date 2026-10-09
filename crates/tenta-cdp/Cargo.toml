@@ -8,6 +8,15 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# Runs the Runtime tests against a real page engine. Without it the crate
+# builds no JavaScript, like the other hosts.
+v8 = ["tenta-browser/v8"]
+
+[[test]]
+name = "runtime"
+required-features = ["v8"]
+
 [dependencies]
 tenta-core = { workspace = true }
 tenta-browser = { workspace = true }

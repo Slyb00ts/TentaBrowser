@@ -1147,7 +1147,7 @@ async fn methods_nobody_implements_still_answer_32601() {
         "Target.getDevToolsTarget",
         "Target.openDevTools",
         "Browser.setWindowBounds",
-        "Runtime.evaluate",
+        "Runtime.queryObjects",
         "Page.navigate",
         "Inspector.nonsense",
     ] {
