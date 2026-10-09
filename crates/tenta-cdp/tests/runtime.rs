@@ -894,7 +894,7 @@ async fn await_promise_waits_for_the_settlement() {
         if message["id"] == id {
             assert_eq!(
                 error_of(&message),
-                (-32000, "Execution context was destroyed.")
+                (-32000, "Inspected target navigated or closed")
             );
             break;
         }
@@ -1144,6 +1144,144 @@ async fn a_fresh_page_has_a_blank_document_with_a_context() {
     page.event("Runtime.executionContextDestroyed").await;
     let next = page.event("Runtime.executionContextCreated").await["context"].clone();
     assert_ne!(next["id"], context["id"]);
+    fixture.stop().await;
+}
+
+// ---- awaited evaluations do not hold the session ------------------------
+
+impl Page {
+    /// Sends a command without waiting for its answer; returns its id.
+    async fn send(&mut self, method: &str, params: Value) -> u64 {
+        let id = self.client.next_id;
+        self.client.next_id += 1;
+        let message = json!({
+            "id": id, "sessionId": self.session, "method": method, "params": params,
+        });
+        self.client
+            .ws
+            .send(Message::text(message.to_string()))
+            .await
+            .unwrap();
+        id
+    }
+
+    /// The answer to command `id`; other messages stay in the backlog.
+    async fn answer(&mut self, id: u64) -> Value {
+        if let Some(at) = self.client.backlog.iter().position(|m| m["id"] == id) {
+            return self.client.backlog.remove(at);
+        }
+        loop {
+            let message = self.client.read_wire().await;
+            if message["id"] == id {
+                return message;
+            }
+            self.client.backlog.push(message);
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pending_awaited_evaluation_does_not_block_a_navigation() {
+    let fixture = Fixture::start(&[("/", INDEX)]).await;
+    let mut page = fixture.page().await;
+    fixture.goto(&page, "/").await;
+
+    let pending = page
+        .send(
+            "Runtime.evaluate",
+            json!({
+                "expression": "(globalThis.__awaiting = true, new Promise(() => {}))",
+                "awaitPromise": true,
+            }),
+        )
+        .await;
+    let navigate = page
+        .send("Page.navigate", json!({ "url": fixture.site.url("/") }))
+        .await;
+    let navigated = page.answer(navigate).await;
+    assert!(navigated.get("error").is_none(), "{navigated}");
+    let destroyed = page.answer(pending).await;
+    assert_eq!(
+        error_of(&destroyed),
+        (-32000, "Inspected target navigated or closed")
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pending_awaited_evaluation_does_not_block_the_next_command() {
+    let fixture = Fixture::start(&[("/", INDEX)]).await;
+    let mut page = fixture.page().await;
+    fixture.goto(&page, "/").await;
+
+    let pending = page
+        .send(
+            "Runtime.evaluate",
+            json!({
+                "expression": "new Promise((resolve) => { globalThis.__resolve = resolve; })",
+                "awaitPromise": true,
+                "returnByValue": true,
+            }),
+        )
+        .await;
+    // Runs after the first script entered, and sees its effect.
+    let second = page
+        .evaluate(
+            "typeof globalThis.__resolve",
+            json!({ "returnByValue": true }),
+        )
+        .await;
+    assert_eq!(second["result"]["value"], "function");
+    let context = page.enable().await["id"].clone();
+    let called = page
+        .send(
+            "Runtime.callFunctionOn",
+            json!({
+                "functionDeclaration": "function () { return new Promise(() => {}); }",
+                "executionContextId": context,
+                "awaitPromise": true,
+            }),
+        )
+        .await;
+    let third = page
+        .evaluate(
+            "__resolve({ late: 1 }), 5",
+            json!({ "returnByValue": true }),
+        )
+        .await;
+    assert_eq!(third["result"]["value"], 5);
+    let late = page.answer(pending).await;
+    assert_eq!(late["result"]["result"]["value"], json!({ "late": 1 }));
+    // The pending call is still waiting; ending the realm rejects it.
+    fixture.goto(&page, "/").await;
+    let destroyed = page.answer(called).await;
+    assert_eq!(
+        error_of(&destroyed),
+        (-32000, "Inspected target navigated or closed")
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn detaching_with_a_pending_awaited_evaluation_answers_promptly() {
+    let fixture = Fixture::start(&[("/", INDEX)]).await;
+    let mut page = fixture.page().await;
+    fixture.goto(&page, "/").await;
+    page.send(
+        "Runtime.evaluate",
+        json!({ "expression": "new Promise(() => {})", "awaitPromise": true }),
+    )
+    .await;
+    let session = page.session.clone();
+    let detached = page
+        .client
+        .result(
+            None,
+            "Target.detachFromTarget",
+            json!({ "sessionId": session }),
+        )
+        .await;
+    assert_eq!(detached, json!({}));
     fixture.stop().await;
 }
 

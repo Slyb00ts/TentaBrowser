@@ -197,7 +197,20 @@ impl Page {
         expression: &str,
         options: EvalOptions,
     ) -> Result<Evaluation> {
-        self.run(Job::Expression(expression.to_owned()), options)
+        self.evaluate_notifying(expression, options, || {}).await
+    }
+
+    /// [`Page::evaluate_with`] that calls `on_pending` once the script has run
+    /// and the evaluation only waits for a promise to settle. It is not called
+    /// when the evaluation finishes without waiting. It exists for the CDP
+    /// host, which frees its command queue at that point.
+    pub async fn evaluate_notifying(
+        &self,
+        expression: &str,
+        options: EvalOptions,
+        on_pending: impl FnOnce() + Send,
+    ) -> Result<Evaluation> {
+        self.run(Job::Expression(expression.to_owned()), options, on_pending)
             .await
     }
 
@@ -228,12 +241,26 @@ impl Page {
         arguments: Vec<CallArgument>,
         options: EvalOptions,
     ) -> Result<Evaluation> {
+        self.call_function_on_id_notifying(target, function, arguments, options, || {})
+            .await
+    }
+
+    /// [`Page::call_function_on_id`] with the callback of
+    /// [`Page::evaluate_notifying`], and likewise for the CDP host.
+    pub async fn call_function_on_id_notifying(
+        &self,
+        target: Option<&str>,
+        function: &str,
+        arguments: Vec<CallArgument>,
+        options: EvalOptions,
+        on_pending: impl FnOnce() + Send,
+    ) -> Result<Evaluation> {
         let job = Job::Call {
             target: target.map(str::to_owned),
             function: function.to_owned(),
             arguments,
         };
-        self.run(job, options).await
+        self.run(job, options, on_pending).await
     }
 
     /// The members of the object `id` names, read without running any getter of
@@ -362,7 +389,12 @@ impl Page {
         self.inner.config.budgets.evaluate_time
     }
 
-    async fn run(&self, job: Job, options: EvalOptions) -> Result<Evaluation> {
+    async fn run(
+        &self,
+        job: Job,
+        options: EvalOptions,
+        on_pending: impl FnOnce() + Send,
+    ) -> Result<Evaluation> {
         if let World::Isolated(name) = &options.world {
             return Err(Error::unsupported(format!(
                 "isolated world {name:?}: the engines run one world per realm"
@@ -432,6 +464,7 @@ impl Page {
                     inner: Arc::clone(&self.inner),
                     ticket,
                 };
+                on_pending();
                 self.wait(receiver, timeout).await?
             }
         };
@@ -449,7 +482,10 @@ impl Page {
                 if self.inner.state.lock().closed {
                     Err(Error::Closed)
                 } else {
-                    Err(context_destroyed())
+                    Err(Error::Other {
+                        code: "navigated_while_awaiting".to_owned(),
+                        message: "the document was replaced while a promise was awaited".to_owned(),
+                    })
                 }
             }
             Err(_) => Err(Error::timeout(

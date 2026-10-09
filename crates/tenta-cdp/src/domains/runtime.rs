@@ -35,6 +35,8 @@ struct Runtime;
 
 const NO_CONTEXT: &str = "Cannot find context with specified id";
 const NO_OBJECT: &str = "Could not find object with given id";
+/// What Chromium answers an awaited evaluation a navigation outlived.
+const NAVIGATED_WHILE_AWAITING: &str = "Inspected target navigated or closed";
 const CONTEXT_DESTROYED: &str = "Execution context was destroyed.";
 /// How the realm script words a lookup of an id it does not hold.
 const UNKNOWN_OBJECT_REASON: &str = "could not find an object";
@@ -243,6 +245,9 @@ async fn current_context(target: &Target) -> u64 {
 /// A failure of the page's realm operation, in Chromium's words.
 fn map_error(error: Error) -> CdpError {
     match error {
+        Error::Other { code, .. } if code == "navigated_while_awaiting" => {
+            CdpError::server(NAVIGATED_WHILE_AWAITING)
+        }
         Error::Other { code, .. } if code == "execution_context_destroyed" => {
             CdpError::server(CONTEXT_DESTROYED)
         }
@@ -360,7 +365,11 @@ async fn evaluate(cx: &CommandContext, params: EvaluateParams) -> Result<Value, 
         params.await_promise,
         params.timeout,
     )?;
-    let outcome = page.evaluate_with(&params.expression, options).await;
+    // Past this point the script has run and only the settlement is awaited,
+    // which the client may need other commands (a navigation) to end.
+    let outcome = page
+        .evaluate_notifying(&params.expression, options, || cx.release_order())
+        .await;
     finish(cx, target, outcome).await
 }
 
@@ -471,11 +480,12 @@ async fn call_function_on(
         None,
     )?;
     let outcome = page
-        .call_function_on_id(
+        .call_function_on_id_notifying(
             params.object_id.as_deref(),
             &params.function_declaration,
             arguments,
             options,
+            || cx.release_order(),
         )
         .await;
     finish(cx, target, outcome).await
