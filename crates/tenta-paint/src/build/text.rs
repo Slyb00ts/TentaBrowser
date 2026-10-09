@@ -4,7 +4,7 @@
 //! Liberation Sans: whole-pixel rows, an automatic thickness of a tenth of
 //! the font size, and positions taken from the first run's ascent. Skip-ink
 //! is not implemented: underlines run unbroken through descenders, and each
-//! underlined fragment that asked for skip-ink is counted as unsupported.
+//! underlined fragment that asked for skip-ink is counted as approximated.
 
 use std::collections::BTreeMap;
 
@@ -233,9 +233,14 @@ impl FontMetrics {
     }
 }
 
-/// Counts what `frag` asks of the text emitter that is not drawn: blurred
-/// shadows and skip-ink on underlines.
-pub(super) fn count_unsupported(frag: &Fragment, counts: &mut BTreeMap<&'static str, usize>) {
+/// Counts what `frag` asks of the text emitter that is not drawn (blurred
+/// shadows) in `counts`, and what is drawn in a simpler form (skip-ink on
+/// underlines) in `approximated`.
+pub(super) fn count_unsupported(
+    frag: &Fragment,
+    counts: &mut BTreeMap<&'static str, usize>,
+    approximated: &mut BTreeMap<&'static str, usize>,
+) {
     let FragmentKind::Text(text) = &frag.kind else {
         return;
     };
@@ -253,7 +258,7 @@ pub(super) fn count_unsupported(frag: &Fragment, counts: &mut BTreeMap<&'static 
     }
     let decoration = &frag.paint.text_decoration;
     if decoration.underline && decoration.skip_ink && frag.rect.w > 0.0 {
-        *counts.entry("TextDecorationSkipInk").or_default() += 1;
+        *approximated.entry("TextDecorationSkipInk").or_default() += 1;
     }
 }
 
@@ -617,18 +622,20 @@ mod tests {
             s.text_shadow = vec![shadow(1.0, 1.0, 3.0, 1), shadow(2.0, 2.0, 0.0, 2)];
         });
         assert_eq!(kinds(&emitted(&frag, bb)), ["text", "text"]);
-        let mut counts = BTreeMap::new();
-        count_unsupported(&frag, &mut counts);
+        let (mut counts, mut approximated) = (BTreeMap::new(), BTreeMap::new());
+        count_unsupported(&frag, &mut counts, &mut approximated);
         assert_eq!(counts, BTreeMap::from([("TextShadowBlur", 1)]));
+        assert!(approximated.is_empty());
     }
 
     #[test]
     fn skip_ink_is_counted_once_per_underlined_fragment_that_asks_for_it() {
         fn count(edit: impl FnOnce(&mut PaintStyle)) -> BTreeMap<&'static str, usize> {
             let (frag, _) = fragment(vec![run(embedded(SANS), 16.0)], edit);
-            let mut counts = BTreeMap::new();
-            count_unsupported(&frag, &mut counts);
-            counts
+            let (mut counts, mut approximated) = (BTreeMap::new(), BTreeMap::new());
+            count_unsupported(&frag, &mut counts, &mut approximated);
+            assert!(counts.is_empty(), "skip-ink is never a skipped feature");
+            approximated
         }
         assert_eq!(
             count(underlined(|_| {})),

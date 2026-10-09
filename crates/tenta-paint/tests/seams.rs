@@ -419,11 +419,15 @@ fn underlined_text_rasterises_to_the_golden() {
         }),
     );
     let out = render(&scene.finish());
-    // Skip-ink is not drawn and is reported once per underlined fragment.
+    // Skip-ink is not drawn: the lines are complete but approximated, once
+    // per underlined fragment.
+    assert!(out.stats.is_complete());
+    assert!(!out.stats.is_exact());
     assert_eq!(
-        out.stats.skipped,
+        out.stats.approximated,
         std::collections::BTreeMap::from([("TextDecorationSkipInk", 2)])
     );
+    assert_eq!(out.stats.approximated_total(), 2);
     // The underline of the first line sits one pixel under its baseline
     // (6 + round(0.905 * 20) = 24): rows 25 and 26 hold the line, a pixel
     // thick plus the 0.17 px remainder.

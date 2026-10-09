@@ -601,6 +601,26 @@ fn unsupported_items_are_skipped_and_reported_by_kind() {
 }
 
 #[test]
+fn approximated_features_are_reported_apart_from_skipped_ones() {
+    let list = DisplayList {
+        items: vec![fill(Rect::new(0.0, 0.0, 2.0, 2.0), rgb(255, 0, 0))],
+        approximated: [("TextDecorationSkipInk", 3), ("Nothing", 0)].into(),
+        ..DisplayList::default()
+    };
+    let out = rasterize(&list, &options(4, 4), &ImageStore::new()).expect("valid size");
+    assert!(out.stats.is_complete(), "approximated pixels are drawn");
+    assert!(!out.stats.is_exact());
+    assert_eq!(out.stats.approximated_total(), 3);
+    assert_eq!(out.stats.skipped_total(), 0);
+    assert_eq!(
+        out.stats.approximated.len(),
+        1,
+        "zero counts are not recorded"
+    );
+    assert!(RasterStats::default().is_exact());
+}
+
+#[test]
 fn degenerate_geometry_draws_nothing_and_does_not_panic() {
     let items = vec![
         fill(Rect::new(f32::NAN, 0.0, 4.0, 4.0), rgb(255, 0, 0)),

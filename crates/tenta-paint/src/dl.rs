@@ -134,6 +134,10 @@ pub struct DisplayList {
     /// Style features the builder could not express as items, by name and
     /// number of fragments; the rasteriser reports them with what it skips.
     pub unsupported: BTreeMap<&'static str, usize>,
+    /// Style features the builder draws in a simpler form than specified, by
+    /// name and number of fragments; the rasteriser reports them as
+    /// approximated.
+    pub approximated: BTreeMap<&'static str, usize>,
 }
 
 impl DisplayList {

@@ -1,8 +1,10 @@
 //! Screenshot request and result types.
 
+use std::time::Duration;
+
 use tenta_core::NodeId;
 use tenta_layout::Rect;
-use tenta_paint::PaintError;
+use tenta_paint::{PaintError, RasterStats};
 
 /// Output encoding.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -23,11 +25,19 @@ pub enum ImageFormat {
 pub enum Capture {
     /// The current viewport.
     Viewport,
-    /// The whole scrollable document.
+    /// The whole scrollable extent, laid out once at the configured viewport:
+    /// the width is the larger of the viewport and the content, `vh` units
+    /// are unchanged and fixed-position boxes appear once, where the first
+    /// screen has them.
     FullPage,
-    /// A rectangle in document coordinates.
+    /// A rectangle in document coordinates (CSS pixels), widened outwards to
+    /// whole device pixels.
     Clip(Rect),
-    /// The border box of an element.
+    /// The union of the border boxes of an element's fragments, widened
+    /// outwards to whole device pixels. The boxes are untransformed layout
+    /// boxes in document coordinates: `transform` and scroll offsets are not
+    /// folded in, so a transformed element is captured at the place it would
+    /// have without the transform.
     Element(NodeId),
 }
 
@@ -38,7 +48,9 @@ pub struct ScreenshotOptions {
     pub format: ImageFormat,
     /// Area.
     pub capture: Capture,
-    /// Device scale override; `None` uses the viewport's.
+    /// Multiplier on the raster only, as the CDP clip scale: the output has
+    /// `CSS pixels x the viewport's device pixel ratio x scale` pixels per
+    /// side and layout and media queries do not see it. `None` is 1.
     pub scale: Option<f32>,
     /// Leave the page background transparent.
     pub omit_background: bool,
@@ -55,8 +67,21 @@ impl Default for ScreenshotOptions {
     }
 }
 
+/// Wall-clock time spent in each stage of one screenshot.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct StageTimes {
+    /// Style flush, box tree and layout; zero when they were already current.
+    pub layout: Duration,
+    /// Display list construction; zero when the retained list was current.
+    pub display_list: Duration,
+    /// Rasterisation.
+    pub raster: Duration,
+    /// Image encoding.
+    pub encode: Duration,
+}
+
 /// An encoded screenshot.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Screenshot {
     /// Encoded bytes.
     pub bytes: Vec<u8>,
@@ -66,6 +91,14 @@ pub struct Screenshot {
     pub width: u32,
     /// Height in device pixels.
     pub height: u32,
+    /// What the rasteriser could not draw. An image whose stats are not
+    /// [complete](RasterStats::is_complete) is missing content.
+    pub stats: RasterStats,
+    /// True when a full-page capture was cut off at the size limits; the
+    /// document is taller than `height` allows.
+    pub clamped: bool,
+    /// Time per stage.
+    pub times: StageTimes,
 }
 
 /// Why a render failed.
@@ -80,6 +113,14 @@ pub enum RenderError {
     },
     /// The document has no root element to render.
     NoRoot,
+    /// The element produced no box: it is `display: none`, detached, or not an
+    /// element.
+    NoBox(NodeId),
+    /// An option is out of range: a clip that is not a finite rectangle with
+    /// a positive area, or a scale that is not a finite positive number.
+    InvalidOption(&'static str),
+    /// The encoder for this format is not implemented.
+    UnsupportedFormat(ImageFormat),
     /// Rasterisation failed.
     Paint(PaintError),
 }
@@ -91,6 +132,11 @@ impl std::fmt::Display for RenderError {
                 write!(f, "a {width}x{height} capture exceeds the render limits")
             }
             RenderError::NoRoot => f.write_str("the document has no root element"),
+            RenderError::NoBox(node) => write!(f, "node {} has no box to capture", node.raw()),
+            RenderError::InvalidOption(what) => write!(f, "invalid screenshot option: {what}"),
+            RenderError::UnsupportedFormat(format) => {
+                write!(f, "cannot encode {format:?} screenshots yet")
+            }
             RenderError::Paint(err) => write!(f, "paint failed: {err}"),
         }
     }

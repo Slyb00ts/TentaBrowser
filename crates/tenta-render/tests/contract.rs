@@ -5,8 +5,8 @@ use tenta_core::NodeId;
 use tenta_dom::Document;
 use tenta_layout::Rect;
 use tenta_render::{
-    Capture, FontPolicy, ImageFormat, RenderConfig, RenderError, RenderSession, Screenshot,
-    ScreenshotOptions, Viewport,
+    Capture, FontPolicy, ImageFormat, RasterStats, RenderConfig, RenderError, RenderSession,
+    Screenshot, ScreenshotOptions, StageTimes, Viewport,
 };
 
 #[test]
@@ -41,6 +41,9 @@ fn public_types_are_constructible() {
         format: ImageFormat::Webp,
         width: 1,
         height: 1,
+        stats: RasterStats::default(),
+        clamped: false,
+        times: StageTimes::default(),
     };
     assert_eq!(shot.width, 1);
     assert_eq!(

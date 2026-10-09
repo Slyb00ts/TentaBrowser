@@ -71,17 +71,36 @@ pub struct RasterStats {
     /// Skipped items by kind, in name order. Glyphs the glyph renderer could
     /// not draw are counted under `"Glyph"`.
     pub skipped: BTreeMap<&'static str, usize>,
+    /// Features drawn in a simpler form than specified, by kind: the pixels
+    /// are present but differ from the exact rendering.
+    pub approximated: BTreeMap<&'static str, usize>,
 }
 
 impl RasterStats {
-    /// True when every item was drawn.
+    /// True when every item was drawn, possibly in an approximated form.
     pub fn is_complete(&self) -> bool {
         self.skipped.is_empty()
+    }
+
+    /// True when every item was drawn and none was approximated.
+    pub fn is_exact(&self) -> bool {
+        self.is_complete() && self.approximated.is_empty()
+    }
+
+    /// Approximated features over all kinds.
+    pub fn approximated_total(&self) -> usize {
+        self.approximated.values().sum()
     }
 
     /// Items skipped over all kinds.
     pub fn skipped_total(&self) -> usize {
         self.skipped.values().sum()
+    }
+
+    fn approximate(&mut self, kind: &'static str, count: usize) {
+        if count > 0 {
+            *self.approximated.entry(kind).or_default() += count;
+        }
     }
 
     fn skip(&mut self, kind: &'static str, count: usize) {
@@ -113,6 +132,9 @@ pub fn rasterize(
     let mut painter = Painter::new(opts)?;
     for (&feature, &count) in &list.unsupported {
         painter.stats.skip(feature, count);
+    }
+    for (&feature, &count) in &list.approximated {
+        painter.stats.approximate(feature, count);
     }
     let mut index = 0;
     while index < list.items.len() {

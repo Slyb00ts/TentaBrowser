@@ -10,6 +10,9 @@ mod screenshot;
 mod session;
 mod viewport;
 
-pub use screenshot::{Capture, ImageFormat, RenderError, Screenshot, ScreenshotOptions};
-pub use session::RenderSession;
+pub use screenshot::{
+    Capture, ImageFormat, RenderError, Screenshot, ScreenshotOptions, StageTimes,
+};
+pub use session::{RenderSession, WorkCounters};
+pub use tenta_paint::RasterStats;
 pub use viewport::{FontPolicy, RenderConfig, Viewport};

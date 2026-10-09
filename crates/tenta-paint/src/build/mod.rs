@@ -26,10 +26,12 @@ pub struct PaintContext<'a> {
 ///
 /// Every `Push*` item in the result is closed by its `Pop*`.
 pub fn build(frags: &FragmentTree, cx: &PaintContext) -> DisplayList {
+    let (unsupported, approximated) = effects::count_unsupported(frags);
     DisplayList {
         items: stacking::paint(frags, cx),
         bounds: frags.scroll_extent,
-        unsupported: effects::count_unsupported(frags),
+        unsupported,
+        approximated,
     }
 }
 

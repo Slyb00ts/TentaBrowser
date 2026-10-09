@@ -64,12 +64,16 @@ pub(super) fn close(scope: EffectScope, items: &mut Vec<Item>) {
 }
 
 /// Counts, by name, the painted fragments that use style the display list
-/// cannot express yet: `filter`, `mix-blend-mode` and what the text emitter
-/// leaves out. Fragments the painter skips (fully transparent subtrees) are
+/// cannot express yet (`filter`, `mix-blend-mode` and what the text emitter
+/// leaves out) and, separately, those drawn in a simpler form than
+/// specified. Fragments the painter skips (fully transparent subtrees) are
 /// not counted. `clip-path` and `overflow-clip-margin` are not counted because
 /// fragments do not carry them.
-pub(super) fn count_unsupported(frags: &FragmentTree) -> BTreeMap<&'static str, usize> {
+pub(super) fn count_unsupported(
+    frags: &FragmentTree,
+) -> (BTreeMap<&'static str, usize>, BTreeMap<&'static str, usize>) {
     let mut counts = BTreeMap::new();
+    let mut approximated = BTreeMap::new();
     let mut pending: Vec<FragId> = vec![frags.root];
     while let Some(id) = pending.pop() {
         let frag = frags.get(id);
@@ -82,10 +86,10 @@ pub(super) fn count_unsupported(frags: &FragmentTree) -> BTreeMap<&'static str, 
         if frag.paint.blend != BlendMode::Normal {
             *counts.entry("BlendMode").or_default() += 1;
         }
-        text::count_unsupported(frag, &mut counts);
+        text::count_unsupported(frag, &mut counts, &mut approximated);
         pending.extend(frag.children.iter().copied());
     }
-    counts
+    (counts, approximated)
 }
 
 #[cfg(test)]
@@ -229,10 +233,11 @@ mod tests {
             paint(|s| s.filter = vec![FilterOp::Invert(1.0)]),
         );
         let tree = builder.finish(root, rect, rect);
-        let counts = count_unsupported(&tree);
+        let (counts, approximated) = count_unsupported(&tree);
         assert_eq!(counts.get("Filter"), Some(&1));
         assert_eq!(counts.get("BlendMode"), Some(&1));
         assert_eq!(counts.len(), 2);
+        assert!(approximated.is_empty());
     }
 
     #[test]
