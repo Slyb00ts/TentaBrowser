@@ -36,6 +36,11 @@ pub struct StoreEntry {
     pub has_data: Cell<bool>,
     /// A descendant needs a style recomputation.
     pub dirty_descendants: Cell<bool>,
+    /// Raw `selectors::matching::ElementSelectorFlags` recorded by matching.
+    /// Kept across flushes because incremental restyle reads the parent's
+    /// `HAS_SLOW_SELECTOR*` and `HAS_EMPTY_SELECTOR` bits long after the
+    /// matching that set them. The flags type has no `Default`, hence the bits.
+    pub selector_flags: Cell<usize>,
     /// Restyle hint and dirtiness bits for the incremental path.
     pub restyle: Cell<RestyleBits>,
     /// The parsed `style` attribute.

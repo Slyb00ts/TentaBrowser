@@ -7,9 +7,17 @@
 //!   document, the store and the atom maps.
 //! - [`Handle`] is the copyable element/node reference Stylo passes around.
 
+mod element;
 mod hints;
+mod node;
+mod selector;
+#[cfg(test)]
+mod selector_tests;
+mod state;
 mod store;
 mod style_attr;
+#[cfg(test)]
+mod test_support;
 
 use std::cell::OnceCell;
 use std::fmt;
@@ -27,6 +35,7 @@ use tenta_core::NodeId;
 use tenta_dom::Document;
 
 use super::atoms::AtomMaps;
+pub use node::{ChildNodes, DocHandle, NodeHandle, ShadowRootHandle};
 pub use store::{RestyleBits, StoreEntry, StyleAttrSlot, StyleStore};
 
 /// Everything a traversal reads, borrowed for the duration of one flush.

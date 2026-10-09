@@ -1513,7 +1513,7 @@ fn supports_context(url_data: &UrlExtraData) -> ParserContext<'_> {
     )
 }
 
-fn configure_stylo() {
+pub(crate) fn configure_stylo() {
     // Stylo's standalone Servo defaults leave several broadly deployed CSS
     // features disabled. These preferences are process-wide, so configure them
     // once before the first stylesheet or CSS.supports parse in any page.
@@ -1522,6 +1522,7 @@ fn configure_stylo() {
         stylo_static_prefs::set_pref!("layout.grid.enabled", true);
         stylo_static_prefs::set_pref!("layout.writing-mode.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.has-selector.enabled", true);
+        stylo_static_prefs::set_pref!("layout.css.nth-child-of.enabled", true);
         stylo_static_prefs::set_pref!("layout.container-queries.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.at-scope.enabled", true);
     });
@@ -1530,6 +1531,13 @@ fn configure_stylo() {
 #[cfg(test)]
 mod sheet_link_tests {
     use super::*;
+
+    #[test]
+    fn nth_child_of_selectors_parse_into_a_rule() {
+        let base = Url::parse("https://example.test/style.css").unwrap();
+        let sheet = CssStyleSheet::parse("li:nth-child(2n+1 of .x) { color: red }", base);
+        assert!(sheet.rule_at(0).is_some());
+    }
 
     #[test]
     fn detached_insertion_marker_releases_without_another_mutation() {

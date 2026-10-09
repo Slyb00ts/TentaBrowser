@@ -582,16 +582,9 @@ impl<'a> SelectorsElement for ElementRef<'a> {
             | PseudoClass::Target
             | PseudoClass::Visited => false,
             PseudoClass::Link | PseudoClass::AnyLink => self.is_link(),
-            PseudoClass::Checked => {
-                (matches!(tag, Some(t) if t == atoms::INPUT)
-                    && document.has_attribute(self.id, atoms::CHECKED))
-                    || (matches!(tag, Some(t) if t == atoms::OPTION)
-                        && document.has_attribute(self.id, atoms::SELECTED))
-            }
+            PseudoClass::Checked => is_checked(document, self.id),
             PseudoClass::Disabled => is_disabled(document, self.id),
-            PseudoClass::Enabled => {
-                is_form_control(document, self.id) && !is_disabled(document, self.id)
-            }
+            PseudoClass::Enabled => is_enabled(document, self.id),
             PseudoClass::Required => {
                 matches!(tag, Some(t) if t == atoms::INPUT || t == atoms::SELECT || t == atoms::TEXTAREA)
                     && document.attribute_str(self.id, "required").is_some()
@@ -600,34 +593,12 @@ impl<'a> SelectorsElement for ElementRef<'a> {
                 matches!(tag, Some(t) if t == atoms::INPUT || t == atoms::SELECT || t == atoms::TEXTAREA)
                     && document.attribute_str(self.id, "required").is_none()
             }
-            PseudoClass::ReadWrite => {
-                // input/textarea without readonly and not disabled, or contenteditable
-                if matches!(tag, Some(t) if t == atoms::INPUT || t == atoms::TEXTAREA) {
-                    return document.attribute_str(self.id, "readonly").is_none()
-                        && !is_disabled(document, self.id);
-                }
-                // contenteditable elements are always read-write
-                document.attribute_str(self.id, "contenteditable").is_some()
-            }
-            PseudoClass::ReadOnly => {
-                // input/textarea with readonly attribute, or everything else except contenteditable
-                if matches!(tag, Some(t) if t == atoms::INPUT || t == atoms::TEXTAREA) {
-                    return document.attribute_str(self.id, "readonly").is_some();
-                }
-                // Everything else except contenteditable is read-only
-                document.attribute_str(self.id, "contenteditable").is_none()
-            }
+            PseudoClass::ReadWrite => is_read_write(document, self.id),
+            PseudoClass::ReadOnly => !is_read_write(document, self.id),
             PseudoClass::Indeterminate => {
                 document.attribute_str(self.id, "indeterminate").is_some()
             }
-            PseudoClass::PlaceholderShown => {
-                matches!(tag, Some(t) if t == atoms::INPUT || t == atoms::TEXTAREA)
-                    && document.has_attribute(self.id, atoms::PLACEHOLDER)
-                    && document
-                        .attribute(self.id, atoms::VALUE)
-                        .unwrap_or("")
-                        .is_empty()
-            }
+            PseudoClass::PlaceholderShown => is_placeholder_shown(document, self.id),
             PseudoClass::Default => {
                 match tag {
                     // option with selected attribute
@@ -671,8 +642,7 @@ impl<'a> SelectorsElement for ElementRef<'a> {
     }
 
     fn is_link(&self) -> bool {
-        matches!(self.document.tag(self.id), Some(t) if t == atoms::A || t == atoms::AREA || t == atoms::LINK)
-            && self.document.has_attribute(self.id, atoms::HREF)
+        is_link(self.document, self.id)
     }
 
     fn is_html_slot_element(&self) -> bool {
@@ -742,7 +712,6 @@ fn lang_matches(actual: &str, expected: &str) -> bool {
 }
 
 /// Form-associated elements: input, button, select, textarea, fieldset.
-/// Option and optgroup are not form-associated in the selector spec sense.
 fn is_form_control(document: &Document, id: NodeId) -> bool {
     matches!(
         document.tag(id),
@@ -755,7 +724,140 @@ fn is_form_control(document: &Document, id: NodeId) -> bool {
     )
 }
 
-fn is_disabled(document: &Document, id: NodeId) -> bool {
+/// `:link` and `:any-link`: `a` and `area` elements with an `href`. No
+/// history exists, so nothing is ever visited.
+pub fn is_link(document: &Document, id: NodeId) -> bool {
+    matches!(document.tag(id), Some(t) if t == atoms::A || t == atoms::AREA)
+        && document.has_attribute(id, atoms::HREF)
+}
+
+/// `:enabled`: the elements that can be disabled, when they are not.
+pub fn is_enabled(document: &Document, id: NodeId) -> bool {
+    let can_be_disabled = is_form_control(document, id)
+        || matches!(document.tag(id), Some(t) if t == atoms::OPTION || t == atoms::OPTGROUP);
+    can_be_disabled && !is_disabled(document, id)
+}
+
+/// `:checked`. A script-set checkedness wins over the `checked` attribute.
+/// Selectedness of `option` is read from the `selected` attribute only; the
+/// document does not track a dirty selectedness.
+pub fn is_checked(document: &Document, id: NodeId) -> bool {
+    match document.tag(id) {
+        Some(t) if t == atoms::INPUT => document
+            .dirty_checkedness(id)
+            .unwrap_or_else(|| document.has_attribute(id, atoms::CHECKED)),
+        Some(t) if t == atoms::OPTION => document.has_attribute(id, atoms::SELECTED),
+        _ => false,
+    }
+}
+
+const INPUT_TYPES: &[&str] = &[
+    "hidden",
+    "text",
+    "search",
+    "tel",
+    "url",
+    "email",
+    "password",
+    "date",
+    "month",
+    "week",
+    "time",
+    "datetime-local",
+    "number",
+    "range",
+    "color",
+    "checkbox",
+    "radio",
+    "file",
+    "submit",
+    "image",
+    "reset",
+    "button",
+];
+
+/// Input types on which `readonly` applies.
+const READONLY_TYPES: &[&str] = &[
+    "text",
+    "search",
+    "url",
+    "tel",
+    "email",
+    "password",
+    "date",
+    "month",
+    "week",
+    "time",
+    "datetime-local",
+    "number",
+];
+
+/// Input types on which `placeholder` applies.
+const PLACEHOLDER_TYPES: &[&str] = &[
+    "text", "search", "url", "tel", "email", "password", "number",
+];
+
+/// Whether the input's type state, after the missing and invalid value
+/// default of `text`, is one of `types`.
+fn input_type_in(document: &Document, id: NodeId, types: &[&str]) -> bool {
+    let value = document.attribute(id, atoms::TYPE).unwrap_or("");
+    let state = INPUT_TYPES
+        .iter()
+        .find(|known| value.eq_ignore_ascii_case(known))
+        .copied()
+        .unwrap_or("text");
+    types.contains(&state)
+}
+
+fn is_text_control(document: &Document, id: NodeId, types: &[&str]) -> Option<bool> {
+    match document.tag(id) {
+        Some(t) if t == atoms::INPUT => Some(input_type_in(document, id, types)),
+        Some(t) if t == atoms::TEXTAREA => Some(true),
+        _ => None,
+    }
+}
+
+/// `:read-write`: a mutable text control, or an editing host. `:read-only` is
+/// its complement.
+pub fn is_read_write(document: &Document, id: NodeId) -> bool {
+    match is_text_control(document, id, READONLY_TYPES) {
+        Some(applies) => {
+            applies && !document.has_attribute(id, atoms::READONLY) && !is_disabled(document, id)
+        }
+        None => document
+            .attribute(id, atoms::CONTENTEDITABLE)
+            .is_some_and(|value| {
+                value.is_empty()
+                    || value.eq_ignore_ascii_case("true")
+                    || value.eq_ignore_ascii_case("plaintext-only")
+            }),
+    }
+}
+
+/// `:placeholder-shown`: a text control with a `placeholder` and an empty
+/// value. A script-set value replaces the default one.
+pub fn is_placeholder_shown(document: &Document, id: NodeId) -> bool {
+    if is_text_control(document, id, PLACEHOLDER_TYPES) != Some(true)
+        || !document.has_attribute(id, atoms::PLACEHOLDER)
+    {
+        return false;
+    }
+    if let Some(value) = document.dirty_value(id) {
+        return value.is_empty();
+    }
+    if document.tag(id) == Some(atoms::TEXTAREA) {
+        return document
+            .children(id)
+            .all(|child| document.text_data(child).is_none_or(str::is_empty));
+    }
+    document
+        .attribute(id, atoms::VALUE)
+        .unwrap_or("")
+        .is_empty()
+}
+
+/// `:disabled`, including inheritance from a disabled `fieldset` or `optgroup`.
+pub fn is_disabled(document: &Document, id: NodeId) -> bool {
     let tag = document.tag(id);
 
     // Option elements: disabled if they have disabled attr or parent optgroup is disabled

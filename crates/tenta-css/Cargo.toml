@@ -16,10 +16,6 @@ required-features = ["stylo"]
 name = "cssom_detached"
 required-features = ["stylo"]
 
-[[example]]
-name = "cascade_spike"
-required-features = ["stylo"]
-
 [features]
 default = []
 # Test helpers over the cascade (`style_html`); never enabled by a product build.
