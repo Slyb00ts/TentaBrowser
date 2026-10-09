@@ -143,9 +143,18 @@ pub enum PageEvent {
     Exception(ExceptionEvent),
     /// Page script called a function installed by [`crate::Page::add_binding`].
     BindingCalled(BindingCall),
+    /// A script realm now exists for the document being installed, numbered as
+    /// the remote object ids, console calls and binding calls of that realm are.
+    /// Sent when the engine is built, before the document's scripts run, so a
+    /// host can announce an execution context before the page's load events
+    /// instead of when it first enters the page.
+    RealmCreated { realm: u64 },
     /// A stylesheet the render could not load, or a limit that cut an import
     /// tree short. The page renders without it.
     StylesheetFailed { url: Url, reason: String },
+    /// An image the render could not fetch or decode. Elements that use it are
+    /// laid out as broken images.
+    ImageFailed { url: String, reason: String },
 }
 
 /// The receiving end of [`crate::Page::events`].

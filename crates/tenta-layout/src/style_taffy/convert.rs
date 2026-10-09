@@ -379,6 +379,22 @@ pub(crate) fn block_alignment_is_normal(
     }
 }
 
+/// Whether `justify-self` of a grid item resolves to `normal`, the inline-axis
+/// twin of [`block_alignment_is_normal`].
+pub(crate) fn inline_alignment_is_normal(
+    item: &stylo::ComputedValues,
+    container: &stylo::ComputedValues,
+) -> bool {
+    let value = |flags: stylo::AlignFlags| flags.value();
+    match value(item.get_position().justify_self.0) {
+        stylo::AlignFlags::NORMAL => true,
+        stylo::AlignFlags::AUTO => {
+            value(container.get_position().justify_items.computed.0.0) == stylo::AlignFlags::NORMAL
+        }
+        _ => false,
+    }
+}
+
 /// A converted style, bound to the computed values its `calc()` handles point into.
 pub(crate) struct ConvertedStyle<'a> {
     style: taffy::Style<stylo::Atom>,
@@ -427,6 +443,12 @@ impl ConvertedStyle<'_> {
     /// Aligns the item to the start of its grid area in the block axis.
     pub(crate) fn start_aligned(mut self) -> Self {
         self.style.align_self = Some(taffy::AlignSelf::START);
+        self
+    }
+
+    /// Aligns the item to the start of its grid area in the inline axis.
+    pub(crate) fn start_aligned_inline(mut self) -> Self {
+        self.style.justify_self = Some(taffy::AlignSelf::START);
         self
     }
 

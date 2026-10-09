@@ -11,7 +11,7 @@ use crate::PaintContext;
 use crate::dl::{Item, Radii};
 
 const NO_RADII: Radii = [0.0; 8];
-const EPSILON: f32 = 1e-3;
+pub(super) const EPSILON: f32 = 1e-3;
 
 /// Whether the style paints anything as a background. This decides what the
 /// canvas takes from the root element.
@@ -109,10 +109,8 @@ fn emit_layer(
         BackgroundContent::Gradient(gradient) => {
             emit_gradient(layer, gradient, origin(), clip, clip_radii, items);
         }
-        BackgroundContent::Image(_) => {
-            if replaced::images_drawable(cx) {
-                replaced::emit_background(layer, origin(), clip, clip_radii, cx, items);
-            }
+        BackgroundContent::Image(key) => {
+            replaced::emit_background(layer, key, origin(), clip, clip_radii, cx, items);
         }
     }
 }
@@ -200,7 +198,7 @@ fn gradient_item(gradient: &GradientPaint, tile: Rect, radii: Radii) -> Option<I
 
 /// The `(start, length)` of every tile along one axis that can reach
 /// `visible`. `area` is the positioning area and `tile` the first tile.
-fn tile_spans(
+pub(super) fn tile_spans(
     area: (f32, f32),
     tile: (f32, f32),
     repeat: RepeatKind,
@@ -224,6 +222,9 @@ fn tile_spans(
         }
         RepeatKind::Space => {
             let count = (area_len / len).floor();
+            if !(len >= MIN_TILE && count <= MAX_SPANS as f32) {
+                return Vec::new();
+            }
             if count < 2.0 {
                 return tile_spans(area, tile, RepeatKind::NoRepeat, visible);
             }
@@ -236,26 +237,48 @@ fn tile_spans(
     }
 }
 
+/// The smallest tile worth drawing, in CSS pixels; below it the pattern is
+/// invisible and the tile count explodes.
+pub(super) const MIN_TILE: f32 = 0.5;
+
+/// Most tiles along one axis. Past it nothing is drawn: the count would be
+/// absurd and the step may be too small for `f32` to advance.
+pub(super) const MAX_SPANS: usize = 4096;
+
 fn repeated(start: f32, len: f32, step: f32, visible: (f32, f32)) -> Vec<(f32, f32)> {
-    let mut cursor = start + ((visible.0 - start) / step).floor() * step;
+    if !(step >= MIN_TILE && len >= MIN_TILE && step.is_finite() && start.is_finite()) {
+        return Vec::new();
+    }
+    // The count is known before the first push, so a huge one never allocates.
+    let first = start + ((visible.0 - start) / step).floor() * step;
+    let count = (visible.1 - first) / step;
+    if count.is_nan() || count > MAX_SPANS as f32 {
+        return Vec::new();
+    }
+    let mut cursor = first;
     let mut spans = Vec::new();
-    while cursor < visible.1 {
+    while cursor < visible.1 && spans.len() < MAX_SPANS {
         if cursor + len > visible.0 {
             spans.push((cursor, len));
         }
-        cursor += step;
+        let next = cursor + step;
+        // A step below the float spacing at this magnitude does not advance.
+        if next <= cursor {
+            return Vec::new();
+        }
+        cursor = next;
     }
     spans
 }
 
-fn near(a: &Rect, b: &Rect) -> bool {
+pub(super) fn near(a: &Rect, b: &Rect) -> bool {
     (a.x - b.x).abs() < EPSILON
         && (a.y - b.y).abs() < EPSILON
         && (a.w - b.w).abs() < EPSILON
         && (a.h - b.h).abs() < EPSILON
 }
 
-fn contains(outer: &Rect, inner: &Rect) -> bool {
+pub(super) fn contains(outer: &Rect, inner: &Rect) -> bool {
     inner.x >= outer.x - EPSILON
         && inner.y >= outer.y - EPSILON
         && inner.right() <= outer.right() + EPSILON

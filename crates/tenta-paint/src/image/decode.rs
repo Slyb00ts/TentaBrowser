@@ -100,6 +100,10 @@ fn decode_raw(format: ImageFormat, bytes: &[u8], ctx: &Ctx) -> Result<RawImage, 
         ImageFormat::Gif => gif::decode(bytes, ctx),
         ImageFormat::Bmp => bmp::decode(bytes, ctx),
         ImageFormat::Ico => ico::decode(bytes, ctx),
+        ImageFormat::Svg => Err(DecodeError::Unsupported {
+            format,
+            feature: "SVG is rendered by decode_svg, which needs a scale",
+        }),
     }
 }
 

@@ -411,6 +411,11 @@ impl PageRuntime {
         for source in init_scripts {
             runtime.run_source(&source);
         }
+        if let Ok(realm) = inspect::realm(&mut *runtime.engine, runtime.script_timeout) {
+            runtime
+                .script_budget
+                .emit(crate::event::PageEvent::RealmCreated { realm });
+        }
         Ok(runtime)
     }
 

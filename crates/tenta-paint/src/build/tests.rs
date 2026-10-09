@@ -198,7 +198,7 @@ impl Seams for Recorder {
 fn build_recorded(tree: &FragmentTree) -> DisplayList {
     let images = ImageStore::new();
     DisplayList {
-        items: paint_with(tree, &PaintContext { images: &images }, Recorder),
+        items: paint_with(tree, &PaintContext::new(&images), Recorder),
         bounds: tree.scroll_extent,
         ..DisplayList::default()
     }
@@ -206,7 +206,7 @@ fn build_recorded(tree: &FragmentTree) -> DisplayList {
 
 fn build_list(tree: &FragmentTree) -> DisplayList {
     let images = ImageStore::new();
-    build(tree, &PaintContext { images: &images })
+    build(tree, &PaintContext::new(&images))
 }
 
 /// The red channel of every fill, which is how tests tag boxes.
@@ -1415,8 +1415,9 @@ fn a_tiled_gradient_over_a_grey_box_with_an_inset_shadow_rasterises_to_the_golde
     );
     let out = render(&scene.finish(), 80, 60);
     let skipped: Vec<_> = out.stats.skipped.iter().map(|(k, v)| (*k, *v)).collect();
-    assert_eq!(skipped, [("BoxShadow", 1), ("LinearGradient", 6)]);
-    assert_eq!(px(&out.pixmap, 40, 30), [160, 160, 160, 255]);
+    assert_eq!(skipped, [("BoxShadow", 1)]);
+    // The tiles are drawn: the centre shows the gradient, not the grey layer.
+    assert_ne!(px(&out.pixmap, 40, 30), [160, 160, 160, 255]);
     assert_golden("build-tiled-gradient-inset", &out.pixmap);
 }
 
@@ -1471,4 +1472,463 @@ fn build_5000_boxes_timing() {
         micros[micros.len() * 95 / 100],
         micros.len()
     );
+}
+
+// ------------------------------------------------------------------ images
+
+mod images {
+    use std::collections::HashMap;
+
+    use tenta_layout::{ImageKey, IntrinsicSize, ObjectFit, ReplacedKind};
+
+    use super::*;
+    use crate::build::{DrawableImage, ImageBindings};
+    use crate::image::{DecodeParams, DecodedImage, ImageId, StoreKey};
+
+    #[derive(Default)]
+    struct Bindings {
+        nodes: HashMap<NodeId, DrawableImage>,
+        urls: HashMap<ImageKey, DrawableImage>,
+        broken: Vec<NodeId>,
+    }
+
+    impl ImageBindings for Bindings {
+        fn node_image(&self, node: NodeId) -> Option<DrawableImage> {
+            self.nodes.get(&node).copied()
+        }
+
+        fn url_image(&self, key: &ImageKey) -> Option<DrawableImage> {
+            self.urls.get(key).copied()
+        }
+
+        fn node_broken(&self, node: NodeId) -> bool {
+            self.broken.contains(&node)
+        }
+    }
+
+    fn natural(w: f32, h: f32) -> IntrinsicSize {
+        IntrinsicSize {
+            width: Some(w),
+            height: Some(h),
+            ratio: Some(w / h),
+        }
+    }
+
+    /// A store holding one 2x2 image, and its handle.
+    fn store() -> (ImageStore, ImageId) {
+        let mut store = ImageStore::new();
+        let image = DecodedImage {
+            width: 2,
+            height: 2,
+            rgba: vec![255; 16].into(),
+            source_width: 2,
+            source_height: 2,
+        };
+        let key = StoreKey {
+            url: ImageKey("test:image".into()),
+            params: DecodeParams::default(),
+        };
+        let id = store.insert(key, image, 1.0).expect("fits");
+        (store, id)
+    }
+
+    fn list(tree: &FragmentTree, store: &ImageStore, bindings: &Bindings) -> DisplayList {
+        build(
+            tree,
+            &PaintContext {
+                images: store,
+                bindings,
+            },
+        )
+    }
+
+    fn images_of(list: &DisplayList) -> Vec<Rect> {
+        list.items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Image { dest, .. } => Some(*dest),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A replaced image fragment with `border` and `padding` of 2 and 3.
+    fn image_tree(fit: ObjectFit, radius: f32) -> FragmentTree {
+        let mut scene = Scene::new();
+        let id = scene.add_kind(
+            scene.root,
+            FragmentKind::Replaced(ReplacedKind::Image),
+            Rect::new(10.0, 10.0, 100.0, 60.0),
+            style(|s| {
+                s.object_fit = fit;
+                s.border.radii = [LengthPercent::px(radius); 8];
+            }),
+            FragFlags::empty(),
+        );
+        scene.edit(id, |f| {
+            f.node = NodeId(42);
+            f.border = Edges::all(2.0);
+            f.padding = Edges::all(3.0);
+        });
+        scene.finish()
+    }
+
+    fn bound(store_id: ImageId, size: (f32, f32)) -> Bindings {
+        let mut bindings = Bindings::default();
+        bindings.nodes.insert(
+            NodeId(42),
+            DrawableImage {
+                id: store_id,
+                natural: natural(size.0, size.1),
+            },
+        );
+        bindings
+    }
+
+    #[test]
+    fn a_replaced_image_fills_its_content_box() {
+        let (store, id) = store();
+        let out = list(
+            &image_tree(ObjectFit::Fill, 0.0),
+            &store,
+            &bound(id, (2.0, 2.0)),
+        );
+        // 100x60 border box, 2 border and 3 padding on each side.
+        assert_eq!(images_of(&out), [Rect::new(15.0, 15.0, 90.0, 50.0)]);
+        assert!(
+            !out.items.iter().any(|i| matches!(i, Item::PushClip { .. })),
+            "an image inside its box needs no clip"
+        );
+    }
+
+    #[test]
+    fn cover_overflows_the_content_box_and_is_clipped_to_it() {
+        let (store, id) = store();
+        let out = list(
+            &image_tree(ObjectFit::Cover, 0.0),
+            &store,
+            &bound(id, (2.0, 2.0)),
+        );
+        assert_eq!(images_of(&out), [Rect::new(15.0, -5.0, 90.0, 90.0)]);
+        let kinds: Vec<_> = out
+            .items
+            .iter()
+            .filter(|i| {
+                matches!(
+                    i,
+                    Item::PushClip { .. } | Item::Image { .. } | Item::PopClip
+                )
+            })
+            .collect();
+        assert!(
+            matches!(kinds[0], Item::PushClip { rect, .. } if *rect == Rect::new(15.0, 15.0, 90.0, 50.0))
+        );
+        assert!(matches!(kinds[1], Item::Image { .. }));
+        assert!(matches!(kinds[2], Item::PopClip));
+        assert!(out.is_balanced());
+    }
+
+    #[test]
+    fn contain_centres_and_a_rounded_box_clips_even_when_it_fits() {
+        let (store, id) = store();
+        let contain = list(
+            &image_tree(ObjectFit::Contain, 0.0),
+            &store,
+            &bound(id, (2.0, 2.0)),
+        );
+        assert_eq!(images_of(&contain), [Rect::new(35.0, 15.0, 50.0, 50.0)]);
+        let rounded = list(
+            &image_tree(ObjectFit::Fill, 8.0),
+            &store,
+            &bound(id, (2.0, 2.0)),
+        );
+        let clip = rounded.items.iter().find_map(|i| match i {
+            Item::PushClip { radii, .. } => Some(*radii),
+            _ => None,
+        });
+        // The inner radii: 8 less the border and the padding, floored at 0.
+        assert_eq!(clip, Some([3.0; 8]));
+    }
+
+    #[test]
+    fn an_unloaded_image_draws_nothing_and_a_broken_one_a_frame() {
+        let (store, _) = store();
+        let none = list(
+            &image_tree(ObjectFit::Fill, 0.0),
+            &store,
+            &Bindings::default(),
+        );
+        assert!(images_of(&none).is_empty());
+        assert!(!none.items.iter().any(|i| matches!(i, Item::Border { .. })));
+
+        let broken = Bindings {
+            broken: vec![NodeId(42)],
+            ..Bindings::default()
+        };
+        let out = list(&image_tree(ObjectFit::Fill, 0.0), &store, &broken);
+        let frames = out
+            .items
+            .iter()
+            .filter(|i| matches!(i, Item::Border { .. }))
+            .count();
+        assert_eq!(frames, 1);
+    }
+
+    #[test]
+    fn an_image_the_store_has_evicted_is_not_drawn() {
+        let (store, id) = store();
+        let gone = ImageId(id.0 + 100);
+        let out = list(
+            &image_tree(ObjectFit::Fill, 0.0),
+            &store,
+            &bound(gone, (2.0, 2.0)),
+        );
+        assert!(images_of(&out).is_empty());
+    }
+
+    fn background_tree(layer: BackgroundLayer) -> FragmentTree {
+        let mut scene = Scene::new();
+        scene.add(
+            scene.root,
+            Rect::new(10.0, 20.0, 100.0, 60.0),
+            style(|s| s.background = vec![layer]),
+        );
+        scene.finish()
+    }
+
+    fn image_layer(
+        size: BackgroundSize,
+        repeat: RepeatKind,
+        position: (LengthPercent, LengthPercent),
+    ) -> BackgroundLayer {
+        BackgroundLayer {
+            content: BackgroundContent::Image(ImageKey("test:bg".into())),
+            repeat: (repeat, repeat),
+            position,
+            size,
+            ..layer(Color::TRANSPARENT)
+        }
+    }
+
+    fn url_bindings(id: ImageId, size: (f32, f32)) -> Bindings {
+        let mut bindings = Bindings::default();
+        bindings.urls.insert(
+            ImageKey("test:bg".into()),
+            DrawableImage {
+                id,
+                natural: natural(size.0, size.1),
+            },
+        );
+        bindings
+    }
+
+    const ORIGIN: (LengthPercent, LengthPercent) = (LengthPercent::px(0.0), LengthPercent::px(0.0));
+
+    #[test]
+    fn a_no_repeat_background_sits_at_its_position() {
+        let (store, id) = store();
+        let tree = background_tree(image_layer(
+            BackgroundSize::Auto,
+            RepeatKind::NoRepeat,
+            (LengthPercent::fraction(1.0), LengthPercent::fraction(0.5)),
+        ));
+        let out = list(&tree, &store, &url_bindings(id, (20.0, 10.0)));
+        // Right edge of a 100x60 box at (10, 20); vertically centred.
+        assert_eq!(images_of(&out), [Rect::new(90.0, 45.0, 20.0, 10.0)]);
+    }
+
+    #[test]
+    fn a_repeating_background_tiles_the_whole_box() {
+        let (store, id) = store();
+        let tree = background_tree(image_layer(
+            BackgroundSize::Explicit(Some(LengthPercent::px(40.0)), Some(LengthPercent::px(30.0))),
+            RepeatKind::Repeat,
+            ORIGIN,
+        ));
+        let out = list(&tree, &store, &url_bindings(id, (2.0, 2.0)));
+        let tiles = images_of(&out);
+        // 3 columns (the last cut) by 2 rows.
+        assert_eq!(tiles.len(), 6);
+        assert_eq!(tiles[0], Rect::new(10.0, 20.0, 40.0, 30.0));
+        assert!(
+            out.items.iter().any(|i| matches!(i, Item::PushClip { .. })),
+            "the edge tiles overflow"
+        );
+        assert!(out.is_balanced());
+    }
+
+    #[test]
+    fn round_and_space_fit_whole_tiles() {
+        let (store, id) = store();
+        let explicit =
+            BackgroundSize::Explicit(Some(LengthPercent::px(40.0)), Some(LengthPercent::px(60.0)));
+        let round = list(
+            &background_tree(image_layer(explicit, RepeatKind::Round, ORIGIN)),
+            &store,
+            &url_bindings(id, (2.0, 2.0)),
+        );
+        // 100 / 40 rounds to 3 tiles of 33.33.
+        let tiles = images_of(&round);
+        assert_eq!(tiles.len(), 3);
+        assert!((tiles[0].w - 100.0 / 3.0).abs() < 0.01);
+        let space = list(
+            &background_tree(image_layer(explicit, RepeatKind::Space, ORIGIN)),
+            &store,
+            &url_bindings(id, (2.0, 2.0)),
+        );
+        // Two 40 px tiles with the 20 px left over between them.
+        let tiles = images_of(&space);
+        assert_eq!(tiles.len(), 2);
+        assert_eq!(tiles[1].x - tiles[0].x, 60.0);
+    }
+
+    #[test]
+    fn cover_and_contain_scale_by_the_ratio() {
+        let (store, id) = store();
+        let at = |size| {
+            let tree = background_tree(image_layer(size, RepeatKind::NoRepeat, ORIGIN));
+            images_of(&list(&tree, &store, &url_bindings(id, (20.0, 20.0))))
+        };
+        assert_eq!(
+            at(BackgroundSize::Contain),
+            [Rect::new(10.0, 20.0, 60.0, 60.0)]
+        );
+        assert_eq!(
+            at(BackgroundSize::Cover),
+            [Rect::new(10.0, 20.0, 100.0, 100.0)]
+        );
+    }
+
+    #[test]
+    fn a_missing_background_image_and_an_absurd_tile_count_draw_nothing() {
+        let (store, id) = store();
+        let tree = background_tree(image_layer(
+            BackgroundSize::Auto,
+            RepeatKind::Repeat,
+            ORIGIN,
+        ));
+        assert!(images_of(&list(&tree, &store, &Bindings::default())).is_empty());
+        // A 1 px tile over a 100x60 box is 6000 tiles: one pattern fill, not
+        // 6000 items.
+        let tiny = list(&tree, &store, &url_bindings(id, (1.0, 1.0)));
+        assert!(images_of(&tiny).is_empty());
+        let patterns = tiny
+            .items
+            .iter()
+            .filter(|i| matches!(i, Item::ImagePattern { .. }))
+            .count();
+        assert_eq!(patterns, 1);
+    }
+
+    #[test]
+    fn display_list_pins_report_the_images_it_draws() {
+        let (store, id) = store();
+        let tree = background_tree(image_layer(
+            BackgroundSize::Auto,
+            RepeatKind::NoRepeat,
+            ORIGIN,
+        ));
+        let out = list(&tree, &store, &url_bindings(id, (20.0, 10.0)));
+        assert_eq!(out.image_ids(), [id]);
+    }
+
+    #[test]
+    fn a_tile_below_the_float_step_or_half_a_pixel_draws_nothing_and_returns() {
+        let (store, id) = store();
+        // 0.002 px tiles over a box 130k px wide would never advance in f32.
+        let mut scene = Scene::new();
+        scene.add(
+            scene.root,
+            Rect::new(1_000_000.0, 0.0, 130_000.0, 60.0),
+            style(|s| {
+                s.background = vec![image_layer(
+                    BackgroundSize::Explicit(
+                        Some(LengthPercent::px(0.002)),
+                        Some(LengthPercent::px(0.002)),
+                    ),
+                    RepeatKind::Repeat,
+                    ORIGIN,
+                )]
+            }),
+        );
+        let out = list(&scene.finish(), &store, &url_bindings(id, (2.0, 2.0)));
+        assert!(images_of(&out).is_empty());
+        for repeat in [RepeatKind::Round, RepeatKind::Space] {
+            let tree = background_tree(image_layer(
+                BackgroundSize::Explicit(
+                    Some(LengthPercent::px(0.01)),
+                    Some(LengthPercent::px(0.01)),
+                ),
+                repeat,
+                ORIGIN,
+            ));
+            assert!(images_of(&list(&tree, &store, &url_bindings(id, (2.0, 2.0)))).is_empty());
+        }
+    }
+
+    #[test]
+    fn round_scales_the_auto_axis_with_the_rounded_one() {
+        let (store, id) = store();
+        let layer = BackgroundLayer {
+            repeat: (RepeatKind::Round, RepeatKind::NoRepeat),
+            ..image_layer(
+                BackgroundSize::Explicit(Some(LengthPercent::px(40.0)), None),
+                RepeatKind::Repeat,
+                ORIGIN,
+            )
+        };
+        let out = list(
+            &background_tree(layer),
+            &store,
+            &url_bindings(id, (20.0, 10.0)),
+        );
+        let tiles = images_of(&out);
+        // 100 / 40 rounds to 3 tiles of 33.33; the height follows its ratio.
+        assert_eq!(tiles.len(), 3);
+        assert!((tiles[0].w - 100.0 / 3.0).abs() < 0.01);
+        assert!(
+            (tiles[0].h - tiles[0].w / 2.0).abs() < 0.01,
+            "{:?}",
+            tiles[0]
+        );
+    }
+
+    #[test]
+    fn a_stripe_repeated_down_a_tall_box_is_one_pattern_cut_to_its_column() {
+        let (store, id) = store();
+        let mut scene = Scene::new();
+        scene.add(
+            scene.root,
+            Rect::new(10.0, 0.0, 100.0, 8000.0),
+            style(|s| {
+                s.background = vec![BackgroundLayer {
+                    repeat: (RepeatKind::NoRepeat, RepeatKind::Repeat),
+                    ..image_layer(
+                        BackgroundSize::Explicit(
+                            Some(LengthPercent::px(20.0)),
+                            Some(LengthPercent::px(2.0)),
+                        ),
+                        RepeatKind::Repeat,
+                        ORIGIN,
+                    )
+                }]
+            }),
+        );
+        let out = list(&scene.finish(), &store, &url_bindings(id, (2.0, 2.0)));
+        let patterns: Vec<_> = out
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::ImagePattern { area, tile, .. } => Some((*area, *tile)),
+                _ => None,
+            })
+            .collect();
+        // 4000 tiles tall, one 20 px column wide.
+        assert_eq!(
+            patterns,
+            [(Rect::new(10.0, 0.0, 20.0, 8000.0), (20.0, 2.0))]
+        );
+        assert!(images_of(&out).is_empty());
+        assert_eq!(out.image_ids(), [id]);
+    }
 }

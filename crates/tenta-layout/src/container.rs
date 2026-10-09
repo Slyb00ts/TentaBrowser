@@ -67,6 +67,7 @@ pub(crate) fn layout_container(
     };
 
     let mut view = TreeView::new(cx, tree, id);
+    view.set_inner_width((border_width - m.border.horizontal() - m.padding.horizontal()).max(0.0));
     let output = view.solve(id, inputs);
     let border_box = Rect::new(0.0, 0.0, output.size.width, output.size.height);
     let percent_base = Size {

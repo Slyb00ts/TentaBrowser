@@ -614,13 +614,28 @@ fn utf8() -> &'static Encoding {
 /// Reads a `file:` sheet. Only a `file:` document may load one, and only from
 /// inside a read root of the page's `FsPolicy`.
 fn read_local(ctx: &StyleContext<'_>, url: &Url, limit: u64) -> Result<Vec<u8>, String> {
-    if ctx.document_url.scheme() != "file" {
-        return Err("a file: stylesheet is only loaded for a file: document".to_owned());
+    read_local_file(ctx.document_url, ctx.fs_policy, url, limit, "stylesheet")
+}
+
+/// Reads the `file:` subresource `url` of the document at `document_url`
+/// (`what` names it in errors): only a `file:` document may load one, only from
+/// inside a read root of `fs_policy`, never following links, never truncated.
+pub(crate) fn read_local_file(
+    document_url: &Url,
+    fs_policy: &FsPolicy,
+    url: &Url,
+    limit: u64,
+    what: &str,
+) -> Result<Vec<u8>, String> {
+    if document_url.scheme() != "file" {
+        return Err(format!(
+            "a file: {what} is only loaded for a file: document"
+        ));
     }
     let path = url
         .to_file_path()
         .map_err(|()| "the file: URL is not a local path".to_owned())?;
-    let (file, length) = ctx.fs_policy.open_read(&path, limit).map_err(|error| {
+    let (file, length) = fs_policy.open_read(&path, limit).map_err(|error| {
         format!("the file could not be read under the filesystem policy: {error}")
     })?;
     let mut body = Vec::with_capacity(usize::try_from(length).unwrap_or(0));

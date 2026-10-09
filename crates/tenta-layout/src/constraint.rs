@@ -12,7 +12,8 @@ use style::properties::longhands::direction::computed_value::T as StyleDirection
 use style::values::computed::{Length, LengthPercentage, Margin, MaxSize, Size};
 
 use crate::block_sizes::{
-    SizeLimits, intrinsic_inline_sizes_of_block, replaced_content_size, replaced_limits,
+    ReplacedHints, SizeLimits, intrinsic_inline_sizes_of_block, replaced_content_size,
+    replaced_limits,
 };
 use crate::box_tree::{BoxId, BoxKind, BoxTree, LayoutCx};
 use crate::quirks;
@@ -289,6 +290,11 @@ pub(crate) fn resolve_box(
             border_box_sizing,
             (horizontal_edges, vertical_edges),
         );
+        // A ratio-only image fills the containing block's width, as a
+        // block-level non-replaced box would.
+        let stretch = space.percentage_base.0.or(definite).map(|cb| {
+            cb - horizontal_edges - margin_left.unwrap_or(0.0) - margin_right.unwrap_or(0.0)
+        });
         let (w, h) = replaced_size(
             cx,
             b.node,
@@ -297,6 +303,7 @@ pub(crate) fn resolve_box(
             border_box_sizing,
             (horizontal_edges, vertical_edges),
             &limits,
+            ReplacedHints::of(style, stretch),
         );
         width = Extent::Content(w);
         height = Extent::Content(h);
@@ -442,6 +449,8 @@ pub(crate) fn abspos_inputs(
             border_box_sizing,
             (horizontal_edges, vertical_edges),
         );
+        let stretch =
+            cb_width - horizontal_edges - margin_left.unwrap_or(0.0) - margin_right.unwrap_or(0.0);
         let (w, h) = replaced_size(
             cx,
             b.node,
@@ -450,6 +459,7 @@ pub(crate) fn abspos_inputs(
             border_box_sizing,
             (horizontal_edges, vertical_edges),
             &limits,
+            ReplacedHints::of(style, Some(stretch)),
         );
         width = Extent::Content(w);
         height = Extent::Content(h);
@@ -549,6 +559,7 @@ fn block_size(
 /// Content-box width and height of a block-level replaced box: specified
 /// sizes win, then the ratio, then the natural size, all inside the
 /// `min-`/`max-` limits (CSS 2.1 10.3.4, 10.6.2 and 10.4).
+#[allow(clippy::too_many_arguments)]
 fn replaced_size(
     cx: &LayoutCx,
     node: tenta_core::NodeId,
@@ -557,6 +568,7 @@ fn replaced_size(
     border_box_sizing: bool,
     (horizontal_edges, vertical_edges): (f32, f32),
     limits: &SizeLimits,
+    hints: ReplacedHints,
 ) -> (f32, f32) {
     let specified_w = match width {
         Extent::Length(v) => Some(to_content_box(v, border_box_sizing, horizontal_edges)),
@@ -566,7 +578,7 @@ fn replaced_size(
         Extent::Length(v) => Some(to_content_box(v, border_box_sizing, vertical_edges)),
         _ => None,
     };
-    replaced_content_size(cx, node, kind, (specified_w, specified_h), limits)
+    replaced_content_size(cx, node, kind, (specified_w, specified_h), limits, hints)
 }
 
 /// The constraint space a box with the given content box offers its

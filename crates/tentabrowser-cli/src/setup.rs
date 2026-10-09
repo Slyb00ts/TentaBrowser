@@ -38,17 +38,28 @@ pub fn build_engine(global: &Global, page_threads: usize) -> CliResult<Engine> {
 }
 
 fn build_engine_for_tier(global: &Global, page_threads: usize, tier: Tier) -> CliResult<Engine> {
+    let js = if tier == Tier::Js {
+        JsEngine::V8
+    } else {
+        JsEngine::Auto
+    };
+    build_engine_with(global, page_threads, tier, js)
+}
+
+/// [`build_engine`] with the tier ceiling and the script backend named.
+pub fn build_engine_with(
+    global: &Global,
+    page_threads: usize,
+    tier: Tier,
+    js: JsEngine,
+) -> CliResult<Engine> {
     let profile = resolve_profile(global.profile.as_deref())?;
     let session_dir = session_cache_dir(global);
     let policy = fs_policy(global, session_dir.as_deref())?;
 
     let mut builder = Engine::builder()
         .max_tier(tier)
-        .js(if tier == Tier::Js {
-            JsEngine::V8
-        } else {
-            JsEngine::Auto
-        })
+        .js(js)
         .profile(profile)
         .fs_policy(policy)
         .ephemeral(global.ephemeral)

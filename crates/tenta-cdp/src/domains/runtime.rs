@@ -21,6 +21,7 @@ use tenta_core::Error;
 
 use self::context::RuntimeState;
 pub(super) use self::context::utility_context;
+pub(super) use self::remote::remote_object;
 use super::target::resume;
 use crate::backend::Target;
 use crate::domain::{CommandContext, CommandFuture, DomainHandler, DomainRegistry, parse_params};
@@ -351,6 +352,7 @@ async fn evaluate(cx: &CommandContext, params: EvaluateParams) -> Result<Value, 
     let target = cx.target()?;
     let page = target.page();
     after_navigation(cx, page).await;
+    super::snapshot::refresh_for(cx, target, &params.expression).await;
     require_context(
         target,
         params.context_id,
@@ -440,6 +442,7 @@ async fn call_function_on(
     let target = cx.target()?;
     let page = target.page();
     after_navigation(cx, page).await;
+    super::snapshot::refresh_for(cx, target, &params.function_declaration).await;
     let arguments = params
         .arguments
         .into_iter()

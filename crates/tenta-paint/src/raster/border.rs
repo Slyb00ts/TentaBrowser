@@ -97,7 +97,7 @@ impl Geometry {
     }
 }
 
-impl Painter {
+impl Painter<'_> {
     /// Draws a border around `rect`, the border box.
     pub(super) fn draw_border(
         &mut self,

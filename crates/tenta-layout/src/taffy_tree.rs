@@ -26,14 +26,16 @@ use taffy::{
 
 use crate::block::layout_block;
 use crate::block_sizes::{
-    self, SizeLimits, intrinsic_inline_sizes_of_block, replaced_content_size,
+    self, ReplacedHints, SizeLimits, intrinsic_inline_sizes_of_block, natural_ratio,
+    replaced_content_size,
 };
 use crate::box_tree::{BoxFlags, BoxId, BoxKind, BoxTree, LayoutBox, LayoutCx};
 use crate::constraint::own_direction;
 use crate::fragment::{FragFlags, FragId, FragmentBuilder};
 use crate::space::{AvailableSize, ConstraintSpace};
 use crate::style_taffy::{
-    ConvertedStyle, block_alignment_is_normal, preferred_aspect_ratio, resolve_calc, to_taffy_style,
+    ConvertedStyle, block_alignment_is_normal, inline_alignment_is_normal, preferred_aspect_ratio,
+    resolve_calc, to_taffy_style,
 };
 use crate::types::{Direction, Edges, OverflowKind, PositionKind};
 
@@ -122,6 +124,9 @@ pub(crate) struct TreeView<'a, 'c> {
     /// The grid area each of a grid root's children was last laid out in, the
     /// containing block its percentages resolve against.
     areas: HashMap<BoxId, Size<Option<f32>>>,
+    /// The content width of the root container, which a ratio-only image fills
+    /// when Taffy measures it before any width is known (a flex base size).
+    inner_width: Option<f32>,
     _memo: MemoScope,
 }
 
@@ -138,11 +143,17 @@ impl<'a, 'c> TreeView<'a, 'c> {
             layouts: HashMap::new(),
             baselines: HashMap::new(),
             areas: HashMap::new(),
+            inner_width: None,
             _memo: MemoScope::enter(),
         };
         view.convert(root);
         view.prepare(root);
         view
+    }
+
+    /// Records the content width of the root container.
+    pub(crate) fn set_inner_width(&mut self, width: f32) {
+        self.inner_width = Some(width);
     }
 
     fn convert(&mut self, id: BoxId) {
@@ -181,15 +192,24 @@ impl<'a, 'c> TreeView<'a, 'c> {
             self.convert(item);
         }
         if matches!(tree.get(container).kind, BoxKind::Grid) {
+            let container_style = &tree.get(container).style;
             for &item in &items {
-                let style = &tree.get(item).style;
+                let b = tree.get(item);
+                let style = &b.style;
                 // `normal` behaves as `start` for items with a preferred aspect
-                // ratio, which Taffy no longer sees on the item style.
-                if preferred_aspect_ratio(style).is_some_and(|r| r > 0.0)
-                    && block_alignment_is_normal(style, &tree.get(container).style)
-                {
+                // ratio, which Taffy no longer sees on the item style. A
+                // replaced item with a natural ratio (an image) has one on both
+                // axes.
+                let natural = matches!(b.kind, BoxKind::Replaced(kind)
+                    if natural_ratio(self.cx, b.node, kind).is_some());
+                let ratio = natural || preferred_aspect_ratio(style).is_some_and(|r| r > 0.0);
+                if ratio && block_alignment_is_normal(style, container_style) {
                     let converted = self.styles.remove(&item).expect("converted above");
                     self.styles.insert(item, converted.start_aligned());
+                }
+                if natural && inline_alignment_is_normal(style, container_style) {
+                    let converted = self.styles.remove(&item).expect("converted above");
+                    self.styles.insert(item, converted.start_aligned_inline());
                 }
             }
         }
@@ -316,12 +336,18 @@ impl<'a, 'c> TreeView<'a, 'c> {
         };
 
         if let BoxKind::Replaced(kind) = b.kind {
+            // A ratio-only image fills its container's width.
+            let stretch = parent_size
+                .width
+                .or(self.inner_width)
+                .map(|w| w - margin_width - edges.width);
             let (w, h) = replaced_content_size(
                 self.cx,
                 b.node,
                 kind,
                 (known_content.width, known_content.height),
                 &SizeLimits::NONE,
+                ReplacedHints::of(&b.style, stretch),
             );
             return LayoutOutput::from_outer_size(Size {
                 width: known.width.unwrap_or(w + edges.width),

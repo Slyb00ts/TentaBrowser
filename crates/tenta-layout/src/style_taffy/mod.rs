@@ -17,5 +17,6 @@ mod tests;
 
 pub(crate) use calc::resolve as resolve_calc;
 pub(crate) use convert::{
-    ConvertedStyle, block_alignment_is_normal, preferred_aspect_ratio, to_taffy_style,
+    ConvertedStyle, block_alignment_is_normal, inline_alignment_is_normal, preferred_aspect_ratio,
+    to_taffy_style,
 };

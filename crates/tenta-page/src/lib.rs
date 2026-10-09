@@ -16,6 +16,10 @@ pub mod page;
 // Private: the runtime is page-thread-local state the page owns, not an API
 // (`crates/tenta-page/src/runtime.rs`).
 mod runtime;
+// Private: fetching and decoding the images of a render
+// (`crates/tenta-page/src/images.rs`).
+#[cfg(feature = "render")]
+mod images;
 // Private module: the render session is page-thread state the page owns. Its
 // option and result types are re-exported below (`crates/tenta-page/src/render.rs`).
 #[cfg(feature = "render")]
@@ -38,6 +42,8 @@ pub use clock::{Clock, ManualClock, SystemClock};
 pub use document::Document;
 pub use event::{Commit, FrameState, LoadStage, PageEvent, PageEvents};
 pub use fetch_policy::{FetchPolicy, HintDisposition, PreloadKind, RecordedHint};
+#[cfg(feature = "render")]
+pub use page::{BoxQuads, ElementGeometry, Quad};
 pub use page::{
     EvalOptions, Evaluation, FromRemote, Goto, Navigation, Page, PageConfig, PendingNavigation,
     TestHooks, Viewport, World,

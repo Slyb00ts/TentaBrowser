@@ -424,6 +424,11 @@ input[type=checkbox i], input[type=radio i] {
   border: none;
   background-color: transparent;
 }
+input[type=image i] {
+  padding: 0;
+  border: none;
+  background-color: transparent;
+}
 input:is([type=button i], [type=submit i], [type=reset i]), button {
   padding: 1px 6px;
   border: 2px outset ButtonFace;

@@ -39,3 +39,5 @@ unsafe_code = "forbid"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "test-util"] }
+png = { workspace = true }
+tenta-testutil = { workspace = true }

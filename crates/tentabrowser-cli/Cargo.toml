@@ -11,9 +11,9 @@ publish = false
 [features]
 default = []
 # JavaScript is opt-in so the default CLI keeps its Tier 1 dependency graph.
-v8 = ["tentabrowser/v8"]
+v8 = ["tentabrowser/v8", "tenta-cdp/v8"]
 # Screenshots and geometry; opt-in like v8 (D-030).
-render = ["tentabrowser/render"]
+render = ["tentabrowser/render", "tenta-cdp/render"]
 # Release artifacts are built with this set (docs/dev/p3-plan.md DP-7).
 full = ["v8", "render"]
 
@@ -29,10 +29,10 @@ tenta-net = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
-clap = { version = "4", features = ["derive", "wrap_help"] }
+clap = { version = "4", features = ["derive", "wrap_help", "env"] }
 # The CLI owns the process runtime; the engine's io and page threads are its
 # own. A current-thread runtime keeps the cold start free of worker threads.
-tokio = { version = "1", features = ["rt", "macros", "time"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "signal"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi", "std"] }
 

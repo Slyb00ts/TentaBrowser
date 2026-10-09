@@ -40,6 +40,6 @@ pub use tenta_page::{
 };
 #[cfg(feature = "render")]
 pub use tenta_page::{
-    Capture, Clip, ContentSize, ImageFormat, RasterStats, Screenshot, ScreenshotOptions,
-    StageTimes, WorkCounters,
+    BoxQuads, Capture, Clip, ContentSize, ElementGeometry, ImageFormat, Quad, RasterStats,
+    Screenshot, ScreenshotOptions, StageTimes, WorkCounters,
 };

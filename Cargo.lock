@@ -3298,8 +3298,11 @@ name = "tenta-browser"
 version = "0.0.1"
 dependencies = [
  "bytes",
+ "gif",
  "hashbrown 0.16.1",
  "http",
+ "image-webp",
+ "jpeg-encoder",
  "parking_lot",
  "png",
  "serde",
@@ -3332,6 +3335,7 @@ dependencies = [
  "serde_json",
  "tenta-browser",
  "tenta-core",
+ "tenta-dom",
  "tokio",
  "tokio-tungstenite",
  "url",
@@ -3573,6 +3577,7 @@ dependencies = [
  "hashbrown 0.16.1",
  "http",
  "parking_lot",
+ "png",
  "serde_json",
  "tenta-core",
  "tenta-css",
@@ -3582,6 +3587,7 @@ dependencies = [
  "tenta-layout",
  "tenta-net",
  "tenta-render",
+ "tenta-testutil",
  "tokio",
  "tracing",
  "url",
@@ -3650,6 +3656,7 @@ dependencies = [
  "tenta-paint",
  "tenta-testutil",
  "toml 0.9.12+spec-1.1.0",
+ "url",
 ]
 
 [[package]]

@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><title>Form fixture</title>
+<style>body{margin:8px;font:16px sans-serif} #name{width:200px;height:28px;border:2px solid #36c;display:block;margin:10px 0}
+#go{width:120px;height:36px;background:#2a9d4a;color:#fff;border:0;display:block}
+#out{margin-top:12px;padding:6px;background:#eee;width:300px;height:30px}</style></head>
+<body><h1 id="title">Fixture</h1>
+<input id="name" type="text" placeholder="name">
+<button id="go" type="button">Greet</button>
+<div id="out">idle</div>
+<script>
+document.getElementById('go').addEventListener('click', function () {
+  document.getElementById('out').textContent = 'Hello, ' + document.getElementById('name').value + '!';
+});
+setTimeout(function(){ var d=document.createElement('p'); d.id='late'; d.textContent='late'; document.body.appendChild(d); }, 200);
+</script></body></html>

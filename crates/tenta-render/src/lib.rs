@@ -6,13 +6,20 @@
 //! by `cargo xtask lint-deps` (`docs/spec/02-architecture.md` §2).
 
 mod geometry;
+mod images;
 mod screenshot;
 mod session;
 mod viewport;
 
+pub use geometry::{BoxQuads, ElementGeometry, Quad, element_geometry, hit_test, node_boxes};
+pub use images::{
+    DataUrl, DecodeSettings, Decoded, ImageKind, ImagePlan, ImageStats, ImageWant, LazyRegion,
+    Rerender, WantOrigin, decode_data_url, decode_image,
+};
 pub use screenshot::{
     Capture, ImageFormat, RenderError, Screenshot, ScreenshotOptions, StageTimes,
 };
 pub use session::{RenderSession, WorkCounters};
-pub use tenta_paint::RasterStats;
+pub use tenta_layout::ImageKey;
+pub use tenta_paint::{DecodeControl, DecodeError, RasterStats};
 pub use viewport::{FontPolicy, RenderConfig, Viewport};

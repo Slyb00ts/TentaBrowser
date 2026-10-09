@@ -4,9 +4,10 @@
 //! By default the process builds an engine with the tier ceiling at `dom`
 //! and sends the first request without a script engine, style or fonts
 //! (`docs/spec/13-performance.md` §1, §2).
-//! `serve`, `mcp`, `test` and `daemon` arrive with the phases that implement
+//! `cdp` serves the DevTools protocol. `serve`, `mcp`, `test` and `daemon` arrive with the phases that implement
 //! what they need.
 
+mod cdp;
 mod cli;
 mod error;
 mod fetch;
@@ -62,6 +63,7 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Search(args) => search::run(&cli.global, args).await,
         Command::Scrape(args) => scrape::run(&cli.global, args).await,
         Command::Screenshot(args) => screenshot::run(&cli.global, args).await,
+        Command::Cdp(args) => cdp::run(&cli.global, args).await,
         Command::Version => {
             let mut stdout = std::io::stdout().lock();
             writeln!(stdout, "tentabrowser {}", env!("CARGO_PKG_VERSION"))

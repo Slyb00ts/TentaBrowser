@@ -36,8 +36,8 @@ pub mod types;
 pub use block::layout_block;
 pub use block_sizes::intrinsic_inline_sizes_of_block;
 pub use box_tree::{
-    BoxFlags, BoxId, BoxKind, BoxTree, ImageInfo, InlineFormattingContext, InlineItem, LayoutBox,
-    LayoutCx, NoImages, TextSource,
+    BoxFlags, BoxId, BoxKind, BoxTree, ImageInfo, ImageState, InlineFormattingContext, InlineItem,
+    LayoutBox, LayoutCx, NoImages, TextSource,
 };
 pub use font::FontSystem;
 #[cfg(feature = "embedded-fonts")]

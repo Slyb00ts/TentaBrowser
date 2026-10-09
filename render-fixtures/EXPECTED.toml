@@ -191,10 +191,10 @@
 "custom property grid shorthand creates explicit columns" = "pass"
 
 ["img-density-and-alt"]
-"raw intrinsic image keeps its 648 CSS pixel width" = "deferred:M2 images"
-"2x density descriptor halves the intrinsic CSS width" = "deferred:M2 images"
-"width descriptor and sizes establish a 300 pixel source size" = "deferred:M2 images"
-"overflow viewport retains its fixed border geometry" = "deferred:M2 images"
+"raw intrinsic image keeps its 648 CSS pixel width" = "pass"
+"2x density descriptor halves the intrinsic CSS width" = "pass"
+"width descriptor and sizes establish a 300 pixel source size" = "pass"
+"overflow viewport retains its fixed border geometry" = "pass"
 
 ["inline-block-flex-items"]
 "inline block title keeps its max content width" = "pass"
@@ -247,7 +247,7 @@
 "inline pair end width maps to right" = "pass"
 
 ["max-height-replaced"]
-"max height clamps intrinsic aspect transfer" = "deferred:M2 images"
+"max height clamps intrinsic aspect transfer" = "pass"
 
 ["media-text-track"]
 "media text track exposes parsed cues" = "deferred:M2 images"
@@ -291,11 +291,11 @@
 "following flow starts after the content-sized chain" = "deferred:M4 flex and grid"
 
 ["ratio-only-inline-images"]
-"native image stretch-fits its definite line width" = "deferred:M2 images"
-"inline anchor preserves ratio-only replaced sizing" = "deferred:M2 images"
-"authored inline image remains an atomic replaced box" = "deferred:M2 images"
-"authored block image uses the same ratio-only branch" = "deferred:M2 images"
-"authored inline-block image keeps replaced sizing" = "deferred:M2 images"
+"native image stretch-fits its definite line width" = "pass"
+"inline anchor preserves ratio-only replaced sizing" = "pass"
+"authored inline image remains an atomic replaced box" = "pass"
+"authored block image uses the same ratio-only branch" = "pass"
+"authored inline-block image keeps replaced sizing" = "pass"
 
 ["relative-box-edges"]
 "vh margin resolves against viewport height" = "pass"
@@ -306,13 +306,13 @@
 "vmax margin resolves against larger viewport axis" = "pass"
 
 ["replaced-block-wrapper"]
-"text alignment leaves the block frame at available width" = "deferred:M2 images"
-"auto block wrapper contains its percentage image" = "deferred:M2 images"
+"text alignment leaves the block frame at available width" = "pass"
+"auto block wrapper contains its percentage image" = "pass"
 
 ["replaced-grid-order"]
 "order-modified description occupies the first grid cell" = "pass"
-"media wrapper shares the first row" = "deferred:M2 images"
-"percentage image uses the wrapper content box" = "deferred:M2 images"
+"media wrapper shares the first row" = "pass"
+"percentage image uses the wrapper content box" = "pass"
 
 ["right-float-navigation"]
 "first inline item stays at band start" = "deferred:M1.1 floats"
@@ -364,10 +364,10 @@
 "positioned ancestor does not capture fixed" = "pass"
 
 ["video-poster"]
-"poster intrinsic width and first stripe" = "deferred:M2 images"
-"poster intrinsic geometry retains middle stripe" = "deferred:M2 images"
-"poster intrinsic geometry retains final stripe" = "deferred:M2 images"
-"right object-position selects the final stripe" = "deferred:M2 images"
+"poster intrinsic width and first stripe" = "pass"
+"poster intrinsic geometry retains middle stripe" = "pass"
+"poster intrinsic geometry retains final stripe" = "pass"
+"right object-position selects the final stripe" = "pass"
 
 ["viewport-consistency"]
 "width media query uses the screenshot viewport" = "deferred:M3 captures"

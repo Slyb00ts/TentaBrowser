@@ -261,6 +261,45 @@ struct WatchState {
     attached: HashSet<String>,
 }
 
+/// A tab is the browser-level wrapper Chromium puts around a page; clients
+/// from Puppeteer 22.6 on attach to tabs and let the tab's session attach the
+/// page. Here a tab is a second name for its page: its id is the page's id
+/// behind this prefix, and its session is a page session that accepts
+/// `Target.setAutoAttach` to hand out the page proper. Random ids are hex, so
+/// the prefix cannot collide with one.
+const TAB_PREFIX: &str = "tab-";
+
+fn tab_id_of(target: &Target) -> String {
+    format!("{TAB_PREFIX}{}", target.id())
+}
+
+/// The page a target id names, and whether the id named its tab.
+fn find_target(backend: &Backend, id: &str) -> Option<(Arc<Target>, bool)> {
+    match id.strip_prefix(TAB_PREFIX) {
+        Some(page) => backend.target(page).map(|target| (target, true)),
+        None => backend.target(id).map(|target| (target, false)),
+    }
+}
+
+fn tab_info_at(target: &Target, url: String) -> Value {
+    let mut info = target_info_at(target, url);
+    info["targetId"] = json!(tab_id_of(target));
+    info["type"] = json!("tab");
+    info
+}
+
+fn tab_info(target: &Target) -> Value {
+    tab_info_at(target, target.url())
+}
+
+/// Marks the sessions that were attached to a tab.
+#[derive(Default)]
+struct TabSession(AtomicBool);
+
+fn is_tab_session(session: &Session) -> bool {
+    session.state::<TabSession>().0.load(Ordering::Acquire)
+}
+
 pub(super) fn target_info(target: &Target) -> Value {
     target_info_at(target, target.url())
 }
@@ -339,7 +378,10 @@ async fn resync(connection: &Arc<Connection>, shared: &Arc<Shared>, session: &Ar
     for target in &live {
         on_created(connection, shared, session, target).await;
     }
-    let live: HashSet<&str> = live.iter().map(|target| target.id()).collect();
+    let live: HashSet<String> = live
+        .iter()
+        .flat_map(|target| [target.id().to_owned(), tab_id_of(target)])
+        .collect();
     let gone: Vec<String> = {
         let watch = session.state::<Watch>();
         let state = watch.inner.lock().await;
@@ -378,6 +420,12 @@ async fn on_destroyed(session: &Arc<Session>, target_id: &str) {
     let mut state = watch.inner.lock().await;
     state.attached.remove(target_id);
     state.watched.remove(target_id);
+    let tab = format!("{TAB_PREFIX}{target_id}");
+    if state.announced.remove(&tab) && state.discover && !session.is_closed() {
+        session
+            .emit("Target.targetDestroyed", json!({ "targetId": tab }))
+            .await;
+    }
     if state.announced.remove(target_id) && state.discover && !session.is_closed() {
         session
             .emit("Target.targetDestroyed", json!({ "targetId": target_id }))
@@ -386,10 +434,18 @@ async fn on_destroyed(session: &Arc<Session>, target_id: &str) {
 }
 
 async fn announce(session: &Arc<Session>, state: &mut WatchState, target: &Arc<Target>) {
-    if !state.discover
-        || !state.discover_filter.allows("page")
-        || !state.announced.insert(target.id().to_owned())
-    {
+    if !state.discover {
+        return;
+    }
+    if state.discover_filter.allows("tab") && state.announced.insert(tab_id_of(target)) {
+        session
+            .emit(
+                "Target.targetCreated",
+                json!({ "targetInfo": tab_info(target) }),
+            )
+            .await;
+    }
+    if !state.discover_filter.allows("page") || !state.announced.insert(target.id().to_owned()) {
         return;
     }
     session
@@ -421,6 +477,14 @@ fn watch_navigations(session: &Arc<Session>, target: &Arc<Target>) {
             }
             let watch = owner.state::<Watch>();
             let state = watch.inner.lock().await;
+            if state.discover && state.announced.contains(&tab_id_of(&target)) {
+                owner
+                    .emit(
+                        "Target.targetInfoChanged",
+                        json!({ "targetInfo": tab_info_at(&target, url.to_string()) }),
+                    )
+                    .await;
+            }
             if state.discover && state.announced.contains(target.id()) {
                 owner
                     .emit(
@@ -443,12 +507,20 @@ async fn attach_automatically(
     let Some(wait_for_debugger) = state.auto_attach else {
         return;
     };
-    // Page sessions have no sub-targets to attach to yet, and must not adopt
-    // the browser's other pages.
-    if session.target().is_some()
-        || !state.auto_attach_filter.allows("page")
-        || !state.attached.insert(target.id().to_owned())
-    {
+    let tab_session = is_tab_session(session);
+    if tab_session {
+        // A tab's session sees its own page and no other.
+        if session.target().is_none_or(|own| own.id() != target.id()) {
+            return;
+        }
+    } else if session.target().is_some() {
+        // Page sessions have no sub-targets to attach to yet, and must not
+        // adopt the browser's other pages.
+        return;
+    } else if state.auto_attach_filter.allows("tab") && state.attached.insert(tab_id_of(target)) {
+        attach_tab(connection, session, target).await;
+    }
+    if !state.auto_attach_filter.allows("page") || !state.attached.insert(target.id().to_owned()) {
         return;
     }
     let attached = connection
@@ -476,6 +548,24 @@ async fn attach_automatically(
                 "sessionId": child.id(),
                 "targetInfo": target_info(target),
                 "waitingForDebugger": waiting,
+            }),
+        )
+        .await;
+}
+
+/// Attaches a tab session of `target` for `session`, which is told.
+async fn attach_tab(connection: &Arc<Connection>, session: &Arc<Session>, target: &Arc<Target>) {
+    let Ok(tab) = connection.attach(target, session.id(), SessionIdKind::Explicit) else {
+        return;
+    };
+    tab.state::<TabSession>().0.store(true, Ordering::Release);
+    session
+        .emit(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": tab.id(),
+                "targetInfo": tab_info(target),
+                "waitingForDebugger": false,
             }),
         )
         .await;
@@ -547,6 +637,11 @@ struct CreateTarget {
 #[serde(rename_all = "camelCase")]
 struct TargetId {
     target_id: String,
+}
+
+#[derive(Deserialize, Default)]
+struct GetTargets {
+    filter: Option<Vec<FilterEntry>>,
 }
 
 #[derive(Deserialize)]
@@ -647,27 +742,36 @@ impl DomainHandler for TargetDomain {
                 // Pages only: the browser target is announced by discovery
                 // and by `getTargetInfo`.
                 "getTargets" => {
-                    let infos: Vec<Value> = cx
-                        .backend()
-                        .targets()
-                        .iter()
-                        .map(|target| target_info(target))
-                        .collect();
+                    let GetTargets { filter } = parse_params(params)?;
+                    let filter = Filter::from_param(filter);
+                    let mut infos = Vec::new();
+                    if filter.allows("browser") {
+                        infos.push(browser_info(cx.backend()));
+                    }
+                    for target in cx.backend().targets() {
+                        if filter.allows("tab") {
+                            infos.push(tab_info(&target));
+                        }
+                        if filter.allows("page") {
+                            infos.push(target_info(&target));
+                        }
+                    }
                     Ok(json!({ "targetInfos": infos }))
                 }
                 "getTargetInfo" => {
                     let GetTargetInfo { target_id } = parse_params(params)?;
                     let backend = cx.backend();
                     let info = match target_id.as_deref() {
-                        None => cx
-                            .session()
-                            .target()
-                            .map_or_else(|| browser_info(backend), |target| target_info(target)),
+                        None => match cx.session().target() {
+                            Some(target) if is_tab_session(cx.session()) => tab_info(target),
+                            Some(target) => target_info(target),
+                            None => browser_info(backend),
+                        },
                         Some(id) if id == backend.browser_id() => browser_info(backend),
-                        Some(id) => {
-                            let target = backend.target(id).ok_or_else(no_such_target)?;
-                            target_info(&target)
-                        }
+                        Some(id) => match find_target(backend, id).ok_or_else(no_such_target)? {
+                            (target, true) => tab_info(&target),
+                            (target, false) => target_info(&target),
+                        },
                     };
                     Ok(json!({ "targetInfo": info }))
                 }
@@ -695,8 +799,9 @@ impl DomainHandler for TargetDomain {
                 }
                 "closeTarget" => {
                     let TargetId { target_id } = parse_params(params)?;
-                    let target = cx.backend().target(&target_id).ok_or_else(no_such_target)?;
-                    if !cx.backend().close_target(&target_id).await? {
+                    let (target, _) =
+                        find_target(cx.backend(), &target_id).ok_or_else(no_such_target)?;
+                    if !cx.backend().close_target(target.id()).await? {
                         return Err(no_such_target());
                     }
                     settle_destroyed(cx.connection(), &target).await;
@@ -705,7 +810,7 @@ impl DomainHandler for TargetDomain {
                 // There is no window to raise.
                 "activateTarget" => {
                     let TargetId { target_id } = parse_params(params)?;
-                    cx.backend().target(&target_id).ok_or_else(no_such_target)?;
+                    find_target(cx.backend(), &target_id).ok_or_else(no_such_target)?;
                     Ok(json!({}))
                 }
                 "attachToTarget" => {
@@ -715,7 +820,8 @@ impl DomainHandler for TargetDomain {
                             "Only flattened sessions are supported; pass flatten: true",
                         ));
                     }
-                    let target = cx.backend().target(&target_id).ok_or_else(no_such_target)?;
+                    let (target, tab) =
+                        find_target(cx.backend(), &target_id).ok_or_else(no_such_target)?;
                     let session = cx.connection().attach(
                         &target,
                         cx.session().id(),
@@ -723,11 +829,17 @@ impl DomainHandler for TargetDomain {
                     )?;
                     let session_id = session.id().unwrap_or_default().to_owned();
                     super::inspector::watch_crashes(&session, &target);
+                    if tab {
+                        session
+                            .state::<TabSession>()
+                            .0
+                            .store(true, Ordering::Release);
+                    }
                     cx.emit(
                         "Target.attachedToTarget",
                         json!({
                             "sessionId": session_id,
-                            "targetInfo": target_info(&target),
+                            "targetInfo": if tab { tab_info(&target) } else { target_info(&target) },
                             "waitingForDebugger": false,
                         }),
                     )

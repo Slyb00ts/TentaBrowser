@@ -27,6 +27,7 @@ required-features = ["v8", "render"]
 [dependencies]
 tenta-core = { workspace = true }
 tenta-browser = { workspace = true }
+tenta-dom = { workspace = true }
 tokio = { workspace = true, features = ["net", "io-util", "rt-multi-thread"] }
 tokio-tungstenite = { workspace = true }
 httparse = { workspace = true }

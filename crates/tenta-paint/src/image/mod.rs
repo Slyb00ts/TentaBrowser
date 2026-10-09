@@ -32,6 +32,7 @@ mod pixels;
 mod png;
 mod resize;
 mod store;
+mod svg;
 mod webp;
 
 use std::sync::Arc;
@@ -42,6 +43,7 @@ pub use error::DecodeError;
 pub use format::{ImageFormat, sniff_format};
 pub use limits::{DecodeLimits, DecodeParams};
 pub use store::{ImageInfo, ImageStore, StoreError, StoreKey};
+pub use svg::{SvgNatural, decode_svg};
 
 /// Handle to an image in an [`ImageStore`].
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]

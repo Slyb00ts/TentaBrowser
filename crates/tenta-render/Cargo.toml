@@ -21,6 +21,7 @@ tenta-css = { workspace = true }
 tenta-js = { workspace = true }
 tenta-layout = { workspace = true }
 tenta-paint = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
 tenta-html = { workspace = true }

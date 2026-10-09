@@ -17,6 +17,9 @@ pub enum ImageFormat {
     Bmp,
     /// Windows icon or cursor.
     Ico,
+    /// Scalable Vector Graphics. Never sniffed: a browser takes an SVG on its
+    /// declared type, and [`decode_svg`](super::decode_svg) renders it.
+    Svg,
 }
 
 impl fmt::Display for ImageFormat {
@@ -28,6 +31,7 @@ impl fmt::Display for ImageFormat {
             Self::Gif => "GIF",
             Self::Bmp => "BMP",
             Self::Ico => "ICO",
+            Self::Svg => "SVG",
         })
     }
 }

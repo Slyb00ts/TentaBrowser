@@ -285,11 +285,32 @@ impl BoxTree {
     }
 }
 
+/// Where an image element stands.
+#[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
+pub enum ImageState {
+    /// Not loaded yet, or not asked for: the element is an empty replaced
+    /// box that takes its size from its attributes and style.
+    #[default]
+    Pending,
+    /// Loaded and decoded.
+    Loaded,
+    /// The fetch or the decode failed, or there is no usable source.
+    Broken,
+}
+
 /// Intrinsic sizes of replaced content, by node. Implemented by the render
 /// session once images load; [`NoImages`] answers for pages without them.
 pub trait ImageInfo {
-    /// Natural size of the image behind `node`, when known.
+    /// Natural size of the image behind `node`, when known. For an image that
+    /// is not loaded this may still carry an aspect ratio, from the element's
+    /// `width` and `height` attributes.
     fn intrinsic(&self, node: NodeId) -> Option<IntrinsicSize>;
+
+    /// How far the image behind `node` has got. A broken `<img>` with `alt`
+    /// text lays out as that text.
+    fn state(&self, _node: NodeId) -> ImageState {
+        ImageState::Pending
+    }
 }
 
 /// An [`ImageInfo`] that knows no image.

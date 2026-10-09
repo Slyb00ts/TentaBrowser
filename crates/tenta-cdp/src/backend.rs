@@ -36,9 +36,14 @@ pub struct Target {
     attached: AtomicUsize,
     contexts: ContextIds,
     console: Arc<ConsoleRing>,
+    overrides: Mutex<crate::overrides::ViewportOverrides>,
 }
 
 impl Target {
+    pub(crate) fn viewport_overrides(&self) -> MutexGuard<'_, crate::overrides::ViewportOverrides> {
+        lock(&self.overrides)
+    }
+
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -241,6 +246,7 @@ impl Backend {
             ..PageOptions::default()
         };
         let page = context.new_page(options).await?;
+        page.add_init_script(crate::interaction::SOURCE);
         let target = Arc::new(Target {
             id: random_id(),
             context_id: context_id.to_owned(),
@@ -248,6 +254,7 @@ impl Backend {
             attached: AtomicUsize::new(0),
             contexts: ContextIds::default(),
             console: Arc::new(ConsoleRing::new()),
+            overrides: Mutex::default(),
         });
         // Subscribed before the page does anything: a session that enables
         // Runtime later is owed what the page logged meanwhile. The task holds

@@ -21,8 +21,8 @@ use super::counters::Counters;
 use super::paint::paint_style;
 use super::replaced::{self, ReplacedInfo};
 use crate::box_tree::{
-    BoxFlags, BoxId, BoxKind, BoxTree, InlineFormattingContext, InlineItem, LayoutBox, LayoutCx,
-    TextSource,
+    BoxFlags, BoxId, BoxKind, BoxTree, ImageState, InlineFormattingContext, InlineItem, LayoutBox,
+    LayoutCx, TextSource,
 };
 use crate::types::{DecorationPaint, MarkerKind, TableKind};
 
@@ -287,11 +287,27 @@ impl<'a, 'cx> Builder<'a, 'cx> {
                 let Some(style) = self.cx.styles.style(node) else {
                     return;
                 };
-                self.enter(node, style, None);
+                let alt = self.broken_image_alt(node);
+                self.enter(node, style, alt);
             }
             tenta_dom::NodeKind::Text | tenta_dom::NodeKind::CData => self.visit_text(node),
             _ => {}
         }
+    }
+
+    /// The text a broken `<img>` with a non-empty `alt` is laid out as: an
+    /// inline box holding it, with no icon and no frame (the fallback Chrome
+    /// shows for an image without usable dimensions).
+    fn broken_image_alt(&self, node: NodeId) -> Option<String> {
+        let doc = self.cx.doc;
+        if doc.tag(node) != Some(atoms::IMG)
+            || doc.namespace(node) != Some(atoms::NS_HTML)
+            || self.cx.images.state(node) != ImageState::Broken
+        {
+            return None;
+        }
+        let alt = doc.attribute(node, atoms::ALT)?.trim();
+        (!alt.is_empty()).then(|| alt.to_owned())
     }
 
     fn visit_text(&mut self, node: NodeId) {

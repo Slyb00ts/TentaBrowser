@@ -1,0 +1,9 @@
+{
+  "name": "tenta-cdp-smoke",
+  "private": true,
+  "type": "module",
+  "description": "Stock Puppeteer against `tentabrowser cdp`; the D5 harness grows from here.",
+  "dependencies": {
+    "puppeteer-core": "25.13.0"
+  }
+}

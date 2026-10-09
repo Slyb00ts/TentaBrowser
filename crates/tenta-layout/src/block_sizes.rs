@@ -108,7 +108,14 @@ pub fn intrinsic_inline_sizes_of_block(cx: &mut LayoutCx, tree: &BoxTree, id: Bo
             crate::taffy_tree::intrinsic_inline_sizes(cx, tree, id)
         }
         (BoxKind::Replaced(kind), _) => {
-            let (w, _) = replaced_content_size(cx, b.node, *kind, (None, None), &SizeLimits::NONE);
+            let (w, _) = replaced_content_size(
+                cx,
+                b.node,
+                *kind,
+                (None, None),
+                &SizeLimits::NONE,
+                ReplacedHints::of(&b.style, None),
+            );
             (w, w)
         }
         (_, Some(ifc)) => intrinsic_inline_content_sizes(cx, tree, ifc),
@@ -171,7 +178,8 @@ pub(crate) fn intrinsic_inline_contribution(
             .and_then(fixed)
             .map(|v| to_content(v, border_box, vertical));
         let limits = replaced_limits(style, (None, None), border_box, (edges, vertical));
-        let (w, _) = replaced_content_size(cx, b.node, kind, (specified, height), &limits);
+        let hints = ReplacedHints::of(style, None);
+        let (w, _) = replaced_content_size(cx, b.node, kind, (specified, height), &limits, hints);
         let shrinks = width.is_some_and(|lp| lp.has_percentage())
             || max_size_lp(&pos.max_width).is_some_and(|lp| lp.has_percentage());
         (if shrinks { 0.0 } else { w }, w)
@@ -245,6 +253,65 @@ pub(crate) fn replaced_limits(
     }
 }
 
+/// What a replaced box's size depends on besides its image: the width of its
+/// containing block, which a ratio-only image fills, and an `aspect-ratio`
+/// that replaces the image's own ratio.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub(crate) struct ReplacedHints {
+    /// The content width the box may fill when the image has a ratio but no
+    /// size (CSS 2.1 10.3.2: computed as for a block-level non-replaced box).
+    pub(crate) stretch: Option<f32>,
+    /// A preferred ratio from `aspect-ratio` and whether it is only a fallback
+    /// (`auto <ratio>`, which the image's own ratio beats).
+    pub(crate) aspect: Option<(f32, bool)>,
+}
+
+impl ReplacedHints {
+    /// The hints of `style` with `stretch` as the fillable content width.
+    pub(crate) fn of(style: &ComputedValues, stretch: Option<f32>) -> Self {
+        let aspect = style.get_position().aspect_ratio;
+        let ratio = match aspect.ratio {
+            style::values::generics::position::PreferredRatio::Ratio(r) => {
+                Some(r.0.0 / r.1.0).filter(|r| r.is_finite() && *r > 0.0)
+            }
+            style::values::generics::position::PreferredRatio::None => None,
+        };
+        Self {
+            stretch: stretch.map(|w| w.max(0.0)),
+            aspect: ratio.map(|r| (r, aspect.auto)),
+        }
+    }
+}
+
+/// The natural aspect ratio of a replaced element, as sizing uses it: the
+/// image's, else the default object size's (canvas and video are 2:1).
+pub(crate) fn natural_ratio(cx: &LayoutCx, node: NodeId, kind: ReplacedKind) -> Option<f32> {
+    let natural = cx
+        .images
+        .intrinsic(node)
+        .unwrap_or_else(|| default_natural_size(kind));
+    ratio_of(&natural, kind, ReplacedHints::default())
+}
+
+/// The ratio a replaced box sizes by: a non-auto `aspect-ratio` replaces the
+/// image's, an `auto <ratio>` is the fallback for an image without one.
+fn ratio_of(natural: &IntrinsicSize, kind: ReplacedKind, hints: ReplacedHints) -> Option<f32> {
+    let own = natural
+        .ratio
+        .or(match (natural.width, natural.height, kind) {
+            // Frames have a default size but no intrinsic ratio.
+            (_, _, ReplacedKind::Iframe | ReplacedKind::Svg) => None,
+            (Some(w), Some(h), _) if h > 0.0 => Some(w / h),
+            _ => None,
+        })
+        .filter(|r| *r > 0.0);
+    match hints.aspect {
+        Some((ratio, false)) => Some(ratio),
+        Some((ratio, true)) => own.or(Some(ratio)),
+        None => own,
+    }
+}
+
 /// The size a replaced element has before any content says otherwise: the
 /// default object size for canvas, video, SVG and frames, nothing for images
 /// and controls.
@@ -278,20 +345,16 @@ pub(crate) fn replaced_content_size(
     kind: ReplacedKind,
     specified: (Option<f32>, Option<f32>),
     limits: &SizeLimits,
+    hints: ReplacedHints,
 ) -> (f32, f32) {
     let natural = cx
         .images
         .intrinsic(node)
         .unwrap_or_else(|| default_natural_size(kind));
-    // Frames have a default size but no intrinsic ratio.
-    let ratio = natural
-        .ratio
-        .or(match (natural.width, natural.height, kind) {
-            (_, _, ReplacedKind::Iframe | ReplacedKind::Svg) => None,
-            (Some(w), Some(h), _) if h > 0.0 => Some(w / h),
-            _ => None,
-        })
-        .filter(|r| *r > 0.0);
+    let ratio = ratio_of(&natural, kind, hints);
+    // An `aspect-ratio` that replaced the image's own also decides the side the
+    // image's size would leave to its natural height.
+    let overridden = matches!(hints.aspect, Some((_, false)));
     match specified {
         (Some(w), Some(h)) => (limits.clamp_w(w), limits.clamp_h(h)),
         (Some(w), None) => {
@@ -308,9 +371,18 @@ pub(crate) fn replaced_content_size(
             let w = natural
                 .width
                 .or_else(|| natural.height.zip(ratio).map(|(h, r)| h * r));
-            let h = natural
-                .height
-                .or_else(|| natural.width.zip(ratio).map(|(w, r)| w / r));
+            let h = if overridden {
+                w.zip(ratio).map(|(w, r)| w / r)
+            } else {
+                natural
+                    .height
+                    .or_else(|| natural.width.zip(ratio).map(|(w, r)| w / r))
+            };
+            // A ratio without a size fills the containing block's width.
+            let (w, h) = match (w, h, ratio, hints.stretch) {
+                (None, None, Some(r), Some(stretch)) => (Some(stretch), Some(stretch / r)),
+                _ => (w, h),
+            };
             let (w, h) = (w.unwrap_or(0.0), h.unwrap_or(0.0));
             if ratio.is_some() {
                 table_10_4(w, h, limits)

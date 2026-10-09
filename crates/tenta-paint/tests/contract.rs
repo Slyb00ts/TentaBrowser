@@ -88,12 +88,7 @@ fn a_hand_built_fragment_tree_becomes_a_balanced_display_list() {
     let extent = Rect::new(0.0, 0.0, 200.0, 100.0);
     let tree = out.finish(root, extent, extent);
 
-    let list = (stub_build as BuildFn)(
-        &tree,
-        &PaintContext {
-            images: &tenta_paint::ImageStore::new(),
-        },
-    );
+    let list = (stub_build as BuildFn)(&tree, &PaintContext::new(&tenta_paint::ImageStore::new()));
     assert_eq!(
         list.items,
         vec![

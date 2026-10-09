@@ -120,8 +120,47 @@ pub enum Command {
     Scrape(ScrapeArgs),
     /// Capture a page as a PNG or JPEG image. Needs a build with `--features render`.
     Screenshot(ScreenshotArgs),
+    /// Serve the Chrome DevTools Protocol, for Puppeteer and Playwright
+    /// (`puppeteer.connect({ browserWSEndpoint })`). Loopback only unless a
+    /// token is set. On loopback there is no authentication by default: any
+    /// local process, and any web page in a local browser that is allowed by
+    /// `--allowed-origin`, can drive the browser; set a token on shared
+    /// machines.
+    Cdp(CdpArgs),
     /// Print the version.
     Version,
+}
+
+#[derive(Debug, Args)]
+pub struct CdpArgs {
+    /// Address to listen on.
+    #[arg(long, value_name = "ADDR", default_value = "127.0.0.1")]
+    pub host: std::net::IpAddr,
+
+    /// Port to listen on; 0 picks a free one. The endpoint is printed on stderr.
+    #[arg(long, value_name = "PORT", default_value_t = 9222)]
+    pub port: u16,
+
+    /// Require this token as the `token` query parameter of every request.
+    /// Needed (16 bytes or more) to listen on a non-loopback address. Prefer
+    /// the environment variable: a flag is visible in the process list.
+    #[arg(
+        long,
+        value_name = "TOKEN",
+        env = "TENTA_CDP_TOKEN",
+        hide_env_values = true
+    )]
+    pub token: Option<String>,
+
+    /// Accept WebSocket and HTTP requests that carry this `Origin`, matched
+    /// exactly (repeatable). Without any, only clients that send no `Origin`
+    /// (not web pages) are served.
+    #[arg(long, value_name = "ORIGIN")]
+    pub allowed_origin: Vec<String>,
+
+    /// Pages that may be open at once.
+    #[arg(long, value_name = "N", default_value_t = 16)]
+    pub max_targets: usize,
 }
 
 #[derive(Debug, Args)]

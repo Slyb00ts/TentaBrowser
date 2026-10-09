@@ -43,11 +43,15 @@ use crate::task::{catch_unwind_future, panic_message};
 use crate::thread::PageThread;
 
 mod evaluate;
+#[cfg(feature = "render")]
+mod geometry;
 mod retained;
 #[cfg(feature = "render")]
 mod screenshot;
 
 pub use evaluate::{EvalOptions, Evaluation, FromRemote, World};
+#[cfg(feature = "render")]
+pub use geometry::{BoxQuads, ElementGeometry, Quad};
 
 /// How many raw bytes of a response are kept so a late `<meta charset>` can
 /// restart the parse from the first byte.
@@ -396,6 +400,8 @@ struct PageInner {
     /// Scripts every new engine runs before the document's own, with the ids
     /// they were registered under.
     init_scripts: Mutex<Vec<(u64, String)>>,
+    /// The viewport now in force: the configured one until [`Page::set_viewport`].
+    viewport: Mutex<Viewport>,
 }
 
 impl PageInner {
@@ -651,6 +657,7 @@ impl Page {
                 settle_gate: tokio::sync::Mutex::new(()),
                 bindings: Mutex::new(Vec::new()),
                 init_scripts: Mutex::new(Vec::new()),
+                viewport: Mutex::new(config.viewport),
                 config,
             }),
         }
@@ -674,7 +681,7 @@ impl Page {
     }
 
     pub fn viewport(&self) -> Viewport {
-        self.inner.config.viewport
+        *self.inner.viewport.lock()
     }
 
     pub fn max_tier(&self) -> Tier {
@@ -1457,6 +1464,10 @@ async fn navigate(
         state.tier = Tier::Dom;
         state.document_navigation_id = generation;
     }
+    // The render session of the document this one replaces, with its pinned
+    // images and retained bodies, ends with it, not at the next render.
+    #[cfg(feature = "render")]
+    crate::render::release(inner.config.id);
     inner.emit(PageEvent::TierChanged { tier: Tier::Dom });
 
     // `DOMContentLoaded` reaches page script here: after the parse has run the
@@ -2942,6 +2953,8 @@ fn commit_error_document(
         state.document_navigation_id = navigation_id;
         std::mem::take(&mut state.engine_held)
     };
+    #[cfg(feature = "render")]
+    crate::render::release(inner.config.id);
     // The error page replaces the document, so the engine the page kept for the
     // document it replaces ends with it.
     if engine_held {

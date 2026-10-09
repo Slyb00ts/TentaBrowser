@@ -593,10 +593,11 @@ fn unsupported_items_are_skipped_and_reported_by_kind() {
     let out = run(items, &options(4, 4));
     assert_eq!(px(&out.pixmap, 1, 1), RED, "supported items still draw");
     assert!(!out.stats.is_complete());
-    assert_eq!(out.stats.skipped_total(), 4);
+    // The gradient is drawn; an image the store does not hold is skipped.
+    assert_eq!(out.stats.skipped_total(), 3);
     assert_eq!(
         out.stats.skipped.iter().collect::<Vec<_>>(),
-        [(&"BoxShadow", &1), (&"Image", &2), (&"LinearGradient", &1)]
+        [(&"BoxShadow", &1), (&"Image", &2)]
     );
 }
 
@@ -1457,4 +1458,352 @@ fn timing_report_1280x800() {
         percentile(&encode_times, 0.95)
     );
     assert_eq!((out.pixmap.width(), out.pixmap.height()), (1280, 800));
+}
+
+// ------------------------------------------------------------------ images
+
+mod images {
+    use super::*;
+    use crate::image::{DecodeParams, DecodedImage, ImageId, ImageQuality, StoreKey};
+    use tenta_layout::ImageKey;
+
+    /// A store holding a `w x h` image whose pixel `(x, y)` is `pixel(x, y)`
+    /// (premultiplied RGBA).
+    fn store_with(w: u32, h: u32, pixel: impl Fn(u32, u32) -> [u8; 4]) -> (ImageStore, ImageId) {
+        let rgba: Vec<u8> = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .flat_map(|(x, y)| pixel(x, y))
+            .collect();
+        let mut store = ImageStore::new();
+        let key = StoreKey {
+            url: ImageKey("test:raster".into()),
+            params: DecodeParams::default(),
+        };
+        let image = DecodedImage {
+            width: w,
+            height: h,
+            rgba: rgba.into(),
+            source_width: w,
+            source_height: h,
+        };
+        let id = store.insert(key, image, 1.0).expect("fits");
+        (store, id)
+    }
+
+    fn draw(store: &ImageStore, items: Vec<Item>, opts: &RasterOptions) -> RasterOutput {
+        let list = DisplayList {
+            items,
+            ..DisplayList::default()
+        };
+        rasterize(&list, opts, store).expect("the output size is valid")
+    }
+
+    fn image(id: ImageId, dest: Rect, quality: ImageQuality) -> Item {
+        Item::Image {
+            dest,
+            src: id,
+            src_rect: None,
+            quality,
+        }
+    }
+
+    /// Red left half, blue right half, 2x1.
+    fn halves(x: u32, _y: u32) -> [u8; 4] {
+        if x == 0 { RED } else { BLUE }
+    }
+
+    #[test]
+    fn an_image_at_its_own_size_is_copied_exactly() {
+        let (store, id) = store_with(2, 1, halves);
+        let out = draw(
+            &store,
+            vec![image(
+                id,
+                Rect::new(1.0, 1.0, 2.0, 1.0),
+                ImageQuality::Smooth,
+            )],
+            &options(4, 3),
+        );
+        assert!(out.stats.is_complete());
+        assert_eq!(px(&out.pixmap, 1, 1), RED);
+        assert_eq!(px(&out.pixmap, 2, 1), BLUE);
+        assert_eq!(px(&out.pixmap, 0, 1), CLEAR);
+        assert_eq!(px(&out.pixmap, 3, 1), CLEAR);
+        assert_eq!(px(&out.pixmap, 1, 0), CLEAR);
+    }
+
+    #[test]
+    fn pixelated_scaling_keeps_hard_edges_and_smooth_scaling_blends_them() {
+        let (store, id) = store_with(2, 1, halves);
+        let dest = Rect::new(0.0, 0.0, 20.0, 10.0);
+        let pixelated = draw(
+            &store,
+            vec![image(id, dest, ImageQuality::Pixelated)],
+            &options(20, 10),
+        );
+        assert_eq!(px(&pixelated.pixmap, 9, 5), RED);
+        assert_eq!(px(&pixelated.pixmap, 10, 5), BLUE);
+        let smooth = draw(
+            &store,
+            vec![image(id, dest, ImageQuality::Smooth)],
+            &options(20, 10),
+        );
+        let edge = px(&smooth.pixmap, 10, 5);
+        assert!(edge[0] > 0 && edge[2] > 0, "the seam is blended: {edge:?}");
+        assert_eq!(
+            px(&smooth.pixmap, 2, 5),
+            RED,
+            "far from the seam it is flat"
+        );
+        assert_eq!(px(&smooth.pixmap, 17, 5), BLUE);
+    }
+
+    #[test]
+    fn a_source_rectangle_selects_part_of_the_image() {
+        let (store, id) = store_with(2, 1, halves);
+        let item = Item::Image {
+            dest: Rect::new(0.0, 0.0, 4.0, 4.0),
+            src: id,
+            src_rect: Some(Rect::new(1.0, 0.0, 1.0, 1.0)),
+            quality: ImageQuality::Pixelated,
+        };
+        let out = draw(&store, vec![item], &options(4, 4));
+        assert_eq!(px(&out.pixmap, 0, 0), BLUE);
+        assert_eq!(px(&out.pixmap, 3, 3), BLUE);
+    }
+
+    #[test]
+    fn a_large_downscale_averages_instead_of_sampling() {
+        // A 64x64 checkerboard of 1 px squares drawn at 8x8 averages to grey,
+        // where plain bilinear sampling would pick one colour.
+        let (store, id) = store_with(64, 64, |x, y| {
+            if (x + y) % 2 == 0 {
+                [255, 255, 255, 255]
+            } else {
+                [0, 0, 0, 255]
+            }
+        });
+        let out = draw(
+            &store,
+            vec![image(
+                id,
+                Rect::new(0.0, 0.0, 8.0, 8.0),
+                ImageQuality::Smooth,
+            )],
+            &options(8, 8),
+        );
+        for (x, y) in [(1, 1), (4, 4), (6, 2)] {
+            let p = px(&out.pixmap, x, y);
+            assert!(p[0].abs_diff(128) <= 4, "grey at {x},{y}: {p:?}");
+        }
+    }
+
+    #[test]
+    fn images_obey_clips_opacity_and_scale() {
+        let (store, id) = store_with(2, 1, halves);
+        let items = vec![
+            clip(Rect::new(0.0, 0.0, 5.0, 10.0), NO_RADII),
+            Item::PushOpacity(0.5),
+            image(id, Rect::new(0.0, 0.0, 20.0, 10.0), ImageQuality::Pixelated),
+            Item::PopOpacity,
+            Item::PopClip,
+        ];
+        let out = draw(&store, items, &options(20, 10));
+        let inside = px(&out.pixmap, 2, 5);
+        assert!(inside[3].abs_diff(128) <= 1, "half opaque: {inside:?}");
+        assert_eq!(px(&out.pixmap, 6, 5), CLEAR, "clipped");
+        // At a device scale of 2 the image covers twice the pixels.
+        let mut scaled = options(8, 4);
+        scaled.scale = 2.0;
+        let out = draw(
+            &store,
+            vec![image(
+                id,
+                Rect::new(0.0, 0.0, 2.0, 1.0),
+                ImageQuality::Pixelated,
+            )],
+            &scaled,
+        );
+        assert_eq!(px(&out.pixmap, 1, 1), RED);
+        assert_eq!(px(&out.pixmap, 2, 1), BLUE);
+        assert_eq!(px(&out.pixmap, 4, 1), CLEAR);
+    }
+
+    #[test]
+    fn a_rotated_image_still_draws() {
+        let (store, id) = store_with(2, 2, |_, _| RED);
+        let items = vec![
+            Item::PushTransform([0.0, 1.0, -1.0, 0.0, 10.0, 0.0]),
+            image(id, Rect::new(0.0, 0.0, 8.0, 4.0), ImageQuality::Smooth),
+            Item::PopTransform,
+        ];
+        let out = draw(&store, items, &options(12, 12));
+        // A quarter turn maps the 8x4 box to x in 6..10, y in 0..8.
+        assert_eq!(px(&out.pixmap, 8, 4), RED);
+        assert_eq!(px(&out.pixmap, 2, 4), CLEAR);
+    }
+
+    #[test]
+    fn an_id_the_store_lacks_is_skipped_and_counted() {
+        let (store, id) = store_with(1, 1, |_, _| RED);
+        let missing = ImageId(id.0 + 7);
+        let out = draw(
+            &store,
+            vec![image(
+                missing,
+                Rect::new(0.0, 0.0, 2.0, 2.0),
+                ImageQuality::Smooth,
+            )],
+            &options(2, 2),
+        );
+        assert_eq!(out.stats.skipped.get("Image"), Some(&1));
+    }
+
+    #[test]
+    fn an_opacity_group_holding_only_an_image_keeps_its_pixels() {
+        let (store, id) = store_with(1, 1, |_, _| [255, 0, 0, 255]);
+        let items = vec![
+            Item::PushOpacity(0.5),
+            image(id, Rect::new(2.0, 2.0, 4.0, 4.0), ImageQuality::Smooth),
+            Item::PopOpacity,
+        ];
+        let out = draw(&store, items, &options(8, 8));
+        assert!(px(&out.pixmap, 3, 3)[3] > 100);
+    }
+
+    // ------------------------------------------------------------ gradients
+
+    fn gradient(angle: f32, stops: Vec<(f32, Color)>, repeat: bool, radii: Radii) -> Item {
+        Item::LinearGradient {
+            rect: Rect::new(0.0, 0.0, 100.0, 10.0),
+            radii,
+            angle,
+            stops,
+            repeat,
+        }
+    }
+
+    #[test]
+    fn a_gradient_runs_along_its_angle() {
+        let stops = vec![(0.0, rgb(255, 0, 0)), (1.0, rgb(0, 0, 255))];
+        let out = raster(
+            vec![gradient(90.0, stops.clone(), false, NO_RADII)],
+            100,
+            10,
+        );
+        let (left, mid, right) = (px(&out, 1, 5), px(&out, 50, 5), px(&out, 98, 5));
+        assert!(left[0] > 245 && left[2] < 10, "{left:?}");
+        assert!(
+            mid[0].abs_diff(127) < 6 && mid[2].abs_diff(127) < 6,
+            "{mid:?}"
+        );
+        assert!(right[2] > 245 && right[0] < 10, "{right:?}");
+        // Pointing up, the colour changes along y and not along x.
+        let up = raster(
+            vec![Item::LinearGradient {
+                rect: Rect::new(0.0, 0.0, 10.0, 100.0),
+                radii: NO_RADII,
+                angle: 0.0,
+                stops,
+                repeat: false,
+            }],
+            10,
+            100,
+        );
+        assert!(px(&up, 5, 98)[0] > 245, "red at the bottom");
+        assert!(px(&up, 5, 1)[2] > 245, "blue at the top");
+        assert_eq!(px(&up, 0, 50), px(&up, 9, 50));
+    }
+
+    #[test]
+    fn a_repeating_gradient_restarts_each_period() {
+        let stops = vec![(0.0, rgb(255, 0, 0)), (0.2, rgb(0, 0, 255))];
+        let out = raster(vec![gradient(90.0, stops, true, NO_RADII)], 100, 10);
+        // The period is 20 px: red restarts at 20, 40, ...
+        for start in [0u32, 20, 40, 60] {
+            let p = px(&out, start + 1, 5);
+            assert!(p[0] > 200, "red near {start}: {p:?}");
+            let q = px(&out, start + 18, 5);
+            assert!(
+                q[2] > 200,
+                "blue near the end of the period at {start}: {q:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fading_to_transparent_keeps_the_colour_of_the_visible_stop() {
+        let stops = vec![(0.0, rgb(255, 0, 0)), (1.0, Color::TRANSPARENT)];
+        let out = raster_with(
+            vec![
+                fill(Rect::new(0.0, 0.0, 100.0, 10.0), rgb(255, 255, 255)),
+                gradient(90.0, stops, false, NO_RADII),
+            ],
+            &options(100, 10),
+        );
+        // Over white, half way is half red: (255, 128, 128), not a grey one.
+        let mid = px(&out, 50, 5);
+        assert_eq!(mid[0], 255);
+        assert!(
+            mid[1].abs_diff(128) <= 4 && mid[2].abs_diff(128) <= 4,
+            "{mid:?}"
+        );
+    }
+
+    #[test]
+    fn a_rounded_gradient_leaves_the_corners_clear() {
+        let stops = vec![(0.0, rgb(255, 0, 0)), (1.0, rgb(255, 0, 0))];
+        let out = raster(vec![gradient(90.0, stops, false, [5.0; 8])], 100, 10);
+        assert_eq!(px(&out, 0, 0), CLEAR);
+        assert_eq!(px(&out, 50, 5), RED);
+    }
+
+    #[test]
+    fn stops_outside_the_line_still_shape_the_colours_inside_it() {
+        // Red at -0.5 and blue at 0.5: the line starts half way between them.
+        let stops = vec![(-0.5, rgb(255, 0, 0)), (0.5, rgb(0, 0, 255))];
+        let out = raster(vec![gradient(90.0, stops, false, NO_RADII)], 100, 10);
+        let (start, end) = (px(&out, 0, 5), px(&out, 99, 5));
+        assert!(
+            start[0].abs_diff(127) < 8 && start[2].abs_diff(127) < 8,
+            "{start:?}"
+        );
+        assert!(end[2] > 245 && end[0] < 8, "{end:?}");
+    }
+
+    #[test]
+    fn a_semi_transparent_stop_interpolates_premultiplied() {
+        // Opaque red to half-transparent blue: premultiplied, the mid point
+        // is (127, 0, 64) at alpha 0.75, not a straight blend of the colours.
+        let blue_half = Color::from_rgba8(0, 0, 255, 128);
+        let stops = vec![(0.0, rgb(255, 0, 0)), (1.0, blue_half)];
+        let out = raster(vec![gradient(90.0, stops, false, NO_RADII)], 100, 10);
+        let mid = px(&out, 50, 5);
+        assert!(mid[3].abs_diff(191) < 6, "alpha {mid:?}");
+        assert!(
+            mid[0].abs_diff(127) < 8 && mid[2].abs_diff(64) < 8,
+            "{mid:?}"
+        );
+    }
+
+    #[test]
+    fn a_pattern_repeats_a_tile_over_thousands_of_rows() {
+        // A 1x2 tile: red over blue, 1 px wide and 2 px tall, down 8000 px.
+        let (store, id) = store_with(1, 2, |_, y| if y == 0 { RED } else { BLUE });
+        let item = Item::ImagePattern {
+            area: Rect::new(2.0, 0.0, 3.0, 8000.0),
+            origin: (2.0, 0.0),
+            tile: (1.0, 2.0),
+            src: id,
+            quality: ImageQuality::Pixelated,
+        };
+        let out = draw(&store, vec![item], &options(8, 8000));
+        assert!(out.stats.is_complete());
+        for row in [0u32, 1, 2, 3999 * 2, 3999 * 2 + 1, 7998, 7999] {
+            let want = if row % 2 == 0 { RED } else { BLUE };
+            assert_eq!(px(&out.pixmap, 3, row), want, "row {row}");
+        }
+        assert_eq!(px(&out.pixmap, 1, 10), CLEAR, "left of the area");
+        assert_eq!(px(&out.pixmap, 5, 10), CLEAR, "right of the area");
+    }
 }

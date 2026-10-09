@@ -1,0 +1,188 @@
+// Expected rectangles recorded from Chrome 154 (getBoundingClientRect, document coordinates).
+
+use super::Case;
+
+pub(super) const CASES: &[Case] = &[
+    Case {
+        name: "inline_in_text",
+        viewport: (800.0, 600.0),
+        html: r##"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c>&#8203;<img id=a src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='30'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E">&#8203;</div></body></html>"##,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("html", [0.0, 0.0, 800.0, 34.0]),
+            ("body", [0.0, 0.0, 800.0, 34.0]),
+            ("c", [0.0, 0.0, 800.0, 34.0]),
+            ("a", [0.0, 0.0, 40.0, 30.0]),
+        ],
+    },
+    Case {
+        name: "inline_alone",
+        viewport: (800.0, 600.0),
+        html: r##"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c><img id=a src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='30'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E"></div></body></html>"##,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("html", [0.0, 0.0, 800.0, 34.0]),
+            ("body", [0.0, 0.0, 800.0, 34.0]),
+            ("c", [0.0, 0.0, 800.0, 34.0]),
+            ("a", [0.0, 0.0, 40.0, 30.0]),
+        ],
+    },
+    Case {
+        name: "inline_valign_middle",
+        viewport: (800.0, 600.0),
+        html: r##"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c>&#8203;<img id=a style="vertical-align:middle" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='30'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E">&#8203;</div></body></html>"##,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("html", [0.0, 0.0, 800.0, 30.0]),
+            ("body", [0.0, 0.0, 800.0, 30.0]),
+            ("c", [0.0, 0.0, 800.0, 30.0]),
+            ("a", [0.0, 0.0, 40.0, 30.0]),
+        ],
+    },
+    Case {
+        name: "inline_valign_top",
+        viewport: (800.0, 600.0),
+        html: r##"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="line-height:50px">&#8203;<img id=a style="vertical-align:top" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='30'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E">&#8203;</div></body></html>"##,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("html", [0.0, 0.0, 800.0, 50.0]),
+            ("body", [0.0, 0.0, 800.0, 50.0]),
+            ("c", [0.0, 0.0, 800.0, 50.0]),
+            ("a", [0.0, 0.0, 40.0, 30.0]),
+        ],
+    },
+    Case {
+        name: "inline_valign_bottom",
+        viewport: (800.0, 600.0),
+        html: r##"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="line-height:50px">&#8203;<img id=a style="vertical-align:bottom" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='30'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E">&#8203;</div></body></html>"##,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("html", [0.0, 0.0, 800.0, 50.0]),
+            ("body", [0.0, 0.0, 800.0, 50.0]),
+            ("c", [0.0, 0.0, 800.0, 50.0]),
+            ("a", [0.0, 20.0, 40.0, 30.0]),
+        ],
+    },
+    Case {
+        name: "inline_valign_text_top",
+        viewport: (800.0, 600.0),
+        html: r##"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c>&#8203;<img id=a style="vertical-align:text-top" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='30'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E">&#8203;</div></body></html>"##,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("html", [0.0, 0.0, 800.0, 30.0]),
+            ("body", [0.0, 0.0, 800.0, 30.0]),
+            ("c", [0.0, 0.0, 800.0, 30.0]),
+            ("a", [0.0, 0.0, 40.0, 30.0]),
+        ],
+    },
+    Case {
+        name: "inline_valign_length",
+        viewport: (800.0, 600.0),
+        html: r##"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c>&#8203;<img id=a style="vertical-align:-10px" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='30'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E">&#8203;</div></body></html>"##,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("html", [0.0, 0.0, 800.0, 30.0]),
+            ("body", [0.0, 0.0, 800.0, 30.0]),
+            ("c", [0.0, 0.0, 800.0, 30.0]),
+            ("a", [0.0, 0.0, 40.0, 30.0]),
+        ],
+    },
+    Case {
+        name: "inline_two_images",
+        viewport: (800.0, 600.0),
+        html: r##"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c><img id=a src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='30'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E"><img id=b src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='50' height='20'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E"></div></body></html>"##,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("html", [0.0, 0.0, 800.0, 34.0]),
+            ("body", [0.0, 0.0, 800.0, 34.0]),
+            ("c", [0.0, 0.0, 800.0, 34.0]),
+            ("a", [0.0, 0.0, 40.0, 30.0]),
+            ("b", [40.0, 10.0, 50.0, 20.0]),
+        ],
+    },
+    Case {
+        name: "inline_wraps",
+        viewport: (800.0, 600.0),
+        html: r##"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="width:100px"><img id=a src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='30'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E"><img id=b src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='20'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E"></div></body></html>"##,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("html", [0.0, 0.0, 800.0, 58.0]),
+            ("body", [0.0, 0.0, 800.0, 58.0]),
+            ("c", [0.0, 0.0, 100.0, 58.0]),
+            ("a", [0.0, 0.0, 60.0, 30.0]),
+            ("b", [0.0, 34.0, 60.0, 20.0]),
+        ],
+    },
+    Case {
+        name: "inline_percent_width",
+        viewport: (800.0, 600.0),
+        html: r##"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="width:200px"><img id=a style="width:50%" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='30'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E"></div></body></html>"##,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("html", [0.0, 0.0, 800.0, 79.0]),
+            ("body", [0.0, 0.0, 800.0, 79.0]),
+            ("c", [0.0, 0.0, 200.0, 79.0]),
+            ("a", [0.0, 0.0, 100.0, 75.0]),
+        ],
+    },
+    Case {
+        name: "inline_ratio_only",
+        viewport: (800.0, 600.0),
+        html: r##"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="width:200px"><img id=a src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 20'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E"></div></body></html>"##,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("html", [0.0, 0.0, 800.0, 104.0]),
+            ("body", [0.0, 0.0, 800.0, 104.0]),
+            ("c", [0.0, 0.0, 200.0, 104.0]),
+            ("a", [0.0, 0.0, 200.0, 100.0]),
+        ],
+    },
+    Case {
+        name: "inline_max_width",
+        viewport: (800.0, 600.0),
+        html: r##"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c style="width:100px"><img id=a style="max-width:100%" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='150'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E"></div></body></html>"##,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("html", [0.0, 0.0, 800.0, 54.0]),
+            ("body", [0.0, 0.0, 800.0, 54.0]),
+            ("c", [0.0, 0.0, 100.0, 54.0]),
+            ("a", [0.0, 0.0, 100.0, 50.0]),
+        ],
+    },
+    Case {
+        name: "inline_block_wrapper",
+        viewport: (800.0, 600.0),
+        html: r##"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><span id=c style="display:inline-block"><img id=a src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='40'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E"></span></body></html>"##,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("html", [0.0, 0.0, 800.0, 44.0]),
+            ("body", [0.0, 0.0, 800.0, 44.0]),
+            ("c", [0.0, 0.0, 80.0, 44.0]),
+            ("a", [0.0, 0.0, 80.0, 40.0]),
+        ],
+    },
+    Case {
+        name: "inline_block_wrapper_percent",
+        viewport: (800.0, 600.0),
+        html: r##"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><span id=c style="display:inline-block"><img id=a style="width:50%" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='40'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E"></span></body></html>"##,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("html", [0.0, 0.0, 800.0, 24.0]),
+            ("body", [0.0, 0.0, 800.0, 24.0]),
+            ("c", [0.0, 0.0, 80.0, 24.0]),
+            ("a", [0.0, 0.0, 40.0, 20.0]),
+        ],
+    },
+    Case {
+        name: "inline_block_image",
+        viewport: (800.0, 600.0),
+        html: r##"<!doctype html><html id=html><head><meta charset=utf-8><style>html,body{margin:0}body{font:16px 'Liberation Sans'}</style></head><body id=body><div id=c><img id=a style="display:inline-block;padding:4px" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='40'%3E%3Crect width='100%25' height='100%25' fill='%23369'/%3E%3C/svg%3E"></div></body></html>"##,
+        scroll: (800.0, 600.0),
+        expect: &[
+            ("html", [0.0, 0.0, 800.0, 52.0]),
+            ("body", [0.0, 0.0, 800.0, 52.0]),
+            ("c", [0.0, 0.0, 800.0, 52.0]),
+            ("a", [0.0, 0.0, 88.0, 48.0]),
+        ],
+    },
+];

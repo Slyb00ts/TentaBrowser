@@ -164,23 +164,13 @@ impl Scene {
 }
 
 fn items(tree: &FragmentTree) -> Vec<Item> {
-    let list = build(
-        tree,
-        &PaintContext {
-            images: &ImageStore::new(),
-        },
-    );
+    let list = build(tree, &PaintContext::new(&ImageStore::new()));
     assert!(list.is_balanced());
     list.items
 }
 
 fn render(tree: &FragmentTree) -> RasterOutput {
-    let list = build(
-        tree,
-        &PaintContext {
-            images: &ImageStore::new(),
-        },
-    );
+    let list = build(tree, &PaintContext::new(&ImageStore::new()));
     let opts = RasterOptions {
         width: tree.viewport.w as u32,
         height: tree.viewport.h as u32,

@@ -57,11 +57,18 @@ required-features = ["wpt-driver"]
 tenta-dom = { workspace = true }
 png = { workspace = true }
 zune-jpeg = { workspace = true }
+jpeg-encoder = { workspace = true }
+image-webp = { workspace = true }
+gif = { workspace = true }
 tenta-testutil = { workspace = true }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 
 [[test]]
 name = "screenshot"
+required-features = ["render"]
+
+[[test]]
+name = "images"
 required-features = ["render"]
 
 [[example]]

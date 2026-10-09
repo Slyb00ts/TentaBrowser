@@ -48,6 +48,9 @@ use structural::ElementResult;
 
 const VIEWPORT: (u32, u32) = (900, 1000);
 
+/// Where the fixtures pretend to be served from, for resolving image URLs.
+const BASE_URL: &str = "https://fixtures.invalid/index.html";
+
 /// Fixtures whose result is produced by script. They are skipped here and
 /// belong to the JavaScript-capable corpus run.
 const SCRIPTED: &[&str] = &[
@@ -110,6 +113,9 @@ fn render(html: &str, mutate: impl FnOnce(&mut Document)) -> Rendered {
         ..RenderConfig::default()
     });
     session.set_style_sources(engine.sources().to_vec());
+    // Images come from `data:` URLs and sibling files that the corpus does not
+    // serve: the first load, the second fail like a missing file.
+    session.load_inline_images(&doc, &url::Url::parse(BASE_URL).expect("a constant URL"));
     let shot = session
         .screenshot(&doc, &ScreenshotOptions::default())
         .expect("the fixture renders");

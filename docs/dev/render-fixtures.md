@@ -126,3 +126,30 @@ floor is affected.
 - Element rects from `checks.json` use tolerance 0.02 px (integer-valued
   expectations), 0.05 px (others) and 1 px position / 2 px or 3% size for
   elements that hold inline text. They are reported, not graded.
+
+## Replaced elements and images: Chrome geometry and pixel references
+
+Two recorded references cover images, both recorded from Chrome 154 on macOS
+and checked in as source:
+
+- **Geometry** (`crates/tenta-render/tests/replaced.rs` and
+  `tests/replaced/chrome_*.rs`, 85 cases). Each case loads SVG `data:` images of
+  a known natural size through the session's own image pipeline
+  (`RenderSession::load_inline_images`), lays the page out and compares every
+  `id`'d border box with Chrome's. Cases are written in
+  `render-fixtures/tools/replaced_cases.py` and recorded with
+  `python3 record_geometry.py replaced_cases.py BLOCK ../../crates/tenta-render/tests/replaced/chrome_block.rs`
+  (groups `BLOCK`, `INLINE`, `FLEX`, `GRID`, `ABS`, `MISC`; one Chrome run per case,
+  a few seconds each). The recorder waits for every image to decode, then reads
+  the rectangles. Avoid text whose width depends on the font in these cases
+  (the machine's default font differs from the embedded one); a zero-width space
+  gives a line its strut without a width. Floats are left out until M1.1.
+- **Pixels** (`crates/tenta-browser/tests/images.rs`, `images_match_chrome_pixels_at_known_points`):
+  a 28-cell page (`object-fit`, `object-position`, `image-rendering`, clipping by
+  `border-radius`, opacity, backgrounds with size, position, `repeat`, `round`, `space`,
+  origin and clip, gradients, JPEG, WebP, GIF, SVG) served by the fixture server and
+  probed at 16 points per cell, away from the edges that resampling blurs. To
+  re-record: `PARITY_DIR=/tmp/parity cargo nextest run -p tenta-browser --features render --test images --run-ignored only write_the_parity_page`,
+  then `python3 render-fixtures/tools/chrome_shot.py /tmp/parity 490 860` and
+  `python3 render-fixtures/tools/probe_table.py /tmp/parity`, and paste the
+  printed table over `CHROME`. Tolerance is 5 per channel (12 for JPEG).

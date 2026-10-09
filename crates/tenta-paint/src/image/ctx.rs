@@ -51,7 +51,7 @@ impl DecodeControl {
         self
     }
 
-    fn check(&self) -> Result<(), DecodeError> {
+    pub(super) fn check(&self) -> Result<(), DecodeError> {
         if self
             .cancel
             .as_ref()

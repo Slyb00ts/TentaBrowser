@@ -4,22 +4,28 @@
 
 use crate::domain::DomainRegistry;
 
+mod audits;
 mod browser;
 mod css;
 mod dom;
 mod emulation;
 mod fetch;
+mod geometry;
 mod input;
 mod inspector;
 mod log;
 mod network;
+mod nodes;
 mod page;
+mod performance;
 mod runtime;
 mod security;
+mod snapshot;
 mod storage;
 mod target;
 
 pub(crate) fn register_all(registry: &mut DomainRegistry) {
+    audits::register(registry);
     browser::register(registry);
     css::register(registry);
     dom::register(registry);
@@ -30,6 +36,7 @@ pub(crate) fn register_all(registry: &mut DomainRegistry) {
     log::register(registry);
     network::register(registry);
     page::register(registry);
+    performance::register(registry);
     runtime::register(registry);
     security::register(registry);
     storage::register(registry);
@@ -51,6 +58,17 @@ mod tests {
         "Log.disable",
         "Runtime.releaseObjectGroup",
         "Runtime.discardConsoleEntries",
+        "Audits.enable",
+        "Audits.disable",
+        "DOM.getDocument",
+        "DOM.querySelector",
+        "DOM.querySelectorAll",
+        "DOM.requestNode",
+        "DOM.getOuterHTML",
+        "DOM.getNodeForLocation",
+        "DOM.focus",
+        "Network.disable",
+        "Performance.disable",
         "Security.enable",
         "Security.disable",
     ];

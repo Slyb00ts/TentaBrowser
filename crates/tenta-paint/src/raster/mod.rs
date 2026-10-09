@@ -4,10 +4,11 @@ mod border;
 mod clip;
 mod dash;
 mod geometry;
+mod image;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 use tenta_layout::{Color, Rect};
@@ -16,7 +17,7 @@ use tiny_skia::{FillRule, Paint, Path, PathBuilder, PixmapPaint, Transform};
 use crate::PaintError;
 use crate::dl::{DisplayList, Item, Radii};
 use crate::glyph;
-use crate::image::ImageStore;
+use crate::image::{ImageId, ImageStore};
 use clip::{ClipState, Scratch};
 use geometry::{
     Axis, IRect, clamp_radii, device_bounds, is_rounded, push_rounded_rect, scale_radii,
@@ -122,14 +123,14 @@ pub struct RasterOutput {
 /// Rasterises `list` into a new pixmap.
 ///
 /// Items the rasteriser cannot draw yet are skipped and reported in the
-/// returned stats, identically in every build profile. Images are not drawn
-/// yet, so the store is accepted only to keep the signature stable.
+/// returned stats, identically in every build profile. `images` resolves the
+/// ids of `Item::Image`; an id it no longer holds is skipped and counted.
 pub fn rasterize(
     list: &DisplayList,
     opts: &RasterOptions,
-    _images: &ImageStore,
+    images: &ImageStore,
 ) -> Result<RasterOutput, PaintError> {
-    let mut painter = Painter::new(opts)?;
+    let mut painter = Painter::new(opts, images)?;
     for (&feature, &count) in &list.unsupported {
         painter.stats.skip(feature, count);
     }
@@ -174,7 +175,10 @@ enum Footprint {
 }
 
 /// Rasteriser state.
-struct Painter {
+struct Painter<'a> {
+    images: &'a ImageStore,
+    /// Reduced copies of images, by image and level, for this rasterisation.
+    mips: HashMap<(ImageId, u32), Rc<image::Mip>>,
     target: tiny_skia::Pixmap,
     /// Maps CSS pixels to pixels of `target`.
     transform: Transform,
@@ -190,8 +194,8 @@ struct Painter {
     stats: RasterStats,
 }
 
-impl Painter {
-    fn new(opts: &RasterOptions) -> Result<Self, PaintError> {
+impl<'a> Painter<'a> {
+    fn new(opts: &RasterOptions, images: &'a ImageStore) -> Result<Self, PaintError> {
         let mut target =
             tiny_skia::Pixmap::new(opts.width, opts.height).ok_or(PaintError::InvalidSize {
                 width: opts.width,
@@ -204,6 +208,8 @@ impl Painter {
             .post_translate(-opts.origin.0 * opts.scale, -opts.origin.1 * opts.scale);
         let canvas = IRect::from_size(opts.width, opts.height);
         Ok(Self {
+            images,
+            mips: HashMap::new(),
             target,
             transform,
             axis: Axis::of(transform),
@@ -229,8 +235,26 @@ impl Painter {
                 radii,
             } => self.draw_border(*rect, *widths, *colors, *styles, *radii),
             Item::BoxShadow { .. } => self.stats.skip("BoxShadow", 1),
-            Item::LinearGradient { .. } => self.stats.skip("LinearGradient", 1),
-            Item::Image { .. } => self.stats.skip("Image", 1),
+            Item::LinearGradient {
+                rect,
+                radii,
+                angle,
+                stops,
+                repeat,
+            } => self.draw_linear_gradient(*rect, *radii, *angle, stops, *repeat),
+            Item::Image {
+                dest,
+                src,
+                src_rect,
+                quality,
+            } => self.draw_image(*dest, *src, *src_rect, *quality),
+            Item::ImagePattern {
+                area,
+                origin,
+                tile,
+                src,
+                quality,
+            } => self.draw_image_pattern(*area, *origin, *tile, *src, *quality),
             Item::Text { origin, run, color } => {
                 let clip = Rc::clone(&self.clip);
                 if clip.bounds().is_empty() {
@@ -559,9 +583,12 @@ fn footprint(item: &Item, transform: Transform) -> Footprint {
             );
             Footprint::Area(device_bounds(rect, transform, 1.0))
         }
+        Item::LinearGradient { rect, .. }
+        | Item::Image { dest: rect, .. }
+        | Item::ImagePattern { area: rect, .. } => {
+            Footprint::Area(device_bounds(*rect, transform, 1.0))
+        }
         Item::BoxShadow { .. }
-        | Item::LinearGradient { .. }
-        | Item::Image { .. }
         | Item::PushClip { .. }
         | Item::PopClip
         | Item::PushOpacity(_)

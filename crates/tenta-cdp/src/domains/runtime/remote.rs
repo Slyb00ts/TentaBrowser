@@ -49,7 +49,7 @@ fn by_value(value: &RemoteValue) -> Value {
 }
 
 /// A `Runtime.RemoteObject`.
-pub(super) fn remote_object(value: &RemoteValue) -> Value {
+pub(in crate::domains) fn remote_object(value: &RemoteValue) -> Value {
     match value {
         RemoteValue::Undefined => json!({ "type": "undefined" }),
         RemoteValue::Null => json!({ "type": "object", "subtype": "null", "value": null }),

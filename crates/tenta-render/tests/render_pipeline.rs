@@ -735,11 +735,24 @@ fn media_queries_follow_the_viewport() {
 #[test]
 fn unsupported_painting_is_reported_not_hidden() {
     let html = "<!doctype html><body style='margin:0'><div style='width:40px;height:40px;\
-                background:linear-gradient(red, blue)'></div>";
+                box-shadow:0 0 6px #000'></div>";
     let mut p = page(html, 50, 50);
     let (shot, _) = p.viewport();
     assert!(!shot.stats.is_complete());
-    assert_eq!(shot.stats.skipped.get("LinearGradient"), Some(&1));
+    assert_eq!(shot.stats.skipped.get("BoxShadow"), Some(&1));
+}
+
+#[test]
+fn linear_gradients_are_drawn_across_their_box() {
+    let html = "<!doctype html><body style='margin:0'><div style='width:40px;height:40px;\
+                background:linear-gradient(to right, red, blue)'></div>";
+    let mut p = page(html, 50, 50);
+    let (shot, image) = p.viewport();
+    assert!(shot.stats.is_complete(), "{:?}", shot.stats);
+    let (left, right) = (image.px(1, 20), image.px(38, 20));
+    assert!(left[0] > 230 && left[2] < 25, "near red: {left:?}");
+    assert!(right[2] > 230 && right[0] < 25, "near blue: {right:?}");
+    assert_eq!(image.px(45, 20), [255, 255, 255, 255], "outside the box");
 }
 
 #[test]

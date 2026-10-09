@@ -5,12 +5,17 @@ use std::time::Instant;
 use tenta_core::NodeId;
 use tenta_css::cascade::{StyleDiff, StyleEngine, StyleEnv, StyleSource};
 use tenta_dom::Document;
-use tenta_layout::{BoxTree, FontSystem, FragmentTree, LayoutCx, NoImages, Rect, layout};
+use tenta_layout::{BoxTree, FontSystem, FragmentTree, ImageKey, LayoutCx, Rect, layout};
 use tenta_paint::{
-    Color, DisplayList, ImageStore, PaintContext, PngProfile, RasterOptions, build, encode_jpeg,
-    encode_png, rasterize,
+    Color, DecodeControl, DisplayList, PaintContext, PngProfile, RasterOptions, StoreError, build,
+    encode_jpeg, encode_png, rasterize,
 };
+use url::Url;
 
+use crate::images::{
+    DecodeSettings, Decoded, ImageKind, ImagePlan, ImageStats, ImageTable, LazyRegion, MediaEnv,
+    Rerender, decode_data_url, decode_image, decode_settings,
+};
 use crate::screenshot::{
     Capture, ImageFormat, RenderError, Screenshot, ScreenshotOptions, StageTimes,
 };
@@ -28,6 +33,9 @@ const MAX_PIXELS: u64 = 1 << 26;
 struct LayoutStamp {
     generation: u64,
     viewport: Viewport,
+    /// The image table's epoch: a loaded or failed image changes sizes and
+    /// can change which boxes exist.
+    images: u64,
 }
 
 /// The display list of the layout with this epoch.
@@ -82,7 +90,7 @@ pub struct RenderSession {
     /// Incremented by every layout, to tie the display list to its fragments.
     epoch: u64,
     display: Option<RetainedList>,
-    images: ImageStore,
+    images: ImageTable,
     work: WorkCounters,
     #[cfg(test)]
     fail_next_layout: bool,
@@ -108,7 +116,7 @@ impl RenderSession {
             laid_out: None,
             epoch: 0,
             display: None,
-            images: ImageStore::new(),
+            images: ImageTable::new(),
             work: WorkCounters::default(),
             #[cfg(test)]
             fail_next_layout: false,
@@ -131,6 +139,128 @@ impl RenderSession {
         }
         self.styles.set_sources(s);
         self.work.source_sets += 1;
+    }
+
+    /// Lists the images `doc` needs and the session lacks, laid out as far as
+    /// the images known so far allow. Call it again after installing images:
+    /// a background image is only found once its box has a fragment, and
+    /// `loading=lazy` elements are judged by where layout put them.
+    ///
+    /// `base` resolves relative image URLs (the document's base URL).
+    pub fn plan_images(&mut self, doc: &Document, base: &Url, region: LazyRegion) -> ImagePlan {
+        let viewport = self.config.viewport;
+        let env = self.media_env();
+        self.images.refresh_nodes(doc, base, &env);
+        self.refresh_layout(doc);
+        let wants = self.images.wants(
+            self.frags.as_ref(),
+            region,
+            (viewport.width as f32, viewport.height as f32),
+            viewport.device_pixel_ratio,
+        );
+        ImagePlan {
+            wants,
+            decode: self.decode_settings(),
+        }
+    }
+
+    /// How fetched bodies are decoded for this session's viewport.
+    pub fn decode_settings(&self) -> DecodeSettings {
+        let viewport = self.config.viewport;
+        decode_settings(viewport.width, viewport.device_pixel_ratio)
+    }
+
+    /// Stores a decoded image under `key` and relays out what it sizes.
+    /// Fails when the image store cannot hold it, which the caller reports as
+    /// that image failing.
+    pub fn install_image(&mut self, key: ImageKey, decoded: Decoded) -> Result<(), StoreError> {
+        let settings = self.decode_settings();
+        self.images.install(key, decoded, &settings)
+    }
+
+    /// Records that `key` could not be loaded, so every element that wanted it
+    /// is a broken image.
+    pub fn fail_image(&mut self, key: ImageKey, reason: impl Into<String>) {
+        self.images.fail(key, reason.into());
+    }
+
+    /// Why `key` failed, if it did.
+    pub fn image_failure(&self, key: &ImageKey) -> Option<&str> {
+        self.images.failure(key)
+    }
+
+    /// Why the image `node` shows failed, if it did.
+    #[doc(hidden)]
+    pub fn image_failure_for(&self, _doc: &Document, node: NodeId) -> Option<&str> {
+        self.images.failure_of_node(node)
+    }
+
+    /// What the session holds, for tests and the memory budget.
+    pub fn image_stats(&self) -> ImageStats {
+        self.images.stats()
+    }
+
+    /// Loads every image `doc` references through a `data:` URL and fails the
+    /// rest, for callers that have no network (fixtures and tests). Returns
+    /// the number of images installed.
+    pub fn load_inline_images(&mut self, doc: &Document, base: &Url) -> usize {
+        let mut installed = 0;
+        // Laying out with the first images can reveal CSS images of boxes
+        // that were empty before, so plan until nothing new is wanted.
+        for _ in 0..4 {
+            let plan = self.plan_images(doc, base, LazyRegion::All);
+            if plan.wants.is_empty() {
+                break;
+            }
+            for want in plan.wants {
+                let mut settings = plan.decode;
+                match want.rerender {
+                    Some(Rerender::Svg { scale }) => settings.device_scale = scale,
+                    Some(Rerender::Raster { max_width }) => {
+                        settings.max_size.0 = max_width.max(1);
+                    }
+                    None => {}
+                }
+                let outcome = if want.url.scheme() == "data" {
+                    decode_data_url(want.url.as_str(), 64 << 20)
+                        .map_err(|e| e.to_string())
+                        .and_then(|data| {
+                            let kind = ImageKind::of(data.mime.as_deref());
+                            decode_image(&data.bytes, kind, &settings, &DecodeControl::new())
+                                .map_err(|e| e.to_string())
+                        })
+                } else {
+                    Err("no network is available to this session".to_owned())
+                };
+                let again = want.rerender.is_some();
+                match outcome {
+                    Ok(decoded) => match self.install_image(want.key.clone(), decoded) {
+                        Ok(()) => installed += usize::from(!again),
+                        Err(_) if again => {}
+                        Err(error) => {
+                            self.fail_image(
+                                want.key,
+                                format!("image memory budget exceeded: {error}"),
+                            );
+                        }
+                    },
+                    // A failed second decode leaves the first in place.
+                    Err(_) if again => {}
+                    Err(reason) => self.fail_image(want.key, reason),
+                }
+            }
+        }
+        installed
+    }
+
+    fn media_env(&self) -> MediaEnv {
+        let viewport = self.config.viewport;
+        MediaEnv {
+            width: viewport.width as f32,
+            height: viewport.height as f32,
+            dpr: viewport.device_pixel_ratio,
+            dark: self.config.dark,
+        }
     }
 
     /// What the session has done so far.
@@ -214,7 +344,7 @@ impl RenderSession {
             .as_ref()
             .expect("the list was just ensured")
             .list;
-        let output = rasterize(list, &raster, &self.images)?;
+        let output = rasterize(list, &raster, &self.images.store)?;
         times.raster = started.elapsed();
 
         let started = Instant::now();
@@ -256,7 +386,11 @@ impl RenderSession {
         let stamp = LayoutStamp {
             generation: doc.mutation_generation(),
             viewport,
+            images: self.images.epoch,
         };
+        // A box tree built before an image changed state may hold the wrong
+        // kind of box (a broken image with `alt` is text), so it is rebuilt.
+        let old_tree = old_tree.filter(|_| previous.is_some_and(|p| p.images == stamp.images));
         if diff == StyleDiff::None && old_tree.is_some() && previous == Some(stamp) {
             self.laid_out = previous;
             self.tree = old_tree;
@@ -267,7 +401,7 @@ impl RenderSession {
             doc,
             styles: &self.styles,
             fonts: &mut self.fonts,
-            images: &NoImages,
+            images: &self.images,
             viewport: (viewport.width as f32, viewport.height as f32),
             quirks: self.styles.env().quirks,
         };
@@ -302,9 +436,12 @@ impl RenderSession {
         let list = build(
             frags,
             &PaintContext {
-                images: &self.images,
+                images: &self.images.store,
+                bindings: &self.images,
             },
         );
+        // Every loaded image stays resident, so none is evicted before it is drawn.
+        self.images.pin_loaded();
         self.display = Some(RetainedList {
             epoch: self.epoch,
             list,

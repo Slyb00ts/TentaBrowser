@@ -44,6 +44,12 @@ pub(super) struct RuntimeState {
     console: AsyncMutex<u64>,
     bindings: Mutex<HashSet<String>>,
     exceptions: AtomicU64,
+    /// The origin of the document the main frame last committed, for a context
+    /// announced before the page records the navigation.
+    frame_origin: Mutex<Option<String>>,
+    /// A realm built before its navigation committed, announced at the commit
+    /// so its context carries the document's origin.
+    unannounced_realm: Mutex<Option<u64>>,
     /// The utility-world contexts the client has been told about, as `(id,
     /// uniqueId)`. Changed only under the `announced` lock.
     utility_announced: Mutex<Vec<(u64, String)>>,
@@ -67,12 +73,22 @@ impl RuntimeState {
     }
 }
 
-fn context_description(target: &Target, realm: u64, id: u64, world: World, name: &str) -> Value {
+fn context_description(
+    session: &Session,
+    target: &Target,
+    realm: u64,
+    id: u64,
+    world: World,
+    name: &str,
+) -> Value {
     // `about:blank` has the opaque origin Chromium spells "://".
-    let origin = target.page().navigation().map_or_else(
-        || "://".to_owned(),
-        |navigation| navigation.final_url.origin().ascii_serialization(),
-    );
+    let committed = lock(&session.state::<RuntimeState>().frame_origin).clone();
+    let origin = committed.unwrap_or_else(|| {
+        target.page().navigation().map_or_else(
+            || "://".to_owned(),
+            |navigation| navigation.final_url.origin().ascii_serialization(),
+        )
+    });
     let main = world == World::Main;
     json!({
         "id": id,
@@ -135,7 +151,7 @@ async fn announce(
     session
         .emit(
             "Runtime.executionContextCreated",
-            json!({ "context": context_description(target, realm, id, World::Main, "") }),
+            json!({ "context": context_description(session, target, realm, id, World::Main, "") }),
         )
         .await;
     announce_utility_worlds(session, target, realm).await;
@@ -160,7 +176,7 @@ async fn announce_utility_worlds(session: &Session, target: &Target, realm: u64)
         session
             .emit(
                 "Runtime.executionContextCreated",
-                json!({ "context": context_description(target, realm, id, world, &name) }),
+                json!({ "context": context_description(session, target, realm, id, world, &name) }),
             )
             .await;
     }
@@ -305,8 +321,38 @@ async fn watch(session: Arc<Session>, target: Arc<Target>, mut events: PageEvent
                     return;
                 };
                 match event {
-                    PageEvent::FrameNavigated { frame, .. } if frame == main_frame => {
-                        refresh(&session, &target).await;
+                    PageEvent::FrameNavigated { frame, url } if frame == main_frame => {
+                        let state = session.state::<RuntimeState>();
+                        *lock(&state.frame_origin) = Some(url.origin().ascii_serialization());
+                        // The realm of this document was built while it
+                        // parsed, before this commit: announce it now, with
+                        // the origin, ahead of the page's load events.
+                        let held = lock(&state.unannounced_realm).take();
+                        if let Some(realm) = held {
+                            reveal(&session, &target, realm).await;
+                        }
+                        // Not awaited here: the loop must go on hearing the
+                        // page, and a refresh waits for the navigation to end.
+                        let (owner, target) = (Arc::clone(&session), Arc::clone(&target));
+                        session.spawn(async move { refresh(&owner, &target).await });
+                    }
+                    // A navigation that ends before it commits leaves a realm
+                    // that will never be announced at a commit: drop it, so a
+                    // later commit does not announce a document that is gone.
+                    PageEvent::NavigationStopped { frame, .. } if frame == main_frame => {
+                        lock(&session.state::<RuntimeState>().unannounced_realm).take();
+                    }
+                    // The engine of a new document exists. Announce its
+                    // context as Chromium does, at commit, instead of when
+                    // the navigation has settled and a client has already
+                    // looked.
+                    PageEvent::RealmCreated { realm } => {
+                        if target.page().navigation_in_flight() {
+                            *lock(&session.state::<RuntimeState>().unannounced_realm) =
+                                Some(realm);
+                        } else {
+                            reveal(&session, &target, realm).await;
+                        }
                     }
                     PageEvent::BindingCalled(call) => {
                         let state = session.state::<RuntimeState>();

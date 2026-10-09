@@ -576,7 +576,7 @@ fn display_list_5k(iterations: usize) {
     for i in 0..iterations {
         record("S-dl-5k", "build", "warm", i, || {
             let started = Instant::now();
-            let list = build(&frags, &PaintContext { images: &images });
+            let list = build(&frags, &PaintContext::new(&images));
             let stages = Stages {
                 display_list: Some(started.elapsed()),
                 ..Stages::default()
@@ -593,7 +593,7 @@ fn raster_1280(iterations: usize) {
     let (doc, sources) = parse(&article(Some(TYPICAL_SECTIONS)), viewport_f32());
     let (_, frags, _) = lay_out(&mut fonts, &doc, &sources);
     let images = ImageStore::new();
-    let list: DisplayList = build(&frags, &PaintContext { images: &images });
+    let list: DisplayList = build(&frags, &PaintContext::new(&images));
     let options = RasterOptions {
         width: VIEWPORT.0,
         height: VIEWPORT.1,

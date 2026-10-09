@@ -17,10 +17,13 @@ use std::rc::Rc;
 use tenta_core::{BudgetKind, Error, PageId, Result};
 use tenta_dom::Document;
 use tenta_layout::Rect;
-use tenta_render::{FontPolicy, RenderConfig, RenderError, RenderSession};
+use tenta_render::{
+    FontPolicy, ImagePlan, ImageWant, LazyRegion, RenderConfig, RenderError, RenderSession,
+};
 pub use tenta_render::{ImageFormat, RasterStats, Screenshot, StageTimes, WorkCounters};
 use url::Url;
 
+use crate::images::{ImageLedger, Loaded};
 use crate::page::Viewport;
 use crate::styles::{StyleSignature, StyleState};
 
@@ -123,6 +126,8 @@ pub struct ContentSize {
 #[derive(Default)]
 pub(crate) struct Sheets {
     pub state: StyleState,
+    /// What this navigation's images have cost so far.
+    pub images: ImageLedger,
     /// The signature the session's sources were collected for.
     applied: Option<StyleSignature>,
 }
@@ -287,6 +292,64 @@ pub(crate) fn content_size(
     })
 }
 
+/// Lists the images the document needs and the session lacks, after giving the
+/// session the sheets the cache holds.
+pub(crate) fn plan_images(
+    session: &RefCell<RenderSession>,
+    sheets: &mut Sheets,
+    doc: &Document,
+    base_url: &Url,
+    viewport: Viewport,
+    region: LazyRegion,
+) -> ImagePlan {
+    let mut session = session.borrow_mut();
+    prepare(&mut session, sheets, doc, base_url, viewport);
+    session.plan_images(doc, base_url, region)
+}
+
+/// What handing an image load to the session came to.
+pub(crate) struct Installed {
+    /// Images that failed, as `(want, reason)`, for the page to report.
+    pub failures: Vec<(ImageWant, String)>,
+    /// Keys whose failure was transient (busy, timed out, cancelled): reported,
+    /// but not remembered, so a later render asks for them again.
+    pub transient: Vec<tenta_render::ImageKey>,
+}
+
+/// Hands the outcomes of an image load to the session.
+pub(crate) fn install_images(session: &RefCell<RenderSession>, loaded: Vec<Loaded>) -> Installed {
+    let mut session = session.borrow_mut();
+    let mut done = Installed {
+        failures: Vec::new(),
+        transient: Vec::new(),
+    };
+    for Loaded { want, result } in loaded {
+        // A failed decode at a new size leaves the first decode in place.
+        let again = want.rerender.is_some();
+        match result {
+            Ok(decoded) => {
+                if let Err(error) = session.install_image(want.key.clone(), decoded)
+                    && !again
+                {
+                    let reason = format!("image memory budget exceeded: {error}");
+                    session.fail_image(want.key.clone(), reason.clone());
+                    done.failures.push((want, reason));
+                }
+            }
+            Err(_) if again => {}
+            Err(reason) if crate::images::is_transient(&reason) => {
+                done.transient.push(want.key.clone());
+                done.failures.push((want, reason));
+            }
+            Err(reason) => {
+                session.fail_image(want.key.clone(), reason.clone());
+                done.failures.push((want, reason));
+            }
+        }
+    }
+    done
+}
+
 fn prepare(
     session: &mut RenderSession,
     sheets: &mut Sheets,
@@ -381,5 +444,59 @@ mod tests {
             error_of(RenderError::NoRoot),
             Error::InvalidArgument { .. }
         ));
+    }
+
+    #[test]
+    fn busy_timed_out_and_cancelled_images_are_not_remembered_as_failed() {
+        use tenta_render::{DecodeError, ImageKey, ImageWant, WantOrigin};
+        let want = |name: &str| {
+            let url = Url::parse(&format!("http://fixture.test/{name}.png")).unwrap();
+            ImageWant {
+                key: ImageKey(url.as_str().into()),
+                url,
+                origin: WantOrigin::Element,
+                rerender: None,
+            }
+        };
+        let busy = "unsupported SVG feature: svg busy: too many SVG renders in progress";
+        let session = RefCell::new(RenderSession::new(RenderConfig::default()));
+        let loaded = vec![
+            Loaded {
+                want: want("busy"),
+                result: Err(busy.to_owned()),
+            },
+            Loaded {
+                want: want("slow"),
+                result: Err(DecodeError::TimedOut.to_string()),
+            },
+            Loaded {
+                want: want("cancelled"),
+                result: Err(DecodeError::Cancelled.to_string()),
+            },
+            Loaded {
+                want: want("late"),
+                result: Err("the image did not arrive before the wait ended".to_owned()),
+            },
+            Loaded {
+                want: want("gone"),
+                result: Err("the origin answered 404".to_owned()),
+            },
+        ];
+        let installed = install_images(&session, loaded);
+        assert_eq!(installed.failures.len(), 5, "all are reported");
+        assert_eq!(installed.transient.len(), 4);
+        let session = session.borrow();
+        for name in ["busy", "slow", "cancelled", "late"] {
+            let key = ImageKey(format!("http://fixture.test/{name}.png").into());
+            assert!(
+                session.image_failure(&key).is_none(),
+                "{name} may be tried again"
+            );
+        }
+        let gone = ImageKey("http://fixture.test/gone.png".into());
+        assert!(
+            session.image_failure(&gone).is_some(),
+            "a 404 is remembered"
+        );
     }
 }

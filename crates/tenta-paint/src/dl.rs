@@ -87,6 +87,22 @@ pub enum Item {
         /// Resampling quality.
         quality: ImageQuality,
     },
+    /// Fills `area` with an image repeated from `origin` in tiles of `tile`
+    /// size, in both directions: many more tiles than one item each could
+    /// carry. A background that repeats along one axis only is cut to one tile
+    /// along the other.
+    ImagePattern {
+        /// Area filled.
+        area: Rect,
+        /// Top-left of a tile that the repetition is anchored to.
+        origin: (f32, f32),
+        /// Size of one tile.
+        tile: (f32, f32),
+        /// Image in the store.
+        src: ImageId,
+        /// Resampling quality.
+        quality: ImageQuality,
+    },
     /// Draws a glyph run.
     Text {
         /// Origin of the run's glyph coordinates.
@@ -160,6 +176,22 @@ impl DisplayList {
             }
         }
         clips == 0 && groups == 0 && transforms == 0
+    }
+
+    /// The distinct images the list draws, for pinning them in the store while
+    /// the list is alive.
+    pub fn image_ids(&self) -> Vec<ImageId> {
+        let mut ids: Vec<ImageId> = self
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Image { src, .. } | Item::ImagePattern { src, .. } => Some(*src),
+                _ => None,
+            })
+            .collect();
+        ids.sort_by_key(|id| id.0);
+        ids.dedup();
+        ids
     }
 }
 

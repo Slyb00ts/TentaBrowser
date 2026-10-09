@@ -423,9 +423,7 @@ impl<'a, S: Seams> Painter<'a, S> {
                 }
                 shadow::emit_inset(frag, border_box, &mut self.items);
                 border::emit(frag, border_box, &mut self.items);
-                if matches!(frag.kind, FragmentKind::Replaced(_))
-                    && replaced::images_drawable(&self.cx)
-                {
+                if matches!(frag.kind, FragmentKind::Replaced(_)) {
                     replaced::emit(frag, border_box, &self.cx, &mut self.items);
                 }
             }

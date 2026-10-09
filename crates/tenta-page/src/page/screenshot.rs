@@ -22,14 +22,17 @@ use std::time::{Duration, Instant};
 
 use tenta_core::{Error, Result, Tier};
 use tenta_dom::Document as DomDocument;
-use tenta_render::RenderSession;
+use tenta_render::{LazyRegion, RenderSession};
 use tokio::sync::oneshot;
 use url::Url;
 
 use super::{Page, PageInner, PageState, Viewport, retained};
 use crate::event::PageEvent;
 use crate::fetch_policy::FetchPolicy;
-use crate::render::{self, ContentSize, Screenshot, ScreenshotOptions, Sheets, WorkCounters};
+use crate::images::{ImageContext, load_images};
+use crate::render::{
+    self, Capture, ContentSize, Screenshot, ScreenshotOptions, Sheets, WorkCounters,
+};
 use crate::runtime;
 use crate::styles::{StyleContext, fetch_planned, plan_fetches};
 use crate::task::{catch_unwind_future, panic_message};
@@ -42,6 +45,15 @@ const STYLESHEET_WAIT: Duration = Duration::from_secs(30);
 /// page that keeps adding stylesheets past this is rendered with what it has.
 const MAX_FETCH_ROUNDS: usize = 3;
 
+/// How long a screenshot waits for the images it has to fetch and decode, all
+/// rounds together. An image still loading then is a broken image.
+const IMAGE_WAIT: Duration = Duration::from_secs(20);
+
+/// How many times a screenshot asks the session what images it needs. A
+/// round's images can reveal more (a CSS image of a box that was empty), so a
+/// page that keeps revealing them is rendered with what has loaded.
+const MAX_IMAGE_ROUNDS: usize = 4;
+
 impl Page {
     /// Renders the page's current document to an image.
     ///
@@ -50,8 +62,15 @@ impl Page {
     /// set, and a sheet that cannot be loaded is reported as
     /// [`PageEvent::StylesheetFailed`] and left out. Sheets are fetched once
     /// per navigation, and the session restyles only when the set of sheets
-    /// changed. The screenshot does not wait for the page's scripts: settle the
-    /// page first to capture what they build.
+    /// changed. The images the document shows (`<img>`, `<picture>`,
+    /// `<input type=image>`, `<video poster>` and CSS `background-image`) are
+    /// then fetched and decoded, a few at a time and under a 20 s wait for them
+    /// all; one that cannot be loaded is reported as
+    /// [`PageEvent::ImageFailed`] and drawn as a broken image. A `loading=lazy`
+    /// image far below a viewport capture is left unloaded. Images are loaded by
+    /// the render, not the load event: `load` does not wait for them. The
+    /// screenshot does not wait for the page's scripts: settle the page first to
+    /// capture what they build.
     ///
     /// Concurrent screenshots of one page run one after the other. Fails with
     /// [`Error::TierDenied`] when the page's ceiling is below the render tier,
@@ -88,7 +107,7 @@ impl Page {
     /// Runs `job` on the page thread and returns what it returns. A panic in
     /// it crashes the page; the caller dropping its future abandons the job at
     /// its next await.
-    async fn on_page_thread<T, F, Fut>(&self, job: F) -> Result<T>
+    pub(super) async fn on_page_thread<T, F, Fut>(&self, job: F) -> Result<T>
     where
         T: Send + 'static,
         F: FnOnce(Arc<PageInner>) -> Fut + Send + 'static,
@@ -129,23 +148,41 @@ pub(super) fn release_later(inner: &Arc<PageInner>) {
 }
 
 async fn screenshot(inner: Arc<PageInner>, options: ScreenshotOptions) -> Result<Screenshot> {
-    rendered(inner, |session, sheets, doc, base_url, viewport| {
+    // Only a viewport capture leaves far-away `loading=lazy` images alone; a
+    // clip or an element may be anywhere, and a full page shows them all.
+    let region = match options.capture {
+        Capture::Viewport => LazyRegion::Viewport,
+        _ => LazyRegion::All,
+    };
+    rendered(inner, region, |session, sheets, doc, base_url, viewport| {
         render::render(session, sheets, doc, base_url, viewport, &options)
     })
     .await
 }
 
 async fn content_size(inner: Arc<PageInner>) -> Result<ContentSize> {
-    rendered(inner, render::content_size).await
+    rendered(inner, LazyRegion::All, render::content_size).await
 }
 
-/// Fetches the stylesheets the document needs, then runs `render` over the
-/// document, the session and the sheets.
-async fn rendered<R>(
+/// Fetches the stylesheets and the images the document needs, then runs
+/// `render` over the document, the session and the sheets.
+pub(super) async fn rendered<R>(
     inner: Arc<PageInner>,
+    region: LazyRegion,
     render: impl FnOnce(&RefCell<RenderSession>, &mut Sheets, &DomDocument, &Url, Viewport) -> Result<R>,
 ) -> Result<R> {
-    let viewport = inner.config.viewport;
+    rendered_with(inner, Some(region), render).await
+}
+
+/// [`rendered`], where `None` plans and fetches no image: layout then uses the
+/// images the session already holds and attribute sizes, which is what a
+/// geometry query wants (`page/geometry.rs`).
+pub(super) async fn rendered_with<R>(
+    inner: Arc<PageInner>,
+    region: Option<LazyRegion>,
+    render: impl FnOnce(&RefCell<RenderSession>, &mut Sheets, &DomDocument, &Url, Viewport) -> Result<R>,
+) -> Result<R> {
+    let viewport = *inner.viewport.lock();
     let (navigation, generation) = admit(&inner)?;
     let handles = render::handles(
         inner.config.id,
@@ -204,9 +241,81 @@ async fn rendered<R>(
         });
     }
 
+    if let Some(region) = region {
+        load_planned_images(
+            &inner,
+            navigation,
+            generation,
+            &handles.session,
+            &mut sheets,
+            (&base_url, viewport),
+            region,
+        )
+        .await?;
+    }
+
     with_document(&inner, navigation, |doc| {
         render(&handles.session, &mut sheets, doc, &base_url, viewport)
     })?
+}
+
+/// Asks the session which images the document needs, fetches and decodes them
+/// and hands them back, until nothing new is wanted, the rounds are used up or
+/// the wait ends. A failure is reported as [`PageEvent::ImageFailed`] and leaves
+/// that image broken; only the page ending or navigating fails the render.
+async fn load_planned_images(
+    inner: &Arc<PageInner>,
+    navigation: u64,
+    generation: u64,
+    session: &RefCell<RenderSession>,
+    sheets: &mut Sheets,
+    (base_url, viewport): (&Url, Viewport),
+    region: LazyRegion,
+) -> Result<()> {
+    let deadline = inner.config.clock.now() + IMAGE_WAIT;
+    let mut transient: std::collections::HashSet<tenta_render::ImageKey> = Default::default();
+    for _ in 0..MAX_IMAGE_ROUNDS {
+        let (document_url, plan) = with_document(inner, navigation, |doc| {
+            let url = doc.url().cloned().unwrap_or_else(|| base_url.clone());
+            (
+                url,
+                render::plan_images(session, sheets, doc, base_url, viewport, region),
+            )
+        })?;
+        // What failed transiently in this render is not asked for again in it.
+        let mut plan = plan;
+        plan.wants.retain(|w| !transient.contains(&w.key));
+        if plan.wants.is_empty() {
+            break;
+        }
+        let ctx = ImageContext {
+            client: &inner.config.client,
+            fs_policy: &inner.config.fs_policy,
+            budgets: &inner.config.budgets,
+            clock: &*inner.config.clock,
+            extra_headers: &inner.config.extra_headers,
+            document_url: &document_url,
+            deadline,
+        };
+        let Some(loaded) = until_replaced(
+            inner,
+            generation,
+            load_images(plan, &ctx, &mut sheets.images),
+        )
+        .await
+        else {
+            return Err(replaced(inner));
+        };
+        let installed = render::install_images(session, loaded);
+        for (want, reason) in installed.failures {
+            inner.emit(PageEvent::ImageFailed {
+                url: want.url.as_str().chars().take(256).collect(),
+                reason,
+            });
+        }
+        transient.extend(installed.transient);
+    }
+    Ok(())
 }
 
 /// What fetching the sheets of the document at `document_url` needs.

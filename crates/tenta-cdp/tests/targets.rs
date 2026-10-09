@@ -319,6 +319,14 @@ async fn puppeteer_connects_discovers_opens_and_closes_a_page() {
     assert_eq!(first["method"], "Target.targetCreated");
     assert!(client.buffered("Target.attachedToTarget"));
 
+    // The empty filter entry matches tabs as well, so Chromium announces the
+    // tab of the new page first.
+    let tab_event = client.event("Target.targetCreated").await;
+    assert_eq!(tab_event["params"]["targetInfo"]["type"], "tab");
+    assert_eq!(
+        tab_event["params"]["targetInfo"]["targetId"],
+        format!("tab-{target_id}").as_str()
+    );
     let created_event = client.event("Target.targetCreated").await;
     let info = &created_event["params"]["targetInfo"];
     assert_eq!(info["targetId"], target_id);
@@ -358,11 +366,159 @@ async fn puppeteer_connects_discovers_opens_and_closes_a_page() {
     assert!(client.buffered("Target.targetDestroyed"));
     let detached = client.event("Target.detachedFromTarget").await;
     assert_eq!(detached["params"]["sessionId"], session.as_str());
+    let destroyed_tab = client.event("Target.targetDestroyed").await;
+    assert_eq!(
+        destroyed_tab["params"]["targetId"],
+        format!("tab-{target_id}").as_str()
+    );
     let destroyed = client.event("Target.targetDestroyed").await;
     assert_eq!(destroyed["params"]["targetId"], target_id);
 
     let targets = client.result(None, "Target.getTargets", json!({})).await;
     assert_eq!(targets["targetInfos"], json!([]));
+    fixture.stop().await;
+}
+
+/// The sequence Puppeteer 22.6 and later open a page with: the browser
+/// session attaches to the tab, and the tab's session attaches the page.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn puppeteer_reaches_a_page_through_its_tab() {
+    let fixture = Fixture::start().await;
+    let mut client = fixture.browser().await;
+    let filter = json!([{ "type": "page", "exclude": true }, {}]);
+    client
+        .result(
+            None,
+            "Target.setDiscoverTargets",
+            json!({ "discover": true, "filter": [{}] }),
+        )
+        .await;
+    client
+        .result(
+            None,
+            "Target.setAutoAttach",
+            json!({ "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true, "filter": filter }),
+        )
+        .await;
+    let page = client
+        .result(None, "Target.createTarget", json!({ "url": "about:blank" }))
+        .await["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let tab = format!("tab-{page}");
+
+    // The browser session is handed the tab, not the page.
+    let attached = client.event("Target.attachedToTarget").await;
+    assert_eq!(attached["params"]["targetInfo"]["type"], "tab");
+    assert_eq!(attached["params"]["targetInfo"]["targetId"], tab.as_str());
+    let tab_session = session_of(&attached);
+    assert!(
+        !client.buffered("Target.attachedToTarget"),
+        "no page session yet"
+    );
+
+    // The tab's session attaches the page, which waits for the debugger.
+    client
+        .result(
+            Some(&tab_session),
+            "Target.setAutoAttach",
+            json!({ "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true, "filter": [{}] }),
+        )
+        .await;
+    let attached = client.event("Target.attachedToTarget").await;
+    assert_eq!(attached["params"]["targetInfo"]["type"], "page");
+    assert_eq!(attached["params"]["targetInfo"]["targetId"], page.as_str());
+    let page_session = session_of(&attached);
+    assert_ne!(page_session, tab_session);
+    client
+        .result(
+            Some(&page_session),
+            "Runtime.runIfWaitingForDebugger",
+            json!({}),
+        )
+        .await;
+    client
+        .result(Some(&page_session), "Page.enable", json!({}))
+        .await;
+
+    // Both ids are known, and the tab closes its page.
+    let info = client
+        .result(None, "Target.getTargetInfo", json!({ "targetId": tab }))
+        .await;
+    assert_eq!(info["targetInfo"]["type"], "tab");
+    let closed = client
+        .result(None, "Target.closeTarget", json!({ "targetId": tab }))
+        .await;
+    assert_eq!(closed["success"], true);
+    assert!(fixture.server.backend().targets().is_empty());
+    let mut destroyed = Vec::new();
+    while destroyed.len() < 2 {
+        let event = client.event("Target.targetDestroyed").await;
+        destroyed.push(event["params"]["targetId"].as_str().unwrap().to_owned());
+    }
+    destroyed.sort();
+    assert_eq!(
+        destroyed,
+        [page.clone(), tab.clone()]
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn get_targets_honours_its_filter_and_a_tab_session_knows_its_tab() {
+    let fixture = Fixture::start().await;
+    let mut client = fixture.browser().await;
+    let page = client
+        .result(None, "Target.createTarget", json!({ "url": "about:blank" }))
+        .await["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let types = |infos: &Value| -> Vec<String> {
+        infos["targetInfos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|info| info["type"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let plain = client.result(None, "Target.getTargets", json!({})).await;
+    assert_eq!(types(&plain), ["page"]);
+    let tabs = client
+        .result(
+            None,
+            "Target.getTargets",
+            json!({ "filter": [{ "type": "tab" }] }),
+        )
+        .await;
+    assert_eq!(types(&tabs), ["tab"]);
+    assert_eq!(
+        tabs["targetInfos"][0]["targetId"],
+        format!("tab-{page}").as_str()
+    );
+    let all = client
+        .result(None, "Target.getTargets", json!({ "filter": [{}] }))
+        .await;
+    assert_eq!(types(&all), ["browser", "tab", "page"]);
+
+    let attached = client
+        .result(
+            None,
+            "Target.attachToTarget",
+            json!({ "targetId": format!("tab-{page}"), "flatten": true }),
+        )
+        .await;
+    let session = attached["sessionId"].as_str().unwrap().to_owned();
+    let info = client
+        .result(Some(&session), "Target.getTargetInfo", json!({}))
+        .await;
+    assert_eq!(info["targetInfo"]["type"], "tab");
     fixture.stop().await;
 }
 
@@ -1392,8 +1548,19 @@ async fn target_filters_decide_by_first_match_with_chromiums_default() {
     let live = first_target_event(&mut plain, "Target.targetCreated").await;
     assert_eq!(live["params"]["targetInfo"]["targetId"], second.as_str());
     no_pages.result(None, "Browser.getVersion", json!({})).await;
-    assert!(!no_pages.buffered("Target.targetCreated"));
-    assert!(!no_pages.buffered("Target.attachedToTarget"));
+    // The empty entry matches tabs, which is how Puppeteer reaches a page:
+    // the watcher hears of tabs and attaches to tabs, never to a page.
+    while no_pages.buffered("Target.targetCreated") {
+        let event = first_target_event(&mut no_pages, "Target.targetCreated").await;
+        assert_eq!(event["params"]["targetInfo"]["type"], "tab");
+    }
+    let mut attached_tabs = 0;
+    while no_pages.buffered("Target.attachedToTarget") {
+        let event = first_target_event(&mut no_pages, "Target.attachedToTarget").await;
+        assert_eq!(event["params"]["targetInfo"]["type"], "tab");
+        attached_tabs += 1;
+    }
+    assert!(attached_tabs >= 1, "the tabs of the open pages attach");
 
     // An empty filter matches nothing, and the default auto-attach filter
     // still admits pages.
