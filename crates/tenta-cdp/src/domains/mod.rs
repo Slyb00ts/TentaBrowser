@@ -41,7 +41,15 @@ mod tests {
     use super::*;
 
     /// Commands the clients do not send but the transport needs.
-    const OUTSIDE_THE_CHECKLIST: &[&str] = &["Target.getTargets"];
+    const OUTSIDE_THE_CHECKLIST: &[&str] = &[
+        "Target.getTargets",
+        "Target.activateTarget",
+        "Inspector.enable",
+        "Inspector.disable",
+        "Log.disable",
+        "Security.enable",
+        "Security.disable",
+    ];
 
     #[test]
     fn every_registered_command_is_one_a_client_uses() {

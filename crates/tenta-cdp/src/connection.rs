@@ -109,6 +109,21 @@ impl Connection {
         Ok(session)
     }
 
+    /// Attaches a flattened session to the browser target: it has no page, so
+    /// its commands are browser-level, like the connection's own session.
+    pub fn attach_browser(&self, parent: Option<&str>) -> Result<Arc<Session>, CdpError> {
+        let id = crate::ids::random_id();
+        let session = Session::new(
+            Arc::clone(&self.backend),
+            Some(id.clone()),
+            parent.map(str::to_owned),
+            None,
+            self.out.clone(),
+        );
+        lock(&self.sessions).insert(id, Arc::clone(&session));
+        Ok(session)
+    }
+
     /// Closes a session and tells its parent with `Target.detachedFromTarget`.
     /// `None` when there is no such session.
     pub async fn detach(&self, id: &str) -> Option<Arc<Session>> {
@@ -118,11 +133,14 @@ impl Connection {
             Some(parent) => self.session(parent),
             None => Some(Arc::clone(&self.root)),
         };
-        if let (Some(parent), Some(target)) = (parent, session.target()) {
+        if let Some(parent) = parent {
+            let target_id = session
+                .target()
+                .map_or_else(|| self.backend.browser_id(), |target| target.id());
             parent
                 .emit(
                     "Target.detachedFromTarget",
-                    json!({ "sessionId": id, "targetId": target.id() }),
+                    json!({ "sessionId": id, "targetId": target_id }),
                 )
                 .await;
         }

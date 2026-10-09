@@ -110,8 +110,14 @@ impl Session {
     {
         let mut closed = self.closed.subscribe();
         tokio::spawn(async move {
+            // The wait is wrapped so its read guard on the close signal is
+            // gone before `select!` drops `task`: dropping the last
+            // `Arc<Session>` captured by `task` writes that same signal.
+            let wait_closed = async {
+                let _ = closed.wait_for(|closed| *closed).await;
+            };
             tokio::select! {
-                _ = closed.wait_for(|closed| *closed) => {}
+                () = wait_closed => {}
                 () = task => {}
             }
         });
