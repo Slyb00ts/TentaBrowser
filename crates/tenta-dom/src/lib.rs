@@ -24,7 +24,7 @@ pub mod shared_sink;
 pub mod sink;
 pub mod text;
 
-pub use arena::{DocTypeData, NodeFlags, NodeKind, PiData, StyleHandle, WrapperSlot};
+pub use arena::{DocTypeData, NodeFlags, NodeKind, PiData, WrapperSlot};
 pub use document::{
     Document, LiveRangeId, MemoryReport, NodeHandle, NodeOrText, ObserverAgent, ObserverAttachment,
     RangeBoundary, ReadyState, SharedObserverAgent, StopPredicate, SweepStats,

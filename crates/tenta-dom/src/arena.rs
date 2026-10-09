@@ -137,15 +137,6 @@ impl DataIndex {
     }
 }
 
-/// Opaque handle to Stylo style data; a placeholder until Tier 3
-/// (`docs/spec/04-dom-and-css.md` §6).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct StyleHandle(pub u32);
-
-impl StyleHandle {
-    pub const NONE: StyleHandle = StyleHandle(u32::MAX);
-}
-
 /// Placeholder for the main-world JavaScript wrapper slot
 /// (`docs/spec/05-javascript.md` §3). Tier 1 never fills it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -311,7 +302,6 @@ pub struct Elements {
     /// table (`docs/spec/04-dom-and-css.md` §2).
     pub id: Vec<LocalName>,
     pub classes: Vec<ClassRange>,
-    pub style_data: Vec<StyleHandle>,
     pub shadow: Vec<NodeId>,
     pub main_wrapper: Vec<WrapperSlot>,
 }
@@ -322,7 +312,6 @@ impl Elements {
         + size_of::<LocalName>()
         + size_of::<AttrRange>()
         + size_of::<ClassRange>()
-        + size_of::<StyleHandle>()
         + size_of::<NodeId>()
         + size_of::<WrapperSlot>();
 
@@ -483,7 +472,6 @@ impl DomArena {
             self.elements.attrs[i] = AttrRange::default();
             self.elements.id[i] = LocalName::NONE;
             self.elements.classes[i] = ClassRange::default();
-            self.elements.style_data[i] = StyleHandle::NONE;
             self.elements.shadow[i] = NodeId::NONE;
             self.elements.main_wrapper[i] = WrapperSlot::EMPTY;
             DataIndex(index)
@@ -494,7 +482,6 @@ impl DomArena {
             self.elements.attrs.push(AttrRange::default());
             self.elements.id.push(LocalName::NONE);
             self.elements.classes.push(ClassRange::default());
-            self.elements.style_data.push(StyleHandle::NONE);
             self.elements.shadow.push(NodeId::NONE);
             self.elements.main_wrapper.push(WrapperSlot::EMPTY);
             DataIndex(index)
@@ -769,7 +756,6 @@ impl DomArena {
             self.elements.classes.shrink_to_fit();
             self.elements.attrs.shrink_to_fit();
             self.elements.shadow.shrink_to_fit();
-            self.elements.style_data.shrink_to_fit();
             self.elements.main_wrapper.shrink_to_fit();
 
             self.comments.shrink_to_fit();

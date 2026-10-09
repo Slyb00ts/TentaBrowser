@@ -25,8 +25,8 @@ use tenta_dom::arena::{Elements, Nodes};
 const BUDGET_BYTES_PER_ELEMENT: f64 = 96.0;
 
 /// The arena core this layout achieves. The gap against §8 is structural, not
-/// an oversight: §1 fixes ten node columns (35 bytes) and eight element
-/// columns (40 bytes), which is 75 bytes before a single attribute is stored,
+/// an oversight: the arena fixes ten node columns (35 bytes) and seven element
+/// columns (36 bytes), which is 71 bytes before a single attribute is stored,
 /// and attribute values cannot be interned process-wide because they come from
 /// untrusted markup (`docs/spec/02-architecture.md` §7, `tenta_core::atom`).
 /// Two attributes cost 20 bytes each plus their value bytes.
@@ -149,7 +149,7 @@ fn ten_thousand_elements_with_a_distinct_id_each() {
     // Assert the memory usage for elements with text children
     let core = report.arena_core() as f64 / ELEMENTS as f64;
     let total = report.total() as f64 / ELEMENTS as f64;
-    // An element plus its own text node: measured 157.9 B core and 335.1 B
+    // An element plus its own text node: measured 153.9 B core and 331.1 B
     // all-in, so the ceilings leave ~5–10 % for column growth without
     // hiding a regression.
     const TEXT_CORE_CEILING_BYTES_PER_ELEMENT: f64 = 176.0;

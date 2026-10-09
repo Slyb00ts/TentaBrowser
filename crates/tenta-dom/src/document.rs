@@ -12,8 +12,7 @@ use tenta_html::{Attribute, ElementFlags, QualName, QuirksMode};
 use url::Url;
 
 use crate::arena::{
-    AttrName, AttrValue, DocTypeData, DomArena, NodeFlags, NodeKind, NodeList, PiData, StyleHandle,
-    WrapperSlot,
+    AttrName, AttrValue, DocTypeData, DomArena, NodeFlags, NodeKind, NodeList, PiData, WrapperSlot,
 };
 use crate::error::{
     hierarchy_request, index_size, invalid_state, no_modification_allowed, not_found, syntax,
@@ -1011,14 +1010,6 @@ impl Document {
     /// documents carry one; it is what makes `to_xml` round-trip.
     pub fn element_prefix(&self, id: NodeId) -> Option<Atom> {
         self.element_prefixes.get(&id).copied()
-    }
-
-    /// Opaque style handle; Tier 3 fills it (`docs/spec/04-dom-and-css.md` §6).
-    pub fn style_data(&self, id: NodeId) -> StyleHandle {
-        if self.kind(id) != NodeKind::Element {
-            return StyleHandle::NONE;
-        }
-        self.arena.elements.style_data[self.arena.nodes.data[self.index(id)].get()]
     }
 
     /// The main-world wrapper slot; the bindings own its contents (P2).
