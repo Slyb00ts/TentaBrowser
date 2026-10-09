@@ -1,12 +1,33 @@
-//! Chrome DevTools Protocol server: domains, sessions, targets and screencast.
+//! Chrome DevTools Protocol server (`docs/spec/09-cdp-compat.md`).
 //!
-//! Skeleton crate created in P0; the implementation lands in the phase named
-//! for it in `docs/spec/16-roadmap.md`. Dependency direction is enforced by
-//! `cargo xtask lint-deps` (`docs/spec/02-architecture.md` §2).
+//! [`CdpServer`] owns the listening socket, the `/json/*` HTTP endpoints and
+//! the WebSocket transport. Protocol domains plug in through
+//! [`DomainHandler`] and [`DomainRegistry`]; the transport itself knows no
+//! domain.
+//!
+//! Dependency direction is enforced by `cargo xtask lint-deps`
+//! (`docs/spec/02-architecture.md` §2).
 
-#[allow(unused_imports)]
-use tenta_browser as _;
-#[allow(unused_imports)]
-use tenta_core as _;
-#[allow(unused_imports)]
-use tenta_page as _;
+mod backend;
+mod connection;
+mod domain;
+mod domains;
+mod error;
+mod http;
+mod ids;
+mod names;
+mod options;
+mod server;
+mod session;
+mod wire;
+
+pub use backend::{Backend, Stats, Target, TargetEvent};
+pub use connection::{Connection, SessionIdKind};
+pub use domain::{
+    CommandContext, CommandFuture, CommandResult, DomainHandler, DomainRegistry, parse_params,
+};
+pub use error::CdpError;
+pub use names::{EVENTS, METHODS};
+pub use options::{CdpOptions, MIN_REMOTE_TOKEN_LEN};
+pub use server::CdpServer;
+pub use session::Session;

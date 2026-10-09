@@ -55,6 +55,9 @@ toml = "0.9"
 tracing = "0.1"
 url = "2"
 http = "1"
+# CDP server transport: handshake only, no TLS stack (D-007, one libcrypto).
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+httparse = "1"
 memchr = "2"
 getrandom = "=0.4.3"
 encoding_rs = "0.8"
