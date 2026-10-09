@@ -629,8 +629,28 @@ pub struct DecorationPaint {
     pub style: LineStyle,
     /// Line colour (`currentcolor` already resolved).
     pub color: Color,
-    /// Explicit thickness; `None` uses the font's metric.
+    /// Explicit thickness; `None` is `auto`, a tenth of the font size.
     pub thickness: Option<f32>,
+    /// `text-underline-offset` added to the underline's position; `None` is
+    /// `auto`. A percentage is a fraction of the font size.
+    pub underline_offset: Option<LengthPercent>,
+    /// `text-underline-position`.
+    pub underline_position: UnderlinePosition,
+    /// `text-decoration-skip-ink` is `auto` (the initial value), so the
+    /// underline should break around descenders. `false` for `none`.
+    pub skip_ink: bool,
+}
+
+/// Where an underline sits (`text-underline-position`).
+#[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
+pub enum UnderlinePosition {
+    /// Just below the baseline.
+    #[default]
+    Auto,
+    /// At the position the font's `post` table suggests.
+    FromFont,
+    /// Below the font's descent.
+    Under,
 }
 
 impl Default for DecorationPaint {
@@ -642,6 +662,9 @@ impl Default for DecorationPaint {
             style: LineStyle::Solid,
             color: Color::BLACK,
             thickness: None,
+            underline_offset: None,
+            underline_position: UnderlinePosition::Auto,
+            skip_ink: true,
         }
     }
 }

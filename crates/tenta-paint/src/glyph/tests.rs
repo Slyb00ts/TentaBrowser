@@ -250,6 +250,7 @@ fn text_is_cut_by_a_rounded_clip() {
         let list = DisplayList {
             items,
             bounds: Rect::default(),
+            ..DisplayList::default()
         };
         let options = RasterOptions {
             width: 80,

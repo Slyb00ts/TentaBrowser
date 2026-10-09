@@ -200,6 +200,7 @@ fn build_recorded(tree: &FragmentTree) -> DisplayList {
     DisplayList {
         items: paint_with(tree, &PaintContext { images: &images }, Recorder),
         bounds: tree.scroll_extent,
+        ..DisplayList::default()
     }
 }
 

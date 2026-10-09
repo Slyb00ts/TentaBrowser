@@ -29,6 +29,7 @@ pub fn build(frags: &FragmentTree, cx: &PaintContext) -> DisplayList {
     DisplayList {
         items: stacking::paint(frags, cx),
         bounds: frags.scroll_extent,
+        unsupported: effects::count_unsupported(frags),
     }
 }
 

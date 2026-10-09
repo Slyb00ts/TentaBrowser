@@ -3,6 +3,7 @@
 //! The builder produces it from a fragment tree; the rasteriser consumes it.
 //! Clips, opacity groups and transforms are balanced `Push`/`Pop` pairs.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use tenta_layout::{BorderStyle, Color, Edges, GlyphRun, LineStyle, Rect};
@@ -130,6 +131,9 @@ pub struct DisplayList {
     pub items: Vec<Item>,
     /// Union of everything the items can touch.
     pub bounds: Rect,
+    /// Style features the builder could not express as items, by name and
+    /// number of fragments; the rasteriser reports them with what it skips.
+    pub unsupported: BTreeMap<&'static str, usize>,
 }
 
 impl DisplayList {
@@ -163,6 +167,7 @@ mod tests {
         DisplayList {
             items,
             bounds: Rect::default(),
+            ..DisplayList::default()
         }
     }
 

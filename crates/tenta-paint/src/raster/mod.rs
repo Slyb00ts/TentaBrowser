@@ -111,6 +111,9 @@ pub fn rasterize(
     _images: &ImageStore,
 ) -> Result<RasterOutput, PaintError> {
     let mut painter = Painter::new(opts)?;
+    for (&feature, &count) in &list.unsupported {
+        painter.stats.skip(feature, count);
+    }
     let mut index = 0;
     while index < list.items.len() {
         index = painter.draw(&list.items, index);

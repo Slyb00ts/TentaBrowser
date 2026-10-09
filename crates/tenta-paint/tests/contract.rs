@@ -52,6 +52,7 @@ fn stub_build(frags: &FragmentTree, _cx: &PaintContext) -> DisplayList {
     DisplayList {
         items,
         bounds: frags.scroll_extent,
+        ..DisplayList::default()
     }
 }
 

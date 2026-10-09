@@ -35,6 +35,7 @@ fn run(items: Vec<Item>, opts: &RasterOptions) -> RasterOutput {
     let list = DisplayList {
         items,
         bounds: Rect::default(),
+        ..DisplayList::default()
     };
     rasterize(&list, opts, &ImageStore::new()).expect("the output size is valid")
 }
@@ -1403,6 +1404,7 @@ fn timing_report_1280x800() {
     let list = DisplayList {
         items: representative_list(),
         bounds: Rect::default(),
+        ..DisplayList::default()
     };
     let opts = options(1280, 800);
     let images = ImageStore::new();
