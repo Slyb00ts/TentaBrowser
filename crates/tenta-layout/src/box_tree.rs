@@ -51,6 +51,14 @@ bitflags::bitflags! {
         const GENERATED = 1 << 6;
         /// Created by the builder, with no DOM node of its own.
         const ANONYMOUS = 1 << 7;
+        /// A [`PaintStyle`] value depends on the box's used size (a percentage
+        /// `translate`, or a `to <corner>` gradient direction). Layout asks
+        /// [`BoxTree::paint_style_for`] for the style of each fragment.
+        const PAINT_SIZE_DEPENDENT = 1 << 8;
+        /// Some paint feature of the style has no `PaintStyle` representation
+        /// yet (radial or conic gradients, `image-set()`, gradient hints, filter
+        /// URLs, `background-clip: text`, 3D rotation) and was left out.
+        const PAINT_SKIPPED = 1 << 9;
     }
 }
 
@@ -114,11 +122,17 @@ pub enum InlineItem {
     OpenInline {
         /// The inline box.
         box_id: BoxId,
+        /// This piece resumes a box that a block-level child interrupted, so it
+        /// carries no start edge (margin, border, padding).
+        resumes: bool,
     },
     /// End of an inline box.
     CloseInline {
         /// The inline box.
         box_id: BoxId,
+        /// A block-level child interrupts the box here and it resumes later, so
+        /// this piece carries no end edge.
+        interrupted: bool,
     },
     /// An atomic inline: inline-block, inline-flex or replaced.
     Atomic {
@@ -130,6 +144,8 @@ pub enum InlineItem {
         /// The `<br>` box.
         box_id: BoxId,
     },
+    /// A soft wrap opportunity with no glyph (`<wbr>`).
+    SoftBreak,
     /// Placeholder at a float's source position.
     Float {
         /// The float box.

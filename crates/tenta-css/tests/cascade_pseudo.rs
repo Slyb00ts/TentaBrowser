@@ -471,3 +471,53 @@ fn attr_in_generated_content_is_read_from_the_element_for_get_computed_style() {
         Some("attr(t) attr(t)")
     );
 }
+
+#[test]
+fn author_rules_for_a_pseudo_element_are_detected_by_origin() {
+    let has =
+        |engine: &tenta_css::cascade::StyleEngine| engine.has_author_rules(PseudoKind::Marker);
+    let (_, engine) = styled("<!DOCTYPE html><ul><li>i</li></ul>");
+    assert!(!has(&engine), "the user-agent ::marker rule does not count");
+
+    for css in [
+        "li::marker { color: red }",
+        "@media (min-width: 1px) { .x::marker { color: red } }",
+        "@layer base { .x::marker { color: red } }",
+    ] {
+        let (_, engine) = styled(&format!(
+            "<!DOCTYPE html><style>{css}</style><ul><li class=x>i</li></ul>"
+        ));
+        assert!(has(&engine), "{css}");
+    }
+
+    let (_, engine) =
+        styled("<!DOCTYPE html><style>.map-marker { color: red }</style><ul><li>i</li></ul>");
+    assert!(!has(&engine));
+    assert!(!engine.has_author_rules(PseudoKind::FirstLine));
+
+    let (_, engine) = styled("<!DOCTYPE html><style>p::before { content: 'x' }</style>");
+    assert!(engine.has_author_rules(PseudoKind::Before));
+    assert!(!engine.has_author_rules(PseudoKind::After));
+}
+
+#[test]
+fn author_rules_in_an_imported_sheet_are_detected() {
+    use tenta_css::cascade::{ImportedSheet, StyleSource};
+    let (doc, mut engine) = styled("<!DOCTYPE html><ul><li>i</li></ul>");
+    let base = url::Url::parse("https://example.test/").unwrap();
+    let imported = base.join("m.css").unwrap();
+    engine.set_sources(vec![StyleSource {
+        owner: None,
+        url: base,
+        text: "@import url(m.css);".to_owned(),
+        media: None,
+        disabled: false,
+        imports: vec![ImportedSheet {
+            url: imported.clone(),
+            final_url: imported,
+            text: "li::marker { color: red }".to_owned(),
+        }],
+    }]);
+    engine.flush(&doc);
+    assert!(engine.has_author_rules(PseudoKind::Marker));
+}

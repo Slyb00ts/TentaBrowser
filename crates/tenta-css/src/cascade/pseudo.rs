@@ -21,6 +21,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use style::context::{CascadeInputs, StyleContext, ThreadLocalStyleContext};
 use style::properties::longhands::display::computed_value::T as Display;
 use style::selector_parser::{PseudoElement, SnapshotMap};
+use style::stylesheets::Origin;
 use style::stylist::RuleInclusion;
 use style::traversal::resolve_style;
 use tenta_core::NodeId;
@@ -169,6 +170,31 @@ impl StyleEngine {
             }
             None => Ok(None),
         }
+    }
+
+    /// Whether any author or user sheet has a rule whose rightmost compound
+    /// targets `pseudo` (`.x::marker`, also inside `@media`, `@layer` and
+    /// `@import`ed sheets). The user-agent sheet does not count, so a `false`
+    /// lets a caller skip resolving a pseudo-element whose style would be the
+    /// user-agent default.
+    ///
+    /// Reads the cascade data built for the engine's sources, so it is only
+    /// valid after the first flush that follows [`StyleEngine::set_sources`] or
+    /// [`StyleEngine::set_env`]; before that it answers for the previous sheets.
+    pub fn has_author_rules(&self, pseudo: PseudoKind) -> bool {
+        let element = match pseudo {
+            PseudoKind::Before => PseudoElement::Before,
+            PseudoKind::After => PseudoElement::After,
+            PseudoKind::Marker => PseudoElement::Marker,
+            PseudoKind::FirstLetter => PseudoElement::FirstLetter,
+            PseudoKind::FirstLine => return false,
+        };
+        let data = self.stylist.cascade_data();
+        [Origin::Author, Origin::User].into_iter().any(|origin| {
+            data.borrow_for_origin(origin)
+                .normal_rules(std::slice::from_ref(&element))
+                .is_some_and(|rules| !rules.is_empty())
+        })
     }
 
     fn stored_pseudo(&self, node: NodeId, pseudo: &PseudoElement) -> Option<Style> {
