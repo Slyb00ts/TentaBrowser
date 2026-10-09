@@ -7,6 +7,8 @@
 mod constructor_order_tests;
 #[cfg(test)]
 mod crypto_tests;
+#[cfg(test)]
+mod geometry_tests;
 mod host;
 mod page_engine;
 #[cfg(test)]

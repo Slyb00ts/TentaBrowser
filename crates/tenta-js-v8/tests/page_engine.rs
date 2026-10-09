@@ -21,6 +21,9 @@ use tenta_js::engine::{
     EngineClock, LifecycleEvent, PageEngine, PageEngineConfig, PageEngineFactory, ScriptErrorKind,
     ScriptKind,
 };
+use tenta_js::geometry::{
+    ClientMetrics, GeometryHost, OffsetMetrics, RectF64, ScrollMetrics, ViewportMetrics,
+};
 use tenta_js_v8::V8EngineFactory;
 use tenta_net::CookieJar;
 
@@ -76,6 +79,7 @@ fn config() -> PageEngineConfig {
         native_memory: tenta_core::NativeMemoryBudget::for_page(
             tenta_core::Budgets::platform_default().page_memory_mb,
         ),
+        viewport: tenta_js::geometry::ViewportMetrics::default(),
     }
 }
 
@@ -888,4 +892,126 @@ fn the_factory_is_shareable_across_page_threads() {
     fn assert_send_sync<T: Send + Sync + 'static>() {}
     assert_send_sync::<V8EngineFactory>();
     assert_send_sync::<Box<dyn PageEngineFactory>>();
+}
+
+/// Reports the given `innerWidth` and fixed values for everything else.
+struct FakeGeometry(f64);
+
+impl GeometryHost for FakeGeometry {
+    fn viewport(&self) -> ViewportMetrics {
+        ViewportMetrics {
+            inner_width: self.0,
+            inner_height: 555.0,
+            outer_width: 800.0,
+            outer_height: 600.0,
+            device_pixel_ratio: 2.0,
+            scroll_x: 11.0,
+            scroll_y: 40.0,
+        }
+    }
+    fn bounding_rect(&self, _: NodeId) -> Option<RectF64> {
+        None
+    }
+    fn client_rects(&self, _: NodeId) -> Vec<RectF64> {
+        Vec::new()
+    }
+    fn offset_metrics(&self, _: NodeId) -> Option<OffsetMetrics> {
+        None
+    }
+    fn client_metrics(&self, _: NodeId) -> Option<ClientMetrics> {
+        None
+    }
+    fn scroll_metrics(&self, _: NodeId) -> Option<ScrollMetrics> {
+        None
+    }
+    fn computed_value(&self, _: NodeId, _: Option<&str>, _: &str) -> Option<String> {
+        None
+    }
+    fn computed_property_names(&self) -> &'static [&'static str] {
+        &[]
+    }
+    fn element_from_point(&self, _: f64, _: f64) -> Option<NodeId> {
+        None
+    }
+}
+
+const METRICS: &str = "[innerWidth, innerHeight, outerWidth, outerHeight, devicePixelRatio, \
+    screenX, screenY, scrollX, scrollY, pageXOffset, pageYOffset].join(',')";
+const FROM_HOST: &str = "777,555,800,600,2,0,0,11,40,11,40";
+const REPLACE: &str = "'use strict'; window.innerWidth = 5; \
+    [innerWidth, innerHeight, Object.keys(window).includes('innerWidth')].join(',')";
+const DESCRIPTOR: &str = "var d = Object.getOwnPropertyDescriptor(window, 'innerWidth'); \
+    [typeof d.get, typeof d.set, d.enumerable, d.configurable].join(',')";
+const ILLEGAL: &str = "var d = Object.getOwnPropertyDescriptor(window, 'innerWidth'); \
+    var out = []; \
+    try { d.get.call({}); } catch (e) { out.push(e instanceof TypeError); } \
+    try { d.set.call({}, 1); } catch (e) { out.push(e instanceof TypeError); } \
+    out.join(',')";
+const FROM_PAGE_VIEWPORT: &str = "640,480,640,480,1.5,0,0,0,0,0,0";
+
+#[test]
+fn window_metrics_follow_the_page_viewport_until_a_geometry_host_is_installed() {
+    let (document, _target) = test_document();
+    let config = PageEngineConfig {
+        viewport: ViewportMetrics {
+            inner_width: 640.0,
+            inner_height: 480.0,
+            outer_width: 640.0,
+            outer_height: 480.0,
+            device_pixel_ratio: 1.5,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        },
+        ..config()
+    };
+    let mut engine = build_engine(&document, &config);
+    let read = |engine: &mut Box<dyn PageEngine>| {
+        engine
+            .evaluate(METRICS, Duration::from_secs(5))
+            .expect("the metrics are readable")
+    };
+    assert_eq!(read(&mut engine), FROM_PAGE_VIEWPORT);
+    engine.set_geometry_host(Rc::new(FakeGeometry(777.0)));
+    assert_eq!(read(&mut engine), FROM_HOST);
+}
+
+fn viewport_engine() -> Box<dyn PageEngine> {
+    let (document, _target) = test_document();
+    build_engine(&document, &config())
+}
+
+#[test]
+fn a_geometry_host_installed_twice_is_replaced() {
+    let mut engine = viewport_engine();
+    engine.set_geometry_host(Rc::new(FakeGeometry(777.0)));
+    engine.set_geometry_host(Rc::new(FakeGeometry(9.0)));
+    assert_eq!(
+        engine
+            .evaluate("innerWidth", Duration::from_secs(5))
+            .unwrap(),
+        "9"
+    );
+}
+
+#[test]
+fn assigning_a_window_metric_replaces_it_and_leaves_the_others() {
+    let mut engine = viewport_engine();
+    engine.set_geometry_host(Rc::new(FakeGeometry(777.0)));
+    assert_eq!(
+        engine.evaluate(REPLACE, Duration::from_secs(5)).unwrap(),
+        "5,555,true"
+    );
+}
+
+#[test]
+fn window_metrics_are_replaceable_accessors() {
+    let mut engine = viewport_engine();
+    assert_eq!(
+        engine.evaluate(DESCRIPTOR, Duration::from_secs(5)).unwrap(),
+        "function,function,true,true"
+    );
+    assert_eq!(
+        engine.evaluate(ILLEGAL, Duration::from_secs(5)).unwrap(),
+        "true,true"
+    );
 }

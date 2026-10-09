@@ -19,7 +19,7 @@
 //! no bridge: the callback reaches the isolate through the scope and enqueues
 //! straight into V8's microtask queue, which the same checkpoints drain.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -38,6 +38,7 @@ use tenta_js::bindings::{
 use tenta_js::dom::events::{EventHandlerName, HostValue, PromiseOutcome, PromiseRef, ScriptHost};
 use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId};
 use tenta_js::fetch::FetchDriver;
+use tenta_js::geometry::{GeometryHost, ViewportMetrics, WindowMetric};
 use tenta_js::xhr::XhrDriver;
 use tenta_net::CookieJar;
 
@@ -81,6 +82,8 @@ guarded_callback!(guarded_window_onload_setter => window_onload_setter);
 guarded_callback!(guarded_window_local_storage_getter => window_local_storage_getter);
 guarded_callback!(guarded_window_session_storage_getter => window_session_storage_getter);
 guarded_callback!(guarded_window_crypto_getter => window_crypto_getter);
+guarded_callback!(guarded_window_metric_getter => window_metric_getter);
+guarded_callback!(guarded_window_metric_setter => window_metric_setter);
 // The handwritten EventTarget methods acquire a callback before reading
 // page-controlled options. Their ordinary return closes that value lease.
 guarded_callback!(guarded_window_add_event_listener => window_add_event_listener, listener_lease);
@@ -173,6 +176,14 @@ pub struct HostState {
     /// [`Self::fetch_driver`] does: the XHR surface reaches the world only
     /// through the context slot ([`host_state`]), and never through the engine.
     pub xhr_driver: RefCell<Option<Rc<dyn XhrDriver>>>,
+    /// The layout-backed answers for script geometry, or `None` for a page
+    /// with no layout. It lives here for the same reason [`Self::fetch_driver`]
+    /// does: a geometry callback reaches the world only through the context
+    /// slot ([`host_state`]), and the host arrives after the context exists.
+    pub geometry_host: RefCell<Option<Rc<dyn GeometryHost>>>,
+    /// What the window metrics answer while there is no geometry host: the
+    /// page's configured viewport.
+    pub viewport: Cell<ViewportMetrics>,
     /// Set while an engine entry is dispatching a DOM event with **no V8
     /// callback anywhere on the stack**.
     ///
@@ -208,6 +219,8 @@ impl HostState {
             fetch_driver: RefCell::new(None),
             cookies,
             xhr_driver: RefCell::new(None),
+            geometry_host: RefCell::new(None),
+            viewport: Cell::new(ViewportMetrics::default()),
             native_dispatch: std::cell::Cell::new(false),
         })
     }
@@ -259,6 +272,13 @@ impl HostState {
     /// [`Self::set_xhr_driver`] for why a page may not have installed one yet.
     pub fn xhr_driver(&self) -> Option<Rc<dyn XhrDriver>> {
         self.xhr_driver.borrow().clone()
+    }
+
+    /// Installs the geometry host, replacing any host installed before. One
+    /// per navigation, because the host answers for the current document
+    /// (`tenta_js::engine::PageEngine::set_geometry_host`).
+    pub fn set_geometry_host(&self, host: Rc<dyn GeometryHost>) {
+        *self.geometry_host.borrow_mut() = Some(host);
     }
 
     /// Marks the start of an engine entry that runs with no V8 callback on the
@@ -463,6 +483,88 @@ pub fn install_window_crypto_accessor(
         None,
         v8::PropertyAttribute::NONE,
     );
+}
+
+/// Installs the numeric window metrics (`innerWidth`, `scrollY`, ...) on the
+/// real global template, for the reason [`install_window_event_handlers`] gives.
+/// Each getter carries its [`WindowMetric`] index as template data, so one
+/// callback serves all of them. The members are `[Replaceable]`: assigning one
+/// defines an own data property that shadows the accessor.
+pub fn install_window_geometry_accessors(
+    scope: &mut v8::PinScope,
+    global_template: v8::Local<v8::ObjectTemplate>,
+) {
+    for (index, metric) in WindowMetric::ALL.into_iter().enumerate() {
+        let data = v8::Integer::new(scope, index as i32);
+        let getter = v8::FunctionTemplate::builder(guarded_window_metric_getter)
+            .data(data.into())
+            .length(0)
+            .build(scope);
+        let setter = v8::FunctionTemplate::builder(guarded_window_metric_setter)
+            .data(data.into())
+            .length(1)
+            .build(scope);
+        let key = v8::String::new(scope, metric.name()).expect("the member name fits V8");
+        global_template.set_accessor_property(
+            key.into(),
+            Some(getter),
+            Some(setter),
+            v8::PropertyAttribute::NONE,
+        );
+    }
+}
+
+fn window_metric_of(
+    scope: &mut v8::PinScope,
+    args: &v8::FunctionCallbackArguments,
+) -> Option<WindowMetric> {
+    args.data()
+        .integer_value(scope)
+        .and_then(|index| usize::try_from(index).ok())
+        .and_then(|index| WindowMetric::ALL.get(index).copied())
+}
+
+fn window_metric_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let global = scope.get_current_context().global(scope);
+    if !args.this().strict_equals(global.into()) {
+        throw_js_error(scope, &JsError::type_error("Illegal invocation"));
+        return;
+    }
+    let Some(metric) = window_metric_of(scope, &args) else {
+        return;
+    };
+    let key = v8::String::new(scope, metric.name()).expect("the member name fits V8");
+    if global
+        .create_data_property(scope, key.into(), args.get(0))
+        .is_none()
+    {
+        throw_type_error(scope, "cannot replace the window metric");
+    }
+}
+
+fn window_metric_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let global = scope.get_current_context().global(scope);
+    if !args.this().strict_equals(global.into()) {
+        throw_js_error(scope, &JsError::type_error("Illegal invocation"));
+        return;
+    }
+    let Some(metric) = window_metric_of(scope, &args) else {
+        return;
+    };
+    let Some(state) = host_state(scope) else {
+        return;
+    };
+    // Cloned out so no borrow of the slot is held while the host runs.
+    let host = state.geometry_host.borrow().clone();
+    rv.set_double(metric.read(host.as_deref(), &state.viewport.get()));
 }
 
 fn window_crypto_getter<'s>(

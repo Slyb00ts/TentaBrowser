@@ -13,6 +13,7 @@ use tenta_js::engine::{
 };
 use tenta_js::event_loop::ProvenanceSink;
 use tenta_js::fetch::{FetchCompletion, FetchDriver};
+use tenta_js::geometry::GeometryHost;
 use tenta_js::xhr::{XhrCompletion, XhrDriver};
 #[cfg(feature = "quickjs")]
 use tenta_js_qjs::QuickJsEngineFactory;
@@ -113,6 +114,9 @@ impl PageEngine for FaultEngine {
     }
     fn set_fetch_driver(&mut self, driver: Rc<dyn FetchDriver>) {
         self.inner.set_fetch_driver(driver)
+    }
+    fn set_geometry_host(&mut self, host: Rc<dyn GeometryHost>) {
+        self.inner.set_geometry_host(host)
     }
     fn settle_fetches(&mut self, completions: Vec<FetchCompletion>) {
         self.inner.settle_fetches(completions)

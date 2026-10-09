@@ -32,6 +32,7 @@ use tenta_js::engine::{
 };
 use tenta_js::event_loop::{Clock, MonoTime, ProvenanceSink};
 use tenta_js::fetch::{FetchCompletion, FetchDriver};
+use tenta_js::geometry::GeometryHost;
 use tenta_js::xhr::{XhrCompletion, XhrDriver};
 
 use crate::Engine;
@@ -177,6 +178,15 @@ impl PageEngine for Engine {
     /// [`HostState`]: crate::host::HostState
     fn set_fetch_driver(&mut self, driver: Rc<dyn FetchDriver>) {
         self.host.set_fetch_driver(driver);
+    }
+
+    /// Stored on the [`HostState`] slot like the drivers, so geometry callbacks
+    /// reach it through the context. See
+    /// [`crate::host::HostState::set_geometry_host`].
+    ///
+    /// [`HostState`]: crate::host::HostState
+    fn set_geometry_host(&mut self, host: Rc<dyn GeometryHost>) {
+        self.host.set_geometry_host(host);
     }
 
     /// Named explicitly so the inherent method is what runs and a later trait
@@ -341,6 +351,7 @@ impl PageEngineFactory for V8EngineFactory {
         // settle.
         engine.set_timer_rule(config.timer_rule);
         engine.set_script_timeout(config.script_timeout);
+        engine.host.viewport.set(config.viewport);
         Ok(Box::new(engine))
     }
 }

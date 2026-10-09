@@ -45,6 +45,7 @@ use tenta_net::CookieJar;
 use crate::bindings::host::SharedDocument;
 use crate::event_loop::ProvenanceSink;
 use crate::fetch::{FetchCompletion, FetchDriver};
+use crate::geometry::{GeometryHost, ViewportMetrics};
 use crate::storage::PageStorage;
 use crate::xhr::{XhrCompletion, XhrDriver};
 
@@ -142,6 +143,8 @@ pub struct PageEngineConfig {
     /// Shared native accounting for the page and all of its document contexts.
     /// The Page owns this Arc across navigation-runtime replacement.
     pub native_memory: NativeMemoryBudget,
+    /// The window metrics script sees until a [`GeometryHost`] is installed.
+    pub viewport: ViewportMetrics,
 }
 
 /// One isolate driving one document.
@@ -234,6 +237,15 @@ pub trait PageEngine {
     /// `fetch`; calling it rejects, because a promise the engine cannot keep is
     /// worse than a loud refusal.
     fn set_fetch_driver(&mut self, driver: Rc<dyn FetchDriver>);
+
+    /// Gives the engine the layout-backed answers for script geometry,
+    /// replacing any host installed before.
+    ///
+    /// Per navigation, like the drivers above: the host answers for the
+    /// document that is current. An engine that never receives one behaves as
+    /// a page with no layout (see [`crate::geometry`]). The default ignores
+    /// the host, so a backend that has no geometry members yet needs no code.
+    fn set_geometry_host(&mut self, _host: Rc<dyn GeometryHost>) {}
 
     /// Settles the promises this batch of completions names, as one entry: the
     /// values are built, the settlements queued as microtasks, and the engine

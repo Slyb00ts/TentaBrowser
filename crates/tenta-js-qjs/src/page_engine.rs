@@ -17,6 +17,7 @@ use tenta_js::dom::events::{
 use tenta_js::engine::*;
 use tenta_js::event_loop::{Clock, MonoTime, ProvenanceSink};
 use tenta_js::fetch::{FetchCompletion, FetchDriver, FetchOutcome};
+use tenta_js::geometry::GeometryHost;
 use tenta_js::xhr::{XhrCompletion, XhrDriver};
 impl PageEngine for Engine {
     fn native_failure(&self) -> Option<&'static str> {
@@ -95,6 +96,9 @@ impl PageEngine for Engine {
     }
     fn set_xhr_driver(&mut self, driver: Rc<dyn XhrDriver>) {
         *self.state.xhr_driver.borrow_mut() = Some(driver)
+    }
+    fn set_geometry_host(&mut self, host: Rc<dyn GeometryHost>) {
+        *self.state.geometry_host.borrow_mut() = Some(host)
     }
     fn settle_fetches(&mut self, completions: Vec<FetchCompletion>) {
         if completions.is_empty() {
@@ -211,6 +215,7 @@ impl PageEngineFactory for QuickJsEngineFactory {
         .map_err(|e| e.message)?;
         engine.set_timer_rule(config.timer_rule);
         engine.set_script_timeout(config.script_timeout);
+        engine.state.viewport.set(config.viewport);
         Ok(Box::new(engine))
     }
 }

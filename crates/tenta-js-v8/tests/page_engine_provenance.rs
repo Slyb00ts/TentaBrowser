@@ -78,6 +78,7 @@ fn config() -> PageEngineConfig {
         native_memory: tenta_core::NativeMemoryBudget::for_page(
             tenta_core::Budgets::platform_default().page_memory_mb,
         ),
+        viewport: tenta_js::geometry::ViewportMetrics::default(),
     }
 }
 

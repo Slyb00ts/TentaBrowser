@@ -14,6 +14,7 @@ use tenta_js::dom::events::{
 };
 use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId};
 use tenta_js::fetch::{FetchDriver, FetchStartError};
+use tenta_js::geometry::{GeometryHost, ViewportMetrics, WindowMetric};
 use tenta_js::xhr::{XhrDriver, XhrHandle, XhrRequest};
 
 type SavedFunction = Persistent<Function<'static>>;
@@ -66,6 +67,12 @@ pub(crate) struct State {
     pub frames: Rc<RefCell<VecDeque<(Handler, f64)>>>,
     pub fetch_driver: RefCell<Option<Rc<dyn FetchDriver>>>,
     pub xhr_driver: RefCell<Option<Rc<dyn XhrDriver>>>,
+    /// The layout-backed answers for script geometry, or `None` for a page
+    /// with no layout.
+    pub geometry_host: RefCell<Option<Rc<dyn GeometryHost>>>,
+    /// What the window metrics answer while there is no geometry host: the
+    /// page's configured viewport.
+    pub viewport: Cell<ViewportMetrics>,
     pending: RefCell<HashMap<u64, Pending>>,
     next_promise: Cell<u64>,
     #[cfg(test)]
@@ -81,6 +88,8 @@ impl State {
             frames: Rc::default(),
             fetch_driver: RefCell::new(None),
             xhr_driver: RefCell::new(None),
+            geometry_host: RefCell::new(None),
+            viewport: Cell::new(ViewportMetrics::default()),
             pending: RefCell::default(),
             next_promise: Cell::new(0),
             #[cfg(test)]
@@ -343,6 +352,19 @@ impl ScriptHost for State {
     }
 }
 
+fn require_window_receiver<'js>(ctx: &Ctx<'js>, this: &Value<'js>) -> rquickjs::Result<()> {
+    if this.is_null()
+        || this.is_undefined()
+        || this
+            .as_object()
+            .is_some_and(|object| object == &ctx.globals())
+    {
+        Ok(())
+    } else {
+        Err(rquickjs::Exception::throw_type(ctx, "Illegal invocation"))
+    }
+}
+
 pub(crate) fn install<'js>(ctx: &Ctx<'js>, state: &Rc<State>) -> rquickjs::Result<()> {
     let global = ctx.globals();
     install_bindings(ctx, &global)?;
@@ -553,6 +575,38 @@ pub(crate) fn install<'js>(ctx: &Ctx<'js>, state: &Rc<State>) -> rquickjs::Resul
             })
         })?,
     )?;
+    for metric in WindowMetric::ALL {
+        let getter_state = state.clone();
+        global.prop(
+            metric.name(),
+            rquickjs::object::Accessor::new(
+                move |ctx: Ctx<'js>, this: This<Value<'js>>| {
+                    quickjs_callback_boundary(&ctx, metric.name(), || {
+                        require_window_receiver(&ctx, &this.0)?;
+                        // Cloned out so no borrow is held while the host runs.
+                        let host = getter_state.geometry_host.borrow().clone();
+                        Ok(metric.read(host.as_deref(), &getter_state.viewport.get()))
+                    })
+                },
+                // `[Replaceable]`: assignment defines an own data property that
+                // shadows the accessor.
+                move |ctx: Ctx<'js>, this: This<Value<'js>>, value: Value<'js>| {
+                    quickjs_callback_boundary(&ctx, metric.name(), || {
+                        require_window_receiver(&ctx, &this.0)?;
+                        ctx.globals().prop(
+                            metric.name(),
+                            rquickjs::object::Property::from(value)
+                                .writable()
+                                .enumerable()
+                                .configurable(),
+                        )
+                    })
+                },
+            )
+            .enumerable()
+            .configurable(),
+        )?;
+    }
     install_exception(ctx)?;
     let state_fetch = state.clone();
     global.set(

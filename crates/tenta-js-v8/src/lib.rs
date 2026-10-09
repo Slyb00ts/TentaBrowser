@@ -670,6 +670,7 @@ impl Engine {
         host::install_window_event_handlers(scope, global_template);
         host::install_window_storage_accessors(scope, global_template);
         host::install_window_crypto_accessor(scope, global_template);
+        host::install_window_geometry_accessors(scope, global_template);
         // This one template outlives the block: the window's prototype chain is
         // chained to `EventTarget.prototype` once the context exists
         // (`host::install_window_prototype`).

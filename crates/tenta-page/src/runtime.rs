@@ -38,13 +38,14 @@ use tenta_js::engine::{
 };
 use tenta_js::event_loop::ProvenanceSink;
 use tenta_js::fetch::{FetchCompletions, FetchDriver};
+use tenta_js::geometry::ViewportMetrics;
 use tenta_js::xhr::{XhrCompletions, XhrDriver};
 use tenta_net::policy::cookies::Site;
 use tenta_net::{Client, NetError, Request, ResourceType};
 use url::Url;
 
 use crate::fetch::NetFetchDriver;
-use crate::page::{PageConfig, next_request_id};
+use crate::page::{PageConfig, Viewport, next_request_id};
 use crate::settle::{RequestClass, SettleTracker};
 
 thread_local! {
@@ -797,6 +798,21 @@ fn engine_config(config: &PageConfig, native_memory: NativeMemoryBudget) -> Page
         cookies: config.cookies.clone(),
         storage: config.storage.clone(),
         native_memory,
+        viewport: viewport_metrics(&config.viewport),
+    }
+}
+
+/// The window metrics script sees before a layout answers: the page's viewport,
+/// unscrolled, with the outer window the size of the inner one.
+fn viewport_metrics(viewport: &Viewport) -> ViewportMetrics {
+    ViewportMetrics {
+        inner_width: f64::from(viewport.width),
+        inner_height: f64::from(viewport.height),
+        outer_width: f64::from(viewport.width),
+        outer_height: f64::from(viewport.height),
+        device_pixel_ratio: f64::from(viewport.device_scale_factor),
+        scroll_x: 0.0,
+        scroll_y: 0.0,
     }
 }
 
@@ -1163,6 +1179,14 @@ mod tests {
     use tenta_js::engine::{EngineWatchdog, LifecycleEvent, ScriptError, ScriptKind};
     use tenta_js::fetch::{FetchCompletion, FetchDriver, FetchOutcome};
     use tenta_js::xhr::{XhrCompletion, XhrDriver, XhrHandle};
+
+    #[test]
+    fn the_default_viewport_is_the_engine_default_metrics() {
+        assert_eq!(
+            viewport_metrics(&Viewport::default()),
+            ViewportMetrics::default()
+        );
+    }
 
     /// An engine that records whether the page trimmed it and does nothing
     /// else: what the guard under test decides is whether the page enters the

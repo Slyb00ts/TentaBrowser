@@ -9,6 +9,19 @@
 //! borrowed, so they must not hold a document borrow across a script call and
 //! must answer with the neutral value (zero rect, `None`) instead of panicking
 //! when the document is unavailable.
+//!
+//! # Without a host
+//!
+//! A page whose engine was never given a host has no layout, as under the
+//! fetch-only tiers. Script geometry then answers what a box-less element
+//! answers: `getBoundingClientRect()` is an all-zero rect, `getClientRects()`
+//! is empty, every `offset*`, `client*` and `scroll*` number is `0`,
+//! `offsetParent` is `null`, and `elementFromPoint` is `null`. Window metrics
+//! (`innerWidth`, `devicePixelRatio`, `scrollY`, ...) answer the page's
+//! configured viewport (`PageEngineConfig::viewport`), not zero, because
+//! scripts divide by them and branch on them. A host that is installed but
+//! cannot answer returns the same neutral values through its `None` and empty
+//! results.
 
 use tenta_core::NodeId;
 
@@ -42,6 +55,105 @@ pub struct ViewportMetrics {
     pub scroll_x: f64,
     /// `scrollY` / `pageYOffset`.
     pub scroll_y: f64,
+}
+
+impl Default for ViewportMetrics {
+    /// The headless desktop window a page without a configured viewport has:
+    /// 1280x800 at scale 1 with the outer window equal to the inner one and no
+    /// scroll offset. It matches `tenta_page::Viewport::default()`, which is
+    /// where a real page's value comes from.
+    fn default() -> Self {
+        Self {
+            inner_width: 1280.0,
+            inner_height: 800.0,
+            outer_width: 1280.0,
+            outer_height: 800.0,
+            device_pixel_ratio: 1.0,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        }
+    }
+}
+
+/// The numeric `Window` members geometry answers, in the order the engines
+/// install them.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum WindowMetric {
+    /// `innerWidth`.
+    InnerWidth,
+    /// `innerHeight`.
+    InnerHeight,
+    /// `outerWidth`.
+    OuterWidth,
+    /// `outerHeight`.
+    OuterHeight,
+    /// `devicePixelRatio`.
+    DevicePixelRatio,
+    /// `screenX`.
+    ScreenX,
+    /// `screenY`.
+    ScreenY,
+    /// `scrollX`.
+    ScrollX,
+    /// `scrollY`.
+    ScrollY,
+    /// `pageXOffset`, an alias of `scrollX`.
+    PageXOffset,
+    /// `pageYOffset`, an alias of `scrollY`.
+    PageYOffset,
+}
+
+impl WindowMetric {
+    /// Every member, so a backend installs them from one table.
+    pub const ALL: [WindowMetric; 11] = [
+        WindowMetric::InnerWidth,
+        WindowMetric::InnerHeight,
+        WindowMetric::OuterWidth,
+        WindowMetric::OuterHeight,
+        WindowMetric::DevicePixelRatio,
+        WindowMetric::ScreenX,
+        WindowMetric::ScreenY,
+        WindowMetric::ScrollX,
+        WindowMetric::ScrollY,
+        WindowMetric::PageXOffset,
+        WindowMetric::PageYOffset,
+    ];
+
+    /// The property name on `window`.
+    pub fn name(self) -> &'static str {
+        match self {
+            WindowMetric::InnerWidth => "innerWidth",
+            WindowMetric::InnerHeight => "innerHeight",
+            WindowMetric::OuterWidth => "outerWidth",
+            WindowMetric::OuterHeight => "outerHeight",
+            WindowMetric::DevicePixelRatio => "devicePixelRatio",
+            WindowMetric::ScreenX => "screenX",
+            WindowMetric::ScreenY => "screenY",
+            WindowMetric::ScrollX => "scrollX",
+            WindowMetric::ScrollY => "scrollY",
+            WindowMetric::PageXOffset => "pageXOffset",
+            WindowMetric::PageYOffset => "pageYOffset",
+        }
+    }
+
+    /// The member's value: from `host` when a layout is installed, otherwise
+    /// from `fallback`, the page's configured viewport.
+    ///
+    /// The window is always at the screen origin, so `screenX` and `screenY`
+    /// are 0 either way.
+    pub fn read(self, host: Option<&dyn GeometryHost>, fallback: &ViewportMetrics) -> f64 {
+        let viewport = host.map_or(*fallback, |host| host.viewport());
+        match self {
+            WindowMetric::InnerWidth => viewport.inner_width,
+            WindowMetric::InnerHeight => viewport.inner_height,
+            WindowMetric::OuterWidth => viewport.outer_width,
+            WindowMetric::OuterHeight => viewport.outer_height,
+            WindowMetric::DevicePixelRatio => viewport.device_pixel_ratio,
+            WindowMetric::ScreenX | WindowMetric::ScreenY => 0.0,
+            WindowMetric::ScrollX | WindowMetric::PageXOffset => viewport.scroll_x,
+            WindowMetric::ScrollY | WindowMetric::PageYOffset => viewport.scroll_y,
+        }
+    }
 }
 
 /// `offsetTop`, `offsetLeft`, `offsetWidth`, `offsetHeight` and `offsetParent`.
