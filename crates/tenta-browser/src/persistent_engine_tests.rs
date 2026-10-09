@@ -253,6 +253,7 @@ impl Rig {
             locale: "en-US".to_owned(),
             extra_headers: Vec::new(),
             viewport: Viewport::default(),
+            system_fonts: false,
             fs_policy: tenta_core::FsPolicy::none(),
             cookies: CookieJar::new(),
             storage: tenta_js::storage::PageStorage::isolated(),

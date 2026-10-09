@@ -491,7 +491,12 @@ async fn unimplemented_methods_answer_32601_with_the_original_id() {
     let fixture = Fixture::start().await;
     let mut client = fixture.browser().await;
     client.next_id = 41;
-    for method in ["Nope.nothing", "Browser.nothing", "Page.enable", "no-dot"] {
+    for method in [
+        "Nope.nothing",
+        "Browser.nothing",
+        "Page.startScreencast",
+        "no-dot",
+    ] {
         let id = client.next_id;
         let response = client.call(None, method, json!({})).await;
         assert_eq!(response["id"], id, "{method}");

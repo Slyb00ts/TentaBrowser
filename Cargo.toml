@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "xtask"]
-exclude = ["tests/linktest", "crates/tenta-net/fuzz", "crates/tenta-html/fuzz"]
+exclude = ["tests/linktest", "crates/tenta-net/fuzz", "crates/tenta-html/fuzz", "crates/tenta-paint/fuzz"]
 
 [workspace.package]
 version = "0.0.1"
@@ -40,6 +40,7 @@ tenta-testutil = { path = "crates/tenta-testutil" }
 # Shared third-party dependencies. Versions are pinned here once and only here.
 anyhow = "1"
 bytes = "1"
+base64 = "0.23"
 hashbrown = "0.16"
 libc = "0.2"
 winapi-util = "=0.1.11"
@@ -81,6 +82,9 @@ unicode-normalization = "0.1"
 # version-locked: parley 0.11 uses skrifa 0.44, so skrifa stays at 0.44.
 parley = { version = "0.11", default-features = false, features = ["libm"] }
 skrifa = "=0.44.0"
+# Only for the `system` feature, which parley turns off: the platform font database
+# serves script fallback when a host opts in (D-036).
+fontique = { version = "0.11", default-features = false }
 taffy = { version = "0.14", default-features = false, features = ["std", "flexbox", "grid", "calc", "content_size"] }
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
 png = "0.18"

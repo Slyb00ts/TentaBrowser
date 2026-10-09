@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use hashbrown::HashMap;
 use tenta_core::RequestId;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 
 use crate::clock::Clock;
 
@@ -228,6 +228,9 @@ pub struct SettleTracker {
     clock: Arc<dyn Clock>,
     /// Signals whenever a state-changing call is made.
     notify: Arc<Notify>,
+    /// Counts the same signals for observers other than the one that parks on
+    /// `notify`: a second waiter on a `Notify` would steal the first one's wake.
+    changes: watch::Sender<u64>,
 
     started: Instant,
     deadline: Option<Instant>,
@@ -278,6 +281,7 @@ impl SettleTracker {
             wait_until,
             clock,
             notify: Arc::new(Notify::new()),
+            changes: watch::channel(0).0,
             started,
             deadline: None,
             latched: None,
@@ -330,6 +334,12 @@ impl SettleTracker {
     /// Gets a cloned handle to the state-change notification.
     pub fn notify_handle(&self) -> Arc<Notify> {
         Arc::clone(&self.notify)
+    }
+
+    /// A receiver that changes whenever the machine's state does, for any
+    /// number of observers that must not compete with the page's own waiter.
+    pub fn changes(&self) -> watch::Receiver<u64> {
+        self.changes.subscribe()
     }
 
     pub fn load_fired(&self) -> bool {
@@ -666,6 +676,18 @@ impl SettleTracker {
         })
     }
 
+    /// The earliest instant after `now` at which time alone completes an idle
+    /// window; `None` when only a request starting or finishing can.
+    pub fn next_idle_wakeup(&self, now: Instant) -> Option<Instant> {
+        let window = self.config.network_idle_window;
+        [self.almost_since, self.zero_since]
+            .into_iter()
+            .flatten()
+            .map(|since| since + window)
+            .filter(|at| *at > now)
+            .min()
+    }
+
     /// In-flight requests that count for the CDP idle signals.
     pub fn in_flight_for_idle(&self) -> usize {
         self.idle_counted
@@ -784,6 +806,8 @@ impl SettleTracker {
     /// Signal that a state change has occurred.
     fn signal_state_change(&self) {
         self.notify.notify_one();
+        self.changes
+            .send_modify(|count| *count = count.wrapping_add(1));
     }
 }
 
@@ -1136,6 +1160,26 @@ mod tests {
         tracker.note_request_started(RequestId(9), RequestClass::WebSocket, Origin::Background);
         clock.advance(Duration::from_millis(500));
         assert!(tracker.network_idle(clock.now()));
+    }
+
+    #[test]
+    fn the_idle_wakeup_names_the_instant_a_window_completes() {
+        let (mut tracker, clock) = tracker(Settle::NetworkIdle);
+        let started = clock.now();
+        tracker.note_request_started(RequestId(1), RequestClass::Image, Origin::Background);
+        tracker.note_request_done(RequestId(1));
+        clock.advance(Duration::from_millis(200));
+        assert_eq!(
+            tracker.next_idle_wakeup(clock.now()),
+            Some(started + Duration::from_millis(500))
+        );
+        clock.advance(Duration::from_millis(400));
+        assert_eq!(tracker.next_idle_wakeup(clock.now()), None);
+
+        let mut changes = tracker.changes();
+        changes.mark_unchanged();
+        tracker.note_request_started(RequestId(2), RequestClass::Image, Origin::Background);
+        assert!(changes.has_changed().expect("sender alive"));
     }
 
     #[test]

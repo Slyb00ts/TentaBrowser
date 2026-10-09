@@ -17,8 +17,8 @@ use std::rc::Rc;
 use tenta_core::{BudgetKind, Error, PageId, Result};
 use tenta_dom::Document;
 use tenta_layout::Rect;
+use tenta_render::{FontPolicy, RenderConfig, RenderError, RenderSession};
 pub use tenta_render::{ImageFormat, RasterStats, Screenshot, StageTimes, WorkCounters};
-use tenta_render::{RenderConfig, RenderError, RenderSession};
 use url::Url;
 
 use crate::page::Viewport;
@@ -111,6 +111,13 @@ impl Default for ScreenshotOptions {
     }
 }
 
+/// The size of a document's scrollable extent in CSS pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ContentSize {
+    pub width: f32,
+    pub height: f32,
+}
+
 /// The stylesheets of the document the session renders, and which of them the
 /// session has been given.
 #[derive(Default)]
@@ -141,7 +148,12 @@ thread_local! {
 /// The session and sheets of `page` for the document of `navigation`, created
 /// on first use. A session built for an earlier document is replaced: its
 /// styles, boxes and fetched sheets all belong to that document.
-pub(crate) fn handles(page: PageId, navigation: u64, viewport: Viewport) -> Handles {
+pub(crate) fn handles(
+    page: PageId,
+    navigation: u64,
+    viewport: Viewport,
+    system_fonts: bool,
+) -> Handles {
     RENDERS.with(|cell| {
         let mut renders = cell.borrow_mut();
         let fresh = renders
@@ -150,6 +162,11 @@ pub(crate) fn handles(page: PageId, navigation: u64, viewport: Viewport) -> Hand
         if fresh {
             let session = RenderSession::new(RenderConfig {
                 viewport: render_viewport(viewport),
+                fonts: if system_fonts {
+                    FontPolicy::SystemFallback
+                } else {
+                    FontPolicy::Embedded
+                },
                 ..RenderConfig::default()
             });
             renders.insert(
@@ -235,12 +252,7 @@ pub(crate) fn render(
         }
     };
     let mut session = session.borrow_mut();
-    session.set_viewport(render_viewport(viewport));
-    let signature = sheets.state.signature(doc);
-    if sheets.applied != Some(signature) {
-        session.set_style_sources(sheets.state.cached_sources(doc, base_url));
-        sheets.applied = Some(signature);
-    }
+    prepare(&mut session, sheets, doc, base_url, viewport);
     session
         .screenshot(
             doc,
@@ -252,6 +264,42 @@ pub(crate) fn render(
             },
         )
         .map_err(error_of)
+}
+
+/// Lays `doc` out and reports its scrollable extent, with the same sheets and
+/// the same viewport a screenshot would use.
+pub(crate) fn content_size(
+    session: &RefCell<RenderSession>,
+    sheets: &mut Sheets,
+    doc: &Document,
+    base_url: &Url,
+    viewport: Viewport,
+) -> Result<ContentSize> {
+    if doc.document_element().is_none() {
+        return Err(Error::invalid("the document has no root element"));
+    }
+    let mut session = session.borrow_mut();
+    prepare(&mut session, sheets, doc, base_url, viewport);
+    let extent = session.layout(doc).scroll_extent;
+    Ok(ContentSize {
+        width: extent.right(),
+        height: extent.bottom(),
+    })
+}
+
+fn prepare(
+    session: &mut RenderSession,
+    sheets: &mut Sheets,
+    doc: &Document,
+    base_url: &Url,
+    viewport: Viewport,
+) {
+    session.set_viewport(render_viewport(viewport));
+    let signature = sheets.state.signature(doc);
+    if sheets.applied != Some(signature) {
+        session.set_style_sources(sheets.state.cached_sources(doc, base_url));
+        sheets.applied = Some(signature);
+    }
 }
 
 fn error_of(error: RenderError) -> Error {
@@ -285,10 +333,10 @@ mod tests {
     #[test]
     fn a_new_navigation_replaces_the_session_and_release_drops_it() {
         let viewport = Viewport::default();
-        let first = handles(page(900), 1, viewport);
-        let same = handles(page(900), 1, viewport);
+        let first = handles(page(900), 1, viewport, false);
+        let same = handles(page(900), 1, viewport, false);
         assert!(Rc::ptr_eq(&first.session, &same.session));
-        let next = handles(page(900), 2, viewport);
+        let next = handles(page(900), 2, viewport, false);
         assert!(!Rc::ptr_eq(&first.session, &next.session));
         assert_eq!(
             Rc::strong_count(&first.session),
@@ -304,8 +352,8 @@ mod tests {
     #[test]
     fn two_pages_do_not_share_a_session() {
         let viewport = Viewport::default();
-        let one = handles(page(901), 1, viewport);
-        let other = handles(page(902), 1, viewport);
+        let one = handles(page(901), 1, viewport, false);
+        let other = handles(page(902), 1, viewport, false);
         assert!(!Rc::ptr_eq(&one.session, &other.session));
         release_all();
         assert!(counters(page(901)).is_none() && counters(page(902)).is_none());

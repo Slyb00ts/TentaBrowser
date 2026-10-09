@@ -20,6 +20,7 @@ use tenta_browser::{
 use tenta_core::Error;
 
 use self::context::RuntimeState;
+pub(super) use self::context::utility_context;
 use super::target::resume;
 use crate::backend::Target;
 use crate::domain::{CommandContext, CommandFuture, DomainHandler, DomainRegistry, parse_params};
@@ -224,7 +225,9 @@ async fn require_context(
         .execution_context()
         .await
         .map_err(|_| no_context())?;
-    let stale = wanted.is_some_and(|wanted| wanted != (current, World::Main))
+    // A utility world runs in the main realm, so a context of either world is
+    // stale exactly when its realm is.
+    let stale = wanted.is_some_and(|(realm, _)| realm != current)
         || objects.iter().any(|realm| *realm != current);
     if stale { Err(no_context()) } else { Ok(()) }
 }

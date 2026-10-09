@@ -12,22 +12,35 @@ use crate::backend::lock;
 /// The console messages Chromium's agent keeps for a late `Runtime.enable`.
 const CONSOLE_CAPACITY: usize = 1000;
 
-/// A script world of a page. The main world is the only one today; isolated
-/// worlds add variants and keep every id they have handed out.
+/// A script world of a page.
+///
+/// `Utility` is the stand-in for an isolated world, named by its position in
+/// [`ContextIds::utility_world`]. It has contexts, ids and announcements of its
+/// own, but evaluations in it run in the main realm, so the page's globals are
+/// visible to them; a separate global needs the engine to support isolated
+/// worlds. Ids already handed out stay valid when that arrives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum World {
     Main,
+    Utility(u32),
 }
 
 impl World {
-    fn name(self) -> &'static str {
+    fn name(self) -> String {
         match self {
-            World::Main => "main",
+            World::Main => "main".to_owned(),
+            World::Utility(index) => format!("utility-{index}"),
         }
     }
 
     fn parse(name: &str) -> Option<World> {
-        (name == World::Main.name()).then_some(World::Main)
+        if name == "main" {
+            return Some(World::Main);
+        }
+        name.strip_prefix("utility-")?
+            .parse()
+            .ok()
+            .map(World::Utility)
     }
 }
 
@@ -40,6 +53,8 @@ const UNIQUE_PREFIX: &str = "tenta-";
 #[derive(Default)]
 pub(crate) struct ContextIds {
     table: Mutex<Table>,
+    /// The names of the utility worlds clients asked for, in creation order.
+    utility: Mutex<Vec<String>>,
 }
 
 #[derive(Default)]
@@ -73,6 +88,29 @@ impl ContextIds {
         table.by_context.insert((realm, world), id);
         table.by_id.insert(id, (realm, world));
         id
+    }
+
+    /// The utility world called `name`, created on first use. Names are kept
+    /// for the life of the page: every new document gets its worlds again.
+    pub(crate) fn utility_world(&self, name: &str) -> World {
+        let mut names = lock(&self.utility);
+        let index = names
+            .iter()
+            .position(|known| known == name)
+            .unwrap_or_else(|| {
+                names.push(name.to_owned());
+                names.len() - 1
+            });
+        World::Utility(index as u32)
+    }
+
+    /// Every utility world, with its name.
+    pub(crate) fn utility_worlds(&self) -> Vec<(World, String)> {
+        lock(&self.utility)
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (World::Utility(index as u32), name.clone()))
+            .collect()
     }
 
     /// What `id` stands for, if it was issued and not yet retired.

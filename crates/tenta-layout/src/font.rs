@@ -1,8 +1,10 @@
 //! Font registration, family resolution and font metrics.
 //!
-//! The font database is built only from the bundled files: no system font is
-//! enumerated and no file is read, so every machine resolves a family list to
-//! the same face.
+//! The default font database is built only from the bundled files: no system
+//! font is enumerated and no file is read, so every machine resolves a family
+//! list to the same face. [`FontSystem::new_with_system_fallback`] (feature
+//! `system-fonts`, D-036) adds the platform database for scripts the bundled
+//! fonts lack; family lists still resolve to bundled faces first.
 
 #[cfg(feature = "embedded-fonts")]
 mod families;
@@ -126,6 +128,8 @@ impl ResolvedFont {
 /// reaches fonts only through this type.
 pub struct FontSystem {
     #[cfg(feature = "embedded-fonts")]
+    system_fallback: bool,
+    #[cfg(feature = "embedded-fonts")]
     font_cx: FontContext,
     #[cfg(feature = "embedded-fonts")]
     layout_cx: LayoutContext,
@@ -142,10 +146,15 @@ impl fmt::Debug for FontSystem {
 #[cfg(feature = "embedded-fonts")]
 fn embedded_font_context() -> &'static FontContext {
     static TEMPLATE: OnceLock<FontContext> = OnceLock::new();
-    TEMPLATE.get_or_init(|| {
+    TEMPLATE.get_or_init(|| build_context(false))
+}
+
+#[cfg(feature = "embedded-fonts")]
+fn build_context(system_fonts: bool) -> FontContext {
+    {
         let mut collection = Collection::new(CollectionOptions {
             shared: false,
-            system_fonts: false,
+            system_fonts,
         });
         for font in EMBEDDED_FONTS {
             collection.register_fonts(Blob::new(Arc::new(font.bytes)), None);
@@ -166,17 +175,76 @@ fn embedded_font_context() -> &'static FontContext {
             collection,
             source_cache: SourceCache::default(),
         }
+    }
+}
+
+/// Like [`embedded_font_context`], plus the platform font database. Bundled
+/// families keep their names and generics; only the fallback for scripts the
+/// bundled fonts do not cover (Han, Kana, Hangul, Thai, ...) reaches system
+/// faces, because DejaVu stays the fallback of [`FALLBACK_SCRIPTS`].
+#[cfg(feature = "system-fonts")]
+fn system_font_context() -> &'static FontContext {
+    static TEMPLATE: OnceLock<FontContext> = OnceLock::new();
+    TEMPLATE.get_or_init(|| {
+        let mut cx = build_context(true);
+        // Enumerate once, here, so page threads never race the platform scan.
+        let _ = cx.collection.family_names().count();
+        cx
     })
 }
 
 impl FontSystem {
+    /// A system over the bundled fonts plus the platform font database for
+    /// scripts the bundled fonts lack. Output depends on the installed fonts, so
+    /// golden tests and the render corpus use [`Self::new_embedded`].
+    #[cfg(feature = "system-fonts")]
+    pub fn new_with_system_fallback() -> Self {
+        Self {
+            system_fallback: true,
+            font_cx: system_font_context().clone(),
+            layout_cx: LayoutContext::new(),
+        }
+    }
+
     /// A system over the bundled fonts. Never enumerates system fonts.
     #[cfg(feature = "embedded-fonts")]
     pub fn new_embedded() -> Self {
         Self {
+            system_fallback: false,
             font_cx: embedded_font_context().clone(),
             layout_cx: LayoutContext::new(),
         }
+    }
+
+    /// A system with Liberation Sans alone, claiming `system_fallback`'s cache
+    /// scope. Next to [`Self::new_embedded`] it shapes Georgian differently on
+    /// any machine, which is what the cache-scope test needs.
+    #[cfg(test)]
+    pub(crate) fn liberation_sans_only(system_fallback: bool) -> Self {
+        let mut collection = Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        });
+        let sans = EMBEDDED_FONTS
+            .iter()
+            .find(|font| font.file_name == "LiberationSans-Regular.ttf")
+            .expect("Liberation Sans is bundled");
+        collection.register_fonts(Blob::new(Arc::new(sans.bytes)), None);
+        Self {
+            system_fallback,
+            font_cx: FontContext {
+                collection,
+                source_cache: SourceCache::default(),
+            },
+            layout_cx: LayoutContext::new(),
+        }
+    }
+
+    /// Which font database this system shapes against: shaped text is cached per
+    /// thread and entries of different databases must not mix.
+    #[cfg(feature = "embedded-fonts")]
+    pub(crate) fn cache_scope(&self) -> u8 {
+        u8::from(self.system_fallback)
     }
 
     /// The `ex`/`ch` metrics source the style engine needs.

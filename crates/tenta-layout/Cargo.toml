@@ -13,6 +13,9 @@ default = ["embedded-fonts"]
 # Compiles the bundled Liberation and DejaVu fonts into the crate (D-028). Without
 # it the crate carries no font data and a caller must supply its own.
 embedded-fonts = []
+# Lets a FontSystem fall back to the platform font database for scripts the bundled
+# fonts lack (CJK, Thai, ...). Opt-in per FontSystem; see D-036.
+system-fonts = ["embedded-fonts", "dep:fontique"]
 
 [dependencies]
 tenta-core = { workspace = true }
@@ -25,6 +28,7 @@ servo_arc = { workspace = true }
 smallvec = { workspace = true }
 bitflags = { workspace = true }
 parley = { workspace = true }
+fontique = { workspace = true, optional = true, features = ["system", "fontconfig-dlopen"] }
 skrifa = { workspace = true }
 taffy = { workspace = true }
 
@@ -32,3 +36,7 @@ taffy = { workspace = true }
 tenta-html = { workspace = true }
 tenta-css = { workspace = true, features = ["test-util"] }
 png = { workspace = true }
+
+[[test]]
+name = "system_fonts"
+required-features = ["system-fonts"]

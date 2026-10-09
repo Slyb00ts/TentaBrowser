@@ -44,6 +44,9 @@ pub(super) struct RuntimeState {
     console: AsyncMutex<u64>,
     bindings: Mutex<HashSet<String>>,
     exceptions: AtomicU64,
+    /// The utility-world contexts the client has been told about, as `(id,
+    /// uniqueId)`. Changed only under the `announced` lock.
+    utility_announced: Mutex<Vec<(u64, String)>>,
 }
 
 impl RuntimeState {
@@ -64,18 +67,23 @@ impl RuntimeState {
     }
 }
 
-fn context_description(target: &Target, realm: u64, id: u64) -> Value {
+fn context_description(target: &Target, realm: u64, id: u64, world: World, name: &str) -> Value {
     // `about:blank` has the opaque origin Chromium spells "://".
     let origin = target.page().navigation().map_or_else(
         || "://".to_owned(),
         |navigation| navigation.final_url.origin().ascii_serialization(),
     );
+    let main = world == World::Main;
     json!({
         "id": id,
         "origin": origin,
-        "name": "",
-        "uniqueId": target.contexts().unique_id(realm, World::Main),
-        "auxData": { "isDefault": true, "type": "default", "frameId": target.id() },
+        "name": name,
+        "uniqueId": target.contexts().unique_id(realm, world),
+        "auxData": {
+            "isDefault": main,
+            "type": if main { "default" } else { "isolated" },
+            "frameId": target.id(),
+        },
     })
 }
 
@@ -84,6 +92,17 @@ async fn retire(session: &Session, target: &Target, announced: &mut Option<(u64,
     let Some((realm, id)) = announced.take() else {
         return;
     };
+    let utility = std::mem::take(&mut *lock(
+        &session.state::<RuntimeState>().utility_announced,
+    ));
+    for (id, unique) in utility {
+        session
+            .emit(
+                "Runtime.executionContextDestroyed",
+                json!({ "executionContextId": id, "executionContextUniqueId": unique }),
+            )
+            .await;
+    }
     session
         .emit(
             "Runtime.executionContextDestroyed",
@@ -116,10 +135,52 @@ async fn announce(
     session
         .emit(
             "Runtime.executionContextCreated",
-            json!({ "context": context_description(target, realm, id) }),
+            json!({ "context": context_description(target, realm, id, World::Main, "") }),
         )
         .await;
+    announce_utility_worlds(session, target, realm).await;
     id
+}
+
+/// Announces the contexts of the utility worlds of `realm` that the client has
+/// not been told about. Every new document gets its worlds again, as in
+/// Chromium, where a world outlives the documents it was created for.
+async fn announce_utility_worlds(session: &Session, target: &Target, realm: u64) {
+    let state = session.state::<RuntimeState>();
+    for (world, name) in target.contexts().utility_worlds() {
+        let id = target.contexts().id_for(realm, world);
+        if lock(&state.utility_announced)
+            .iter()
+            .any(|(known, _)| *known == id)
+        {
+            continue;
+        }
+        let unique = target.contexts().unique_id(realm, world);
+        lock(&state.utility_announced).push((id, unique));
+        session
+            .emit(
+                "Runtime.executionContextCreated",
+                json!({ "context": context_description(target, realm, id, world, &name) }),
+            )
+            .await;
+    }
+}
+
+/// The context of the utility world `name` in the page's current realm, for
+/// `Page.createIsolatedWorld`. Announced to the session if it listens.
+pub(in crate::domains) async fn utility_context(
+    session: &Session,
+    target: &Target,
+    name: &str,
+) -> Result<u64, tenta_core::Error> {
+    let realm = target.page().execution_context().await?;
+    let world = target.contexts().utility_world(name);
+    let state = session.state::<RuntimeState>();
+    let announced = state.announced.lock().await;
+    if state.is_enabled() && announced.is_some_and(|(current, _)| current == realm) {
+        announce_utility_worlds(session, target, realm).await;
+    }
+    Ok(target.contexts().id_for(realm, world))
 }
 
 /// Announces the page's current realm, building the engine of a document that
@@ -190,6 +251,7 @@ pub(super) async fn disable(session: &Session) {
         return;
     }
     announced.take();
+    lock(&state.utility_announced).clear();
     session
         .emit("Runtime.executionContextsCleared", json!({}))
         .await;

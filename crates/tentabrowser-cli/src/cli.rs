@@ -377,6 +377,12 @@ pub struct ScreenshotArgs {
     /// Capture a page that answered 4xx or 5xx.
     #[arg(long)]
     pub allow_http_errors: bool,
+
+    /// Draw text with the bundled fonts only. By default scripts they lack
+    /// (CJK, Thai, ...) fall back to the system fonts, so the same page can
+    /// look different on another machine.
+    #[arg(long)]
+    pub bundled_fonts: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]

@@ -160,10 +160,11 @@ const MAX_BYTES: usize = 48 << 20;
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 struct Digest(u64, u64);
 
-fn digest(paragraph: &Paragraph<'_>) -> Digest {
+fn digest(paragraph: &Paragraph<'_>, fonts: u8) -> Digest {
     let mut halves = [DefaultHasher::new(), DefaultHasher::new()];
     for (seed, hasher) in halves.iter_mut().enumerate() {
         seed.hash(hasher);
+        fonts.hash(hasher);
         paragraph.text.hash(hasher);
         (paragraph.direction as u8).hash(hasher);
         for span in paragraph.spans {
@@ -259,14 +260,18 @@ fn cacheable(paragraph: &Paragraph<'_>) -> bool {
 }
 
 /// The shaped chunk of `paragraph`, from the cache or from `shape`.
+///
+/// `fonts` is [`FontSystem::cache_scope`]: chunks shaped against different font
+/// databases must not share entries.
 pub(super) fn cached(
     paragraph: &Paragraph<'_>,
+    fonts: u8,
     shape: impl FnOnce() -> ShapedChunk,
 ) -> Rc<ShapedChunk> {
     if !cacheable(paragraph) {
         return Rc::new(shape());
     }
-    let key = digest(paragraph);
+    let key = digest(paragraph, fonts);
     if let Some(found) = CACHE.with_borrow_mut(|cache| {
         cache.clock += 1;
         let clock = cache.clock;

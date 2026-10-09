@@ -46,6 +46,8 @@ mod tests {
         "Target.activateTarget",
         "Inspector.enable",
         "Inspector.disable",
+        "Page.disable",
+        "Page.stopLoading",
         "Log.disable",
         "Runtime.releaseObjectGroup",
         "Runtime.discardConsoleEntries",

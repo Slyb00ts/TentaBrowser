@@ -1240,3 +1240,78 @@ fn capitalize_continues_a_word_across_calls() {
     assert_eq!(apply("ld", TextTransform::Capitalize, &mut in_word), "ld");
     assert_eq!(apply(" x", TextTransform::Capitalize, &mut in_word), " X");
 }
+
+fn lang_chunk(
+    fonts: &mut FontSystem,
+    text: &str,
+    lang: Option<&str>,
+) -> std::rc::Rc<super::chunk::ShapedChunk> {
+    let style = TextStyle {
+        family_list: SANS.to_owned(),
+        size: 16.0,
+        lang: lang.map(str::to_owned),
+        ..TextStyle::default()
+    };
+    let spans = [TextSpan {
+        range: 0..text.len(),
+        style: &style,
+    }];
+    let paragraph = Paragraph {
+        text,
+        spans: &spans,
+        direction: Direction::Ltr,
+    };
+    super::shape::shape_chunk(fonts, &paragraph)
+}
+
+#[test]
+fn the_shaped_chunk_cache_is_scoped_by_font_database() {
+    // Georgian is covered only by DejaVu. The first database lacks it and
+    // caches `.notdef`; the second must not reuse that entry.
+    let text = "\u{10d0}\u{10d1}";
+    let mut bare = FontSystem::liberation_sans_only(true);
+    assert!(
+        lang_chunk(&mut bare, text, None)
+            .glyphs
+            .iter()
+            .all(|g| g.id == 0)
+    );
+    let mut covered = FontSystem::new_embedded();
+    assert!(
+        lang_chunk(&mut covered, text, None)
+            .glyphs
+            .iter()
+            .all(|g| g.id != 0)
+    );
+    assert!(
+        lang_chunk(&mut bare, text, None)
+            .glyphs
+            .iter()
+            .all(|g| g.id == 0)
+    );
+}
+
+#[test]
+fn lang_is_part_of_the_shaped_chunk_cache_key() {
+    let mut fonts = FontSystem::new_embedded();
+    let before = super::chunk::stats().entries;
+    lang_chunk(&mut fonts, "lang key probe", Some("ja"));
+    lang_chunk(&mut fonts, "lang key probe", Some("zh-Hans"));
+    lang_chunk(&mut fonts, "lang key probe", Some("ja"));
+    assert_eq!(super::chunk::stats().entries - before, 2);
+}
+
+#[cfg(all(target_os = "macos", feature = "system-fonts"))]
+#[test]
+fn lang_picks_the_regional_han_face_with_system_fonts() {
+    let mut fonts = FontSystem::new_with_system_fallback();
+    let ja = lang_chunk(&mut fonts, "\u{76f4}", Some("ja"));
+    let zh = lang_chunk(&mut fonts, "\u{76f4}", Some("zh-Hans"));
+    let face =
+        |chunk: &super::chunk::ShapedChunk| (chunk.runs[0].face.font.clone(), chunk.glyphs[0].id);
+    assert!(face(&ja).1 != 0 && face(&zh).1 != 0);
+    assert!(
+        face(&ja) != face(&zh),
+        "ja and zh-Hans must not share a face"
+    );
+}

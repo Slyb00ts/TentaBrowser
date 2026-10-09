@@ -196,6 +196,10 @@ pub(crate) trait ScriptBudget: Send + Sync {
     fn binding_names(&self) -> Vec<String> {
         Vec::new()
     }
+    /// The scripts every new engine runs, in order, before the document's own.
+    fn init_scripts(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// The task that runs a retained runtime's turns while no settle call does.
@@ -382,7 +386,8 @@ impl PageRuntime {
                 tracing::warn!(page = ?page, binding = %name, %error, "a binding could not be installed");
             }
         }
-        Ok(PageRuntime {
+        let init_scripts = script_budget.init_scripts();
+        let mut runtime = PageRuntime {
             page,
             engine,
             document,
@@ -400,7 +405,13 @@ impl PageRuntime {
             fetches,
             xhrs,
             awaits,
-        })
+        };
+        // After the bindings, so an init script can call them; a script that
+        // throws leaves the others and the document unaffected.
+        for source in init_scripts {
+            runtime.run_source(&source);
+        }
+        Ok(runtime)
     }
 
     /// One turn of the page loop: reclaim detached nodes when it is safe and

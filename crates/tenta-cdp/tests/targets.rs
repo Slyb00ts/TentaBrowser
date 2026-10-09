@@ -1148,7 +1148,7 @@ async fn methods_nobody_implements_still_answer_32601() {
         "Target.openDevTools",
         "Browser.setWindowBounds",
         "Runtime.queryObjects",
-        "Page.navigate",
+        "Page.printToPDF",
         "Inspector.nonsense",
     ] {
         assert_eq!(

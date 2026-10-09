@@ -36,16 +36,16 @@ mod watchdog;
 
 pub use clock::{Clock, ManualClock, SystemClock};
 pub use document::Document;
-pub use event::{PageEvent, PageEvents};
+pub use event::{Commit, FrameState, LoadStage, PageEvent, PageEvents};
 pub use fetch_policy::{FetchPolicy, HintDisposition, PreloadKind, RecordedHint};
 pub use page::{
-    EvalOptions, Evaluation, FromRemote, Goto, Navigation, Page, PageConfig, TestHooks, Viewport,
-    World,
+    EvalOptions, Evaluation, FromRemote, Goto, Navigation, Page, PageConfig, PendingNavigation,
+    TestHooks, Viewport, World,
 };
 #[cfg(feature = "render")]
 pub use render::{
-    Capture, Clip, ImageFormat, RasterStats, Screenshot, ScreenshotOptions, StageTimes,
-    WorkCounters,
+    Capture, Clip, ContentSize, ImageFormat, RasterStats, Screenshot, ScreenshotOptions,
+    StageTimes, WorkCounters,
 };
 pub use runtime::drop_thread_runtimes;
 pub use settle::{

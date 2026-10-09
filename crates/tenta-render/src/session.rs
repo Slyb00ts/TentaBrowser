@@ -14,7 +14,7 @@ use tenta_paint::{
 use crate::screenshot::{
     Capture, ImageFormat, RenderError, Screenshot, ScreenshotOptions, StageTimes,
 };
-use crate::viewport::{RenderConfig, Viewport};
+use crate::viewport::{FontPolicy, RenderConfig, Viewport};
 
 /// Longest side of a capture in device pixels, the limit Chromium applies to
 /// a texture.
@@ -93,7 +93,11 @@ pub struct RenderSession {
 impl RenderSession {
     /// A session for `cfg` with no document and no style sources.
     pub fn new(cfg: RenderConfig) -> Self {
-        let fonts = FontSystem::new_embedded();
+        let fonts = match cfg.fonts {
+            #[cfg(feature = "system-fonts")]
+            FontPolicy::SystemFallback => FontSystem::new_with_system_fallback(),
+            _ => FontSystem::new_embedded(),
+        };
         let styles = StyleEngine::new(style_env(&cfg, false), fonts.metrics());
         Self {
             config: cfg,

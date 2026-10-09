@@ -15,19 +15,21 @@
 //! state; step 3 lends it out of there so the state lock is not held while
 //! rendering, and it comes back however the step ends.
 
+use std::cell::RefCell;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tenta_core::{Error, Result, Tier};
 use tenta_dom::Document as DomDocument;
+use tenta_render::RenderSession;
 use tokio::sync::oneshot;
 use url::Url;
 
-use super::{Page, PageInner, PageState, retained};
+use super::{Page, PageInner, PageState, Viewport, retained};
 use crate::event::PageEvent;
 use crate::fetch_policy::FetchPolicy;
-use crate::render::{self, Screenshot, ScreenshotOptions, WorkCounters};
+use crate::render::{self, ContentSize, Screenshot, ScreenshotOptions, Sheets, WorkCounters};
 use crate::runtime;
 use crate::styles::{StyleContext, fetch_planned, plan_fetches};
 use crate::task::{catch_unwind_future, panic_message};
@@ -64,6 +66,14 @@ impl Page {
     pub async fn screenshot(&self, options: ScreenshotOptions) -> Result<Screenshot> {
         self.on_page_thread(move |inner| screenshot(inner, options))
             .await
+    }
+
+    /// The size of the document's scrollable extent in CSS pixels, laid out at
+    /// the page's viewport with the same stylesheets a screenshot would use
+    /// (fetched first, under the same bounds). The extent is at least the
+    /// viewport. Fails like [`Page::screenshot`].
+    pub async fn content_size(&self) -> Result<ContentSize> {
+        self.on_page_thread(content_size).await
     }
 
     /// The units of work the page's render session has done, `None` before the
@@ -119,9 +129,30 @@ pub(super) fn release_later(inner: &Arc<PageInner>) {
 }
 
 async fn screenshot(inner: Arc<PageInner>, options: ScreenshotOptions) -> Result<Screenshot> {
+    rendered(inner, |session, sheets, doc, base_url, viewport| {
+        render::render(session, sheets, doc, base_url, viewport, &options)
+    })
+    .await
+}
+
+async fn content_size(inner: Arc<PageInner>) -> Result<ContentSize> {
+    rendered(inner, render::content_size).await
+}
+
+/// Fetches the stylesheets the document needs, then runs `render` over the
+/// document, the session and the sheets.
+async fn rendered<R>(
+    inner: Arc<PageInner>,
+    render: impl FnOnce(&RefCell<RenderSession>, &mut Sheets, &DomDocument, &Url, Viewport) -> Result<R>,
+) -> Result<R> {
     let viewport = inner.config.viewport;
     let (navigation, generation) = admit(&inner)?;
-    let handles = render::handles(inner.config.id, navigation, viewport);
+    let handles = render::handles(
+        inner.config.id,
+        navigation,
+        viewport,
+        inner.config.system_fonts,
+    );
     // Held to the end: it orders this screenshot against the others of the
     // page, and the fetches below need the cache it guards.
     let mut sheets = handles.sheets.lock().await;
@@ -174,14 +205,7 @@ async fn screenshot(inner: Arc<PageInner>, options: ScreenshotOptions) -> Result
     }
 
     with_document(&inner, navigation, |doc| {
-        render::render(
-            &handles.session,
-            &mut sheets,
-            doc,
-            &base_url,
-            viewport,
-            &options,
-        )
+        render(&handles.session, &mut sheets, doc, &base_url, viewport)
     })?
 }
 

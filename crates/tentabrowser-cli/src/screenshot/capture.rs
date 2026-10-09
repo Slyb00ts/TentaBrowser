@@ -50,6 +50,7 @@ async fn shoot(session: &Session, global: &Global, args: &ScreenshotArgs) -> Cli
 fn page_options(args: &ScreenshotArgs) -> PageOptions {
     PageOptions {
         javascript: runs_scripts(args),
+        system_fonts: !args.bundled_fonts,
         viewport: Viewport {
             width: args.width,
             height: args.height,

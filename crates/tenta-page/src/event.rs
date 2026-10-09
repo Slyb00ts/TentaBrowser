@@ -8,6 +8,72 @@ use tenta_js::inspect::{BindingCall, ConsoleCall, ExceptionEvent};
 use tokio::sync::broadcast;
 use url::Url;
 
+/// A milestone of a committed document's load, in the order Chromium reports
+/// them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LoadStage {
+    DomContentLoaded,
+    Load,
+    /// At most two requests in flight for the settle configuration's idle
+    /// window, after `load`.
+    NetworkAlmostIdle,
+    /// Nothing in flight for the idle window, after `load`.
+    NetworkIdle,
+}
+
+impl LoadStage {
+    /// Every stage, in the order a document reaches them.
+    pub const ALL: [LoadStage; 4] = [
+        LoadStage::DomContentLoaded,
+        LoadStage::Load,
+        LoadStage::NetworkAlmostIdle,
+        LoadStage::NetworkIdle,
+    ];
+}
+
+/// What a navigation committed: the response head arrived, or an error
+/// document replaced the page.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Commit {
+    /// Identifies the navigation, and with it the document it loads.
+    pub navigation_id: u64,
+    /// The committed document's URL, after redirects.
+    pub url: Url,
+    /// The MIME type of the response, lower-cased and without parameters.
+    pub mime_type: String,
+    /// The HTTP status; 0 for an error document.
+    pub status: u16,
+    /// The `net::ERR_*` name when the navigation failed and an error document
+    /// was committed instead.
+    pub error: Option<String>,
+    /// The URL the failed navigation was for, when `error` is set.
+    pub unreachable_url: Option<Url>,
+}
+
+/// Where the page's main frame is in loading its current document.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameState {
+    /// The navigation of the document the frame shows; 0 for the initial
+    /// `about:blank`.
+    pub navigation_id: u64,
+    /// `None` for the initial `about:blank` document, which no navigation
+    /// committed.
+    pub commit: Option<Commit>,
+    /// The stages that document has reached, in order.
+    pub stages: Vec<LoadStage>,
+}
+
+impl FrameState {
+    /// The initial document, which is complete from the start.
+    pub(crate) fn initial() -> Self {
+        Self {
+            navigation_id: 0,
+            commit: None,
+            stages: LoadStage::ALL.to_vec(),
+        }
+    }
+}
+
 /// How many events a slow subscriber may fall behind before it loses the
 /// oldest ones.
 pub const EVENT_BUFFER: usize = 512;
@@ -38,6 +104,25 @@ pub enum PageEvent {
         url: Url,
         error: String,
     },
+    /// A navigation began, before any request left the page.
+    NavigationStarted {
+        frame: FrameId,
+        navigation_id: u64,
+        url: Url,
+    },
+    /// A navigation's response head, or an error document, replaced the
+    /// frame's document. The new document is not installed yet: that is
+    /// [`PageEvent::FrameNavigated`].
+    NavigationCommitted { frame: FrameId, commit: Commit },
+    /// The document of `navigation_id` reached `stage`.
+    Lifecycle {
+        frame: FrameId,
+        navigation_id: u64,
+        stage: LoadStage,
+    },
+    /// The navigation ended, or was stopped, without its document reaching
+    /// `load`. Not sent for a navigation a newer one replaced.
+    NavigationStopped { frame: FrameId, navigation_id: u64 },
     /// A frame committed a navigation.
     FrameNavigated { frame: FrameId, url: Url },
     /// The page's task panicked, its watchdog fired, or a hard budget was
@@ -86,6 +171,17 @@ impl PageEvents {
         }
     }
 
+    /// Like [`PageEvents::next`], but says when events were lost instead of
+    /// skipping them silently, for a consumer that can recover state: `Err`
+    /// carries how many events were dropped.
+    pub async fn next_or_lag(&mut self) -> Option<Result<PageEvent, u64>> {
+        match self.inner.recv().await {
+            Ok(event) => Some(Ok(event)),
+            Err(broadcast::error::RecvError::Lagged(lost)) => Some(Err(lost)),
+            Err(broadcast::error::RecvError::Closed) => None,
+        }
+    }
+
     /// The next event if one is already buffered.
     pub fn try_next(&mut self) -> Option<PageEvent> {
         loop {
@@ -131,6 +227,22 @@ mod tests {
         drop(sender);
         assert_eq!(events.next().await, None);
         assert!(events.try_next().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_lagging_subscriber_can_learn_how_much_it_lost() {
+        let (sender, _) = broadcast::channel(2);
+        let mut events = PageEvents::new(sender.subscribe());
+        for index in 0..5u64 {
+            let _ = sender.send(PageEvent::Crashed {
+                reason: index.to_string(),
+            });
+        }
+        assert!(matches!(events.next_or_lag().await, Some(Err(3))));
+        assert!(matches!(
+            events.next_or_lag().await,
+            Some(Ok(PageEvent::Crashed { .. }))
+        ));
     }
 
     #[test]

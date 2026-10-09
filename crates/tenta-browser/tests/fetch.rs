@@ -378,15 +378,27 @@ async fn a_navigation_reports_its_events_in_order() {
             PageEvent::Request { .. } => "request",
             PageEvent::Response { .. } => "response",
             PageEvent::RequestFailed { .. } => "failed",
+            PageEvent::NavigationStarted { .. } => "started",
+            PageEvent::NavigationCommitted { .. } => "committed",
             PageEvent::FrameNavigated { .. } => "navigated",
             PageEvent::Crashed { .. } => "crashed",
             PageEvent::TierChanged { .. } => "tier",
+            PageEvent::Lifecycle { .. } => "lifecycle",
             _ => "other",
         })
         .collect();
     assert_eq!(
         kinds,
-        ["request", "response", "navigated", "tier"],
+        [
+            "started",
+            "request",
+            "response",
+            "committed",
+            "navigated",
+            "tier",
+            "lifecycle",
+            "lifecycle",
+        ],
         "events were {seen:?}"
     );
     page.close().await.expect("close");
@@ -467,6 +479,16 @@ async fn redirect_emits_per_hop_events() {
     // Collect events and verify the per-hop sequence
     let mut collected_events = Vec::new();
     while let Some(event) = events.next().await {
+        // The sequence below is the network's; the navigation and lifecycle
+        // milestones have their own test.
+        if matches!(
+            event,
+            PageEvent::NavigationStarted { .. }
+                | PageEvent::NavigationCommitted { .. }
+                | PageEvent::Lifecycle { .. }
+        ) {
+            continue;
+        }
         collected_events.push(event.clone());
         // Stop after TierChanged
         if matches!(event, PageEvent::TierChanged { .. }) {

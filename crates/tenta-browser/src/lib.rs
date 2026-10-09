@@ -33,12 +33,13 @@ pub use tenta_page::fetch_policy::{FetchPolicy, HintDisposition, PreloadKind, Re
 pub use tenta_page::page::{Goto, Navigation, Page, Viewport};
 pub use tenta_page::settle::{Settle, SettleConfig, SettleState};
 pub use tenta_page::{
-    BindingCall, CallArgument, Completion, ConsoleCall, EvalOptions, Evaluation, ExceptionDetails,
-    ExceptionEvent, FromRemote, ObjectPreview, PageEvent, PageEvents, PropertyDescriptor,
-    PropertyPreview, PropertyQuery, RemoteKind, RemoteObject, RemoteValue, StackFrame, World,
+    BindingCall, CallArgument, Commit, Completion, ConsoleCall, EvalOptions, Evaluation,
+    ExceptionDetails, ExceptionEvent, FrameState, FromRemote, LoadStage, ObjectPreview, PageEvent,
+    PageEvents, PendingNavigation, PropertyDescriptor, PropertyPreview, PropertyQuery, RemoteKind,
+    RemoteObject, RemoteValue, StackFrame, World,
 };
 #[cfg(feature = "render")]
 pub use tenta_page::{
-    Capture, Clip, ImageFormat, RasterStats, Screenshot, ScreenshotOptions, StageTimes,
-    WorkCounters,
+    Capture, Clip, ContentSize, ImageFormat, RasterStats, Screenshot, ScreenshotOptions,
+    StageTimes, WorkCounters,
 };

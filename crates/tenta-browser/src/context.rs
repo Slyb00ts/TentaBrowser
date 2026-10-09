@@ -79,6 +79,9 @@ pub struct PageOptions {
     /// (`docs/spec/02-architecture.md` §1.1). `None` is the engine's ceiling.
     pub max_tier: Option<Tier>,
     pub viewport: Viewport,
+    /// Fall back to the platform fonts for scripts the bundled fonts lack
+    /// (D-036). Off by default: screenshots then depend only on bundled fonts.
+    pub system_fonts: bool,
     #[doc(hidden)]
     pub crash_in_parse_for_test: bool,
 }
@@ -92,6 +95,7 @@ impl Default for PageOptions {
             javascript: true,
             max_tier: None,
             viewport: Viewport::default(),
+            system_fonts: false,
             crash_in_parse_for_test: false,
         }
     }
@@ -104,6 +108,7 @@ impl PageOptions {
             javascript: false,
             max_tier: Some(Tier::Dom),
             viewport: Viewport::default(),
+            system_fonts: false,
             crash_in_parse_for_test: false,
         }
     }
@@ -460,6 +465,7 @@ impl BrowserContext {
             locale: self.inner.engine.options.locale.clone(),
             extra_headers: self.inner.extra_headers.clone(),
             viewport: options.viewport,
+            system_fonts: options.system_fonts,
             fs_policy: self.inner.engine.options.fs_policy.clone(),
             cookies: self.inner.cookies.clone(),
             storage: self.inner.storage.new_page(),

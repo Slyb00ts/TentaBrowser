@@ -52,6 +52,11 @@ pub struct CdpOptions {
     pub idle_timeout: Option<Duration>,
     /// How long a command may run before it is answered with an error.
     pub command_timeout: Duration,
+    /// How long a navigation started by `Page.navigate` or `Page.reload` may
+    /// take to load before the frame is reported as stopped. Chromium has no
+    /// such limit; an engine that serves automation should not hold a page
+    /// in a load that never ends.
+    pub navigation_timeout: Duration,
     /// How long a client may take to send its HTTP request head.
     pub head_timeout: Duration,
     /// The `Browser` field of `/json/version` and `Browser.getVersion`.
@@ -74,6 +79,7 @@ impl Default for CdpOptions {
             max_targets: 64,
             idle_timeout: None,
             command_timeout: Duration::from_secs(300),
+            navigation_timeout: Duration::from_secs(60),
             head_timeout: Duration::from_secs(10),
             product: format!("TentaBrowser/{}", env!("CARGO_PKG_VERSION")),
             user_agent: format!(

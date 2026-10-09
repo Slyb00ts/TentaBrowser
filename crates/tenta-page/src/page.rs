@@ -31,7 +31,7 @@ use url::Url;
 use crate::clock::Clock;
 use crate::document::Document;
 use crate::error_page::error_document;
-use crate::event::{EVENT_BUFFER, PageEvent, PageEvents};
+use crate::event::{Commit, EVENT_BUFFER, FrameState, LoadStage, PageEvent, PageEvents};
 use crate::fetch_policy::{FetchPolicy, RecordedHint};
 use crate::runtime;
 use crate::runtime::ScriptBudget;
@@ -186,6 +186,23 @@ impl std::future::Future for GotoGuard {
     }
 }
 
+/// A navigation that has started, from [`Page::begin_goto`].
+pub struct PendingNavigation {
+    guard: GotoGuard,
+}
+
+impl PendingNavigation {
+    /// The `navigation_id` of this navigation's events.
+    pub fn navigation_id(&self) -> u64 {
+        self.guard.generation
+    }
+
+    /// Waits for the navigation to end, as [`Page::goto`] does.
+    pub async fn finish(self) -> Result<Navigation> {
+        Ok(self.guard.await?.navigation)
+    }
+}
+
 struct NavigateOutcome {
     navigation: Navigation,
     evaluation: Option<Result<String>>,
@@ -270,6 +287,9 @@ pub struct PageConfig {
     /// `Accept-Language` overrides).
     pub extra_headers: Vec<(String, String)>,
     pub viewport: Viewport,
+    /// Lets text fall back to the platform fonts for scripts the bundled fonts
+    /// lack (D-036). Off keeps rendering independent of the machine.
+    pub system_fonts: bool,
     /// Gates every host file the page reads on its own behalf, such as the
     /// stylesheets of a `file:` document. Never widened by the page.
     pub fs_policy: tenta_core::FsPolicy,
@@ -317,9 +337,24 @@ struct PageState {
     /// moved since `title_generation`.
     title: Option<String>,
     title_generation: Option<u64>,
+    /// The main frame's current document and how far its load got.
+    frame: FrameState,
+    /// The navigation that has started and has neither reached `load` nor
+    /// been reported stopped.
+    loading: Option<u64>,
 }
 
 impl PageState {
+    /// The frame now shows the document `commit` describes, which has reached
+    /// no stage yet.
+    fn commit_frame(&mut self, commit: &Commit) {
+        self.frame = FrameState {
+            navigation_id: commit.navigation_id,
+            commit: Some(commit.clone()),
+            stages: Vec::new(),
+        };
+    }
+
     /// Re-reads the title of `document` if it changed since the last look.
     fn cache_title(&mut self, document: &DomDocument) {
         let generation = document.mutation_generation();
@@ -358,9 +393,60 @@ struct PageInner {
     /// The binding names engines expose. Separate from `state` so building an
     /// engine, which reads it, never contends with a holder of the state lock.
     bindings: Mutex<Vec<String>>,
+    /// Scripts every new engine runs before the document's own, with the ids
+    /// they were registered under.
+    init_scripts: Mutex<Vec<(u64, String)>>,
 }
 
 impl PageInner {
+    /// Makes `commit` the frame's document and announces it. Callers hold the
+    /// state lock only to call [`PageState::commit_frame`]; the event goes out
+    /// after.
+    fn announce_commit(&self, commit: Commit) {
+        self.emit(PageEvent::NavigationCommitted {
+            frame: self.frame,
+            commit,
+        });
+    }
+
+    /// Records that the document of `navigation_id` reached `stage` and
+    /// reports it, once. A stage of a document the frame no longer shows is
+    /// dropped.
+    fn reach(&self, navigation_id: u64, stage: LoadStage) {
+        {
+            let mut state = self.state.lock();
+            let frame = &mut state.frame;
+            if frame.navigation_id != navigation_id || frame.stages.contains(&stage) {
+                return;
+            }
+            frame.stages.push(stage);
+            if stage == LoadStage::Load && state.loading == Some(navigation_id) {
+                state.loading = None;
+            }
+        }
+        self.emit(PageEvent::Lifecycle {
+            frame: self.frame,
+            navigation_id,
+            stage,
+        });
+    }
+
+    /// Reports a navigation that ended without its document reaching `load`:
+    /// a failed or timed-out load, or a stop. Once per navigation, and not
+    /// for one a newer navigation replaced.
+    fn finish_navigation(&self, navigation_id: u64) {
+        let stopped = {
+            let mut state = self.state.lock();
+            (state.loading == Some(navigation_id)).then(|| state.loading.take())
+        };
+        if stopped.is_some() {
+            self.emit(PageEvent::NavigationStopped {
+                frame: self.frame,
+                navigation_id,
+            });
+        }
+    }
+
     fn emit(&self, event: PageEvent) {
         // Events are only sent if there's a channel and it has subscribers.
         if let Some(sender) = self.events.lock().as_ref() {
@@ -461,6 +547,14 @@ impl ScriptBudget for PageInner {
         self.bindings.lock().clone()
     }
 
+    fn init_scripts(&self) -> Vec<String> {
+        self.init_scripts
+            .lock()
+            .iter()
+            .map(|(_, source)| source.clone())
+            .collect()
+    }
+
     fn crash_native_memory(&self, failure: NativeMemoryFailure) {
         self.mark_crashed_with(
             &format!(
@@ -544,6 +638,8 @@ impl Page {
                     navigations_in_flight: 0,
                     title: None,
                     title_generation: None,
+                    frame: FrameState::initial(),
+                    loading: None,
                 }),
                 // Lazy event channel: allocated on first events() call (N-R3-5)
                 events: Mutex::new(None),
@@ -554,6 +650,7 @@ impl Page {
                 native_memory: NativeMemoryBudget::for_page(config.budgets.page_memory_mb),
                 settle_gate: tokio::sync::Mutex::new(()),
                 bindings: Mutex::new(Vec::new()),
+                init_scripts: Mutex::new(Vec::new()),
                 config,
             }),
         }
@@ -616,6 +713,57 @@ impl Page {
     /// What the last navigation learned.
     pub fn navigation(&self) -> Option<Navigation> {
         self.inner.state.lock().navigation.clone()
+    }
+
+    /// The main frame's current document and the load stages it has reached.
+    ///
+    /// The initial `about:blank` document has no commit and has reached every
+    /// stage. A navigation takes the frame over at its response head, not
+    /// before.
+    pub fn frame_state(&self) -> FrameState {
+        self.inner.state.lock().frame.clone()
+    }
+
+    /// Cancels the navigation in flight, if any, like a browser's stop button:
+    /// its `goto` fails as aborted. Returns whether a navigation was in flight.
+    pub fn stop_loading(&self) -> bool {
+        let stopped = {
+            let mut state = self.inner.state.lock();
+            if state.navigations_in_flight == 0 {
+                return false;
+            }
+            state.navigation_generation = state.navigation_generation.wrapping_add(1);
+            state.loading.take()
+        };
+        self.inner.generation_changed.notify_waiters();
+        if let Some(navigation_id) = stopped {
+            self.inner.emit(PageEvent::NavigationStopped {
+                frame: self.inner.frame,
+                navigation_id,
+            });
+        }
+        true
+    }
+
+    /// Registers `source` to run in every document the page loads from now on,
+    /// before any script of the document itself, and returns the id
+    /// [`Page::remove_init_script`] takes. A document runs it when its engine is
+    /// built: at its first script, or at the first evaluation of a document
+    /// that has none. The document the page shows now is not affected.
+    pub fn add_init_script(&self, source: &str) -> u64 {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        self.inner.init_scripts.lock().push((id, source.to_owned()));
+        id
+    }
+
+    /// Stops running a script registered by [`Page::add_init_script`] in new
+    /// documents. Returns whether the id was registered.
+    pub fn remove_init_script(&self, id: u64) -> bool {
+        let mut scripts = self.inner.init_scripts.lock();
+        let before = scripts.len();
+        scripts.retain(|(candidate, _)| *candidate != id);
+        scripts.len() != before
     }
 
     /// Subresource hints the last parse recorded.
@@ -731,10 +879,31 @@ impl Page {
 
     async fn goto_url_inner(
         &self,
-        mut url: Url,
+        url: Url,
         options: Goto,
         evaluation: Option<String>,
     ) -> Result<NavigateOutcome> {
+        self.begin_navigation(url, options, evaluation)?.await
+    }
+
+    /// Starts navigating to `url` and returns at once with the navigation's
+    /// identity, which the events about it carry as `navigation_id`.
+    ///
+    /// Dropping the [`PendingNavigation`] cancels the navigation, like
+    /// dropping a [`Page::goto`] future.
+    pub fn begin_goto(&self, url: &str, options: Goto) -> Result<PendingNavigation> {
+        let url =
+            Url::parse(url).map_err(|err| Error::invalid(format!("invalid URL {url:?}: {err}")))?;
+        let guard = self.begin_navigation(url, options, None)?;
+        Ok(PendingNavigation { guard })
+    }
+
+    fn begin_navigation(
+        &self,
+        mut url: Url,
+        options: Goto,
+        evaluation: Option<String>,
+    ) -> Result<GotoGuard> {
         // Credentials in the URL never reach the wire (tenta-net strips them)
         // and never show in `Navigation.url`, events or the document URL,
         // as `location.href` never shows them in Chrome.
@@ -796,16 +965,16 @@ impl Page {
                         (result, _) => result,
                     }
                 };
+                reporter.finish_navigation(generation);
                 let _ = reply.send(result);
             })
         }))?;
-        GotoGuard {
+        Ok(GotoGuard {
             answer,
             inner: inner_for_drop,
             generation,
             completed: false,
-        }
-        .await
+        })
     }
 
     /// The synchronous half of [`Page::close`]: marks the page closed, cancels
@@ -934,6 +1103,24 @@ async fn navigate(
 
     let request_id = next_request_id();
     let request = build_request(config, &url, &options)?;
+    // A navigation that a newer one already replaced never started, as far as
+    // an observer is concerned: the newer one is the one it should attribute
+    // the next commit to.
+    let current = {
+        let mut state = inner.state.lock();
+        let current = state.navigation_generation == generation;
+        if current {
+            state.loading = Some(generation);
+        }
+        current
+    };
+    if current {
+        inner.emit(PageEvent::NavigationStarted {
+            frame: inner.frame,
+            navigation_id: generation,
+            url: url.clone(),
+        });
+    }
     inner.emit(PageEvent::Request {
         id: request_id,
         url: url.clone(),
@@ -1144,6 +1331,16 @@ async fn navigate(
         status,
         from_cache: response.from_cache,
     });
+    let commit = Commit {
+        navigation_id: generation,
+        url: final_url.clone(),
+        mime_type: content_type.as_deref().map(mime_of).unwrap_or_default(),
+        status,
+        error: None,
+        unreachable_url: None,
+    };
+    inner.state.lock().commit_frame(&commit);
+    inner.announce_commit(commit);
 
     tracker.borrow_mut().note_parser_running(true);
     // The `defer`/`async` scripts of this navigation, and the fetches they
@@ -1188,6 +1385,26 @@ async fn navigate(
     // `check_cancelled` wide, and a concurrent `goto`/`close` bumping the
     // navigation generation is what lands in it.
     let mut deferred = DeferredDocument::new(inner.config.id, document);
+
+    // A document with scripts builds its engine at the first of them, which runs
+    // the init scripts first. One without scripts would otherwise build none, and
+    // an init script that adds a `DOMContentLoaded` or `load` listener would
+    // never be heard, so it gets its engine here, before either event.
+    if !inner.init_scripts.lock().is_empty()
+        && inner.config.javascript
+        && inner.config.engine.is_some()
+        && let Some(document) = deferred.shared()
+    {
+        runtime::ensure_runtime(
+            inner.config.id,
+            document.clone(),
+            &inner.config,
+            Rc::clone(&tracker),
+            Arc::clone(&inner) as Arc<dyn ScriptBudget>,
+        )
+        .map_err(Error::unsupported)?;
+        runtime::note_parse_finished(inner.config.id, document);
+    }
 
     tracker.borrow_mut().note_parser_running(false);
     tracker.borrow_mut().note_request_done(request_id);
@@ -1271,6 +1488,8 @@ async fn navigate(
             runtime.dispatch_lifecycle(LifecycleEvent::DomContentLoaded)
         });
     }
+
+    inner.reach(generation, LoadStage::DomContentLoaded);
 
     // If a mid-body timeout occurred while reading the response body,
     // return an error after installing the partial document.
@@ -1376,6 +1595,7 @@ async fn navigate(
             if let Some(tree) = kept {
                 retained::start_pump(&inner, tree);
             }
+            report_network_idle(&inner, &tracker, generation);
             return Ok(NavigateOutcome {
                 navigation,
                 evaluation: evaluation.map(|_| Err(Error::timeout("evaluate", timeout_millis))),
@@ -1433,10 +1653,74 @@ async fn navigate(
     if let Some(tree) = kept {
         retained::start_pump(&inner, tree);
     }
+    report_network_idle(&inner, &tracker, generation);
     Ok(NavigateOutcome {
         navigation,
         evaluation,
     })
+}
+
+/// Reports `networkAlmostIdle` and `networkIdle` for the document of
+/// `generation` when the tracker's idle windows complete after `load`.
+///
+/// Settling does not wait for the windows: a page is settled the moment its
+/// work is done, and the windows are half a second of silence on top of that.
+/// A task on the page thread keeps watching the same tracker the engine
+/// reports into, so requests the page starts later move the windows, and ends
+/// when the page closes or navigates again. It runs whether or not anyone is
+/// subscribed, because the frame state it fills in is what a client that joins
+/// later is told.
+fn report_network_idle(
+    inner: &Arc<PageInner>,
+    tracker: &Rc<RefCell<SettleTracker>>,
+    generation: u64,
+) {
+    let (inner, tracker) = (Arc::clone(inner), Rc::clone(tracker));
+    tokio::task::spawn_local(async move {
+        let mut changes = tracker.borrow().changes();
+        let mut almost_idle = false;
+        loop {
+            // Registered before the check, so a navigation that starts in
+            // between wakes the wait below.
+            let navigated = inner.generation_changed.notified();
+            tokio::pin!(navigated);
+            navigated.as_mut().enable();
+            let wake = {
+                let state = inner.state.lock();
+                if state.closed || state.navigation_generation != generation {
+                    return;
+                }
+                drop(state);
+                let tracker = tracker.borrow();
+                let now = inner.config.clock.now();
+                if tracker.load_fired() {
+                    if !almost_idle && tracker.network_almost_idle(now) {
+                        almost_idle = true;
+                        inner.reach(generation, LoadStage::NetworkAlmostIdle);
+                    }
+                    if tracker.network_idle(now) {
+                        inner.reach(generation, LoadStage::NetworkIdle);
+                        return;
+                    }
+                }
+                tracker
+                    .next_idle_wakeup(now)
+                    .map(|at| at.saturating_duration_since(now))
+            };
+            let elapsed = async {
+                match wake {
+                    Some(wait) => tokio::time::sleep(wait).await,
+                    None => std::future::pending().await,
+                }
+            };
+            tokio::select! {
+                biased;
+                () = &mut navigated => {}
+                _ = changes.changed() => {}
+                () = elapsed => {}
+            }
+        }
+    });
 }
 
 fn evaluate_in_navigation(
@@ -2414,6 +2698,7 @@ async fn settle_loop(
                     runtime.dispatch_lifecycle(LifecycleEvent::Load)
                 });
             }
+            inner.reach(initial_generation, LoadStage::Load);
         }
         // At Tier 1 the condition is evaluated once after install and no
         // mutation can change it. With an engine it is re-evaluated whenever
@@ -2634,12 +2919,21 @@ fn commit_error_document(
         error: Some(name.to_owned()),
         navigation_id,
     };
+    let commit = Commit {
+        navigation_id,
+        url: error_url.clone(),
+        mime_type: "text/html".to_owned(),
+        status: 0,
+        error: Some(name.to_owned()),
+        unreachable_url: Some(url.clone()),
+    };
     let engine_held = {
         let mut state = inner.state.lock();
         // Check if this navigation was cancelled or the page was closed
         if state.navigation_generation != navigation_id || state.closed {
             return false;
         }
+        state.commit_frame(&commit);
         state.document = Some(document);
         state.navigation = Some(navigation);
         state.hints.clear();
@@ -2653,10 +2947,15 @@ fn commit_error_document(
     if engine_held {
         drop(runtime::take_runtime(inner.config.id));
     }
+    inner.announce_commit(commit);
     inner.emit(PageEvent::FrameNavigated {
         frame: inner.frame,
         url: error_url,
     });
+    // An error document has no scripts or subresources to wait for.
+    for stage in LoadStage::ALL {
+        inner.reach(navigation_id, stage);
+    }
     true
 }
 

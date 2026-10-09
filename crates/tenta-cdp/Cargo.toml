@@ -12,10 +12,17 @@ publish = false
 # Runs the Runtime tests against a real page engine. Without it the crate
 # builds no JavaScript, like the other hosts.
 v8 = ["tenta-browser/v8"]
+# Page.captureScreenshot and the content size of Page.getLayoutMetrics need the
+# render pipeline; without it both answer an error.
+render = ["tenta-browser/render"]
 
 [[test]]
 name = "runtime"
 required-features = ["v8"]
+
+[[test]]
+name = "page"
+required-features = ["v8", "render"]
 
 [dependencies]
 tenta-core = { workspace = true }
@@ -26,4 +33,10 @@ httparse = { workspace = true }
 getrandom = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+url = { workspace = true }
+base64 = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+[dev-dependencies]
+png = { workspace = true }
+zune-jpeg = { workspace = true }

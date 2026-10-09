@@ -23,7 +23,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 unicode-normalization = { workspace = true }
 # Bing's `u=a1<base64url>` click wrappers (providers/plans/bing.toml).
-base64 = "0.23"
+base64 = { workspace = true }
 # `SearchResult::published`; the same version tenta-net pins.
 time = { version = "0.3", features = ["parsing", "formatting", "macros"] }
 # Only the synchronisation primitives: the response cache coalesces identical

@@ -509,7 +509,7 @@ pub(crate) fn shape_chunk(fonts: &mut FontSystem, paragraph: &Paragraph<'_>) -> 
     }
     paragraph.assert_tiled();
     let prefix = direction_mark(paragraph.direction).len();
-    chunk::cached(paragraph, || {
+    chunk::cached(paragraph, fonts.cache_scope(), || {
         let mut layout = shape(fonts, paragraph, true);
         extract_chunk(&mut layout, prefix)
     })

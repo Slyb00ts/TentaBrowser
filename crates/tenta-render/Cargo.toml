@@ -8,6 +8,12 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = ["system-fonts"]
+# `FontPolicy::SystemFallback` reaches the platform font database (D-036). Without
+# it that policy behaves as `Embedded` and the platform font crates are not built.
+system-fonts = ["tenta-layout/system-fonts"]
+
 [dependencies]
 tenta-core = { workspace = true }
 tenta-dom = { workspace = true }
@@ -27,3 +33,7 @@ toml = { workspace = true }
 [[bench]]
 name = "render"
 harness = false
+
+[[test]]
+name = "system_fonts"
+required-features = ["system-fonts"]

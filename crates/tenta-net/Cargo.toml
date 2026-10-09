@@ -47,7 +47,7 @@ hickory-resolver = "0.26"
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 brotli = { version = "9", default-features = false, features = ["std"] }
 zstd = "0.14"
-base64 = "0.23"
+base64 = { workspace = true }
 pin-project-lite = "0.2"
 futures-core = { version = "0.3", default-features = false }
 

@@ -27,6 +27,9 @@ pub enum FontPolicy {
     /// Only the fonts bundled with the engine; deterministic output.
     #[default]
     Embedded,
+    /// The bundled fonts, plus the platform font database for scripts they
+    /// lack (CJK, Thai, ...). Output depends on the installed fonts (D-036).
+    SystemFallback,
 }
 
 /// Configuration of a [`crate::RenderSession`].
