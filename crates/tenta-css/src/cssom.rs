@@ -26,8 +26,8 @@ use style::properties::declaration_block::{
     SourcePropertyDeclarationUpdate, parse_one_declaration_into,
 };
 use style::properties::{
-    Importance, PropertyDeclarationBlock, PropertyId, SourcePropertyDeclaration,
-    parse_style_attribute,
+    Importance, NonCustomPropertyId, PropertyDeclarationBlock, PropertyId,
+    SourcePropertyDeclaration, parse_style_attribute,
 };
 use style::selector_parser::{SelectorImpl, SelectorParser};
 use style::shared_lock::{SharedRwLock, SharedRwLockReadGuard, ToCssWithGuard};
@@ -1497,6 +1497,22 @@ pub fn supports_property(property: &str, value: &str, base_url: &Url) -> bool {
         return false;
     }
     supports_condition(&format!("{property}: {value}"), base_url)
+}
+
+/// Every longhand, shorthand and alias name Stylo accepts in content, sorted.
+///
+/// This is the set `CSSStyleDeclaration` needs one IDL attribute for. It is
+/// read after the process-wide preferences are applied, so a property gated on
+/// one (D-031 included) is listed exactly when `setProperty` would accept it.
+pub fn supported_property_names() -> Vec<&'static str> {
+    configure_stylo();
+    let mut names: Vec<&'static str> = NonCustomPropertyId::iter()
+        .map(NonCustomPropertyId::name)
+        .filter(|name| PropertyId::parse_enabled_for_all_content(name).is_ok())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
 }
 
 fn supports_context(url_data: &UrlExtraData) -> ParserContext<'_> {

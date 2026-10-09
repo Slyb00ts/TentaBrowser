@@ -516,6 +516,9 @@ pub mod quickjs {
 
 pub mod host;
 
+#[cfg(any(feature = "v8", feature = "quickjs"))]
+pub mod style_properties;
+
 /// Runtime coverage for the mechanisms the generated pair-iterator glue rests
 /// on: the two prelude helpers a `iterable<K, V>` declaration is built from,
 /// and the V8 template behaviour that makes `@@iterator` identical to

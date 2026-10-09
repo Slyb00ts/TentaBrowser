@@ -431,6 +431,13 @@ impl CSSStyleRuleOps for HostObject {
     }
 }
 
+#[cfg(feature = "v8")]
+impl crate::bindings::style_properties::StyleDeclarationHost for HostObject {
+    fn is_style_declaration(&self) -> bool {
+        matches!(self, HostObject::Style { .. }) || style_record(self).is_some()
+    }
+}
+
 impl CSSStylePropertiesOps for HostObject {
     fn css_float(&self) -> Result<String, JsError> {
         <HostObject as CSSStyleDeclarationOps>::get_property_value(self, "float")

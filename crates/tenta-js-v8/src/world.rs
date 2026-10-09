@@ -929,6 +929,10 @@ impl WrapperWorld for V8World {
             // The template must already be installed for this interface.
             let template = cached_template(scope, interface_name)?;
             let instance = template.instance_template(scope).new_instance(scope)?;
+            if interface_name == "CSSStyleProperties" {
+                tenta_js::bindings::style_properties::ensure_v8::<HostObject>(scope, instance)
+                    .ok()?;
+            }
 
             // Box the host so its address is stable across map growth: only the
             // pointer moves, never the pointee, so the internal field stays valid.

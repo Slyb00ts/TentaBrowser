@@ -689,11 +689,13 @@ Document includes ParentNode;
 DocumentFragment includes ParentNode;
 
 // Phase 4c-2: inline style. CSSStyleDeclaration exposes the `style` attribute's
-// declaration block as a CSSOM object. Camel-case named access (`style.color`)
-// needs a named-property handler the generator does not install yet, so only
-// the object model (cssText, item, getPropertyValue, setProperty, ...) is wired;
-// frameworks that set individual properties through `setProperty`/`cssText`
-// work, `style.color = ...` does not.
+// declaration block as a CSSOM object. The per-property attributes of CSSOM
+// ("Extensions to the CSSStyleDeclaration interface": `backgroundColor`,
+// `webkitTransform`, `background-color`) cannot be listed here, because the set
+// is whatever Stylo supports. They are defined on CSSStyleProperties.prototype
+// by `crates/tenta-js/src/bindings/style_properties.rs`, once per context when
+// its first CSSStyleProperties wrapper is made, and forward to
+// getPropertyValue/setProperty.
 [Exposed=Window]
 interface CSSStyleDeclaration {
   attribute DOMString cssText;

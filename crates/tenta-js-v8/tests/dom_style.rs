@@ -2,8 +2,8 @@
 //!
 //! The inline `style` attribute is exposed as a CSSOM object model:
 //! cssText/length/item/getPropertyValue/getPropertyPriority/setProperty/
-//! removeProperty. Camel-case named access (`style.color`) is deliberately not
-//! wired yet. Includes the R3 wrapper-GC identity case.
+//! removeProperty. The per-property attributes (`style.color`) are covered by
+//! `css_style_properties.rs`. Includes the R3 wrapper-GC identity case.
 
 use std::cell::RefCell;
 use std::rc::Rc;

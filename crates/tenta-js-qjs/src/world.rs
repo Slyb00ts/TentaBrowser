@@ -534,6 +534,9 @@ impl World {
             let p = p.get(interface)?;
             (p.value.clone().restore(ctx).ok()?, p.ancestors)
         };
+        if interface == "CSSStyleProperties" {
+            tenta_js::bindings::style_properties::ensure_quickjs::<HostObject>(&prototype).ok()?;
+        }
         let owner = host.context().clone();
         let generation = self.next_wrapper.get();
         self.next_wrapper.set(generation.wrapping_add(1));

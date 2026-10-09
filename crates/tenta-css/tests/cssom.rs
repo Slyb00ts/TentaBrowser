@@ -4,7 +4,7 @@ use style::stylesheet_set::DocumentStylesheetSet;
 use style::stylesheets::{CustomMediaMap, DocumentStyleSheet};
 use tenta_css::{
     CssDeclarationBlock, CssRuleType, CssStyleSheet, CssomError, SheetChangeKind,
-    supports_condition, supports_property,
+    supported_property_names, supports_condition, supports_property,
 };
 use url::Url;
 
@@ -605,4 +605,27 @@ fn retained_parent_lineage_does_not_cycle_with_the_sheet() {
     drop(parent);
     drop(child);
     assert!(retained.0.is_unique());
+}
+
+#[test]
+fn supported_property_names_cover_longhands_shorthands_and_gated_properties() {
+    let names = supported_property_names();
+    let base = base_url();
+    for expected in [
+        "color",
+        "background-color",
+        "margin",
+        "float",
+        "user-select",
+    ] {
+        assert!(names.contains(&expected), "{expected} is not listed");
+    }
+    assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(!names.contains(&"--custom"));
+    assert!(
+        names
+            .iter()
+            .all(|name| supports_property(name, "inherit", &base)),
+        "every listed name must be accepted by setProperty's parser"
+    );
 }
