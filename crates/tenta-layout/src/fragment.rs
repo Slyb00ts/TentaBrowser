@@ -39,6 +39,17 @@ bitflags::bitflags! {
         const FLOAT = 1 << 3;
         /// Out of normal flow.
         const OUT_OF_FLOW = 1 << 4;
+        /// The body fragment whose background the canvas takes when the root
+        /// `<html>` element paints none (CSS Backgrounds, propagation from
+        /// the root's first `<body>` child). Set by layout on at most one
+        /// direct child of the root.
+        const CANVAS_SOURCE = 1 << 5;
+        /// Painted atomically as if it were a stacking context, in the
+        /// inline-level phase of its parent (CSS 2.1 Appendix E, and
+        /// Flexbox/Grid for their items). Set by layout on flex items, grid
+        /// items and inline-blocks; its positioned and z-indexed descendants
+        /// still belong to the enclosing stacking context.
+        const PAINT_ATOMIC = 1 << 6;
     }
 }
 

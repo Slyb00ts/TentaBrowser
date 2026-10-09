@@ -5,6 +5,7 @@ mod border;
 mod clip;
 mod effects;
 mod marker;
+mod replaced;
 mod shadow;
 mod stacking;
 mod text;
@@ -25,10 +26,11 @@ pub struct PaintContext<'a> {
 ///
 /// Every `Push*` item in the result is closed by its `Pop*`.
 pub fn build(frags: &FragmentTree, cx: &PaintContext) -> DisplayList {
-    let mut items = Vec::new();
-    stacking::paint_fragment(frags, frags.root, (0.0, 0.0), cx, &mut items);
     DisplayList {
-        items,
+        items: stacking::paint(frags, cx),
         bounds: frags.scroll_extent,
     }
 }
+
+#[cfg(test)]
+mod tests;
