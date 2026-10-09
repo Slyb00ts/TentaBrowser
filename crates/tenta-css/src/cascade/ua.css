@@ -181,6 +181,7 @@ slot {
 ::marker {
   unicode-bidi: isolate;
   font-variant-numeric: tabular-nums;
+  white-space: pre;
   text-transform: none;
 }
 
