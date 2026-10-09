@@ -6,21 +6,41 @@ use servo_arc::Arc;
 use style::data::ElementDataWrapper;
 use style::properties::PropertyDeclarationBlock;
 use style::shared_lock::Locked;
-use tenta_core::NodeRef;
+use tenta_core::atom::atoms;
+use tenta_core::{NodeId, NodeRef};
+use tenta_dom::Document;
+use url::Url;
+
+use super::style_attr;
 
 /// Restyle bits kept per element until the incremental path consumes them.
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
 pub struct RestyleBits(pub u8);
 
-/// The parsed `style=""` block of one element and the document generation it
-/// was parsed at. `TElement::style_attribute` returns a borrow of the block, so
-/// it has to live as long as the entry.
+/// The parsed `style=""` block of one element and what it was parsed from.
+/// `TElement::style_attribute` returns a borrow of the block, so it has to live
+/// as long as the entry; replacing it needs `&mut`, which is why staleness is
+/// settled by [`StyleStore::refresh`] before a flush, not during it.
 #[derive(Debug, Default)]
 pub struct StyleAttrSlot {
-    /// `Document::mutation_generation` the block was parsed at; the cache is
-    /// stale when the document has moved on and the attribute changed.
+    /// `Document::mutation_generation` the block was last known current at.
+    /// While it equals the document's, the attribute text is not compared.
     pub source_generation: Cell<u64>,
+    /// The attribute text the block was parsed from; unset when the element
+    /// had no `style` attribute at parse time.
+    pub source: OnceCell<Box<str>>,
     /// `None` inside means the element has no usable `style` attribute.
+    pub block: OnceCell<Option<Arc<Locked<PropertyDeclarationBlock>>>>,
+}
+
+/// The presentational-hint declarations of one element.
+#[derive(Debug, Default)]
+pub struct HintsSlot {
+    /// `Document::mutation_generation` the block was built at. Hints read the
+    /// element's ancestors (`cellpadding`, the body's `link` colour), so any
+    /// document mutation makes them stale.
+    pub source_generation: Cell<u64>,
+    /// `None` inside means the element has no hints.
     pub block: OnceCell<Option<Arc<Locked<PropertyDeclarationBlock>>>>,
 }
 
@@ -45,6 +65,12 @@ pub struct StoreEntry {
     pub restyle: Cell<RestyleBits>,
     /// The parsed `style` attribute.
     pub style_attr: StyleAttrSlot,
+    /// The synthesized presentational hints.
+    pub hints: HintsSlot,
+    /// `Document::mutation_generation` at the last [`StyleStore::refresh`].
+    /// The cache readers refuse to run when it is not the document's current
+    /// generation, because a skipped refresh would serve stale styles.
+    pub refreshed_generation: Cell<u64>,
 }
 
 /// Style state for every arena slot, owned by the engine and kept across
@@ -53,6 +79,8 @@ pub struct StoreEntry {
 #[derive(Debug, Default)]
 pub struct StyleStore {
     entries: Vec<StoreEntry>,
+    /// The base URL every cached `url()` was resolved against.
+    base: Option<Url>,
 }
 
 impl StyleStore {
@@ -75,6 +103,48 @@ impl StyleStore {
                 generation: node.generation,
                 ..StoreEntry::default()
             };
+        }
+    }
+
+    /// Drops every cached `style=""` block and hint block that no longer
+    /// matches `doc`, and stamps every entry as current. The engine calls it
+    /// before each flush, after [`StyleStore::claim`]: the caches are filled
+    /// through shared references during the traversal and cannot be replaced
+    /// there, and the readers panic on an entry that was not stamped.
+    ///
+    /// A `style` block survives a document mutation when its attribute text is
+    /// unchanged, so unrelated edits do not reparse every inline style. A
+    /// changed base URL drops every cache, since `url()` values resolve
+    /// against it.
+    ///
+    /// The caches are plain cells: the store is for one thread at a time.
+    pub fn refresh(&mut self, doc: &Document) {
+        let generation = doc.mutation_generation();
+        let base = style_attr::document_base(doc);
+        let base_changed = self.base.as_ref() != Some(&base);
+        self.base = Some(base);
+        for (slot, entry) in self.entries.iter_mut().enumerate() {
+            entry.refreshed_generation.set(generation);
+            let attr = &mut entry.style_attr;
+            if base_changed {
+                attr.source.take();
+                attr.block.take();
+                entry.hints.block.take();
+                continue;
+            }
+            if attr.block.get().is_some() && attr.source_generation.get() != generation {
+                let node = NodeId(slot as u32);
+                let current = doc.attribute(node, atoms::STYLE);
+                if attr.source.get().map(|text| &**text) == current {
+                    attr.source_generation.set(generation);
+                } else {
+                    attr.source.take();
+                    attr.block.take();
+                }
+            }
+            if entry.hints.source_generation.get() != generation {
+                entry.hints.block.take();
+            }
         }
     }
 
@@ -103,8 +173,6 @@ impl StyleStore {
 
 #[cfg(test)]
 mod tests {
-    use tenta_core::NodeId;
-
     use super::*;
 
     #[test]
