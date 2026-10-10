@@ -573,11 +573,11 @@ impl<'a> SelectorsElement for ElementRef<'a> {
         let document = self.document;
         let tag = document.tag(self.id);
         match pc {
-            // No user interaction, no focus and no history at Tier 1.
+            PseudoClass::Focus => is_focused(document, self.id),
+            PseudoClass::FocusVisible => is_focus_visible(document, self.id),
+            PseudoClass::FocusWithin => is_focus_within(document, self.id),
+            // No pointer and no history at Tier 1.
             PseudoClass::Active
-            | PseudoClass::Focus
-            | PseudoClass::FocusVisible
-            | PseudoClass::FocusWithin
             | PseudoClass::Hover
             | PseudoClass::Target
             | PseudoClass::Visited => false,
@@ -736,6 +736,24 @@ pub fn is_enabled(document: &Document, id: NodeId) -> bool {
     let can_be_disabled = is_form_control(document, id)
         || matches!(document.tag(id), Some(t) if t == atoms::OPTION || t == atoms::OPTGROUP);
     can_be_disabled && !is_disabled(document, id)
+}
+
+/// `:focus`: the element holds focus.
+pub fn is_focused(document: &Document, id: NodeId) -> bool {
+    document.focused_element() == Some(id)
+}
+
+/// `:focus-visible`: the element holds focus and the focus is one the user
+/// agent shows (see [`Document::focus_visible`]).
+pub fn is_focus_visible(document: &Document, id: NodeId) -> bool {
+    is_focused(document, id) && document.focus_visible()
+}
+
+/// `:focus-within`: the element or one of its descendants holds focus.
+pub fn is_focus_within(document: &Document, id: NodeId) -> bool {
+    document
+        .focused_element()
+        .is_some_and(|focused| document.is_inclusive_ancestor(id, focused))
 }
 
 /// `:checked`. A script-set checkedness wins over the `checked` attribute.

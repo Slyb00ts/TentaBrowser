@@ -108,7 +108,7 @@ event loop and timer/provenance machinery, watchdogs, generated WebIDL
 bindings, and partial fetch, XHR, forms, Blob/File and XML support. Stylo
 backs inline styles, CSS.supports and the native stylesheet model. QuickJS
 parity, workers/SAB, storage, streams/WebSocket, Web Crypto, full CSSOM,
-history/location, iframes/CSP/observers, Google Full search and the P2
+history/location, iframes/CSP/IntersectionObserver, Google Full search and the P2
 WPT/conformance/budget gates remain outstanding. See
 `docs/dev/implementation-status.md` for precise package evidence and gaps.
 P3–P8 work (layout, paint, hosts, media, WebRTC, mobile and hardening) has

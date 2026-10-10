@@ -80,6 +80,16 @@ pub enum PromiseOutcome<'a> {
     ParseJson(&'a [u8]),
 }
 
+/// What [`ScriptHost::invoke_mutation_callback`] did with a batch of records.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MutationDelivery {
+    /// The callback ran (or threw); every record has a wrapper now.
+    Called,
+    /// The callback or the observer is gone, or this backend cannot deliver:
+    /// the records will never be delivered.
+    Unreachable,
+}
+
 /// The engine's callback boundary. The event dispatcher calls into script only
 /// through this trait, so the dispatch algorithm stays engine-independent and
 /// unit-testable with a recording mock.
@@ -103,6 +113,35 @@ pub trait ScriptHost {
     /// The caller holds no `RefCell` borrow of the document, listener table or
     /// event slab (invariant A5).
     fn invoke_listener(&self, callback: CallbackRef, current_target: u64, event: u64) -> bool;
+
+    /// Invokes a `MutationObserver`'s `MutationCallback` with `this` set to the
+    /// observer's wrapper and the arguments `(records, observer)`, where
+    /// `records` is an array of the `MutationRecord` wrappers named by
+    /// `records` (handle bits). Exceptions the callback throws are reported and
+    /// swallowed.
+    ///
+    /// The answer says what happened to the wrappers: see [`MutationDelivery`].
+    /// The default refuses, which is what a backend without a
+    /// mutation-observer microtask answers.
+    ///
+    /// # Preconditions
+    ///
+    /// The caller holds no `RefCell` borrow of the document or the host slab.
+    fn invoke_mutation_callback(
+        &self,
+        _callback: CallbackRef,
+        _observer: u64,
+        _records: &[u64],
+    ) -> MutationDelivery {
+        MutationDelivery::Unreachable
+    }
+
+    /// The computed value of `property` for `node` when this world has a layout
+    /// to ask, and `None` when it has none (a page below the render tier).
+    /// Focus uses it to refuse an element that is not rendered.
+    fn computed_style_value(&self, _node: tenta_core::NodeId, _property: &str) -> Option<String> {
+        None
+    }
 
     /// Reads a callback-scoped, exact native typed-array view.
     fn array_buffer_view_info(

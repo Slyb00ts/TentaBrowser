@@ -793,6 +793,8 @@ fn install_bindings<'js>(ctx: &Ctx<'js>, global: &Object<'js>) -> rquickjs::Resu
     install_abstract_range::<HostObject>(ctx, global, registry)?;
     install_static_range::<HostObject>(ctx, global, registry)?;
     install_range::<HostObject>(ctx, global, registry)?;
+    install_mutation_record::<HostObject>(ctx, global, registry)?;
+    install_mutation_observer::<HostObject>(ctx, global, registry)?;
     install_node_list::<HostObject>(ctx, global, registry)?;
     install_html_collection::<HostObject>(ctx, global, registry)?;
     install_dom_token_list::<HostObject>(ctx, global, registry)?;

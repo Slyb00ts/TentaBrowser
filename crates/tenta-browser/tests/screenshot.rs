@@ -59,6 +59,28 @@ const MUTATING: &str = "<!doctype html><html><head><style>html,body{margin:0}</s
     document.body.appendChild(made);\
     </script></body></html>";
 
+/// A page whose UI appears from a `MutationObserver` callback: inserting into
+/// `#slot` reveals a card and turns the banner green, the way a lazy-loading
+/// list reacts to the node it watches. The second insertion, made later by the
+/// test, adds a second card.
+#[cfg(feature = "v8")]
+const LAZY: &str = "<!doctype html><html><head><style>html,body{margin:0}\
+    #banner{width:100px;height:40px;background:#ff0000}#banner.loaded{background:#00ff00}\
+    .card{width:50px;height:50px;background:#0000ff}.card+.card{background:#ff8000}\
+    </style></head><body><div id=\"banner\"></div><div id=\"slot\"></div><script>\
+    var slot = document.getElementById('slot');\
+    new MutationObserver(function (records) {\
+      document.getElementById('banner').className = 'loaded';\
+      for (var i = 0; i < records.length; i++) {\
+        if (records[i].addedNodes[0].className === 'placeholder') {\
+          var card = document.createElement('div'); card.className = 'card'; slot.appendChild(card);\
+        }\
+      }\
+    }).observe(slot, { childList: true });\
+    var placeholder = document.createElement('i'); placeholder.className = 'placeholder';\
+    slot.appendChild(placeholder);\
+    </script></body></html>";
+
 const GATED: &str = "<!doctype html><html><head><style>html,body{margin:0}</style>\
     <link rel=\"stylesheet\" href=\"gate.css\"></head>\
     <body><div class=\"late\"></div><script>window.ready = 1;</script></body></html>";
@@ -85,6 +107,8 @@ impl Rig {
             ("slow.css", SITE_CSS),
             ("editable.html", EDITABLE),
             ("mutating.html", MUTATING),
+            #[cfg(feature = "v8")]
+            ("lazy.html", LAZY),
             ("gated.html", GATED),
             ("gate.css", "html{}"),
             ("late.css", LATE_CSS),
@@ -611,6 +635,34 @@ mod scripted {
         assert_eq!(image.pixel(150, 100), GREEN);
         // The engine still owns the tree.
         assert!(page.document().is_none());
+
+        page.close().await.expect("close");
+        rig.finish();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_mutation_observer_builds_lazy_ui_before_the_page_is_captured() {
+        let rig = Rig::new().await;
+        let page = rig.scripted("/lazy.html", viewport(200, 160, 1.0)).await;
+
+        // The observer ran in a microtask after the inline script: the banner
+        // is green and its callback appended the first card below it.
+        let image = decode(&capture(&page, Capture::Viewport).await);
+        assert_eq!(image.pixel(10, 10), GREEN);
+        assert_eq!(image.pixel(10, 60), BLUE);
+        assert_eq!(image.pixel(10, 120), [255, 255, 255, 255]);
+
+        // A mutation made by a later script entry is delivered by that entry's
+        // own microtask checkpoint, before the next capture.
+        page.evaluate(
+            "var again = document.createElement('div'); again.className = 'card'; \
+             document.getElementById('slot').appendChild(again);",
+        )
+        .await
+        .expect("evaluate");
+        let image = decode(&capture(&page, Capture::Viewport).await);
+        assert_eq!(image.pixel(10, 60), BLUE);
+        assert_eq!(image.pixel(10, 100), ORANGE);
 
         page.close().await.expect("close");
         rig.finish();

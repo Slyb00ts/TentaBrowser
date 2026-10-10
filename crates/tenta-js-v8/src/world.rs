@@ -606,7 +606,11 @@ pub fn reclaim_dead_bookkeeping(
                     let owns_pins = matches!(
                         ctx.host_records.borrow().get(key),
                         Some(
-                            HostRecord::Attr(_) | HostRecord::Range(_) | HostRecord::StaticRange(_)
+                            HostRecord::Attr(_)
+                                | HostRecord::Range(_)
+                                | HostRecord::StaticRange(_)
+                                | HostRecord::MutationObserver(_)
+                                | HostRecord::MutationRecord(_)
                         )
                     );
                     let reclaimed = ctx.reclaim_host(key);
@@ -719,6 +723,12 @@ impl WrapperWorld for V8World {
             // Defer that one death until this wrapper is fully installed; an early
             // return or panic restores it for the next safe sweep.
             let mut pending_rewrap = PendingRewrap::take(&self.state, handle);
+            // A `MutationRecord` wrapper is exempt from the per-checkpoint
+            // wrapper bound: the standard delivers every record of an observer
+            // in one call, and the native queue that holds the records is
+            // already charged to the page budget, so the wrapper adds no
+            // resource the bound was protecting.
+            let is_record_wrapper = interface == "MutationRecord";
 
             // Reflect other wrappers collected since the last call into the
             // document, where no document borrow is held, and reclaim their slab
@@ -756,6 +766,7 @@ impl WrapperWorld for V8World {
             // host mutation; this second check bounds a single outgoing result
             // that materializes several wrappers.
             if decode(handle).tag != TAG_WINDOW
+                && !is_record_wrapper
                 && self.state.borrow().new_wrapper_materializations >= HARD_WRAPPER_MATERIALIZATIONS
             {
                 refused.set(true);
@@ -1047,8 +1058,10 @@ impl WrapperWorld for V8World {
                     generation,
                 },
             );
-            state.new_wrapper_materializations =
-                state.new_wrapper_materializations.saturating_add(1);
+            if !is_record_wrapper {
+                state.new_wrapper_materializations =
+                    state.new_wrapper_materializations.saturating_add(1);
+            }
             let previous_storage_wrapper = storage_wrapper
                 .and_then(|(index, wrapper)| state.storage_wrappers[index].replace(wrapper));
             let previous_crypto_wrapper =

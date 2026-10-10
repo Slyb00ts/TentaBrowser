@@ -8,6 +8,7 @@
 
 mod host;
 mod inspector;
+mod observer;
 mod page_engine;
 mod promise;
 mod script_host;
@@ -632,6 +633,12 @@ impl Engine {
             self.host.clone(),
         ));
         *dom.ctx.script.borrow_mut() = Some(script);
+        let context = Rc::downgrade(&dom.ctx);
+        *self.host.mutation_notify.borrow_mut() = Some(Rc::new(move || {
+            if let Some(context) = context.upgrade() {
+                tenta_js::bindings::host::notify_mutation_observers(&context);
+            }
+        }));
     }
 
     /// Creates the DOM-enabled context: installs `Node`, `Element` and
@@ -900,6 +907,21 @@ impl Engine {
             .expect("install the StaticRange interface");
             tenta_js::bindings::install_range::<HostObject>(scope, global_template, &mut registry)
                 .expect("install the Range interface");
+            // Neither is a node: both are host records under TAG_HOST. A record
+            // is installed with its observer, which hands the callback its
+            // `MutationRecord`s.
+            tenta_js::bindings::install_mutation_record::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the MutationRecord interface");
+            tenta_js::bindings::install_mutation_observer::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the MutationObserver interface");
             tenta_js::bindings::install_node_list::<HostObject>(
                 scope,
                 global_template,
@@ -1733,12 +1755,39 @@ impl Engine {
             return;
         }
         self.discard_stray_termination();
+        self.queue_observer_notification();
         self.isolate.perform_microtask_checkpoint();
         self.host.microtasks_pending.set(false);
         self.flush_rejections();
         if self.dom.is_some() {
             self.graph_checkpoint();
         }
+    }
+
+    /// Queues the mutation-observer microtask for a mutation made by native
+    /// code, which has no binding call to queue it after. A mutation made by
+    /// script was queued when its call returned and finds nothing owed here.
+    fn queue_observer_notification(&mut self) {
+        let Some(dom) = &self.dom else {
+            return;
+        };
+        if !tenta_js::bindings::host::mutation_observers_awaiting_microtask(&dom.ctx) {
+            return;
+        }
+        let ctx = dom.ctx.clone();
+        v8::scope!(let handle_scope, &mut self.isolate);
+        let context = v8::Local::new(handle_scope, &self.context);
+        let mut context_scope = v8::ContextScope::new(handle_scope, context);
+        v8::scope!(let scope, &mut context_scope);
+        observer::queue_notification(scope, &ctx);
+    }
+
+    /// Whether native code left a mutation-observer notification unqueued, which
+    /// is work no queue here knows about.
+    fn observer_notification_owed(&self) -> bool {
+        self.dom.as_ref().is_some_and(|dom| {
+            tenta_js::bindings::host::mutation_observers_awaiting_microtask(&dom.ctx)
+        })
     }
 
     /// Settles the promises a batch of fetch completions names, entering the
@@ -2083,6 +2132,11 @@ impl Engine {
         // `trusted` is true: the user agent fired this, not script. It is what
         // makes `event.isTrusted` report true to the listener.
         let _ = dispatch_at(&dom.ctx, target, event_key, true);
+        if matches!(event, LifecycleEvent::DomContentLoaded) {
+            // The document is parsed and its deferred scripts have run: the
+            // first focusable `autofocus` element takes focus.
+            let _ = tenta_js::bindings::host::flush_autofocus(&dom.ctx);
+        }
         // Remove the transient record unless a listener made a wrapper for it
         // (in which case the world's dead-event sweep owns its removal), exactly
         // as the XHR drain does.
@@ -2163,6 +2217,7 @@ impl Engine {
         if !self.host.ready.borrow().is_empty()
             || !self.host.ready_frames.borrow().is_empty()
             || self.host.microtasks_pending.get()
+            || self.observer_notification_owed()
         {
             return Some(std::time::Duration::ZERO);
         }

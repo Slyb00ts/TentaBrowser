@@ -61,6 +61,15 @@ pub(super) fn element_state(doc: &Document, node: NodeId) -> ElementState {
     if selectors::is_placeholder_shown(doc, node) {
         state |= ElementState::PLACEHOLDER_SHOWN;
     }
+    if selectors::is_focus_within(doc, node) {
+        state |= ElementState::FOCUS_WITHIN;
+        if selectors::is_focused(doc, node) {
+            state |= ElementState::FOCUS;
+            if doc.focus_visible() {
+                state |= ElementState::FOCUSRING;
+            }
+        }
+    }
     state
 }
 

@@ -67,6 +67,8 @@ include!(concat!(env!("OUT_DIR"), "/cdata_section_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/abstract_range_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/range_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/static_range_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/mutation_observer_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/mutation_record_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/dom_implementation_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/dom_parser_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/xml_serializer_ops.rs"));
@@ -193,6 +195,8 @@ include!(concat!(env!("OUT_DIR"), "/cdata_section_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/abstract_range_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/range_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/static_range_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/mutation_observer_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/mutation_record_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/url_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/url_search_params_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/headers_register.rs"));
@@ -331,6 +335,10 @@ include!(concat!(env!("OUT_DIR"), "/abstract_range_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/range_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/static_range_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/mutation_observer_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/mutation_record_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/url_v8.rs"));
 #[cfg(feature = "v8")]
@@ -483,6 +491,10 @@ pub mod quickjs {
     include!(concat!(env!("OUT_DIR"), "/range_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/static_range_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/mutation_observer_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/mutation_record_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/url_qjs.rs"));
     #[cfg(feature = "quickjs")]

@@ -40,7 +40,7 @@ mod observer_ownership;
 mod observer_pins;
 mod observer_registry;
 mod observer_semantics;
-pub use observer_agent::{ObserverAgent, ObserverGraphEdge};
+pub use observer_agent::{NotifyDemand, ObserverAgent, ObserverGraphEdge};
 pub use observer_hooks::SharedObserverAgent;
 pub use observer_host::{
     NativeObserveError, NativeObserver, NativeRecordBatch, NativeRecordView, ObserverListKind,
@@ -204,6 +204,16 @@ pub struct Document {
     /// The dirty checkedness of a checkbox or radio, keyed the same way:
     /// presence is the "dirty checkedness flag", the value is the checkedness.
     dirty_checkedness: HashMap<NodeId, bool>,
+    /// The element holding focus, if any. It is a generational reference so a
+    /// swept and reused arena slot can never inherit focus; whether the element
+    /// is still focused is decided by [`Self::focused_element`].
+    focused: Option<NodeRef>,
+    /// Whether the focused element matches `:focus-visible` (the focus came
+    /// from the keyboard, from script, or lands on a text control).
+    focus_visible: bool,
+    /// The element whose focus a disconnection ended and whose `blur` /
+    /// `focusout` have not been fired yet; see [`Self::take_lost_focus`].
+    lost_focus: Option<NodeRef>,
     mutation_generation: u64,
     /// Bumped only by changes to the shape of the tree, which is what
     /// invalidates document order and the sorted index buckets. Attribute and
@@ -274,6 +284,9 @@ impl Document {
             hosts: HashMap::new(),
             dirty_values: HashMap::new(),
             dirty_checkedness: HashMap::new(),
+            focused: None,
+            focus_visible: false,
+            lost_focus: None,
             mutation_generation: 0,
             structure_generation: 1,
             mutations_since_sweep: 0,
@@ -1062,6 +1075,43 @@ impl Document {
     /// Sets a control's checkedness, raising its dirty checkedness flag.
     pub fn set_dirty_checkedness(&mut self, id: NodeId, checked: bool) {
         self.dirty_checkedness.insert(id, checked);
+    }
+
+    /// The element that holds focus, or `None` when the viewport does.
+    ///
+    /// Focus ends when the element leaves the document (the standard's *focus
+    /// fixup rule*): disconnecting a subtree clears it, and the checks here
+    /// also refuse a reference whose node was swept or is no longer connected.
+    pub fn focused_element(&self) -> Option<NodeId> {
+        let id = self.resolve(self.focused?).ok()?;
+        (self.kind(id) == NodeKind::Element && self.is_connected(id)).then_some(id)
+    }
+
+    /// The element that lost focus by leaving the document, once: the host
+    /// fires its `blur` and `focusout` (with a null `relatedTarget`) when script
+    /// next regains control, as browsers do.
+    pub fn take_lost_focus(&mut self) -> Option<NodeRef> {
+        self.lost_focus.take()
+    }
+
+    /// Whether the focused element matches `:focus-visible`.
+    pub fn focus_visible(&self) -> bool {
+        self.focus_visible && self.focused_element().is_some()
+    }
+
+    /// Moves focus to `element`, or to the viewport for `None`, and reports
+    /// whether anything changed. A change bumps the mutation generation so
+    /// styles that depend on `:focus` are recomputed.
+    pub fn set_focused_element(&mut self, element: Option<NodeId>, visible: bool) -> bool {
+        let next = element.map(|id| self.node_ref(id));
+        let visible = visible && next.is_some();
+        if next == self.focused && visible == self.focus_visible {
+            return false;
+        }
+        self.focused = next;
+        self.focus_visible = visible;
+        self.bump();
+        true
     }
 
     /// Attributes of an element in source order.
@@ -2407,10 +2457,24 @@ impl Document {
         }
         let ctx_name = self.element_name(parent).unwrap_or_else(body_context);
         let frag_root = self.parse_fragment(ctx_name, html)?;
-        self.preflight_range_removals([element])?;
-        self.insert_fragment(frag_root, parent, element)?;
-        self.mutate(Mutation::Remove { child: element })?;
-        Ok(())
+        // The standard's *replace* is one operation, observable as one record
+        // that adds the parsed nodes and removes the element together. The
+        // parsed nodes are first gathered into a detached fragment, which no
+        // observer can see, so only the replace itself is recorded.
+        let fragment = self.create_fragment();
+        let parsed: Vec<NodeId> = self.children(frag_root).collect();
+        for child in parsed {
+            self.mutate(Mutation::Append {
+                parent: fragment,
+                child,
+            })?;
+        }
+        self.mutate(Mutation::Remove { child: frag_root })?;
+        self.mutate(Mutation::ReplaceChild {
+            parent,
+            new_child: fragment,
+            old_child: element,
+        })
     }
 
     /// Parses `html` and inserts the resulting nodes relative to `element`.
@@ -2781,6 +2845,12 @@ impl Document {
             visited += 1;
             let slot = self.index(node);
             self.arena.nodes.flags[slot].set(NodeFlags::CONNECTED, connected);
+            // The focus fixup rule: an element that leaves the document stops
+            // being focused, and inserting it again does not give focus back.
+            if !connected && self.focused.is_some_and(|focused| focused.id == node) {
+                self.lost_focus = self.focused.take();
+                self.focus_visible = false;
+            }
             if connected {
                 self.arena.nodes.flags[slot].remove(NodeFlags::KEEP_VALID);
                 self.arena.nodes.flags[slot].remove(NodeFlags::KEEP);

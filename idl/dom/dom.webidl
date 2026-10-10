@@ -192,6 +192,7 @@ interface Document : Node {
   readonly attribute HTMLElement? head;
   readonly attribute DOMString readyState;
   readonly attribute Element? activeElement;
+  boolean hasFocus();
 
   // d-7: the document metadata members. `title` is not a reflected attribute:
   // it reads and writes the document's `<title>` element (see the host impl).
@@ -745,3 +746,23 @@ interface mixin ElementCSSInlineStyle {
 
 HTMLElement includes ElementCSSInlineStyle;
 SVGElement includes ElementCSSInlineStyle;
+
+// The focus members of HTML's HTMLOrSVGElement mixin. `focus()` and `blur()`
+// run the standard's focusing and unfocusing steps against the document's
+// single focused area and fire `focus`/`focusin`/`blur`/`focusout`; they can
+// run listeners, so both are [Throws]. `focusVisible` decides
+// `:focus-visible`; `preventScroll` is accepted and ignored because nothing
+// scrolls.
+interface mixin HTMLOrSVGElement {
+  [Throws] undefined focus(optional FocusOptions options = {});
+  [Throws] undefined blur();
+  attribute long tabIndex;
+};
+
+dictionary FocusOptions {
+  boolean preventScroll = false;
+  boolean focusVisible;
+};
+
+HTMLElement includes HTMLOrSVGElement;
+SVGElement includes HTMLOrSVGElement;

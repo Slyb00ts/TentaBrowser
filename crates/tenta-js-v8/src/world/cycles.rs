@@ -120,6 +120,15 @@ impl tenta_js::bindings::V8CallbackAdmission for Admission {
         Ok(())
     }
 
+    fn after_callback(&self, scope: &mut v8::PinScope<'_, '_>) {
+        // An element removed while focused owes `blur`/`focusout`; this is the
+        // first point script has regained control since the removal.
+        let _ = tenta_js::bindings::host::fire_lost_focus(&self.context);
+        if self.context.documents.mutation_observers_used() {
+            crate::observer::queue_notification(scope, &self.context);
+        }
+    }
+
     fn before_constructor_host(
         &self,
         scope: &mut v8::PinScope<'_, '_>,

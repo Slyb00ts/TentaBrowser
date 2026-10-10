@@ -964,6 +964,14 @@ pub trait V8CallbackAdmission: 'static {
     /// Release values if conversion or the host operation returned early.
     fn end_stored_value_lease(&self, isolate: &v8::Isolate);
     fn exit(&self);
+    /// Runs after a callback frame has been released and its result checked,
+    /// still inside the callback's scope. A world uses it to act on native
+    /// state the callback left behind, such as queueing a microtask that must
+    /// be ordered with the script that caused it, or firing the events the
+    /// callback owed (an element removed while focused). It runs after the
+    /// callback's own effects are complete, so it may enter script but must not
+    /// change what the callback returns.
+    fn after_callback(&self, _scope: &mut v8::PinScope<'_, '_>) {}
 }
 
 #[cfg(feature = "v8")]
@@ -1179,12 +1187,15 @@ fn v8_callback_boundary_inner<'s, 'i, R: Copy>(
         };
         let value = call(scope);
         drop(_frame);
-        if let Some(admission) = poll {
+        if let Some(admission) = &poll {
             hard_stop_requested.set(admission.take_native_buffer_work_termination());
         }
         if native_callback_failure(scope).is_some() {
             scope.terminate_execution();
             return fallback;
+        }
+        if let Some(admission) = &poll {
+            admission.after_callback(scope);
         }
         value
     })) {

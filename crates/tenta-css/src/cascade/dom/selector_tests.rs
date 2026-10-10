@@ -395,6 +395,29 @@ fn state_reports_what_the_selector_map_needs() {
 }
 
 #[test]
+fn the_focused_element_reports_focus_and_its_ancestors_focus_within() {
+    let mut doc = parse("<div id=o><p id=m><input id=f></p><input id=other></div>");
+    let focused = by_id(&doc, "f");
+    doc.set_focused_element(Some(focused), true);
+    with_view(&doc, |view| {
+        let state = |id: &str| view.handle(by_id(&doc, id)).unwrap().state();
+        let all = ElementState::FOCUS | ElementState::FOCUSRING | ElementState::FOCUS_WITHIN;
+        assert!(state("f").contains(all));
+        for ancestor in ["m", "o"] {
+            assert!(state(ancestor).contains(ElementState::FOCUS_WITHIN));
+            assert!(!state(ancestor).intersects(ElementState::FOCUS | ElementState::FOCUSRING));
+        }
+        assert!(!state("other").intersects(all));
+    });
+    doc.set_focused_element(Some(focused), false);
+    with_view(&doc, |view| {
+        let state = view.handle(focused).unwrap().state();
+        assert!(state.contains(ElementState::FOCUS));
+        assert!(!state.contains(ElementState::FOCUSRING));
+    });
+}
+
+#[test]
 fn lang_is_inherited_and_matched_by_range() {
     let doc = parse(
         "<div lang=en-US><p id=a></p><p id=b lang=''></p><p id=c lang=de></p></div><p id=d></p>",

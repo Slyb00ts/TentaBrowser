@@ -1437,6 +1437,33 @@ pins the split.
 native-dispatch path (`HostState::enter_native_dispatch`), which is also what
 lets them enter V8 with no callback on the stack.
 
+### `MutationObserver`: host records over native observer state (P3 `JS1`)
+
+`MutationObserver` and `MutationRecord` (`idl/dom/MutationObserver.webidl`) are
+host records in the sense above, with three differences worth knowing before
+touching them (`crates/tenta-js/src/bindings/host/mutation_observer.rs`):
+
+- **Native state is released after the slab borrow ends.** `HostRecord::MutationObserver`
+  holds a `tenta_dom::NativeObserver` and `HostRecord::MutationRecord` a
+  `PublishedObserverRecord`; both walk native registrations when dropped. `free_record`
+  therefore does not drop them: it moves them into `ReclaimedHost::retired`, and
+  `HostContext::reclaim_host` finishes them (`NativeObserver::forget`, record release) once
+  `host_records` is no longer borrowed. A new host record that owns native state follows
+  the same route.
+- **The observer owns a reference to itself while it observes.** `observe()` stores one
+  stored-value reference to the observer's own wrapper (`ScriptHost::retain_existing_target`)
+  and `disconnect()` releases it, so an observer the page no longer references keeps
+  delivering. `reclaim_host_record` returns the callback's reference (and the self
+  reference, if any) in `ReclaimedHost::values`.
+- **Delivery is a microtask queued from the callback boundary.** The V8 prelude calls
+  `V8CallbackAdmission::after_callback(scope)` (default no-op) after each generated
+  callback's frame is released and its result checked, still inside the callback's scope.
+  The world's `Admission` uses it to turn a `Requested` notify demand into one V8 microtask
+  (`tenta-js-v8/src/observer.rs`), which is how the notification stays ordered with promise
+  reactions queued after the mutation. Native-origin mutations are picked up by
+  `Engine::checkpoint`. `ScriptHost::invoke_mutation_callback` has a refusing default so a
+  backend without the microtask (QuickJS today) compiles and never delivers.
+
 ## Extended attributes
 
 | Attribute | Effect |

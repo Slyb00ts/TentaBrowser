@@ -19,7 +19,17 @@ use std::time::SystemTime;
 mod crypto;
 #[cfg(any(feature = "v8", feature = "quickjs"))]
 pub mod cssom;
+mod focus;
+mod mutation_observer;
 pub mod storage;
+
+pub use focus::{
+    blur_element, fire_lost_focus, flush_autofocus, focus_element, is_focusable_area, tab_index,
+};
+pub use mutation_observer::{
+    MutationObserverRecord, MutationRecordRecord, NativeRetired, mark_mutation_microtask_enqueued,
+    mutation_observers_awaiting_microtask, notify_mutation_observers,
+};
 
 use tenta_core::atom::atoms;
 use tenta_core::{
@@ -54,24 +64,25 @@ use super::{
     ElementOps, EndingType, Event, EventConstructor, EventInit, EventListener,
     EventListenerOptionsOrBoolean, EventOps, EventTarget, EventTargetConstructor, EventTargetOps,
     FileConstructor, FileOps, FileOrUsvString, FilePropertyBag, FocusEventConstructor,
-    FocusEventInit, FocusEventOps, FormDataConstructor, FormDataOps, HTMLAnchorElementOps,
-    HTMLButtonElementOps, HTMLCollection, HTMLCollectionOps, HTMLDivElementOps, HTMLElement,
-    HTMLElementOps, HTMLFormElement, HTMLFormElementOps, HTMLIFrameElementOps, HTMLImageElementOps,
-    HTMLInputElementOps, HTMLLabelElementOps, HTMLOptionElementOps, HTMLParagraphElementOps,
-    HTMLScriptElementOps, HTMLSelectElementOps, HTMLSpanElementOps, HTMLTemplateElementOps,
-    HTMLTextAreaElementOps, Handle, Headers, HeadersConstructor, HeadersInit, HeadersOps,
-    IterableEntries, JsError, KeyboardEventConstructor, KeyboardEventInit, KeyboardEventOps,
-    MouseEventConstructor, MouseEventInit, MouseEventOps, NamedNodeMap, NamedNodeMapOps, Node,
-    NodeList, NodeListOps, NodeOps, NodeOrDomString, ProcessingInstruction,
-    ProcessingInstructionOps, ProgressEventConstructor, ProgressEventInit, ProgressEventOps,
-    Promise, Range, RangeConstructor, RangeOps, Realm, RequestInit, ResponseConstructor,
-    ResponseInit, ResponseOps, ResponseType, SVGElementOps, StaticRangeConstructor,
-    StaticRangeInit, StaticRangeOps, Text, TextDecodeOptions, TextDecoderConstructor,
-    TextDecoderOps, TextDecoderOptions, TextEncoderConstructor, TextEncoderOps, TextOps,
-    UIEventConstructor, UIEventInit, UIEventOps, URLConstructor, URLOps, URLSearchParams,
-    URLSearchParamsConstructor, URLSearchParamsOps, WheelEventConstructor, WheelEventInit,
-    WheelEventOps, Window, WindowProxy, XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps,
-    XMLHttpRequestOps, XMLHttpRequestResponseType, XMLSerializerConstructor, XMLSerializerOps,
+    FocusEventInit, FocusEventOps, FocusOptions, FormDataConstructor, FormDataOps,
+    HTMLAnchorElementOps, HTMLButtonElementOps, HTMLCollection, HTMLCollectionOps,
+    HTMLDivElementOps, HTMLElement, HTMLElementOps, HTMLFormElement, HTMLFormElementOps,
+    HTMLIFrameElementOps, HTMLImageElementOps, HTMLInputElementOps, HTMLLabelElementOps,
+    HTMLOptionElementOps, HTMLParagraphElementOps, HTMLScriptElementOps, HTMLSelectElementOps,
+    HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps, Handle, Headers,
+    HeadersConstructor, HeadersInit, HeadersOps, IterableEntries, JsError,
+    KeyboardEventConstructor, KeyboardEventInit, KeyboardEventOps, MouseEventConstructor,
+    MouseEventInit, MouseEventOps, NamedNodeMap, NamedNodeMapOps, Node, NodeList, NodeListOps,
+    NodeOps, NodeOrDomString, ProcessingInstruction, ProcessingInstructionOps,
+    ProgressEventConstructor, ProgressEventInit, ProgressEventOps, Promise, Range,
+    RangeConstructor, RangeOps, Realm, RequestInit, ResponseConstructor, ResponseInit, ResponseOps,
+    ResponseType, SVGElementOps, StaticRangeConstructor, StaticRangeInit, StaticRangeOps, Text,
+    TextDecodeOptions, TextDecoderConstructor, TextDecoderOps, TextDecoderOptions,
+    TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
+    URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
+    WheelEventConstructor, WheelEventInit, WheelEventOps, Window, WindowProxy,
+    XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps, XMLHttpRequestOps,
+    XMLHttpRequestResponseType, XMLSerializerConstructor, XMLSerializerOps,
 };
 #[cfg(any(feature = "v8", feature = "quickjs"))]
 use super::{CSSOps, CSSStyleDeclarationOps};
@@ -329,6 +340,10 @@ pub enum HostRecord {
     Storage(storage::StorageRecord),
     /// The per-Window Web Crypto object; it has no native graph edges.
     Crypto,
+    /// A `MutationObserver`: its callback and its native observer.
+    MutationObserver(MutationObserverRecord),
+    /// A `MutationRecord`: one published native record.
+    MutationRecord(MutationRecordRecord),
 }
 
 /// The state behind one `Attr`.
@@ -448,6 +463,8 @@ impl HostRecord {
             HostRecord::CssRuleStyle(_) => "CSSStyleProperties",
             HostRecord::Storage(_) => "Storage",
             HostRecord::Crypto => "Crypto",
+            HostRecord::MutationObserver(_) => "MutationObserver",
+            HostRecord::MutationRecord(_) => "MutationRecord",
         }
     }
 }
@@ -1417,6 +1434,13 @@ pub struct DocumentSet {
     minted: RefCell<Vec<SharedContext>>,
     observer_agent: SharedObserverAgent,
     observer_phase: Cell<ObserverInstallPhase>,
+    /// Set when the first `MutationObserver` is constructed; until then no
+    /// notify demand is ever delivered.
+    observers_used: Cell<bool>,
+    /// The next observer creation serial and the count of observers that hold
+    /// themselves alive by observing.
+    observer_serial: Cell<u64>,
+    observing_observers: Cell<usize>,
     native_memory: NativeMemoryBudget,
     minted_charge: RefCell<NativeMemoryReservation>,
     charged_minted_capacity: Cell<usize>,
@@ -1831,6 +1855,9 @@ impl HostContext {
                 minted: RefCell::new(Vec::new()),
                 observer_agent: observer.agent,
                 observer_phase: Cell::new(observer.phase),
+                observers_used: Cell::new(false),
+                observer_serial: Cell::new(0),
+                observing_observers: Cell::new(0),
                 native_memory: native_memory.clone(),
                 minted_charge: RefCell::new(minted_charge),
                 charged_minted_capacity: Cell::new(0),
@@ -1942,7 +1969,10 @@ impl HostContext {
                 .map(|element| attr_identity(element, record.name)),
             _ => None,
         };
-        let reclaimed = reclaim_host_record(&mut self.host_records.borrow_mut(), key);
+        let mut reclaimed = reclaim_host_record(&mut self.host_records.borrow_mut(), key);
+        for retired in std::mem::take(&mut reclaimed.retired) {
+            retired.finish();
+        }
         #[cfg(any(feature = "v8", feature = "quickjs"))]
         if let Some(state) = css_state
             && reclaimed.keys.contains(&key)
@@ -4874,12 +4904,21 @@ impl DocumentOps for HostObject {
     }
 
     fn active_element(&self) -> Result<Option<Handle<Element>>, JsError> {
-        // No focus model yet: per the spec the fallback active element is the
-        // body (or the document element when there is no body).
+        // The focused element, or the fallback the standard names: the body, or
+        // the document element when there is no body.
         let (doc, _) = self.anchor();
         let doc = doc.borrow();
-        let active = doc.body().or_else(|| doc.document_element());
+        let active = doc
+            .focused_element()
+            .or_else(|| doc.body())
+            .or_else(|| doc.document_element());
         Ok(active.map(|id| Handle::from_bits(encode_node(self.slot(), doc.node_ref(id)))))
+    }
+
+    fn has_focus(&self) -> bool {
+        // The only document that can hold system focus is the page's own; a
+        // document a `DOMImplementation` minted has no browsing context.
+        self.slot() == 0
     }
 
     fn title(&self) -> Result<String, JsError> {
@@ -7101,6 +7140,22 @@ impl HTMLElementOps for HostObject {
     fn style(&self) -> Result<Handle<CSSStyleProperties>, JsError> {
         self.style_handle()
     }
+
+    fn focus(&self, options: Option<FocusOptions>) -> Result<(), JsError> {
+        self.focus_steps(options)
+    }
+
+    fn blur(&self) -> Result<(), JsError> {
+        self.unfocus_steps()
+    }
+
+    fn tab_index(&self) -> i32 {
+        self.tab_index_value()
+    }
+
+    fn set_tab_index(&self, value: i32) {
+        self.reflect_attribute("tabindex", &value.to_string());
+    }
 }
 
 // `HTMLIFrameElement` is an interface shell for now: it adds no members of its
@@ -7474,6 +7529,22 @@ impl HTMLScriptElementOps for HostObject {
 impl SVGElementOps for HostObject {
     fn style(&self) -> Result<Handle<CSSStyleProperties>, JsError> {
         self.style_handle()
+    }
+
+    fn focus(&self, options: Option<FocusOptions>) -> Result<(), JsError> {
+        self.focus_steps(options)
+    }
+
+    fn blur(&self) -> Result<(), JsError> {
+        self.unfocus_steps()
+    }
+
+    fn tab_index(&self) -> i32 {
+        self.tab_index_value()
+    }
+
+    fn set_tab_index(&self, value: i32) {
+        self.reflect_attribute("tabindex", &value.to_string());
     }
 }
 impl DocumentFragmentOps for HostObject {
@@ -8989,7 +9060,9 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
         | HostRecord::Attr(_)
         | HostRecord::FormData(_)
         | HostRecord::Storage(_)
-        | HostRecord::Crypto => return None,
+        | HostRecord::Crypto
+        | HostRecord::MutationObserver(_)
+        | HostRecord::MutationRecord(_) => return None,
         // A range holds two node handles and no pair list either.
         HostRecord::Range(_) | HostRecord::StaticRange(_) => return None,
         #[cfg(any(feature = "v8", feature = "quickjs"))]
@@ -9020,7 +9093,9 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
             | HostRecord::StaticRange(_)
             | HostRecord::Implementation
             | HostRecord::Storage(_)
-            | HostRecord::Crypto => None,
+            | HostRecord::Crypto
+            | HostRecord::MutationObserver(_)
+            | HostRecord::MutationRecord(_) => None,
             #[cfg(any(feature = "v8", feature = "quickjs"))]
             HostRecord::CssSheet(_)
             | HostRecord::CssRuleList(_)
@@ -9148,6 +9223,10 @@ enum HostLink {
     Storage,
     /// The Window Crypto object has no native graph edge.
     Crypto,
+    /// A `MutationObserver` links to no other host record.
+    MutationObserver,
+    /// A `MutationRecord` links to no other host record.
+    MutationRecord,
     /// Constructed CSS records are independently owned by their wrappers.
     #[cfg(any(feature = "v8", feature = "quickjs"))]
     CssSheet,
@@ -9174,6 +9253,8 @@ pub struct ReclaimedHost {
     pub keys: Vec<HostKey>,
     /// The interned value bits those records owned and no longer reference.
     pub values: Vec<u64>,
+    /// Native observer state the caller drops once no slab borrow is held.
+    pub retired: Vec<NativeRetired>,
 }
 
 /// Removes the record at `key` and reports what its removal released.
@@ -9186,13 +9267,20 @@ fn free_record(slab: &mut HostSlab, key: HostKey, out: &mut ReclaimedHost) {
         return;
     };
     out.keys.push(key);
-    // Only a signal owns an interned value, and only a *stored* one: `null` and
-    // `undefined` are sentinels the wrapper world never handed a slot to.
-    if let HostRecord::Signal(signal) = record
-        && let Some(bits) = signal.reason
-        && bits != AnyValue::NULL.0
-    {
-        out.values.push(bits);
+    // A signal owns its abort reason and a mutation observer its callback; a
+    // signal's is only a *stored* one: `null` and `undefined` are sentinels the
+    // wrapper world never handed a slot to.
+    match record {
+        HostRecord::Signal(signal) => {
+            if let Some(bits) = signal.reason
+                && bits != AnyValue::NULL.0
+            {
+                out.values.push(bits);
+            }
+        }
+        HostRecord::MutationObserver(observer) => observer.retire(out),
+        HostRecord::MutationRecord(record) => record.retire(out),
+        _ => {}
     }
 }
 
@@ -9274,6 +9362,8 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         Some(HostRecord::StaticRange(_)) => HostLink::StaticRange,
         Some(HostRecord::Storage(_)) => HostLink::Storage,
         Some(HostRecord::Crypto) => HostLink::Crypto,
+        Some(HostRecord::MutationObserver(_)) => HostLink::MutationObserver,
+        Some(HostRecord::MutationRecord(_)) => HostLink::MutationRecord,
         #[cfg(any(feature = "v8", feature = "quickjs"))]
         Some(HostRecord::CssSheet(_)) => HostLink::CssSheet,
         #[cfg(any(feature = "v8", feature = "quickjs"))]
@@ -9308,7 +9398,10 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         | HostLink::StaticRange => {
             free_record(slab, key, &mut freed);
         }
-        HostLink::Storage | HostLink::Crypto => {
+        HostLink::Storage
+        | HostLink::Crypto
+        | HostLink::MutationObserver
+        | HostLink::MutationRecord => {
             free_record(slab, key, &mut freed);
         }
         #[cfg(any(feature = "v8", feature = "quickjs"))]

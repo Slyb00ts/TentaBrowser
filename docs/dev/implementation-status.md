@@ -14,7 +14,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | --- | --- | --- |
 | P0 | Foundation and recorded local exit in the roadmap | Revalidate affected foundation gates as dependencies and platforms change |
 | P1 | Network, HTML, arena DOM, extraction, fast search and CLI implemented | Full current platform, fingerprint, fuzz and performance exit-gate revalidation |
-| P2 | V8 and QuickJS page execution, generated DOM bindings, event loop, watchdogs, fetch/XHR/forms/Blob/File/XML subsets, live Range work, Stylo inline styles and native CSSOM model, atomic CLI evaluation | QuickJS parity, full CSSOM, workers, storage, streams/WebSocket, Web Crypto, observers, navigation/history/frames/CSP, XML, persistent evaluation/remote objects, Full search, all roadmap conformance and budget gates |
+| P2 | V8 and QuickJS page execution, generated DOM bindings, event loop, watchdogs, fetch/XHR/forms/Blob/File/XML subsets, live Range work, Stylo inline styles and native CSSOM model, atomic CLI evaluation | QuickJS parity, full CSSOM, workers, storage, streams/WebSocket, Web Crypto, IntersectionObserver and the other observers, navigation/history/frames/CSP, XML, persistent evaluation/remote objects, Full search, all roadmap conformance and budget gates |
 | P3 | Crate skeletons and reference render corpus | Stylo, layout, geometry, paint, image/font/canvas/screenshot/PDF implementations and rendering gates |
 | P4 | Host crate skeletons and protocol inventory/checklists | CDP/MCP/FFI, workers/storage extensions, editing, downloads/dialogs and client/device conformance |
 | P5 | Audio crate skeleton | Audio graph, decoders/sinks/worklets/capture and five-platform gates |
@@ -1641,6 +1641,96 @@ arms on both backends. Their combined WebIDL run passes 87/87 after the root
 removed an unused fixture import and changed two invalid anonymous function
 statement inputs to function expressions; all conversion assertions remain.
 These are focused binding results, not full WebIDL or P2 conformance.
+
+## JS1: native MutationObserver and focus (P3 package)
+
+`MutationObserver`/`MutationRecord` and the focus model are native on the V8
+arm; the CDP page shim lost its polling `MutationObserver` and its focus
+bookkeeping. Design and file list: `docs/dev/p3-plan.md` ("As built (JS1)") and
+`docs/dev/idl.md`.
+
+- **MutationObserver.** Host records over the existing `tenta-dom` observer
+  foundation: options validation with TypeErrors, `observe`/`disconnect`/
+  `takeRecords`, records with `type`, `target`, static `addedNodes`/
+  `removedNodes`, siblings, `attributeName`/`attributeNamespace`, `oldValue`,
+  transient registrations for removed subtrees, and delivery in one V8
+  microtask queued right after the mutating binding call returns (so it runs
+  before promise reactions queued later). Native mutations (parser, CDP input)
+  are queued by the engine's next checkpoint. Pending observers are notified in
+  creation order and each takes its records just before its own callback, so a
+  mutation made by an earlier callback lands in a later observer's single batch;
+  every observer gets one complete batch per notification (10,000 records in one
+  call, `takeRecords()` returns all of them) because `MutationRecord` wrappers
+  are exempt from the world's per-checkpoint wrapper bound (their records are
+  already charged to the page budget). The notification microtask is queued only
+  once some observer has a pending record, as browsers do (the native layer still
+  requests it for every mutation). An observer keeps itself alive while it
+  observes, so an observer whose targets became unreachable lives, with its
+  pinned targets (about 2.6 KB each, measured), until it is disconnected or the
+  world ends: the collector does not walk `ObserverAgent::visit_gc_edges` yet.
+  A page may keep at most 10,000 observing observers; `observe()` past that
+  throws `QuotaExceededError`, which is the warning the page and the CDP
+  console see. Backlog: put each observer and its callback into its targets'
+  ephemeron group (`cycles.rs`) and subtract the observer pin with
+  `conditional_handle_subtraction`, so the cap and `self_root` can go.   ends. Not done: slot-change records, `normalize()`/`splitText()` (the
+  bindings do not exist; they are the prerequisite of the Range mutators),
+  `Range.deleteContents/extractContents/insertNode/surroundContents`, the
+  QuickJS arm (generated and installed, never compiled here because `rquickjs`
+  is unbuildable; delivery is refused by `ScriptHost`'s default), and
+  `ParentNode.replaceChildren` of an existing child, which queues two records
+  where the standard queues one.
+- **Focus.** `HTMLElement.focus()/blur()/tabIndex`, `Document.hasFocus()`,
+  `document.activeElement`, trusted `focus`/`blur`/`focusin`/`focusout` with
+  `relatedTarget`, and `:focus`/`:focus-within`/`:focus-visible` in both selector
+  engines (screenshots show focused styles). `autofocus` focuses the first
+  focusable candidate once, when `DOMContentLoaded` has fired. Not done: the
+  standard's per-insertion candidate queue, iframes, shadow trees, sequential focus navigation (Tab order stays in the CDP shim),
+  the window's own focus events.
+  `inert` (on the element or an ancestor) and `hidden` refuse focus. Elements
+  with `display: none` (self or ancestor) or `visibility: hidden` are refused
+  through `ScriptHost::computed_style_value`, which asks the geometry host;
+  no page has a production geometry host yet (G1b), so today that check only
+  runs under a host that supplies one (tested with a fake) and a real page
+  relies on `hidden`/`inert`. Removing the focused element fires `blur` and
+  `focusout` with a null `relatedTarget` once the removing binding call returns.
+
+- **Also changed.** `outerHTML` now queues one replace record instead of an insert
+  and a remove. The V8 callback boundary gained `V8CallbackAdmission::
+  after_callback` (default no-op); the three prelude goldens were re-blessed and
+  differ only by that hook. `ObserverPins` lost an O(entries) document scan per
+  queued record (see the measurement below).
+
+Evidence (2026-10-10, V8, this working tree; the baseline binary was built from
+HEAD d459038 with no JS1 changes):
+
+| Check | Before | After |
+| --- | --- | --- |
+| WPT `dom/nodes` (tentabrowser, 4 jobs) | 3,649/6,090 subtests (59.92%), 253/334 files OK | 3,765/6,098 (61.74%), 254/334 files OK; no file lost a passing subtest |
+| WPT `dom/nodes/MutationObserver-*.html` (11 files) | 11/135 subtests | 118/138 subtests (the rest: Range mutators, `normalize`, parser mutation timing, a cross-realm timeout) |
+| WPT `html/interaction/focus` | 9/598 subtests (1.51%), 179/197 files OK | 62/599 (10.35%), 180/197 files OK (most of the rest is `focusgroup`, iframes and `window.open`) |
+| Unit and integration tests | -- | `tenta-js-v8`, `tenta-js`, `tenta-idl`, `tenta-css`, `tenta-dom` 1,910 passed; `tenta-page`, `tenta-browser`, `tenta-cdp` (`v8,render`) 539 passed (one earlier run timed out `image_events::a_thousand_image_events_are_all_delivered` while another build shared the machine; it passed alone and in the rerun) |
+| Puppeteer smoke (`tests/cdp-clients/smoke`, `tentabrowser cdp`) | -- | all 14 steps OK, `waitForSelector` served by the native observer |
+
+Release mutation loop (`tenta-js-v8/tests/perf_mutation_observer.rs`, 15
+interleaved rounds, 10,000 nodes built and 20,000 attribute writes, p50/p95):
+
+| Variant | mutate | deliver |
+| --- | --- | --- |
+| no observer | 59.6 / 85.8 ms | 0.8 ms |
+| idle observer (detached target) | 87.2 / 138.6 ms | 0.6 ms |
+| observer on the subtree, callback counts records (30,000 records) | 90.3 / 125.8 ms | 200 / 275 ms |
+
+The first measurement of the last row was 609 ms to mutate: the pin ledger
+compared every pinned node's document with the mutated one for each queued
+record, which made queueing N records O(N^2); a stored owner document made it
+constant time (6.8x faster). The remaining recording cost is about 1 us per
+recorded mutation over the no-observer loop. The idle row is a 46% increase
+(0.9 us per mutation) from the registered-world mutation path that already
+existed; it is above the 10% noise floor and was not investigated further.
+Delivery was measured before records were exempted from the wrapper bound,
+when wrapper-pressure collections dominated it; it has not been re-measured.
+`bench/` has no
+in-process scenario for this; the figures come from the test above.
 
 ## Implementation queue and dependencies
 

@@ -77,6 +77,11 @@ impl PinLease {
 /// `release_all` before dropping the Document arena.
 pub struct ObserverPins {
     entries: HashMap<ObserverNode, PinEntry>,
+    // The Document every entry belongs to, set when the first entry of an
+    // empty ledger is inserted. It answers "does this ledger belong to this
+    // Document" in constant time; scanning the entries per record made queueing
+    // N records cost O(N^2).
+    owner_document: Option<u64>,
     // Exact physical entries with no logical owner. Their handles remain in
     // this same ledger until a mutable Document maintenance seam drains them.
     deferred_zero: usize,
@@ -90,6 +95,7 @@ impl ObserverPins {
         let entries_charge = budget.begin(NativeMemoryComponent::MutationObserver);
         Self {
             entries: HashMap::new(),
+            owner_document: None,
             deferred_zero: 0,
             budget,
             entries_charge,
@@ -144,10 +150,10 @@ impl ObserverPins {
         record: &SemanticRecord,
     ) -> Result<PinLease, PinError> {
         let nodes = unique_references(record, &self.budget)?;
-        if self
-            .entries
-            .values()
-            .any(|entry| entry.handle.document_id() != document.document_id())
+        if !self.entries.is_empty()
+            && self
+                .owner_document
+                .is_some_and(|owner| owner != document.document_id())
         {
             return Err(PinError::Native(Error::invalid(
                 "observer pin ledger belongs to another document",
@@ -247,6 +253,9 @@ impl ObserverPins {
             }
         }
         for (node, handle) in acquired {
+            if self.entries.is_empty() {
+                self.owner_document = Some(node.document_id);
+            }
             let previous = self.entries.insert(
                 node,
                 PinEntry {
@@ -524,11 +533,10 @@ impl ObserverPins {
         if self.deferred_zero == 0 {
             return Ok(0);
         }
-        if self.entries.values().any(|entry| {
-            entry.pending_owners == 0
-                && entry.conditional_owners == 0
-                && entry.handle.document_id() != document.document_id()
-        }) {
+        if self
+            .owner_document
+            .is_some_and(|owner| owner != document.document_id())
+        {
             return Err(Error::invalid(
                 "observer pin drained through another document",
             ));

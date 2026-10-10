@@ -201,6 +201,10 @@ pub struct HostState {
     /// entry builds and throws values; a half-set flag would make the two
     /// disagree.
     pub native_dispatch: std::cell::Cell<bool>,
+    /// The standard's *notify mutation observers*, installed with the DOM
+    /// context. The microtask [`crate::observer`] queues reaches it through the
+    /// context slot, like every other host callback.
+    pub(crate) mutation_notify: RefCell<Option<Rc<dyn Fn()>>>,
     /// The realm's inspection surface: the dispatcher, the sink its events go
     /// to and the rejections waiting to be reported.
     pub(crate) inspector: crate::inspector::InspectorState,
@@ -230,6 +234,7 @@ impl HostState {
             geometry_host: RefCell::new(None),
             viewport: Cell::new(ViewportMetrics::default()),
             native_dispatch: std::cell::Cell::new(false),
+            mutation_notify: RefCell::new(None),
             inspector: crate::inspector::InspectorState::new(),
         })
     }

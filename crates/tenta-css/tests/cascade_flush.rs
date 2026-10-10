@@ -247,3 +247,39 @@ fn every_kind_of_style_input_is_read_under_the_engines_one_lock() {
     assert_eq!(value(&doc, &engine, "p", "margin-top"), "2px");
     assert_eq!(value(&doc, &engine, "p", "color"), "rgb(0, 255, 0)");
 }
+
+const FOCUS_PAGE: &str = "<!DOCTYPE html><html><head><style>\
+    input { color: rgb(1, 0, 0) } input:focus { color: rgb(2, 0, 0) }\
+    input:focus-visible { background-color: rgb(4, 0, 0) } #wrap:focus-within { color: rgb(3, 0, 0) }\
+    </style></head><body><div id=wrap><input id=f><input id=g></div></body></html>";
+
+#[test]
+fn focus_moves_the_focus_pseudo_classes_in_the_computed_styles() {
+    let (mut doc, mut engine) = styled(FOCUS_PAGE);
+    assert_eq!(value(&doc, &engine, "f", "color"), "rgb(1, 0, 0)");
+    assert_eq!(value(&doc, &engine, "wrap", "color"), "rgb(0, 0, 0)");
+
+    let f = element(&doc, "f");
+    doc.set_focused_element(Some(f), true);
+    assert_eq!(engine.flush(&doc), StyleDiff::Full);
+    assert_eq!(value(&doc, &engine, "f", "color"), "rgb(2, 0, 0)");
+    assert_eq!(value(&doc, &engine, "g", "color"), "rgb(1, 0, 0)");
+    assert_eq!(
+        value(&doc, &engine, "f", "background-color"),
+        "rgb(4, 0, 0)"
+    );
+    assert_eq!(value(&doc, &engine, "wrap", "color"), "rgb(3, 0, 0)");
+
+    doc.set_focused_element(Some(f), false);
+    assert_eq!(engine.flush(&doc), StyleDiff::Full);
+    assert_eq!(value(&doc, &engine, "f", "color"), "rgb(2, 0, 0)");
+    assert_eq!(
+        value(&doc, &engine, "f", "background-color"),
+        "rgb(255, 255, 255)"
+    );
+
+    doc.set_focused_element(None, false);
+    assert_eq!(engine.flush(&doc), StyleDiff::Full);
+    assert_eq!(value(&doc, &engine, "f", "color"), "rgb(1, 0, 0)");
+    assert_eq!(value(&doc, &engine, "wrap", "color"), "rgb(0, 0, 0)");
+}

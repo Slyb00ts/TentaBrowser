@@ -25,8 +25,13 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use tenta_js::bindings::host::encode_window;
-use tenta_js::bindings::{Event, EventTarget, Handle, JsError, handle_to_v8, value_to_v8};
-use tenta_js::dom::events::{CallbackRef, HostValue, PromiseOutcome, PromiseRef, ScriptHost};
+use tenta_js::bindings::{
+    Event, EventTarget, Handle, JsError, MutationObserver, MutationRecord, handle_to_v8,
+    value_to_v8,
+};
+use tenta_js::dom::events::{
+    CallbackRef, HostValue, MutationDelivery, PromiseOutcome, PromiseRef, ScriptHost,
+};
 use tenta_js::fetch::FetchStartError;
 use tenta_js::xhr::{XhrHandle, XhrRequest};
 
@@ -319,6 +324,50 @@ impl ScriptHost for V8ScriptHost {
         }
 
         cancelled
+    }
+
+    fn invoke_mutation_callback(
+        &self,
+        callback: CallbackRef,
+        observer: u64,
+        records: &[u64],
+    ) -> MutationDelivery {
+        self.with_context(|scope| {
+            let Ok(this) = handle_to_v8::<MutationObserver>(scope, Handle::from_bits(observer))
+            else {
+                return MutationDelivery::Unreachable;
+            };
+            let Ok(callee) = value_to_v8(scope, callback.0) else {
+                return MutationDelivery::Unreachable;
+            };
+            let Ok(function) = v8::Local::<v8::Function>::try_from(callee) else {
+                return MutationDelivery::Unreachable;
+            };
+            let mut wrappers: Vec<v8::Local<v8::Value>> = Vec::with_capacity(records.len());
+            for bits in records {
+                let Ok(record) = handle_to_v8::<MutationRecord>(scope, Handle::from_bits(*bits))
+                else {
+                    return MutationDelivery::Unreachable;
+                };
+                wrappers.push(record);
+            }
+            let array = v8::Array::new_with_elements(scope, &wrappers);
+            v8::tc_scope!(let tc, scope);
+            // The call is script, so it is bracketed like a listener's: it can
+            // queue a promise reaction and `enter_script` records the debt.
+            self.host.enter_script();
+            let result = function.call(tc, this, &[array.into(), this]);
+            if result.is_none() {
+                crate::inspector::report_caught(tc, &self.host);
+            }
+            self.host.exit_script();
+            MutationDelivery::Called
+        })
+    }
+
+    fn computed_style_value(&self, node: tenta_core::NodeId, property: &str) -> Option<String> {
+        let host = self.host.geometry_host.borrow().clone()?;
+        host.computed_value(node, None, property)
     }
 
     fn release_value(&self, bits: u64) {

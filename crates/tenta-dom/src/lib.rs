@@ -26,10 +26,11 @@ pub mod text;
 
 pub use arena::{DocTypeData, NodeFlags, NodeKind, PiData, WrapperSlot};
 pub use document::{
-    Document, LiveRangeId, MemoryReport, NodeHandle, NodeOrText, ObserverAgent, ObserverAttachment,
-    RangeBoundary, ReadyState, SharedObserverAgent, StopPredicate, SweepStats,
-    validate_doctype_name, validate_processing_instruction_data,
-    validate_processing_instruction_target,
+    Document, LiveRangeId, MemoryReport, NativeObserveError, NativeObserver, NativeRecordBatch,
+    NodeHandle, NodeOrText, NotifyDemand, ObserveOptionsInput, ObserverAgent, ObserverAttachment,
+    ObserverId, ObserverNode, OptionsError, PublishedObserverRecord, RangeBoundary, ReadyState,
+    RecordType, SharedObserverAgent, StopPredicate, SweepStats, validate_doctype_name,
+    validate_processing_instruction_data, validate_processing_instruction_target,
 };
 pub use interner::{DocInterner, LocalName};
 pub use mutation::{

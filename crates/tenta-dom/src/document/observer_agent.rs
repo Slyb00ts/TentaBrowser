@@ -263,6 +263,13 @@ impl ObserverAgent {
         self.notify_demand
     }
 
+    /// Whether any observer has a record waiting for delivery. A microtask
+    /// asked for by a mutation that no observer selected has nothing to do, and
+    /// browsers queue none: the host enqueues only when this is true.
+    pub fn has_pending_observers(&self) -> bool {
+        self.journal.pending_observers().next().is_some()
+    }
+
     /// Inspect native graph relationships without allocating, borrowing a
     /// Document, acquiring node handles, or materializing wrappers. The
     /// visitor must not call script or reenter the agent/registration locks.

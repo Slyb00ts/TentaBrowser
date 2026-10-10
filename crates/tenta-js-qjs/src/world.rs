@@ -704,6 +704,8 @@ impl World {
                                     HostRecord::Attr(_)
                                         | HostRecord::Range(_)
                                         | HostRecord::StaticRange(_)
+                                        | HostRecord::MutationObserver(_)
+                                        | HostRecord::MutationRecord(_)
                                 )
                             );
                             let reclaimed = ctx.reclaim_host(d.host_key());

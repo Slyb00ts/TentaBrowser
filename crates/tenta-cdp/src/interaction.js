@@ -1,11 +1,12 @@
 // Page-side half of the CDP Input and DOM domains.
 //
-// The engine has no focus model, no pointer or keyboard default actions and no
-// IntersectionObserver yet (HT3, SC1 and the observer packages own those), but
-// Puppeteer and Playwright need them before their first click or keystroke.
-// This script supplies the smallest version of each. It is registered as an
-// init script of every page the CDP server creates and is meant to disappear
-// as the native features land; none of it exists for pages other hosts open.
+// The engine has no pointer or keyboard default actions and no
+// IntersectionObserver yet (HT3 and SC1 own those), but Puppeteer and
+// Playwright need them before their first click or keystroke. This script
+// supplies the smallest version of each. It is registered as an init script of
+// every page the CDP server creates and is meant to disappear as the native
+// features land; none of it exists for pages other hosts open. Focus and
+// MutationObserver are native now: this script only drives them.
 //
 // Events dispatched here are synthetic: `isTrusted` is false.
 //
@@ -13,9 +14,8 @@
 // domain: a page can read it, replace its globals or call `__tentaCdp`. It
 // captures the intrinsics it relies on when it is installed, before any page
 // script runs, so a casual page cannot subvert it, and that is all the
-// protection it has. Its additions (`IntersectionObserver`, `MutationObserver`,
-// focus and geometry members, `__tentaCdp`) are visible to a page that looks,
-// so it is fingerprintable. It is an automation aid and not a stealth layer.
+// protection it has. Its additions (`IntersectionObserver`, geometry members,
+// `__tentaCdp`) are visible to a page that looks, so it is fingerprintable. It is an automation aid and not a stealth layer.
 (function (global) {
   'use strict';
   if (global.__tentaCdp) return;
@@ -25,12 +25,8 @@
   const assign = Object.assign;
   const apply = Reflect.apply;
   const SafeMap = Map;
-  const SafeSet = Set;
   const SafeWeakMap = WeakMap;
-  let wakeObservers = () => {};
   const indexOf = Array.prototype.indexOf;
-  const arraySlice = Array.prototype.slice;
-  const clearTimeoutOf = global.clearTimeout;
   const setTimeoutOf = global.setTimeout;
   const getterOf = (proto, name) => {
     const descriptor = proto && Object.getOwnPropertyDescriptor(proto, name);
@@ -39,18 +35,22 @@
   const childNodesOf = getterOf(global.Node && global.Node.prototype, 'childNodes');
   const nodeTypeOf = getterOf(global.Node && global.Node.prototype, 'nodeType');
   const parentNodeOf = getterOf(global.Node && global.Node.prototype, 'parentNode');
-  const elementProto0 = global.Element && global.Element.prototype;
-  const getAttributeNamesOf = elementProto0 && elementProto0.getAttributeNames;
-  const getAttributeOf = elementProto0 && elementProto0.getAttribute;
-  const querySelectorAllOf = global.Document && global.Document.prototype.querySelectorAll;
+  const documentProto = global.Document && global.Document.prototype;
+  const querySelectorAllOf = documentProto && documentProto.querySelectorAll;
   const childrenOf = (node) => (childNodesOf ? apply(childNodesOf, node, []) : node.childNodes);
   const has = (el, name) => el.hasAttribute(name);
   const attr = (el, name) => (el.getAttribute(name) || '').toLowerCase();
 
   // ---- focus ------------------------------------------------------------
 
-  let active = null;
+  // Focus is the engine's: `focus()`, `blur()`, `activeElement` and the four
+  // focus events are native. The intrinsics are captured before page script
+  // runs so a page that replaces them cannot redirect the host's commands.
   const selections = new SafeWeakMap();
+  const elementProto = global.HTMLElement && global.HTMLElement.prototype;
+  const focusOf = elementProto && elementProto.focus;
+  const blurOf = elementProto && elementProto.blur;
+  const activeElementOf = getterOf(global.Document && global.Document.prototype, 'activeElement');
 
   const TEXT_TYPES = ['', 'text', 'search', 'tel', 'url', 'email', 'password', 'number'];
 
@@ -60,87 +60,35 @@
     return el.localName === 'input' && TEXT_TYPES.indexOf(attr(el, 'type')) !== -1;
   }
 
-  function focusable(el) {
+  // The element holding focus, or null while the viewport does.
+  function current() {
+    const el = activeElementOf ? apply(activeElementOf, doc, []) : null;
+    return el && el !== doc.body && el !== doc.documentElement ? el : null;
+  }
+
+  // Moves focus to `el` when the engine accepts it as a focus target. A pointer
+  // shows the focus ring only on a text control, as browsers do.
+  function focusElement(el, byPointer) {
+    if (!el || !focusOf) return;
+    apply(focusOf, el, [{ focusVisible: !byPointer || isTextControl(el) }]);
+  }
+
+  function blurElement(el) {
+    if (el && blurOf) apply(blurOf, el, []);
+  }
+
+  // Whether a Tab press can land on `el`. Sequential focus navigation is not
+  // native yet, so the order is computed here from the document.
+  function tabbable(el) {
     if (!el || el.nodeType !== 1 || !el.isConnected) return false;
-    if (has(el, 'tabindex')) return !isNaN(parseInt(el.getAttribute('tabindex'), 10));
+    const index = parseInt(el.getAttribute('tabindex'), 10);
+    if (!isNaN(index)) return index >= 0;
     const tag = el.localName;
     if (tag === 'input') return !has(el, 'disabled') && attr(el, 'type') !== 'hidden';
     if (tag === 'textarea' || tag === 'select' || tag === 'button') return !has(el, 'disabled');
     if ((tag === 'a' || tag === 'area') && has(el, 'href')) return true;
     const editable = el.getAttribute('contenteditable');
     return editable !== null && editable.toLowerCase() !== 'false';
-  }
-
-  function current() {
-    if (active && !active.isConnected) active = null;
-    return active;
-  }
-
-  function fireFocus(type, target, related, bubbles) {
-    target.dispatchEvent(
-      new global.FocusEvent(type, { bubbles, composed: true, relatedTarget: related }),
-    );
-  }
-
-  function focusElement(el) {
-    if (!focusable(el)) return;
-    const previous = current();
-    if (previous === el) return;
-    if (previous) {
-      active = null;
-      fireFocus('blur', previous, el, false);
-      fireFocus('focusout', previous, el, true);
-    }
-    active = el;
-    fireFocus('focus', el, previous, false);
-    fireFocus('focusin', el, previous, true);
-  }
-
-  function blurElement(el) {
-    if (current() !== el) return;
-    active = null;
-    fireFocus('blur', el, null, false);
-    fireFocus('focusout', el, null, true);
-  }
-
-  const elementProto = global.HTMLElement && global.HTMLElement.prototype;
-  if (elementProto) {
-    if (typeof elementProto.focus !== 'function') {
-      defineProperty(elementProto, 'focus', {
-        value: function focus() {
-          focusElement(this);
-        },
-        writable: true,
-        configurable: true,
-      });
-    }
-    if (typeof elementProto.blur !== 'function') {
-      defineProperty(elementProto, 'blur', {
-        value: function blur() {
-          blurElement(this);
-        },
-        writable: true,
-        configurable: true,
-      });
-    }
-  }
-  const documentProto = global.Document && global.Document.prototype;
-  if (documentProto) {
-    defineProperty(documentProto, 'activeElement', {
-      get: function activeElement() {
-        return current() || this.body || this.documentElement;
-      },
-      configurable: true,
-    });
-    if (typeof documentProto.hasFocus !== 'function') {
-      defineProperty(documentProto, 'hasFocus', {
-        value: function hasFocus() {
-          return true;
-        },
-        writable: true,
-        configurable: true,
-      });
-    }
   }
 
   // There is no scrolling: everything laid out is "in view".
@@ -265,229 +213,6 @@
         };
         return walker;
       },
-      writable: true,
-      configurable: true,
-    });
-  }
-
-  // ---- MutationObserver (snapshot diff) ---------------------------------------
-
-  // The engine has no MutationObserver. This stand-in compares a snapshot of
-  // each observed tree on a backing-off timer and delivers `childList`,
-  // `attributes` and `characterData` records for what changed since the last
-  // look, only when something did. Records carry the node that changed;
-  // sibling pointers and the order of changes within one interval are not
-  // reproduced, and a change made and undone inside an interval is invisible.
-  if (typeof global.MutationObserver !== 'function') {
-    const observers = new SafeSet();
-    // Every look costs one serialization of the observed tree, compared with
-    // the last one as a string: no node wrappers are made unless the markup
-    // changed (a wrapper costs far more than the comparison). Only then is the
-    // tree walked, up to this many nodes into document order; changes beyond
-    // are not reported. The delay between looks backs off from 50 ms to 1 s
-    // while nothing changes and starts over at a change, at `observe` and at
-    // any host command.
-    const MAX_SNAPSHOT_NODES = 1000;
-    const MIN_DELAY = 50;
-    const MAX_DELAY = 1000;
-    let timer = null;
-    let delay = MIN_DELAY;
-
-    // A node with more children than this is tracked by its child count
-    // alone: listing them makes a wrapper per child, which is what is costly.
-    // Its records name no added or removed nodes.
-    const MAX_CHILDREN = 200;
-
-    const childrenState = (node) => {
-      const list = childrenOf(node);
-      return list.length > MAX_CHILDREN
-        ? { children: null, count: list.length }
-        : { children: apply(arraySlice, list, []), count: list.length };
-    };
-
-    const stateOf = (node) => {
-      const type = apply(nodeTypeOf, node, []);
-      if (type === 1) {
-        const attrs = new SafeMap();
-        const names = apply(getAttributeNamesOf, node, []);
-        for (let i = 0; i < names.length; i += 1) {
-          attrs.set(names[i], apply(getAttributeOf, node, [names[i]]));
-        }
-        return assign(childrenState(node), { attrs, data: null });
-      }
-      if (type === 3 || type === 8 || type === 4) {
-        return { children: [], count: 0, attrs: null, data: node.data };
-      }
-      return assign(childrenState(node), { attrs: null, data: null });
-    };
-
-    // Walks `root` (and its subtree when asked) into a node -> state map.
-    const snapshot = (root, subtree) => {
-      const states = new SafeMap();
-      const pending = [root];
-      while (pending.length > 0 && states.size < MAX_SNAPSHOT_NODES) {
-        const node = pending.pop();
-        const state = stateOf(node);
-        states.set(node, state);
-        if (subtree || node === root) {
-          const kids = state.children || [];
-          for (let i = 0; i < kids.length; i += 1) {
-            if (subtree) pending.push(kids[i]);
-          }
-        }
-      }
-      return states;
-    };
-
-    const record = (type, target, extra) => assign({
-      type,
-      target,
-      addedNodes: [],
-      removedNodes: [],
-      previousSibling: null,
-      nextSibling: null,
-      attributeName: null,
-      attributeNamespace: null,
-      oldValue: null,
-    }, extra);
-
-    const diff = (entry) => {
-      const { options, before } = entry;
-      const after = snapshot(entry.target, options.subtree);
-      const records = [];
-      after.forEach((now, node) => {
-        const was = before.get(node);
-        if (!was) return;
-        if (options.childList) {
-          if (now.children === null || was.children === null) {
-            if (now.count !== was.count) records.push(record('childList', node, {}));
-          } else {
-            const same = now.children.length === was.children.length
-              && now.children.every((child, i) => child === was.children[i]);
-            if (!same) {
-              const nowSet = new SafeSet(now.children);
-              const wasSet = new SafeSet(was.children);
-              const added = now.children.filter((child) => !wasSet.has(child));
-              const removed = was.children.filter((child) => !nowSet.has(child));
-              if (added.length > 0 || removed.length > 0) {
-                records.push(record('childList', node, { addedNodes: added, removedNodes: removed }));
-              }
-            }
-          }
-        }
-        if (options.attributes && now.attrs && was.attrs) {
-          const names = new SafeSet();
-          now.attrs.forEach((value, name) => names.add(name));
-          was.attrs.forEach((value, name) => names.add(name));
-          names.forEach((name) => {
-            if (options.attributeFilter && apply(indexOf, options.attributeFilter, [name]) === -1) return;
-            if (now.attrs.get(name) === was.attrs.get(name)) return;
-            records.push(record('attributes', node, {
-              attributeName: name,
-              oldValue: options.attributeOldValue ? (was.attrs.get(name) === undefined ? null : was.attrs.get(name)) : null,
-            }));
-          });
-        }
-        if (options.characterData && now.data !== null && now.data !== was.data) {
-          records.push(record('characterData', node, {
-            oldValue: options.characterDataOldValue ? was.data : null,
-          }));
-        }
-      });
-      entry.before = after;
-      return records;
-    };
-
-    const signature = (node) => {
-      const type = apply(nodeTypeOf, node, []);
-      if (type === 9) return node.documentElement ? node.documentElement.outerHTML : '';
-      return type === 1 ? node.outerHTML : String(node.data);
-    };
-
-    const collect = (observer) => {
-      const records = [];
-      observer._entries.forEach((entry) => {
-        const sig = signature(entry.target);
-        if (sig === entry.sig) return;
-        entry.sig = sig;
-        const found = diff(entry);
-        for (let i = 0; i < found.length; i += 1) records.push(found[i]);
-      });
-      return records;
-    };
-
-    const schedule = () => {
-      if (timer !== null) clearTimeoutOf(timer);
-      timer = setTimeoutOf(tick, delay);
-    };
-
-    function tick() {
-      timer = null;
-      let changed = false;
-      observers.forEach((observer) => {
-        const records = collect(observer);
-        if (records.length > 0) {
-          changed = true;
-          observer._callback.call(observer, records, observer);
-        }
-      });
-      delay = changed ? MIN_DELAY : Math.min(delay * 2, MAX_DELAY);
-      if (observers.size > 0) schedule();
-    }
-
-    const stopIfIdle = () => {
-      if (observers.size === 0 && timer !== null) {
-        clearTimeoutOf(timer);
-        timer = null;
-      }
-    };
-
-    wakeObservers = () => {
-      if (observers.size > 0 && delay !== MIN_DELAY) {
-        delay = MIN_DELAY;
-        schedule();
-      }
-    };
-
-    class MutationObserver {
-      constructor(callback) {
-        if (typeof callback !== 'function') {
-          throw new TypeError('MutationObserver callback must be a function');
-        }
-        defineProperty(this, '_callback', { value: callback });
-        defineProperty(this, '_entries', { value: new SafeMap() });
-      }
-      observe(target, init) {
-        const options = assign({}, init);
-        if (options.attributes === undefined && (options.attributeOldValue || options.attributeFilter)) {
-          options.attributes = true;
-        }
-        if (options.characterData === undefined && options.characterDataOldValue) {
-          options.characterData = true;
-        }
-        if (!options.childList && !options.attributes && !options.characterData) {
-          throw new TypeError(
-            "Failed to execute 'observe' on 'MutationObserver': The options object must set at least one of 'attributes', 'characterData', or 'childList' to true.",
-          );
-        }
-        this._entries.set(target, {
-          target, options, sig: signature(target), before: snapshot(target, options.subtree),
-        });
-        observers.add(this);
-        delay = MIN_DELAY;
-        schedule();
-      }
-      disconnect() {
-        this._entries.clear();
-        observers.delete(this);
-        stopIfIdle();
-      }
-      takeRecords() {
-        return collect(this);
-      }
-    }
-    defineProperty(global, 'MutationObserver', {
-      value: MutationObserver,
       writable: true,
       configurable: true,
     });
@@ -791,7 +516,7 @@
     } else if (stop.localName === 'label') {
       const control = labelControl(stop);
       if (control && !stop.contains(target.closest('input, select, textarea, button'))) {
-        focusElement(control);
+        focusElement(control, true);
         click(control, init, { detail: 0 });
       }
     } else if (stop.localName === 'a') {
@@ -835,9 +560,12 @@
       const proceed = fireMouse(target, 'mousedown', init, {});
       if (proceed && (init.button || 0) === 0) {
         let focusTarget = target;
-        while (focusTarget && !focusable(focusTarget)) focusTarget = focusTarget.parentElement;
-        if (focusTarget) focusElement(focusTarget);
-        else if (current()) blurElement(current());
+        while (focusTarget) {
+          focusElement(focusTarget, true);
+          if (current() === focusTarget) break;
+          focusTarget = focusTarget.parentElement;
+        }
+        if (!focusTarget && current()) blurElement(current());
       }
       if ((init.button || 0) === 2) fireMouse(target, 'contextmenu', init, {});
       return proceed;
@@ -890,9 +618,7 @@
     const out = [];
     for (let i = 0; i < all.length; i += 1) {
       const el = all[i];
-      if (!focusable(el)) continue;
-      const index = el.getAttribute('tabindex');
-      if (index !== null && parseInt(index, 10) < 0) continue;
+      if (!tabbable(el)) continue;
       out.push(el);
     }
     return out;
@@ -1091,7 +817,6 @@
 
   function reporting(action) {
     return function () {
-      wakeObservers();
       navigation = null;
       unsupported = null;
       apply(action, null, arguments);
@@ -1111,8 +836,7 @@
       pathOf,
       nodeAt,
       setLayout(next) {
-        wakeObservers();
-        const all = apply(querySelectorAllOf, doc, ['*']);
+          const all = apply(querySelectorAllOf, doc, ['*']);
         const fresh = new SafeMap();
         for (let i = 0; i < all.length; i += 1) fresh.set(all[i], i);
         indexes = fresh;
