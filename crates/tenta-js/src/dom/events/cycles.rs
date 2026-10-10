@@ -291,6 +291,10 @@ impl Plan {
     /// Returns one owned reference for each removed listener.
     pub fn drain_collected(&self, dead: &HashSet<u64>) -> Vec<u64> {
         let mut released = Vec::with_capacity(self.registrations.len());
+        // Handler-map entries are pruned once per context after the loop; a
+        // retain per registration would scan the whole map each time.
+        let mut contexts: HashMap<u16, &SharedContext> = HashMap::new();
+        let mut removed_ids: HashMap<u16, HashSet<(TargetKey, u64)>> = HashMap::new();
         for registration in &self.registrations {
             if !dead.contains(&registration.callback) {
                 continue;
@@ -305,11 +309,19 @@ impl Plan {
                 Some(registration.callback),
                 "listener ownership changed during cycle collection"
             );
+            contexts.entry(context.slot).or_insert(context);
+            removed_ids
+                .entry(context.slot)
+                .or_default()
+                .insert((registration.target, registration.id.0));
+            released.push(registration.callback);
+        }
+        for (slot, removed) in removed_ids {
+            let context = contexts[&slot];
             context
                 .handlers
                 .borrow_mut()
-                .retain(|(target, _), id| *target != registration.target || *id != registration.id);
-            released.push(registration.callback);
+                .retain(|(target, _), id| !removed.contains(&(*target, id.0)));
         }
         released
     }
@@ -380,5 +392,81 @@ mod tests {
         document.borrow_mut().release_wrapper(node);
         assert_eq!(document.borrow_mut().sweep_detached().nodes_freed, 1);
         root.documents.clear_minted();
+    }
+
+    fn many_collected_registrations(count: u64) -> (Rc<RefCell<Document>>, Rc<HostContext>, Plan) {
+        let document = Rc::new(RefCell::new(Document::new()));
+        let root = HostContext::new(
+            document.clone(),
+            SharedClock::new(Clock::virtual_at(MonoTime::ZERO)),
+            tenta_net::CookieJar::new(),
+            crate::storage::PageStorage::isolated(),
+        );
+        let mut wrappers = Vec::new();
+        for callback in 0..count {
+            let node = {
+                let mut doc = document.borrow_mut();
+                let id = doc.create_html_element(atoms::DIV);
+                let node = doc.node_ref(id);
+                doc.retain_wrapper(node).unwrap();
+                node
+            };
+            let id = root
+                .listeners
+                .borrow_mut()
+                .add_at(
+                    TargetKey::Node(node),
+                    "load".to_owned(),
+                    CallbackRef(callback),
+                    false,
+                    false,
+                    false,
+                )
+                .unwrap();
+            root.handlers.borrow_mut().insert(
+                (
+                    TargetKey::Node(node),
+                    crate::dom::events::EventHandlerName::new("onload"),
+                ),
+                id,
+            );
+            wrappers.push(encode_node(root.slot, node));
+            document.borrow_mut().release_wrapper(node);
+        }
+        let plan = Plan::with_wrappers(&root, &wrappers);
+        (document, root, plan)
+    }
+
+    #[test]
+    fn draining_many_collected_registrations_removes_listeners_and_handlers() {
+        let (_document, root, plan) = many_collected_registrations(3000);
+        let dead: HashSet<u64> = (0..3000).filter(|bits| bits % 3 != 0).collect();
+        let mut released = plan.drain_collected(&dead);
+        released.sort_unstable();
+        assert_eq!(released.len(), dead.len());
+        let handlers = root.handlers.borrow();
+        assert_eq!(handlers.len(), 1000);
+        let listeners = root.listeners.borrow();
+        assert!(
+            handlers
+                .iter()
+                .all(|((target, _), id)| listeners.contains_at(*target, *id))
+        );
+        drop((handlers, listeners));
+        root.documents.clear_minted();
+    }
+
+    #[test]
+    #[ignore = "micro-benchmark"]
+    fn bench_drain_collected() {
+        for count in [1_000u64, 5_000, 20_000] {
+            let (_document, root, plan) = many_collected_registrations(count);
+            let dead: HashSet<u64> = (0..count).collect();
+            let start = std::time::Instant::now();
+            let released = plan.drain_collected(&dead);
+            eprintln!("BENCH n={count} drain={:?}", start.elapsed());
+            assert_eq!(released.len() as u64, count);
+            root.documents.clear_minted();
+        }
     }
 }

@@ -15,3 +15,14 @@ slow-timeout = { period = "120s", terminate-after = 5 }
 [[profile.ci.overrides]]
 filter = 'binary(corpus)'
 slow-timeout = { period = "120s", terminate-after = 5 }
+
+# The image-flood tests measure that thousands of image events fit in the
+# page's wall-clock script budget; sharing the CPU with other test processes
+# in a debug build pushes them over it, so they run alone.
+[[profile.default.overrides]]
+filter = 'binary(image_events) & (test(/thousand/) | test(/more_pending_images_than_the_cap/))'
+threads-required = "num-test-threads"
+
+[[profile.ci.overrides]]
+filter = 'binary(image_events) & (test(/thousand/) | test(/more_pending_images_than_the_cap/))'
+threads-required = "num-test-threads"
