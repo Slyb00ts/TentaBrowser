@@ -144,6 +144,7 @@ impl Env {
             budgets: &self.budgets,
             clock: &*self.clock,
             extra_headers: &[],
+            net: None,
             document_url: &self.document_url,
             deadline: Instant::now() + Duration::from_secs(60),
             fetch_policy: FetchPolicy::for_tier(self.tier),

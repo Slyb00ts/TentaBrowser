@@ -579,8 +579,14 @@ async fn emulation_accepts_what_it_can_ignore_and_refuses_the_rest_by_name() {
         json!({ "media": "print", "features": [{ "name": "prefers-color-scheme", "value": "dark" }] }),
     )
     .await;
+    // The user agent header is overridable per page since the Network package;
+    // `navigator.userAgent` is not.
+    page.result(
+        "Emulation.setUserAgentOverride",
+        json!({ "userAgent": "x" }),
+    )
+    .await;
     for (method, params) in [
-        ("setUserAgentOverride", json!({ "userAgent": "x" })),
         (
             "setTimezoneOverride",
             json!({ "timezoneId": "Europe/Warsaw" }),

@@ -34,14 +34,13 @@ pub(super) struct FrameEvents {
 /// Seconds on a clock that only moves forward, the unit of the protocol's
 /// `MonotonicTime`.
 fn monotonic_seconds() -> f64 {
-    static ORIGIN: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    ORIGIN.get_or_init(Instant::now).elapsed().as_secs_f64()
+    crate::clock::seconds_at(Instant::now())
 }
 
 /// The loader id of the document `navigation_id` loaded. Chromium's are 32
 /// hex digits; clients only compare them.
 pub(super) fn loader_id(target: &Target, navigation_id: u64) -> String {
-    format!("{:016X}{:016X}", target.page().id().raw(), navigation_id)
+    target.loader_id(navigation_id)
 }
 
 /// The origin Chromium reports for a document: opaque origins, such as

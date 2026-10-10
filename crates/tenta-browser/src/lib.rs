@@ -38,6 +38,13 @@ pub use tenta_page::{
     PageEvents, PendingNavigation, PropertyDescriptor, PropertyPreview, PropertyQuery, RemoteKind,
     RemoteObject, RemoteValue, StackFrame, World,
 };
+/// What a protocol host needs to watch and hold a page's network traffic.
+pub mod network {
+    pub use tenta_net::hooks::BoxFuture;
+    pub use tenta_net::request::{PriorityClass, ResourceType};
+    pub use tenta_net::{NetError, Timing};
+    pub use tenta_page::network::*;
+}
 #[cfg(feature = "render")]
 pub use tenta_page::{
     BoxQuads, Capture, Clip, ContentSize, ElementGeometry, ImageFormat, Quad, RasterStats,

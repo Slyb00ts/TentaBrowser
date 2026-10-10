@@ -9,6 +9,7 @@
 //! (`docs/spec/02-architecture.md` §2).
 
 mod backend;
+mod clock;
 mod connection;
 mod domain;
 mod domains;

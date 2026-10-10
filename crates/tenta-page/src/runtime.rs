@@ -1275,7 +1275,7 @@ pub(crate) async fn fetch_script(
         return None;
     }
     let request_id = next_request_id();
-    let request = match script_request(config, meta, url, remaining) {
+    let mut request = match script_request(config, meta, url, remaining) {
         Ok(request) => request,
         Err(error) => {
             tracing::warn!(
@@ -1293,7 +1293,8 @@ pub(crate) async fn fetch_script(
     // One place ends the request, whatever the fetch did. A request left in the
     // settle machine's table would hold the settle open for a fetch that is
     // over — the failure mode this fetch is most likely to cause.
-    let fetched = read_script_body(&config.client, request).await;
+    let tracked = config.net.begin(&mut request, request_id, None);
+    let fetched = read_script_body(&config.client, request, tracked).await;
     tracker.borrow_mut().note_request_done(request_id);
     match fetched {
         Ok(Some(body)) => {
@@ -1361,8 +1362,20 @@ fn script_request(
 async fn read_script_body(
     client: &Client,
     request: Request,
+    mut tracked: Option<crate::network::Tracked>,
 ) -> std::result::Result<Option<Bytes>, NetError> {
-    let response = client.send(request).await?;
+    let response = match client.send(request).await {
+        Ok(response) => response,
+        Err(error) => {
+            if let Some(tracked) = &mut tracked {
+                tracked.failed(&error);
+            }
+            return Err(error);
+        }
+    };
+    if let Some(tracked) = &mut tracked {
+        tracked.response(&response);
+    }
     tracing::debug!(
         status = response.status.as_u16(),
         "a script response head arrived"
@@ -1372,9 +1385,27 @@ async fn read_script_body(
             status = response.status.as_u16(),
             "an external script was not served; the parse goes on without it"
         );
+        // The body is read only for a host that watches the traffic.
+        if let Some(tracked) = &mut tracked
+            && let Ok(body) = response.body.collect().await
+        {
+            tracked.complete(&body);
+        }
         return Ok(None);
     }
-    response.body.collect().await.map(Some)
+    let body = match response.body.collect().await {
+        Ok(body) => body,
+        Err(error) => {
+            if let Some(tracked) = &mut tracked {
+                tracked.failed(&error);
+            }
+            return Err(error);
+        }
+    };
+    if let Some(tracked) = &mut tracked {
+        tracked.complete(&body);
+    }
+    Ok(Some(body))
 }
 
 /// Decodes the text of an external classic script.

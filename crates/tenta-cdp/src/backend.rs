@@ -9,6 +9,7 @@ use tenta_browser::{BrowserContext, ContextOptions, Engine, Goto, Page, PageOpti
 use tenta_core::{Result, Tier};
 use tokio::sync::{broadcast, watch};
 
+use crate::domains::network::{NetOverrides, NetworkBridge};
 use crate::error::CdpError;
 use crate::ids::random_id;
 use crate::options::CdpOptions;
@@ -37,6 +38,8 @@ pub struct Target {
     contexts: ContextIds,
     console: Arc<ConsoleRing>,
     overrides: Mutex<crate::overrides::ViewportOverrides>,
+    network: Arc<NetworkBridge>,
+    net_overrides: Mutex<NetOverrides>,
 }
 
 impl Target {
@@ -46,6 +49,28 @@ impl Target {
 
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// The loader id of the document `navigation_id` loaded. Chromium's are 32
+    /// hex digits; clients only compare them.
+    pub(crate) fn loader_id(&self, navigation_id: u64) -> String {
+        format!("{:016X}{:016X}", self.page.id().raw(), navigation_id)
+    }
+
+    pub(crate) fn net_overrides(&self) -> MutexGuard<'_, NetOverrides> {
+        lock(&self.net_overrides)
+    }
+
+    pub(crate) fn network(&self) -> &Arc<NetworkBridge> {
+        &self.network
+    }
+
+    /// Tells the page whether anyone listens to its network traffic or holds
+    /// its requests, after a session changed what it wants.
+    pub(crate) fn sync_network(&self) {
+        let hub = self.page.network();
+        hub.set_events(self.network.wants_events());
+        hub.set_intercepting(self.network.is_intercepting());
     }
 
     pub fn context_id(&self) -> &str {
@@ -247,6 +272,8 @@ impl Backend {
         };
         let page = context.new_page(options).await?;
         page.add_init_script(crate::interaction::SOURCE);
+        let network = Arc::new(NetworkBridge::default());
+        page.network().set_sink(Some(Arc::clone(&network) as _));
         let target = Arc::new(Target {
             id: random_id(),
             context_id: context_id.to_owned(),
@@ -255,6 +282,8 @@ impl Backend {
             contexts: ContextIds::default(),
             console: Arc::new(ConsoleRing::new()),
             overrides: Mutex::default(),
+            network,
+            net_overrides: Mutex::default(),
         });
         // Subscribed before the page does anything: a session that enables
         // Runtime later is owed what the page logged meanwhile. The task holds

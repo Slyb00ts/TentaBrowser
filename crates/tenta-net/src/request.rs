@@ -282,6 +282,9 @@ pub struct Request {
     /// for a future 401 Basic challenge (P2: HttpAuthCache) if an auth path
     /// already exists for the origin.
     pub userinfo: Option<(String, Option<String>)>,
+    /// The page's listener for this request, if one is attached. It survives
+    /// redirects and revalidations.
+    pub tap: Option<std::sync::Arc<dyn crate::hooks::RequestTap>>,
 }
 
 impl Request {
@@ -315,6 +318,7 @@ impl Request {
             user_activated: false,
             site_floor: FetchSite::NoOrigin,
             userinfo,
+            tap: None,
         }
     }
 
@@ -490,6 +494,7 @@ impl Request {
             user_activated: self.user_activated,
             site_floor: self.site_floor,
             userinfo: self.userinfo.clone(),
+            tap: self.tap.clone(),
         }
     }
 

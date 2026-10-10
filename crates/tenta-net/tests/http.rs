@@ -14,7 +14,9 @@ use http::{HeaderMap, StatusCode};
 use tenta_net::client::{ClientConfig, Coalescing, NetRuntime, Protocol};
 use tenta_net::dns::Resolver;
 use tenta_net::error::ErrorName;
-use tenta_net::hooks::{BoxFuture, FulfilledResponse, Hooks, Interception, Interceptor, Observer};
+use tenta_net::hooks::{
+    BoxFuture, FulfilledResponse, Hooks, Interception, Interceptor, Observer, RequestTap,
+};
 use tenta_net::policy::cache::HttpCache;
 use tenta_net::policy::cookies::{CookieJar, CookiePolicy, SameSiteContext, Site};
 use tenta_net::policy::private_network::DestinationPolicy;
@@ -264,6 +266,170 @@ async fn a_second_request_reuses_the_pooled_connection() {
     assert_eq!(server.state.hits(), 2);
     let stats = client.pool_stats().await;
     assert_eq!(stats.idle_h1, 1);
+}
+
+#[tokio::test]
+async fn a_reused_connection_still_reports_the_peer() {
+    let server = TestServer::start().await;
+    let runtime = runtime();
+    let client = plain_client(&runtime);
+
+    let first = client.get(&server.url("/hello")).await.expect("response");
+    let peer = first
+        .remote_addr
+        .expect("a fresh connection reports its peer");
+    first.bytes().await.expect("body");
+    let second = client.get(&server.url("/hello")).await.expect("response");
+    assert_eq!(
+        second.timing.connect,
+        Duration::ZERO,
+        "the socket was reused"
+    );
+    assert_eq!(second.remote_addr, Some(peer));
+}
+
+/// A tap that records the hops it sees and answers the second one itself.
+#[derive(Debug, Default)]
+struct RecordingTap {
+    redirects: parking_lot::Mutex<Vec<(String, u16, String)>>,
+    held: parking_lot::Mutex<Vec<String>>,
+}
+
+impl RequestTap for RecordingTap {
+    fn intercept<'a>(&'a self, request: &'a mut Request) -> BoxFuture<'a, Interception> {
+        Box::pin(async move {
+            self.held.lock().push(request.url.path().to_owned());
+            if request.url.path().ends_with("/hello") {
+                return Interception::Fulfill(FulfilledResponse::new(
+                    StatusCode::OK,
+                    "from the tap",
+                ));
+            }
+            Interception::Continue
+        })
+    }
+
+    fn redirected(
+        &self,
+        next: &Request,
+        hop: &tenta_net::RedirectHop,
+        headers: &[(String, http::HeaderValue)],
+    ) {
+        assert!(
+            headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("location")),
+            "the redirect response's headers are passed along"
+        );
+        self.redirects.lock().push((
+            hop.url.path().to_owned(),
+            hop.status,
+            next.url.path().to_owned(),
+        ));
+    }
+}
+
+#[tokio::test]
+async fn a_request_tap_sees_every_hop_and_may_answer_one() {
+    let server = TestServer::start().await;
+    let runtime = runtime();
+    let client = plain_client(&runtime);
+    let tap = Arc::new(RecordingTap::default());
+
+    let mut request = Request::get(&server.url("/redirect/1")).expect("request");
+    request.tap = Some(Arc::clone(&tap) as Arc<dyn RequestTap>);
+    let response = client.send(request).await.expect("response");
+
+    assert_eq!(response.text().await.expect("body"), "from the tap");
+    assert_eq!(*tap.held.lock(), ["/redirect/1", "/hello"]);
+    assert_eq!(
+        *tap.redirects.lock(),
+        [("/redirect/1".to_owned(), 302, "/hello".to_owned())]
+    );
+    assert_eq!(server.state.hits(), 1, "the second hop never left");
+}
+
+type TapFn = Box<dyn Fn(&mut Request) -> Interception + Send + Sync>;
+
+/// A tap whose decision is a closure.
+struct FnTap(TapFn);
+
+impl std::fmt::Debug for FnTap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FnTap")
+    }
+}
+
+impl RequestTap for FnTap {
+    fn intercept<'a>(&'a self, request: &'a mut Request) -> BoxFuture<'a, Interception> {
+        Box::pin(std::future::ready((self.0)(request)))
+    }
+}
+
+fn tapped(url: &str, decide: TapFn) -> Request {
+    let mut request = Request::get(url).expect("request");
+    request.tap = Some(Arc::new(FnTap(decide)));
+    request
+}
+
+#[tokio::test]
+async fn a_fulfilled_redirect_is_followed_and_its_cookie_is_stored() {
+    let server = TestServer::start().await;
+    let runtime = runtime();
+    let jar = CookieJar::new();
+    let client = cookie_client(&runtime, jar.clone());
+    let target = server.url("/hello");
+    let first = server.url("/fulfilled");
+
+    let location = target.clone();
+    let request = tapped(
+        &first,
+        Box::new(move |request| {
+            if request.url.path() != "/fulfilled" {
+                return Interception::Continue;
+            }
+            Interception::Fulfill(
+                FulfilledResponse::new(StatusCode::FOUND, "")
+                    .header("Location", &location)
+                    .header("Set-Cookie", "fulfilled=1; Path=/"),
+            )
+        }),
+    );
+    let response = client.send(request).await.expect("response");
+    assert_eq!(response.redirects.len(), 1);
+    assert_eq!(response.url.path(), "/hello");
+    assert_eq!(response.text().await.expect("body"), "hello world");
+    assert!(
+        jar.cookies()
+            .iter()
+            .any(|cookie| cookie.name == "fulfilled"),
+        "the fulfilled Set-Cookie is in the jar"
+    );
+    assert_eq!(
+        server.state.hits(),
+        1,
+        "only the followed hop reached the server"
+    );
+}
+
+#[tokio::test]
+async fn a_url_a_hook_substitutes_meets_the_destination_policy() {
+    let runtime = runtime();
+    let config = ClientConfig {
+        resolver: Some(Arc::new(Resolver::literals_only(SessionCache::ephemeral()))),
+        allow_h2: false,
+        ..ClientConfig::default()
+    };
+    let client = runtime.client(config).expect("client");
+    let request = tapped(
+        "http://93.184.216.34/",
+        Box::new(|request| {
+            request.url = Url::parse("http://127.0.0.1:8081/").unwrap();
+            Interception::Continue
+        }),
+    );
+    let error = client.send(request).await.expect_err("loopback is refused");
+    assert_eq!(error.name, ErrorName::AccessDenied, "{error:?}");
 }
 
 #[tokio::test]

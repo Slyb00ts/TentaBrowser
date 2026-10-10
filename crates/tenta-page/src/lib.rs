@@ -12,6 +12,7 @@ pub mod event;
 // the engine the page owns, not an API (`crates/tenta-page/src/fetch.rs`).
 mod fetch;
 pub mod fetch_policy;
+pub mod network;
 pub mod page;
 // Private: the runtime is page-thread-local state the page owns, not an API
 // (`crates/tenta-page/src/runtime.rs`).

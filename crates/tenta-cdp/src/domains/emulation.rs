@@ -7,8 +7,11 @@
 //! (`innerWidth`) keep the viewport the document's engine was built with.
 //! `setTouchEmulationEnabled` and `setEmulatedMedia` are accepted and have no
 //! effect yet: there is no touch input, and the style system takes no media
-//! overrides. Everything else is refused by name rather than answered `{}`,
-//! so a client does not believe a user agent or a locale took hold.
+//! overrides. `setUserAgentOverride` replaces the `User-Agent` (and
+//! `Accept-Language`) header of the page's requests until the session ends;
+//! `navigator.userAgent` keeps the context's value. Everything else is refused
+//! by name rather than answered `{}`, so a client does not believe a locale or
+//! a timezone took hold.
 
 use std::sync::{Arc, Mutex};
 
@@ -32,10 +35,6 @@ const MAX_SCALE_FACTOR: f64 = 16.0;
 
 /// What a refused command says is missing.
 const REFUSED: &[(&str, &str)] = &[
-    (
-        "setUserAgentOverride",
-        "the user agent is fixed per browser context; set it when the context is created",
-    ),
     ("setLocaleOverride", "locale overrides are not built"),
     ("setTimezoneOverride", "timezone overrides are not built"),
     (
@@ -67,6 +66,13 @@ struct DeviceMetrics {
     height: u32,
     device_scale_factor: f64,
     mobile: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserAgent {
+    user_agent: String,
+    accept_language: Option<String>,
 }
 
 /// The override one session holds on its page; ends with the session.
@@ -191,6 +197,18 @@ impl DomainHandler for Emulation {
                 "clearDeviceMetricsOverride" => {
                     cx.target()?;
                     cx.session().state::<Override>().restore();
+                    Ok(json!({}))
+                }
+                "setUserAgentOverride" => {
+                    let UserAgent {
+                        user_agent,
+                        accept_language,
+                    } = parse_params(params)?;
+                    super::network::override_user_agent(
+                        &cx,
+                        &user_agent,
+                        accept_language.as_deref(),
+                    )?;
                     Ok(json!({}))
                 }
                 "setTouchEmulationEnabled" | "setEmulatedMedia" => {

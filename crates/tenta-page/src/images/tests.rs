@@ -166,6 +166,7 @@ impl Env {
             budgets: &self.budgets,
             clock: &*self.clock,
             extra_headers: &[],
+            net: None,
             document_url: &self.document_url,
             deadline: Instant::now() + wait,
             rolling: None,

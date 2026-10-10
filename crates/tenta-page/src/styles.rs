@@ -58,6 +58,8 @@ pub(crate) struct StyleContext<'a> {
     pub clock: &'a dyn Clock,
     /// The page's header overrides, sent exactly as scripts send them.
     pub extra_headers: &'a [(String, String)],
+    /// The page's network observation point, when it has one.
+    pub net: Option<&'a crate::network::NetworkHub>,
     /// The document: initiator of every request, which decides `Referer`,
     /// `Origin` and `Sec-Fetch-Site`.
     pub document_url: &'a Url,
@@ -658,13 +660,23 @@ async fn read_remote(
     remaining: Duration,
     byte_limit: u64,
 ) -> Result<(Vec<u8>, Option<String>, Url), String> {
-    let request = style_request(ctx, url, remaining, byte_limit)
+    let mut request = style_request(ctx, url, remaining, byte_limit)
         .map_err(|error| format!("a page header cannot go on the wire: {error:?}"))?;
-    let response = ctx
-        .client
-        .send(request)
-        .await
-        .map_err(|error| format!("{error:?}"))?;
+    let mut tracked = ctx
+        .net
+        .and_then(|net| net.begin(&mut request, crate::page::next_request_id(), None));
+    let response = match ctx.client.send(request).await {
+        Ok(response) => response,
+        Err(error) => {
+            if let Some(tracked) = &mut tracked {
+                tracked.failed(&error);
+            }
+            return Err(format!("{error:?}"));
+        }
+    };
+    if let Some(tracked) = &mut tracked {
+        tracked.response(&response);
+    }
     if !matches!(response.url.scheme(), "http" | "https") {
         return Err(format!(
             "the sheet was served from a {}: URL",
@@ -672,7 +684,9 @@ async fn read_remote(
         ));
     }
     if !response.status.is_success() {
-        return Err(format!("the origin answered {}", response.status.as_u16()));
+        let status = response.status.as_u16();
+        finish_unread(&mut tracked, response).await;
+        return Err(format!("the origin answered {status}"));
     }
     let content_type = response.header("content-type");
     let nosniff = response
@@ -688,21 +702,39 @@ async fn read_remote(
     // Standards mode wants `text/css`; only quirks mode tolerates another type,
     // and nosniff forbids the tolerance.
     if !is_css && (nosniff || (content_type.is_some() && !env.quirks)) {
+        finish_unread(&mut tracked, response).await;
         return Err("the response is not served as text/css".to_owned());
     }
     let charset = content_type.and_then(charset_param);
     let final_url = key_of(&response.url);
-    let body = response
-        .body
-        .collect()
-        .await
-        .map_err(|error| format!("{error:?}"))?;
+    let body = response.body.collect().await.map_err(|error| {
+        if let Some(tracked) = &mut tracked {
+            tracked.failed(&error);
+        }
+        format!("{error:?}")
+    })?;
+    if let Some(tracked) = &mut tracked {
+        tracked.complete(&body);
+    }
     // The transport enforces the limit on the wire; a local answer (an
     // interceptor, the cache) is checked here.
     if body.len() as u64 > byte_limit {
         return Err("the response exceeds the page's remaining byte budget".to_owned());
     }
     Ok((body.to_vec(), charset, final_url))
+}
+
+/// Ends a tracked request whose body the page does not use: it is read only
+/// when a network host watches the traffic.
+async fn finish_unread(
+    tracked: &mut Option<crate::network::Tracked>,
+    response: tenta_net::Response,
+) {
+    if let Some(tracked) = tracked
+        && let Ok(body) = response.body.collect().await
+    {
+        tracked.complete(&body);
+    }
 }
 
 /// The request for one stylesheet. The page's headers go on it as they go on a

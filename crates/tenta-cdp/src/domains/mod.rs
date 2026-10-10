@@ -14,7 +14,7 @@ mod geometry;
 mod input;
 mod inspector;
 mod log;
-mod network;
+pub(crate) mod network;
 mod nodes;
 mod page;
 mod performance;
@@ -68,6 +68,9 @@ mod tests {
         "DOM.getNodeForLocation",
         "DOM.focus",
         "Network.disable",
+        "Network.getAllCookies",
+        "Network.setCookie",
+        "Network.clearBrowserCookies",
         "Performance.disable",
         "Security.enable",
         "Security.disable",

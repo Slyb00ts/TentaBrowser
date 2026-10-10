@@ -469,6 +469,7 @@ impl BrowserContext {
             fs_policy: self.inner.engine.options.fs_policy.clone(),
             cookies: self.inner.cookies.clone(),
             storage: self.inner.storage.new_page(),
+            net: tenta_page::network::NetworkHub::default(),
             on_close: Some({
                 let inner = Arc::downgrade(&self.inner);
                 Arc::new(move |page| {

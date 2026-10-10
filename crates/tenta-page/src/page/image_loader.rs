@@ -740,6 +740,7 @@ async fn run(
         budgets: &config.budgets,
         clock: &*config.clock,
         extra_headers: &config.extra_headers,
+        net: Some(&config.net),
         document_url: &document_url,
         deadline: config.clock.now() + IMAGE_WAIT,
         rolling: Some(IMAGE_WAIT),

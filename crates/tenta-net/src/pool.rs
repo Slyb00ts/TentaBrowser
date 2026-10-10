@@ -71,6 +71,8 @@ struct Slot {
     h2: Option<H2Handle>,
     /// Caps concurrent HTTP/1.1 requests to this host.
     slots: Arc<Semaphore>,
+    /// The address the newest connection for this key went to.
+    remote: Option<std::net::SocketAddr>,
 }
 
 /// Idle connections, per key.
@@ -108,12 +110,24 @@ impl Pool {
         &self.config
     }
 
+    /// Remembers the address `key` was last connected to, which a response
+    /// on a reused connection reports.
+    pub fn note_remote(&mut self, key: &PoolKey, remote: std::net::SocketAddr) {
+        self.slot(key).remote = Some(remote);
+    }
+
+    /// The address `key` was last connected to.
+    pub fn remote(&self, key: &PoolKey) -> Option<std::net::SocketAddr> {
+        self.slots.get(key).and_then(|slot| slot.remote)
+    }
+
     fn slot(&mut self, key: &PoolKey) -> &mut Slot {
         let max = self.config.max_h1_per_host;
         self.slots.entry(key.clone()).or_insert_with(|| Slot {
             idle_h1: VecDeque::new(),
             h2: None,
             slots: Arc::new(Semaphore::new(max)),
+            remote: None,
         })
     }
 

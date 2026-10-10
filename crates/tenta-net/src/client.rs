@@ -819,22 +819,66 @@ async fn execute(state: Rc<ClientRuntime>, mut request: Request) -> Result<Respo
         // every redirect target.
         shared.destinations().check_url(&request.url)?;
 
+        let before_hooks = request.url.clone();
+        let mut fulfilled = None;
         for interceptor in &shared.hooks.interceptors {
             match interceptor.intercept(&mut request).await {
                 Interception::Continue => {}
                 Interception::Fail(err) => return Err(err),
                 Interception::Fulfill(response) => {
-                    return Ok(local_response(
-                        &request.url,
-                        response.status,
-                        response.headers,
-                        response.body,
-                        started,
-                        redirects,
-                        false,
-                    ));
+                    fulfilled = Some(response);
+                    break;
                 }
             }
+        }
+        if fulfilled.is_none()
+            && let Some(tap) = request.tap.clone()
+        {
+            match tap.intercept(&mut request).await {
+                Interception::Continue => {}
+                Interception::Fail(err) => return Err(err),
+                Interception::Fulfill(response) => fulfilled = Some(response),
+            }
+        }
+
+        if let Some(response) = fulfilled {
+            // An answer a hook produced is a response like any other: its
+            // cookies are stored and a redirect in it is followed.
+            let response = local_response(
+                &request.url,
+                response.status,
+                response.headers,
+                response.body,
+                started,
+                redirects.clone(),
+                false,
+            );
+            shared.store_cookies(&request, &response.headers);
+            let policy = request.redirect;
+            if let Some(next_request) = check_and_follow_redirect_hop(
+                request,
+                &response,
+                policy,
+                max_redirects,
+                &mut redirects,
+                false,
+            )? {
+                request = next_request;
+                continue;
+            }
+            return Ok(response);
+        }
+
+        // A hook that changed the URL is a new destination: the policy and the
+        // credential stripping of the loop head apply to it too, before the
+        // cache can answer for it.
+        if request.url != before_hooks {
+            shared.destinations().check_url(&request.url)?;
+            if request.userinfo.is_none() {
+                request.userinfo = extract_userinfo(request.url.as_str());
+            }
+            let _ = request.url.set_username("");
+            let _ = request.url.set_password(None);
         }
 
         if let Some(cache) = &shared.cache
@@ -1165,6 +1209,9 @@ async fn execute(state: Rc<ClientRuntime>, mut request: Request) -> Result<Respo
         drain_redirect_body(outcome.body).await;
 
         request = follow_redirect(request, &outcome.status, target)?;
+        if let (Some(tap), Some(hop)) = (&request.tap, redirects.last()) {
+            tap.redirected(&request, hop, &outcome.headers);
+        }
     }
 }
 
@@ -1432,6 +1479,9 @@ async fn send_once(
 
     // A warm HTTP/2 connection is the common case; nothing is opened.
     let pooled_h2 = state.pool.borrow_mut().h2(&key);
+    // Read before any await: a `Ref` held across one would panic the next
+    // task that borrows the pool mutably.
+    let pooled_remote = state.pool.borrow().remote(&key);
     if let Some(handle) = pooled_h2 {
         reused.set(true);
         let attempt = run_h2(
@@ -1442,7 +1492,7 @@ async fn send_once(
             body,
             cookie.clone(),
             ConnectTiming::default(),
-            None,
+            pooled_remote,
             start,
             deadline,
             coalesce_key.clone(),
@@ -1484,7 +1534,7 @@ async fn send_once(
             permit,
             cookie,
             ConnectTiming::default(),
-            None,
+            pooled_remote,
             start,
             deadline,
             coalesce_key,
@@ -1507,6 +1557,9 @@ async fn send_once(
     )
     .await??;
     let remote_addr = opened.remote_addr;
+    if let Some(remote) = remote_addr {
+        state.pool.borrow_mut().note_remote(&key, remote);
+    }
     let connect_timing = opened.timing;
 
     if shared.allow_h2 && opened.alpn.as_deref() == Some("h2") {
@@ -2592,7 +2645,11 @@ fn check_and_follow_redirect_hop(
         from_cache,
     });
 
-    Ok(Some(follow_redirect(request, &response.status, target)?))
+    let next = follow_redirect(request, &response.status, target)?;
+    if let (Some(tap), Some(hop)) = (&next.tap, redirects.last()) {
+        tap.redirected(&next, hop, &response.headers);
+    }
+    Ok(Some(next))
 }
 
 /// The redirect target of a 3xx response, resolved against the request URL.

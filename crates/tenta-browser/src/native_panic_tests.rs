@@ -187,6 +187,7 @@ fn make_page(
         fs_policy: tenta_core::FsPolicy::none(),
         cookies: CookieJar::new(),
         storage: tenta_js::storage::PageStorage::isolated(),
+        net: tenta_page::network::NetworkHub::default(),
         on_close: None,
         test_hooks: TestHooks::default(),
     })

@@ -69,6 +69,29 @@ pub trait Observer: Send + Sync {
     fn on_body_chunk(&self, _url: &Url, _chunk: &Bytes) {}
 }
 
+/// A listener one request carries with it (`Request::tap`).
+///
+/// The context-wide [`Observer`] and [`Interceptor`] cannot tell which page a
+/// request belongs to; a tap is attached by the page that issues the request,
+/// so it can. A request without one pays a single `Option` check.
+pub trait RequestTap: Send + Sync + std::fmt::Debug {
+    /// Runs on every hop, after the context's interceptors and before the
+    /// cache: the same place a context interceptor runs.
+    fn intercept<'a>(&'a self, _request: &'a mut Request) -> BoxFuture<'a, Interception> {
+        Box::pin(std::future::ready(Interception::Continue))
+    }
+
+    /// A 3xx answered the previous hop and `next` is the request that follows
+    /// it. `headers` are the redirect response's.
+    fn redirected(
+        &self,
+        _next: &Request,
+        _hop: &crate::client::RedirectHop,
+        _headers: &[(String, http::HeaderValue)],
+    ) {
+    }
+}
+
 /// Everything a client lets a driver plug in at runtime.
 #[derive(Clone, Default)]
 pub struct Hooks {

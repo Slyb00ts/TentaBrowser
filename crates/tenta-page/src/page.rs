@@ -308,6 +308,8 @@ pub struct PageConfig {
     pub cookies: CookieJar,
     /// The context's local areas and this page's session namespace.
     pub storage: PageStorage,
+    /// The page's network observation point; inactive until a host uses it.
+    pub net: crate::network::NetworkHub,
     /// Called once, from [`Page::close`], so whoever registered the page
     /// (its context's group table) can forget it without polling.
     pub on_close: Option<Arc<dyn Fn(PageId) + Send + Sync>>,
@@ -629,9 +631,11 @@ fn initial_document(javascript: bool) -> DomDocument {
 impl Page {
     /// Builds a page pinned to the thread in `config`.
     pub fn new(config: PageConfig) -> Page {
+        let frame = next_frame_id();
+        config.net.bind_frame(frame);
         Page {
             inner: Arc::new(PageInner {
-                frame: next_frame_id(),
+                frame,
                 state: Mutex::new(PageState {
                     document: Some(initial_document(config.javascript)),
                     navigation: None,
@@ -677,6 +681,11 @@ impl Page {
 
     pub fn main_frame(&self) -> FrameId {
         self.inner.frame
+    }
+
+    /// The page's network events and overrides (`crate::network`).
+    pub fn network(&self) -> &crate::network::NetworkHub {
+        &self.inner.config.net
     }
 
     /// The index of the page thread this page is pinned to.
@@ -1113,7 +1122,8 @@ async fn navigate(
     tracker.borrow_mut().note_navigation_commit();
 
     let request_id = next_request_id();
-    let request = build_request(config, &url, &options)?;
+    let mut request = build_request(config, &url, &options)?;
+    let mut tracked = config.net.begin(&mut request, request_id, Some(generation));
     // A navigation that a newer one already replaced never started, as far as
     // an observer is concerned: the newer one is the one it should attribute
     // the next commit to.
@@ -1183,6 +1193,9 @@ async fn navigate(
     let response = match sent {
         Ok(Ok(response)) => response,
         Ok(Err(net_error)) => {
+            if let Some(tracked) = &mut tracked {
+                tracked.failed(&net_error);
+            }
             let raw: Error = net_error.into();
             let (name, message) = net_error_parts(&raw);
             inner.emit(PageEvent::RequestFailed {
@@ -1238,6 +1251,9 @@ async fn navigate(
             } else {
                 net_error_parts(&raw)
             };
+            if let Some(tracked) = &mut tracked {
+                tracked.failed_with(&name);
+            }
             inner.emit(PageEvent::RequestFailed {
                 id: request_id,
                 url: url.clone(),
@@ -1342,6 +1358,10 @@ async fn navigate(
         status,
         from_cache: response.from_cache,
     });
+    if let Some(tracked) = &mut tracked {
+        tracked.response(&response);
+    }
+    config.net.note_document(generation, &final_url);
     let commit = Commit {
         navigation_id: generation,
         url: final_url.clone(),
@@ -1366,6 +1386,7 @@ async fn navigate(
         BodyMeta {
             final_url: &final_url,
             content_type: &content_type,
+            tracked: tracked.take(),
         },
         deadline,
         timeout_millis,
@@ -2259,6 +2280,8 @@ fn decoded_encoding(
 struct BodyMeta<'a> {
     final_url: &'a Url,
     content_type: &'a Option<String>,
+    /// Reports the body to a network host while it is read.
+    tracked: Option<crate::network::Tracked>,
 }
 
 /// Streams the response into the parser, running each script the parse pauses
@@ -2279,6 +2302,7 @@ async fn parse_body(
     let config = &inner.config;
     let final_url = meta.final_url;
     let content_type = meta.content_type;
+    let mut tracked = meta.tracked;
     let transport_charset = content_type.as_deref().and_then(charset_of);
     let mime = content_type
         .as_deref()
@@ -2406,6 +2430,9 @@ async fn parse_body(
                     document.set_ready_state(tenta_dom::ReadyState::Complete);
                 }
                 let hints = std::mem::take(&mut *hints.lock());
+                if let Some(tracked) = &mut tracked {
+                    tracked.finish();
+                }
                 // The deferred scripts run at this end of the parse too, and
                 // for the same reason: the document is as complete as it will
                 // be. The deadline has already passed here, so the drain only
@@ -2431,7 +2458,13 @@ async fn parse_body(
         let chunk = chunk
             .map_err(|error| navigation_error(Error::from(error), max_bytes, timeout_millis))?;
         total += chunk.len() as u64;
+        if let Some(tracked) = &mut tracked {
+            tracked.chunk(&chunk);
+        }
         if total > max_bytes {
+            if let Some(tracked) = &mut tracked {
+                tracked.failed_with("net::ERR_FILE_TOO_BIG");
+            }
             return Err(over_budget(max_bytes));
         }
         if let Some(buffer) = &mut restart_buffer {
@@ -2520,6 +2553,10 @@ async fn parse_body(
                 message: "navigation was cancelled by a concurrent goto or close".into(),
             });
         }
+    }
+
+    if let Some(tracked) = &mut tracked {
+        tracked.finish();
     }
 
     // `feed_last` is what reports the scripts of a body shorter than the

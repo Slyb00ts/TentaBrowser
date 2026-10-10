@@ -75,6 +75,8 @@ pub(crate) struct ImageContext<'a> {
     pub budgets: &'a Budgets,
     pub clock: &'a dyn Clock,
     pub extra_headers: &'a [(String, String)],
+    /// The page's network observation point, when it has one.
+    pub net: Option<&'a crate::network::NetworkHub>,
     /// The document: initiator of every request and the first party.
     pub document_url: &'a Url,
     /// A fetch that cannot finish before this is not started.
@@ -266,6 +268,7 @@ pub(crate) async fn drive(
                 client: ctx.client.clone(),
                 fs_policy: ctx.fs_policy.clone(),
                 extra_headers: ctx.extra_headers.to_vec(),
+                net: ctx.net.cloned(),
                 document_url: ctx.document_url.clone(),
                 remaining: ctx.deadline().saturating_duration_since(ctx.clock.now()),
                 byte_limit,
@@ -388,6 +391,7 @@ struct Job {
     client: Client,
     fs_policy: FsPolicy,
     extra_headers: Vec<(String, String)>,
+    net: Option<crate::network::NetworkHub>,
     document_url: Url,
     remaining: Duration,
     byte_limit: u64,
@@ -479,20 +483,35 @@ impl Job {
         }
         // The client enforces the timeout on the wire; the same bound here
         // covers an interceptor and a body that stalls after its head.
+        let mut tracked = self
+            .net
+            .as_ref()
+            .and_then(|net| net.begin(&mut request, crate::page::next_request_id(), None));
         let fetched = tokio::time::timeout(self.remaining, async {
-            let response = self
-                .client
-                .send(request)
-                .await
-                .map_err(|error| format!("{error:?}"))?;
-            self.read(response).await
+            let response = match self.client.send(request).await {
+                Ok(response) => response,
+                Err(error) => {
+                    if let Some(tracked) = &mut tracked {
+                        tracked.failed(&error);
+                    }
+                    return Err(format!("{error:?}"));
+                }
+            };
+            if let Some(tracked) = &mut tracked {
+                tracked.response(&response);
+            }
+            self.read(response, &mut tracked).await
         })
         .await;
         fetched.unwrap_or_else(|_| Err("the image did not arrive before the wait ended".to_owned()))
     }
 
     /// Checks a response and reads its body, without copying it.
-    async fn read(&self, response: tenta_net::Response) -> Result<(Bytes, Option<String>), String> {
+    async fn read(
+        &self,
+        response: tenta_net::Response,
+        tracked: &mut Option<crate::network::Tracked>,
+    ) -> Result<(Bytes, Option<String>), String> {
         if !matches!(response.url.scheme(), "http" | "https") {
             return Err(format!(
                 "the image was served from a {}: URL",
@@ -500,14 +519,25 @@ impl Job {
             ));
         }
         if !response.status.is_success() {
-            return Err(format!("the origin answered {}", response.status.as_u16()));
+            let status = response.status.as_u16();
+            // The body is read only for a host that watches the traffic.
+            if let Some(tracked) = tracked.as_mut()
+                && let Ok(body) = response.body.collect().await
+            {
+                tracked.complete(&body);
+            }
+            return Err(format!("the origin answered {status}"));
         }
         let content_type = response.header("content-type").map(str::to_owned);
-        let body = response
-            .body
-            .collect()
-            .await
-            .map_err(|error| format!("{error:?}"))?;
+        let body = response.body.collect().await.map_err(|error| {
+            if let Some(tracked) = tracked.as_mut() {
+                tracked.failed(&error);
+            }
+            format!("{error:?}")
+        })?;
+        if let Some(tracked) = tracked.as_mut() {
+            tracked.complete(&body);
+        }
         if body.len() as u64 > self.byte_limit {
             return Err("the response exceeds the image size limit".to_owned());
         }

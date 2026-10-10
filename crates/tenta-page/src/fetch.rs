@@ -143,6 +143,8 @@ pub(crate) struct NetFetchDriver {
     /// `User-Agent` override that reached the document but not the requests
     /// script made would be a strange half of a profile.
     extra_headers: Vec<(String, String)>,
+    /// The page's network observation point.
+    net: crate::network::NetworkHub,
     /// Every request still running, with the handle an XHR can be addressed by.
     ///
     /// Interior mutability because `FetchDriver::start` takes `&self`: the
@@ -171,6 +173,7 @@ impl NetFetchDriver {
             tracker,
             max_body_bytes: config.budgets.network_bytes,
             extra_headers: config.extra_headers.clone(),
+            net: config.net.clone(),
             inflight: RefCell::new(Vec::new()),
         }
     }
@@ -218,7 +221,7 @@ impl NetFetchDriver {
         // on the wire leaves no trace in the settle machine. The refusal is a
         // start refusal rather than a `Failed` outcome: the request cannot be
         // built at all, so there is nothing to send and nothing to wait for.
-        let net = net_request(
+        let mut net = net_request(
             &request,
             resource_type,
             self.max_body_bytes,
@@ -240,6 +243,7 @@ impl NetFetchDriver {
         // driver's. It is *not* what the cross-origin gate above compares; that
         // one is the initiator's, the document URL (`same_origin_allowed`).
         let request_id = next_request_id();
+        let mut tracked = self.net.begin(&mut net, request_id, None);
         self.tracker.borrow_mut().note_request_started(
             request_id,
             RequestClass::XhrFetch,
@@ -268,8 +272,13 @@ impl NetFetchDriver {
         let handle = tokio::task::spawn_local(async move {
             let fetched = catch_unwind_future(async move {
                 match client.send(net).await {
-                    Ok(response) => fetched_response(response, &initiator).await,
-                    Err(error) => transport_failure(&error),
+                    Ok(response) => fetched_response(response, &initiator, &mut tracked).await,
+                    Err(error) => {
+                        if let Some(tracked) = &mut tracked {
+                            tracked.failed(&error);
+                        }
+                        transport_failure(&error)
+                    }
                 }
             })
             .await;
@@ -530,7 +539,11 @@ fn same_origin_allowed(initiator: &Url, url: &Url) -> Result<(), FetchStartError
 /// the Fetch rule. `response.headers` is preferred over `raw_headers` because
 /// the transport removes `Content-Encoding` and `Content-Length` from it when
 /// it decoded the body, so it does not lie about the bytes the engine holds.
-async fn fetched_response(response: Response, initiator: &Url) -> FetchOutcome {
+async fn fetched_response(
+    response: Response,
+    initiator: &Url,
+    tracked: &mut Option<crate::network::Tracked>,
+) -> FetchOutcome {
     // Gate 2: the final URL, before the body is read. A same-origin URL that
     // redirected off-origin is the case `Client::send` cannot report any other
     // way, because it follows redirects internally. Dropping the `Response`
@@ -540,7 +553,13 @@ async fn fetched_response(response: Response, initiator: &Url) -> FetchOutcome {
             url = %response.url,
             "a response was redirected off the requesting origin; it is discarded"
         );
+        if let Some(tracked) = tracked {
+            tracked.failed_with("net::ERR_FAILED");
+        }
         return FetchOutcome::Failed(refusal.message().to_owned());
+    }
+    if let Some(tracked) = tracked {
+        tracked.response(&response);
     }
     tracing::debug!(status = response.status.as_u16(), "a response head arrived");
     let status = response.status.as_u16();
@@ -557,7 +576,14 @@ async fn fetched_response(response: Response, initiator: &Url) -> FetchOutcome {
     // (`FetchedResponse::body`), so there is nowhere for a stream to go until
     // `d-5b`. `Some(vec![])` for an empty body is correct — `None` would mean
     // "no body at all", which the engine cannot tell from an empty one.
-    match response.body.collect().await {
+    let collected = response.body.collect().await;
+    if let Some(tracked) = tracked {
+        match &collected {
+            Ok(body) => tracked.complete(body),
+            Err(error) => tracked.failed(error),
+        }
+    }
+    match collected {
         Ok(body) => FetchOutcome::Response(FetchedResponse {
             url,
             status,
@@ -628,6 +654,7 @@ mod tests {
             tracker,
             max_body_bytes: 4096,
             extra_headers: Vec::new(),
+            net: crate::network::NetworkHub::default(),
             inflight: RefCell::new(Vec::new()),
         }
     }
@@ -833,7 +860,7 @@ mod tests {
             b"a body script must never see",
         );
 
-        let outcome = fetched_response(answered, &initiator).await;
+        let outcome = fetched_response(answered, &initiator, &mut None).await;
 
         assert_eq!(outcome, FetchOutcome::Failed(CROSS_ORIGIN.to_owned()));
     }
@@ -1108,7 +1135,7 @@ mod tests {
             b"{\"ok\":true}",
         );
 
-        let fetched = resolved(fetched_response(answered, &initiator).await);
+        let fetched = resolved(fetched_response(answered, &initiator, &mut None).await);
 
         assert_eq!(fetched.url, target.to_string());
         assert_eq!(fetched.status, 200);
@@ -1141,7 +1168,7 @@ mod tests {
             b"<h1>HTTP 503</h1>",
         );
 
-        let fetched = resolved(fetched_response(answered, &initiator).await);
+        let fetched = resolved(fetched_response(answered, &initiator, &mut None).await);
 
         assert_eq!(fetched.status, 503);
         assert!(!fetched.redirected, "nothing redirected");
