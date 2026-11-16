@@ -486,3 +486,401 @@ async fn the_page_side_script_keeps_the_contract_the_tools_use() {
         .await;
     assert_eq!(report, "[[\"navigate\",\"unsupported\"],\"x\",true]");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn console_messages_carry_levels_exceptions_and_locations() {
+    let harness = Harness::start(Tier::Js).await;
+    let client = harness.client();
+    client.navigate(&harness.url("/console.html")).await;
+
+    let all = client.tool("browser_console_messages", json!({})).await;
+    all.ok();
+    let messages = all.structured()["messages"].as_array().unwrap().clone();
+    let line = |level: &str| {
+        messages
+            .iter()
+            .find(|message| message["level"] == level)
+            .unwrap_or_else(|| panic!("a `{level}` line in {messages:?}"))
+            .clone()
+    };
+    assert_eq!(line("log")["text"], "plain message 42 {answer: true}");
+    assert_eq!(line("warning")["text"], "a warning");
+    assert_eq!(line("error")["text"], "an error line");
+    let exception = line("exception");
+    assert!(
+        exception["text"]
+            .as_str()
+            .unwrap()
+            .contains("undefinedFunctionOfTheFixture is not defined"),
+        "{exception}"
+    );
+    // The engines do not name the scripts they compile yet, so there is no
+    // `url:line` to report; a location that is not a URL is left out.
+    assert_eq!(exception["location"], json!(null));
+    assert_eq!(all.structured()["errors"], 2);
+    let text = all.text();
+    assert!(
+        text.starts_with("<<<PAGE CONTENT "),
+        "page text is fenced: {text}"
+    );
+    assert!(text.contains("[warning] a warning"), "{text}");
+
+    let errors = client
+        .tool("browser_console_messages", json!({"level": "error"}))
+        .await;
+    errors.ok();
+    assert_eq!(errors.structured()["returned"], 2);
+    let warnings = client
+        .tool(
+            "browser_console_messages",
+            json!({"level": "warning", "limit": 1}),
+        )
+        .await;
+    warnings.ok();
+    assert_eq!(warnings.structured()["returned"], 1);
+    assert_eq!(warnings.structured()["matching"], 3);
+    assert_eq!(
+        warnings.structured()["messages"][0]["level"],
+        "exception",
+        "the newest line is kept"
+    );
+
+    // What a later evaluation logs is added; a navigation starts over.
+    client.evaluate("console.info('from the agent')").await;
+    let more = client.tool("browser_console_messages", json!({})).await;
+    assert!(more.text().contains("from the agent"), "{}", more.text());
+    client.navigate(&harness.url("/about.html")).await;
+    let fresh = client.tool("browser_console_messages", json!({})).await;
+    fresh.ok();
+    assert_eq!(fresh.structured()["total"], 0);
+    assert!(
+        fresh.text().contains("No console messages match."),
+        "{}",
+        fresh.text()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_post_form_is_submitted_by_the_page_and_the_tool_reports_the_navigation() {
+    let harness = Harness::start(Tier::Js).await;
+    let client = harness.client();
+    client.navigate(&harness.url("/login.html")).await;
+    let snapshot = client.tool("browser_snapshot", json!({})).await;
+    let text = snapshot.text();
+    let user = find_ref(&text, &["textbox", "User"]);
+    let pass = find_ref(&text, &["textbox", "Password"]);
+    let remember = find_ref(&text, &["checkbox", "Remember me"]);
+    let button = find_ref(&text, &["button", "Log in"]);
+
+    client
+        .tool(
+            "browser_fill",
+            json!({"ref": user, "value": "ada lovelace"}),
+        )
+        .await
+        .ok();
+    client
+        .tool("browser_fill", json!({"ref": pass, "value": "p&ss=word"}))
+        .await
+        .ok();
+    client
+        .tool("browser_click", json!({"ref": remember}))
+        .await
+        .ok();
+    client
+        .evaluate("document.getElementById('role').value = 'a'")
+        .await;
+
+    let clicked = client.tool("browser_click", json!({"ref": button})).await;
+    clicked.ok();
+    let echo = harness.url("/api/echo?next=home");
+    assert_eq!(
+        clicked.structured()["navigation"]["url"],
+        echo,
+        "{}",
+        clicked.0
+    );
+    assert_eq!(clicked.structured()["navigation"]["status"], 200);
+    assert!(
+        clicked
+            .text()
+            .contains(&format!("Navigated to {echo} (HTTP 200).")),
+        "{}",
+        clicked.text()
+    );
+
+    let page = client.tool("browser_extract", json!({})).await;
+    page.ok();
+    let body = page.text();
+    let start = body.find('{').expect("the echoed JSON");
+    let end = body.rfind('}').expect("the echoed JSON");
+    let echoed: serde_json::Value = serde_json::from_str(&body[start..=end]).expect("JSON");
+    assert_eq!(echoed["method"], "POST");
+    assert_eq!(echoed["query"], "next=home");
+    assert_eq!(
+        echoed["body"],
+        "user=ada+lovelace&pass=p%26ss%3Dword&remember=yes&role=a&action=login"
+    );
+    assert_eq!(
+        echoed["headers"]["content-type"],
+        "application/x-www-form-urlencoded"
+    );
+
+    // The submission is a history entry like any other navigation.
+    let back = client.tool("browser_back", json!({})).await;
+    back.ok();
+    assert_eq!(back.structured()["title"], "Log in");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn enter_in_a_field_submits_a_post_form() {
+    let harness = Harness::start(Tier::Js).await;
+    let client = harness.client();
+    client.navigate(&harness.url("/login.html")).await;
+    let user = client.ref_of(&["textbox", "User"]).await;
+    let typed = client
+        .tool(
+            "browser_type",
+            json!({"ref": user, "text": "grace", "submit": true}),
+        )
+        .await;
+    typed.ok();
+    assert_eq!(
+        typed.structured()["navigation"]["url"],
+        harness.url("/api/echo?next=home"),
+        "{}",
+        typed.0
+    );
+    let body = client
+        .evaluate("JSON.parse(document.body.textContent).body")
+        .await;
+    assert_eq!(
+        body, "user=grace&pass=&role=u&action=login",
+        "implicit submission goes through the form's default button"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn navigations_the_pages_own_script_starts_are_followed_and_reported() {
+    let harness = Harness::start(Tier::Js).await;
+    let client = harness.client();
+
+    // A redirect written in JavaScript: the page asked for is the page shown.
+    let redirected = client
+        .tool(
+            "browser_navigate",
+            json!({"url": harness.url("/jsredirect.html")}),
+        )
+        .await;
+    redirected.ok();
+    assert_eq!(redirected.structured()["title"], "About");
+    assert_eq!(
+        redirected.structured()["final_url"],
+        harness.url("/about.html?from=redirect")
+    );
+
+    // A click handler that assigns `location`.
+    client.navigate(&harness.url("/login.html")).await;
+    let link = client.ref_of(&["link", "About (scripted)"]).await;
+    let clicked = client.tool("browser_click", json!({"ref": link})).await;
+    clicked.ok();
+    assert_eq!(
+        clicked.structured()["navigation"]["url"],
+        harness.url("/about.html?via=script"),
+        "{}",
+        clicked.0
+    );
+
+    // An evaluation that navigates says so.
+    let evaluated = client
+        .tool(
+            "browser_evaluate",
+            json!({"expression": "location.href = '/index.html'; 'going'"}),
+        )
+        .await;
+    evaluated.ok();
+    assert_eq!(evaluated.structured()["result"], "going");
+    assert_eq!(
+        evaluated.structured()["navigation"]["url"],
+        harness.url("/index.html")
+    );
+    assert!(
+        evaluated
+            .text()
+            .contains("The script navigated the page to"),
+        "{}",
+        evaluated.text()
+    );
+    let snapshot = client.tool("browser_snapshot", json!({})).await;
+    assert_eq!(snapshot.structured()["title"], "Fixture Home");
+
+    // The session history holds each of them.
+    let back = client.tool("browser_back", json!({})).await;
+    back.ok();
+    assert_eq!(
+        back.structured()["final_url"],
+        harness.url("/about.html?via=script")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_into_the_page_moves_to_the_fragment_without_loading() {
+    let harness = Harness::start(Tier::Js).await;
+    let client = harness.client();
+    client.navigate(&harness.url("/login.html")).await;
+    let help = client.ref_of(&["link", "Help"]).await;
+    let clicked = client.tool("browser_click", json!({"ref": help})).await;
+    clicked.ok();
+    assert_eq!(
+        clicked.structured()["navigation"],
+        json!(null),
+        "nothing was loaded: {}",
+        clicked.0
+    );
+    let snapshot = client.tool("browser_snapshot", json!({})).await;
+    snapshot.ok();
+    assert_eq!(
+        snapshot.structured()["url"],
+        harness.url("/login.html#help"),
+        "the page URL follows the document"
+    );
+    assert_eq!(
+        client
+            .evaluate("hashes.join(',') + '|' + history.length")
+            .await,
+        "help|2"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn select_option_chooses_by_value_or_text_and_fires_the_events() {
+    let harness = Harness::start(Tier::Js).await;
+    let client = harness.client();
+    client.navigate(&harness.url("/login.html")).await;
+    let snapshot = client.tool("browser_snapshot", json!({})).await;
+    let text = snapshot.text();
+    let role_line = text
+        .lines()
+        .find(|line| line.contains("combobox \"Role\""))
+        .unwrap_or_else(|| panic!("the select is in the snapshot: {text}"));
+    assert!(
+        role_line.contains("value=\"User\"") && role_line.contains("options=[\"User\", \"Admin\"]"),
+        "{role_line}"
+    );
+    let role = find_ref(&text, &["combobox", "Role"]);
+    let tags = find_ref(&text, &["listbox", "Tags"]);
+
+    let chosen = client
+        .tool(
+            "browser_select_option",
+            json!({"ref": role, "values": ["admin"]}),
+        )
+        .await;
+    chosen.ok();
+    assert_eq!(
+        chosen.structured()["selected"],
+        json!([{"value": "a", "text": "Admin"}]),
+        "matched by text, ignoring case"
+    );
+    assert_eq!(chosen.structured()["changed"], true);
+    assert_eq!(
+        client
+            .evaluate("changes.join(' ') + '|' + document.getElementById('role').value")
+            .await,
+        "input:a change:a|a"
+    );
+    let again = client
+        .tool(
+            "browser_select_option",
+            json!({"ref": role, "values": ["a"]}),
+        )
+        .await;
+    again.ok();
+    assert_eq!(again.structured()["changed"], false);
+    assert_eq!(
+        client.evaluate("changes.length").await,
+        2,
+        "no events for a selection that did not change"
+    );
+    let after = client.tool("browser_snapshot", json!({})).await.text();
+    assert!(
+        after.contains("combobox \"Role\"") && after.contains("value=\"Admin\""),
+        "{after}"
+    );
+
+    let many = client
+        .tool(
+            "browser_select_option",
+            json!({"ref": tags, "values": ["Alpha", "c"]}),
+        )
+        .await;
+    many.ok();
+    assert_eq!(
+        many.structured()["selected"],
+        json!([{"value": "a", "text": "Alpha"}, {"value": "c", "text": "Gamma"}]),
+        "a multiple select ends up with exactly the options named"
+    );
+    let cleared = client
+        .tool("browser_select_option", json!({"ref": tags, "values": []}))
+        .await;
+    cleared.ok();
+    assert_eq!(cleared.structured()["selected"], json!([]));
+
+    let missing = client
+        .tool(
+            "browser_select_option",
+            json!({"ref": role, "values": ["Owner"]}),
+        )
+        .await;
+    assert_eq!(missing.error_type(), "invalid_arguments");
+    assert!(
+        missing.text().contains("\"User\", \"Admin\""),
+        "the error lists the options: {}",
+        missing.text()
+    );
+    let two = client
+        .tool(
+            "browser_select_option",
+            json!({"ref": role, "values": ["u", "a"]}),
+        )
+        .await;
+    assert_eq!(two.error_type(), "invalid_arguments");
+    let user = find_ref(&text, &["textbox", "User"]);
+    let wrong = client
+        .tool(
+            "browser_select_option",
+            json!({"ref": user, "values": ["x"]}),
+        )
+        .await;
+    assert_eq!(wrong.error_type(), "invalid_arguments");
+
+    // The chosen option is what the form submits.
+    let button = find_ref(&text, &["button", "Log in"]);
+    client
+        .tool("browser_click", json!({"ref": button}))
+        .await
+        .ok();
+    let body = client
+        .evaluate("JSON.parse(document.body.textContent).body")
+        .await;
+    assert_eq!(body, "user=&pass=&role=a&action=login");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hover_fires_the_pointer_events_a_menu_listens_for() {
+    let harness = Harness::start(Tier::Js).await;
+    let client = harness.client();
+    client.navigate(&harness.url("/login.html")).await;
+    let before = client.tool("browser_snapshot", json!({})).await.text();
+    assert!(!before.contains("Menu content"), "{before}");
+    let button = find_ref(&before, &["button", "Menu"]);
+    let hovered = client.tool("browser_hover", json!({"ref": button})).await;
+    hovered.ok();
+    assert!(
+        hovered.text().starts_with("Moved the pointer over "),
+        "{}",
+        hovered.text()
+    );
+    let after = client.tool("browser_snapshot", json!({})).await.text();
+    assert!(after.contains("Menu content"), "{after}");
+}

@@ -123,13 +123,64 @@ pub fn tools() -> Vec<Tool> {
                 "properties": {
                     "key": {"type": "string", "minLength": 1, "maxLength": 40, "description": "Key or chord, such as `Enter` or `Control+a`."},
                     "ref": {"type": "string", "description": "Element to focus first."},
-                    "settle": settle
+                    "settle": settle.clone()
                 },
                 "required": ["key"],
                 "additionalProperties": false,
                 "examples": [{"key": "Enter"}, {"key": "Control+a", "ref": "e3"}]
             }),
             press_key_handler,
+        ),
+        Tool::new(
+            "browser_select_option",
+            "Choose an option of a select",
+            "Selects options of a <select> element (a `combobox` or `listbox` in the snapshot, \
+             whose line lists its `options`) given by `ref`. Each entry of `values` names one \
+             option by its value or by its visible text; a single select takes one, a multiple \
+             select takes any number and ends up with exactly those selected (an empty list \
+             clears it). Fires `input` and `change` as a user's choice does, so pages that react \
+             to the selection do. Fails with `invalid_arguments` when the element is not a \
+             <select>, is disabled, or an entry names no option (the message lists the options), \
+             and with `element_not_found` for a stale ref. Waits for the page to settle \
+             afterwards. Returns the options now selected.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "ref": {"type": "string", "description": "Element ref of a <select>."},
+                    "values": {
+                        "type": "array",
+                        "items": {"type": "string", "maxLength": 1000},
+                        "maxItems": 100,
+                        "description": "The options to select, each by value or by visible text."
+                    },
+                    "settle": settle.clone()
+                },
+                "required": ["ref", "values"],
+                "additionalProperties": false,
+                "examples": [{"ref": "e7", "values": ["Poland"]}, {"ref": "e9", "values": ["a", "c"]}]
+            }),
+            select_option_handler,
+        ),
+        Tool::new(
+            "browser_hover",
+            "Move the pointer over an element",
+            "Moves the pointer onto the element given by `ref`, firing `mouseover`, `mouseenter` \
+             and `mousemove` (and `mouseout` on the element it leaves). Use it to open menus and \
+             tooltips that appear on hover, then take a browser_snapshot. What a stylesheet's \
+             `:hover` rule shows is not rendered: only script that listens for the pointer reacts. \
+             Fails with `element_not_found` for a stale ref or an element with no layout box. \
+             Waits for the page to settle afterwards.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "ref": {"type": "string", "description": "Element ref from browser_snapshot."},
+                    "settle": settle
+                },
+                "required": ["ref"],
+                "additionalProperties": false,
+                "examples": [{"ref": "e12"}]
+            }),
+            hover_handler,
         ),
     ]
 }
@@ -149,7 +200,13 @@ async fn finish(
     settle: bool,
 ) -> Result<Outcome, ToolError> {
     check_supported(report)?;
-    let navigation = follow(session, page, report).await?;
+    let navigation = match follow(session, page, report).await? {
+        Some(navigation) => Some(navigation),
+        // Nothing for the host to follow, but the page may have started a
+        // navigation itself: a form submitted by POST, a handler that
+        // assigned `location`.
+        None => dom::page_navigation(session, page, report.document).await,
+    };
     let settled = if settle {
         Some(settle_after_action(page, session).await?)
     } else {
@@ -159,6 +216,13 @@ async fn finish(
         navigation,
         settled,
     })
+}
+
+/// Adds the navigation an action caused to the session history.
+fn record(session: &mut BrowserSession, outcome: &Outcome) {
+    if let Some(navigation) = &outcome.navigation {
+        session.history.visit(navigation.final_url.as_str());
+    }
 }
 
 fn tail(outcome: &Outcome) -> String {
@@ -196,11 +260,18 @@ fn merge(mut base: Value, outcome: &Outcome) -> Value {
     base
 }
 
-/// The element's current value, for confirming typed text.
-async fn value_of(page: &Page, node: tenta_core::NodeId) -> Option<String> {
+/// The element's current value, for confirming typed text. `None` once the
+/// page has navigated: the node belongs to the document the action ran in,
+/// and its id means nothing in the one that replaced it.
+async fn value_of(page: &Page, node: tenta_core::NodeId, outcome: &Outcome) -> Option<String> {
     use tenta_core::atom::atoms;
+    if outcome.navigation.is_some() {
+        return None;
+    }
     read_doc(page, move |doc| {
-        if doc.tag(node) != Some(atoms::INPUT) && doc.tag(node) != Some(atoms::TEXTAREA) {
+        if !doc.is_live(node)
+            || (doc.tag(node) != Some(atoms::INPUT) && doc.tag(node) != Some(atoms::TEXTAREA))
+        {
             return None;
         }
         let password = doc
@@ -316,6 +387,7 @@ async fn click(session: &mut BrowserSession, args: ClickArgs) -> Result<ToolOutp
     );
     let report = run_script(session, &page, &script(&target.path, &body)).await?;
     let outcome = finish(session, &page, &report, args.settle.unwrap_or(true)).await?;
+    record(session, &outcome);
 
     let place = at.map_or_else(String::new, |(x, y)| format!(" at ({x:.0}, {y:.0})"));
     let name = args.reference.as_deref().unwrap_or("the point");
@@ -419,7 +491,8 @@ async fn type_text(session: &mut BrowserSession, args: TypeArgs) -> Result<ToolO
     );
     let report = run_script(session, &page, &script(&target.path, &body)).await?;
     let outcome = finish(session, &page, &report, args.settle.unwrap_or(true)).await?;
-    let value = value_of(&page, target.node).await;
+    record(session, &outcome);
+    let value = value_of(&page, target.node, &outcome).await;
     let summary = format!(
         "Typed {} characters into {} {}.{}",
         args.text.chars().count(),
@@ -466,7 +539,8 @@ async fn fill(session: &mut BrowserSession, args: FillArgs) -> Result<ToolOutput
     let body = format!("A.focus(t);m(A.key('keyDown',{select_all}));{replace}");
     let report = run_script(session, &page, &script(&target.path, &body)).await?;
     let outcome = finish(session, &page, &report, args.settle.unwrap_or(true)).await?;
-    let value = value_of(&page, target.node).await;
+    record(session, &outcome);
+    let value = value_of(&page, target.node, &outcome).await;
     let summary = format!(
         "Filled {} {} with {} characters.{}",
         args.reference,
@@ -520,10 +594,260 @@ async fn press_key(
     let body = format!("{focus}m(A.key('keyDown',{init}));m(A.key('keyUp',{init}));");
     let report = run_script(session, &page, &script(&path, &body)).await?;
     let outcome = finish(session, &page, &report, args.settle.unwrap_or(true)).await?;
+    record(session, &outcome);
     Ok(ToolOutput::text(
         format!("Pressed {}.{}", args.key, tail(&outcome)),
         merge(
             json!({"action": "press_key", "key": args.key, "ref": args.reference}),
+            &outcome,
+        ),
+    ))
+}
+
+// ---- select and hover ---------------------------------------------------
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SelectOptionArgs {
+    #[serde(rename = "ref")]
+    reference: String,
+    values: Vec<String>,
+    settle: Option<bool>,
+}
+
+handler!(select_option_handler, SelectOptionArgs, select_option);
+
+/// What the page-side selection reports: the options it could not find, or
+/// the ones now selected.
+#[derive(Default)]
+struct Selection {
+    missing: Vec<String>,
+    available: Vec<String>,
+    selected: Vec<(String, String)>,
+    changed: bool,
+}
+
+fn strings(value: &tenta_browser::RemoteValue) -> Vec<String> {
+    match value {
+        tenta_browser::RemoteValue::Array(items) => items
+            .iter()
+            .filter_map(|item| item.as_str().map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn parse_selection(value: tenta_browser::RemoteValue) -> Selection {
+    use tenta_browser::RemoteValue;
+    let mut selection = Selection::default();
+    let RemoteValue::Object(members) = value else {
+        return selection;
+    };
+    for (name, value) in members {
+        match name.as_str() {
+            "missing" => selection.missing = strings(&value),
+            "available" => selection.available = strings(&value),
+            "changed" => selection.changed = value.as_bool().unwrap_or(false),
+            "selected" => {
+                if let RemoteValue::Array(items) = value {
+                    selection.selected = items
+                        .iter()
+                        .filter_map(|item| match strings(item).as_slice() {
+                            [value, text] => Some((value.clone(), text.clone())),
+                            _ => None,
+                        })
+                        .collect();
+                }
+            }
+            _ => {}
+        }
+    }
+    selection
+}
+
+async fn select_option(
+    session: &mut BrowserSession,
+    args: SelectOptionArgs,
+) -> Result<ToolOutput, ToolError> {
+    dom::require_javascript(session)?;
+    let page = session.page().await?;
+    super::snapshot::after_navigation(session, &page).await;
+    let target = resolve_ref(session, &page, &args.reference).await?;
+    let node = target.node;
+    let (is_select, multiple, disabled) = read_doc(&page, move |doc| {
+        (
+            doc.tag(node) == Some(tenta_core::atom::atoms::SELECT),
+            doc.attribute_str(node, "multiple").is_some(),
+            tenta_dom::forms::is_disabled(doc, node),
+        )
+    })
+    .await?;
+    if !is_select {
+        return Err(ToolError::invalid(format!(
+            "`{}` is {}, not a <select>; use browser_click for other controls",
+            args.reference, target.description
+        )));
+    }
+    if disabled {
+        return Err(ToolError::invalid(format!(
+            "`{}` ({}) is disabled",
+            args.reference, target.description
+        )));
+    }
+    if !multiple && args.values.len() != 1 {
+        return Err(ToolError::invalid(format!(
+            "`{}` is a single select: give exactly one value, not {}",
+            args.reference,
+            args.values.len()
+        )));
+    }
+
+    // An option is named by its value, then by its text, then by its text
+    // ignoring case and surrounding space. `input` and `change` fire only when
+    // the selection changed, as they do for a person.
+    let wanted = serde_json::to_string(&args.values).expect("a list of strings");
+    let path = serde_json::to_string(&target.path).expect("a list of numbers");
+    let expression = format!(
+        "(function(){{var A=globalThis.__tentaCdp;\
+         if(!A)throw new Error('the interaction script is not installed in this page');\
+         var t=A.nodeAt({path});if(!t)throw new Error('the element left the page');\
+         var W={wanted},O=[],i;for(i=0;i<t.options.length;i++)O.push(t.options[i]);\
+         function norm(s){{return String(s).trim().toLowerCase();}}\
+         function find(w){{return O.filter(function(o){{return o.value===w;}})[0]\
+           ||O.filter(function(o){{return o.text===w;}})[0]\
+           ||O.filter(function(o){{return norm(o.text)===norm(w);}})[0];}}\
+         var chosen=[],missing=[];\
+         W.forEach(function(w){{var o=find(w);if(o)chosen.push(o);else missing.push(w);}});\
+         if(missing.length)return {{missing:missing,available:O.map(function(o){{return o.text;}})}};\
+         var before=O.map(function(o){{return o.selected;}});\
+         if(t.multiple)O.forEach(function(o){{o.selected=chosen.indexOf(o)!==-1;}});\
+         else chosen[0].selected=true;\
+         var changed=O.some(function(o,n){{return o.selected!==before[n];}});\
+         if(changed){{t.dispatchEvent(new Event('input',{{bubbles:true,composed:true}}));\
+           t.dispatchEvent(new Event('change',{{bubbles:true}}));}}\
+         return {{changed:changed,selected:O.filter(function(o){{return o.selected;}})\
+           .map(function(o){{return [o.value,o.text];}})}};}})()"
+    );
+    let document = dom::shown_document(&page);
+    let options = tenta_browser::EvalOptions {
+        return_by_value: true,
+        ..tenta_browser::EvalOptions::default()
+    };
+    let selection = match page
+        .evaluate_with(&expression, options)
+        .await?
+        .into_completion()
+    {
+        tenta_browser::Completion::Value(value) => parse_selection(value),
+        tenta_browser::Completion::Threw(details) => {
+            return Err(ToolError::new(
+                ErrorKind::ScriptError,
+                format!(
+                    "the page could not carry out the action: {}",
+                    details.message
+                ),
+            ));
+        }
+    };
+    if !selection.missing.is_empty() {
+        return Err(ToolError::invalid(format!(
+            "`{}` has no option {}; its options are: {}",
+            args.reference,
+            selection
+                .missing
+                .iter()
+                .map(|value| format!("{value:?}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            selection
+                .available
+                .iter()
+                .map(|text| format!("{text:?}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        )));
+    }
+    let report = Report {
+        document,
+        ..Report::default()
+    };
+    let outcome = finish(session, &page, &report, args.settle.unwrap_or(true)).await?;
+    record(session, &outcome);
+    let labels: Vec<String> = selection
+        .selected
+        .iter()
+        .map(|(_, text)| format!("{text:?}"))
+        .collect();
+    let summary = format!(
+        "Selected {} in {} {}.{}{}",
+        if labels.is_empty() {
+            "nothing".to_owned()
+        } else {
+            labels.join(", ")
+        },
+        args.reference,
+        target.description,
+        if selection.changed {
+            ""
+        } else {
+            " The selection was already that."
+        },
+        tail(&outcome)
+    );
+    Ok(ToolOutput::text(
+        summary,
+        merge(
+            json!({
+                "action": "select_option",
+                "target": {"ref": args.reference, "element": target.description},
+                "selected": selection.selected.iter().map(|(value, text)| json!({
+                    "value": value,
+                    "text": text,
+                })).collect::<Vec<_>>(),
+                "changed": selection.changed,
+            }),
+            &outcome,
+        ),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HoverArgs {
+    #[serde(rename = "ref")]
+    reference: String,
+    settle: Option<bool>,
+}
+
+handler!(hover_handler, HoverArgs, hover);
+
+async fn hover(session: &mut BrowserSession, args: HoverArgs) -> Result<ToolOutput, ToolError> {
+    let page = session.page().await?;
+    super::snapshot::after_navigation(session, &page).await;
+    let target = resolve_ref(session, &page, &args.reference).await?;
+    let (target, at) = click_point(&page, &args.reference, target).await?;
+    let (x, y) = at.unwrap_or((0.0, 0.0));
+    let body = format!(
+        "m(A.mouse(t,'mouseMoved',{{x:{x},y:{y},button:0,buttons:0,detail:0,\
+         ctrlKey:false,shiftKey:false,altKey:false,metaKey:false}}));"
+    );
+    let report = run_script(session, &page, &script(&target.path, &body)).await?;
+    let outcome = finish(session, &page, &report, args.settle.unwrap_or(true)).await?;
+    record(session, &outcome);
+    let place = at.map_or_else(String::new, |(x, y)| format!(" at ({x:.0}, {y:.0})"));
+    Ok(ToolOutput::text(
+        format!(
+            "Moved the pointer over {} {}{place}.{}",
+            args.reference,
+            target.description,
+            tail(&outcome)
+        ),
+        merge(
+            json!({
+                "action": "hover",
+                "target": {"ref": args.reference, "element": target.description},
+                "point": at.map(|(x, y)| json!({"x": x, "y": y})),
+            }),
             &outcome,
         ),
     ))

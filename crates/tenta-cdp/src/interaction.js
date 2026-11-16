@@ -252,7 +252,22 @@
 
   // ---- text editing -----------------------------------------------------
 
+  // The engine keeps the selection of the text controls its selection API
+  // applies to, so the page's own scripts see the caret this script moves. A
+  // control it does not apply to (`type=number`, `email`) reads null there
+  // and keeps its caret here.
+  function nativeSelection(el) {
+    return typeof el.selectionStart === 'number' && typeof el.setSelectionRange === 'function';
+  }
+
   function selectionOf(el) {
+    if (nativeSelection(el)) {
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
+      return el.selectionDirection === 'backward'
+        ? { anchor: end, focus: start }
+        : { anchor: start, focus: end };
+    }
     const length = String(el.value).length;
     let sel = selections.get(el);
     if (!sel) sel = { anchor: length, focus: length };
@@ -263,6 +278,14 @@
   }
 
   function setSelection(el, anchor, focus) {
+    if (nativeSelection(el)) {
+      el.setSelectionRange(
+        Math.min(anchor, focus),
+        Math.max(anchor, focus),
+        focus < anchor ? 'backward' : anchor < focus ? 'forward' : 'none',
+      );
+      return;
+    }
     selections.set(el, { anchor, focus });
   }
 
@@ -512,6 +535,20 @@
 
   function submit(form, submitter) {
     if (!form) return;
+    // A POST has an entity body, which only the engine can send: it fires
+    // `submit`, encodes the form and starts the navigation itself, and the
+    // host sees a navigation in flight instead of a URL to follow.
+    const own = (name) => (submitter && has(submitter, name) ? submitter.getAttribute(name) : null);
+    const method = (own('formmethod') || form.getAttribute('method') || '').toLowerCase();
+    if (method === 'post' && typeof form.requestSubmit === 'function') {
+      try {
+        form.requestSubmit(submitter || null);
+      } catch (error) {
+        // Not a submit button of this form: submit without one.
+        form.requestSubmit();
+      }
+      return;
+    }
     const Submit = typeof global.SubmitEvent === 'function' ? global.SubmitEvent : global.Event;
     const event = new Submit('submit', { bubbles: true, cancelable: true, submitter });
     if (form.dispatchEvent(event)) navigation = formUrl(form, submitter);
@@ -555,9 +592,14 @@
       const target = attr(stop, 'target');
       const opens = init.ctrlKey || init.metaKey || init.shiftKey || init.altKey;
       const url = absoluteUrl(stop.getAttribute('href'));
-      if (url && !opens && selfTargets.indexOf(target) !== -1 && !has(stop, 'download')
-          && !sameDocument(url)) {
-        navigation = url;
+      if (url && !opens && selfTargets.indexOf(target) !== -1 && !has(stop, 'download')) {
+        if (!sameDocument(url)) {
+          navigation = url;
+        } else if (global.location && typeof global.location.assign === 'function') {
+          // A link into this document: the engine moves to the fragment
+          // (URL, history entry, `hashchange`) without loading anything.
+          global.location.assign(url);
+        }
       }
     } else if (stop.localName === 'summary') {
       const details = stop.parentElement;

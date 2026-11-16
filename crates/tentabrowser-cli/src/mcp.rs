@@ -7,7 +7,10 @@
 //! features; otherwise the tools that need them answer `tier_denied`.
 
 use tenta_mcp::{HttpOptions, HttpServer, McpOptions, McpServer, stdio};
-use tentabrowser::{ContextOptions, Engine, JsEngine, Tier, Viewport};
+use tentabrowser::{
+    ContextOptions, Engine, EngineSearch, JsEngine, SearchContextOptions, SearchError,
+    SearchRequest, SearchResponse, SearchSetup, Tier, Viewport,
+};
 
 use crate::cli::{Global, McpArgs};
 use crate::error::{CliError, CliResult};
@@ -21,6 +24,7 @@ pub async fn run(global: &Global, args: &McpArgs) -> CliResult<()> {
     if args.max_sessions == 0 {
         return Err(CliError::usage("--max-sessions must be at least 1"));
     }
+    let search_setup = search_setup(global, args)?;
     let engine = build_engine(global, args)?;
     let (width, height) = args.viewport;
     let options = McpOptions {
@@ -39,6 +43,13 @@ pub async fn run(global: &Global, args: &McpArgs) -> CliResult<()> {
             ..Viewport::default()
         },
         max_sessions: args.max_sessions,
+        search: match EngineSearcher::start(engine.clone(), search_setup) {
+            Ok(searcher) => Some(tenta_mcp::SearchHandle(std::sync::Arc::new(searcher))),
+            Err(error) => {
+                tracing::warn!(%error, "browser_web_search is unavailable: its worker did not start");
+                None
+            }
+        },
         ..McpOptions::default()
     };
     let server = McpServer::new(engine.clone(), options);
@@ -50,6 +61,79 @@ pub async fn run(global: &Global, args: &McpArgs) -> CliResult<()> {
     server.close_all().await;
     engine.close();
     outcome
+}
+
+type SearchJob = (
+    SearchRequest,
+    tokio::sync::oneshot::Sender<Result<SearchResponse, SearchError>>,
+);
+
+/// `browser_web_search` through the engine's internal search context, which
+/// has its own cookie jar and connections: a search shares nothing with the
+/// pages an agent opens (`docs/spec/03-network.md` §4).
+///
+/// A search future is not `Send` (it holds a parser), while a tool call may
+/// run on any thread of the server's runtime, so the searches run on one
+/// thread of their own and the tool waits for the answer over a channel.
+struct EngineSearcher {
+    jobs: tokio::sync::mpsc::UnboundedSender<SearchJob>,
+}
+
+impl EngineSearcher {
+    fn start(engine: Engine, setup: SearchSetup) -> std::io::Result<Self> {
+        let (jobs, mut queue) = tokio::sync::mpsc::unbounded_channel::<SearchJob>();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        std::thread::Builder::new()
+            .name("tenta-mcp-search".to_owned())
+            .spawn(move || {
+                let local = tokio::task::LocalSet::new();
+                local.block_on(&runtime, async move {
+                    // Ends when the server, which owns the sender, is dropped.
+                    while let Some((request, reply)) = queue.recv().await {
+                        let (engine, setup) = (engine.clone(), setup.clone());
+                        tokio::task::spawn_local(async move {
+                            // The caller may have been cancelled; nobody waits then.
+                            let _ = reply.send(engine.search_with(&setup, request).await);
+                        });
+                    }
+                });
+            })?;
+        Ok(Self { jobs })
+    }
+}
+
+impl tenta_mcp::WebSearch for EngineSearcher {
+    fn search(&self, request: SearchRequest) -> tenta_mcp::SearchFuture<'_> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        let sent = self.jobs.send((request, reply));
+        Box::pin(async move {
+            let stopped = || SearchError::NoProvider("the search worker has stopped".to_owned());
+            sent.map_err(|_| stopped())?;
+            answer.await.map_err(|_| stopped())?
+        })
+    }
+}
+
+/// Every loaded provider plan is allowed: the agent names the provider per
+/// call, and the first call's setup is the one the subsystem keeps.
+fn search_setup(global: &Global, args: &McpArgs) -> CliResult<SearchSetup> {
+    let mut setup = SearchSetup {
+        context: SearchContextOptions {
+            allow_private_network: global.allow_private_network,
+            proxy: global.proxy.clone(),
+            user_agent: global.user_agent.clone(),
+            accept_language: global.accept_language.clone(),
+        },
+        request_timeout: Some(std::time::Duration::from_millis(global.timeout)),
+        ..SearchSetup::default()
+    };
+    for spec in &args.search_endpoint {
+        let (plan, endpoint) = crate::search::parse_endpoint(spec)?;
+        setup = setup.endpoint_override(plan, endpoint);
+    }
+    Ok(setup)
 }
 
 async fn serve_stdio(server: &McpServer) -> CliResult<()> {

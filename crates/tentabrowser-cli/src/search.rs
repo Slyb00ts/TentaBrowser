@@ -139,7 +139,7 @@ fn search_setup(
 }
 
 /// `--search-endpoint duckduckgo_html=http://127.0.0.1:8080/serp.html`.
-fn parse_endpoint(spec: &str) -> CliResult<(ProviderId, Url)> {
+pub(crate) fn parse_endpoint(spec: &str) -> CliResult<(ProviderId, Url)> {
     let (plan, url) = spec.split_once('=').ok_or_else(|| {
         CliError::usage(format!(
             "--search-endpoint {spec:?}: expected <plan_id>=<url>"

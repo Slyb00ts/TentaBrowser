@@ -27,7 +27,8 @@ required-features = ["v8", "render"]
 tenta-core = { workspace = true }
 tenta-browser = { workspace = true }
 tenta-dom = { workspace = true }
-# MC3 adds `browser_web_search` on top of this crate.
+# The request and result model of `browser_web_search`; the host supplies the
+# subsystem that runs a query (`tools::search::WebSearch`).
 tenta-search = { workspace = true }
 tokio = { workspace = true, features = ["net", "io-util", "io-std", "rt-multi-thread"] }
 httparse = { workspace = true }

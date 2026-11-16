@@ -101,24 +101,103 @@ async fn navigate(
             ),
         ));
     }
-    let wait_until = match args.wait_until.as_deref() {
+    let load = Load {
+        wait_until: args.wait_until,
+        timeout_ms: args.timeout_ms,
+    };
+    let loaded = open(session, url.as_str(), &load).await?;
+    session.history.visit(&loaded.final_url);
+    Ok(loaded.output("Navigated to", session))
+}
+
+/// How a load waits; the arguments `browser_navigate`, `browser_back`,
+/// `browser_forward` and `browser_reload` share.
+#[derive(Default)]
+pub(super) struct Load {
+    pub wait_until: Option<String>,
+    pub timeout_ms: Option<u64>,
+}
+
+/// The schema properties of [`Load`].
+pub(super) fn load_properties() -> (serde_json::Value, serde_json::Value) {
+    (
+        json!({
+            "type": "string",
+            "enum": ["load", "domcontentloaded", "networkidle"],
+            "description": "What to wait for. `networkidle` (default) also waits for the page's load-driven requests and timers, up to the busy cap."
+        }),
+        json!({
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 120000,
+            "description": "Deadline for the whole navigation. Default 30000."
+        }),
+    )
+}
+
+/// A finished load.
+pub(super) struct Loaded {
+    pub final_url: String,
+    summary_tail: String,
+    structured: serde_json::Value,
+}
+
+impl Loaded {
+    /// The tool result: `verb` starts the summary (`Navigated to`, `Went back to`).
+    pub fn output(mut self, verb: &str, session: &BrowserSession) -> ToolOutput {
+        let (back, forward) = session.history.around();
+        if let Some(fields) = self.structured.as_object_mut() {
+            fields.insert(
+                "history".to_owned(),
+                json!({ "back": back, "forward": forward }),
+            );
+        }
+        ToolOutput::text(format!("{verb} {}", self.summary_tail), self.structured)
+    }
+}
+
+/// Loads `url` in the session's page and waits as `load` says. Does not touch
+/// the session history: the caller knows whether this is a new entry.
+pub(super) async fn open(
+    session: &mut BrowserSession,
+    url: &str,
+    load: &Load,
+) -> Result<Loaded, ToolError> {
+    let wait_until = match load.wait_until.as_deref() {
         Some("load") => Settle::Load,
         Some("domcontentloaded") => Settle::DomContent,
         _ => Settle::NetworkIdle,
     };
-    let timeout = args
+    let timeout = load
         .timeout_ms
         .map_or(session.options().navigation_timeout, Duration::from_millis);
     let page = session.page().await?;
-    let navigation = page
-        .goto(
-            url.as_str(),
-            Goto::new().wait_until(wait_until).timeout(timeout),
-        )
-        .await?;
+    let navigation = match page
+        .goto(url, Goto::new().wait_until(wait_until).timeout(timeout))
+        .await
+    {
+        Ok(navigation) => navigation,
+        Err(error) => {
+            // A page whose script navigates while it loads (a redirect written
+            // in JavaScript) replaces the navigation that loaded it; what the
+            // agent asked for is the page that results.
+            let aborted =
+                matches!(&error, tenta_core::Error::Net { code, .. } if code.contains("ABORTED"));
+            let replaced = if aborted && page.navigation_in_flight() {
+                let _ = tokio::time::timeout(timeout, page.navigation_settled()).await;
+                page.navigation()
+            } else {
+                None
+            };
+            match replaced {
+                Some(navigation) => navigation,
+                None => return Err(error.into()),
+            }
+        }
+    };
     if let Some(code) = &navigation.error {
         let kind = crate::error::net_kind(code);
-        let error = ToolError::new(kind, format!("{} could not be loaded: {code}", args.url));
+        let error = ToolError::new(kind, format!("{url} could not be loaded: {code}"));
         return Err(if kind == ErrorKind::NavigationFailed {
             error.retryable()
         } else {
@@ -130,8 +209,7 @@ async fn navigate(
         return Err(ToolError::new(
             ErrorKind::Timeout,
             format!(
-                "{} did not finish loading within {} ms",
-                args.url,
+                "{url} did not finish loading within {} ms",
                 timeout.as_millis()
             ),
         )
@@ -143,8 +221,8 @@ async fn navigate(
         let _ = super::snapshot::layout_of(&page).await;
     }
     let title = page.title().unwrap_or_default();
-    let summary = format!(
-        "Navigated to {} (HTTP {}). Title: {:?}.{} Call browser_snapshot to read the page.",
+    let summary_tail = format!(
+        "{} (HTTP {}). Title: {:?}.{} Call browser_snapshot to read the page.",
         navigation.final_url,
         navigation.status,
         title,
@@ -156,9 +234,10 @@ async fn navigate(
             ""
         },
     );
-    Ok(ToolOutput::text(
-        summary,
-        json!({
+    Ok(Loaded {
+        final_url: navigation.final_url.to_string(),
+        summary_tail,
+        structured: json!({
             "url": navigation.url.as_str(),
             "final_url": navigation.final_url.as_str(),
             "status": navigation.status,
@@ -168,7 +247,7 @@ async fn navigate(
             "redirects": navigation.redirects.len(),
             "settled": settled.to_json(),
         }),
-    ))
+    })
 }
 
 async fn close(session: &mut BrowserSession, _args: CloseArgs) -> Result<ToolOutput, ToolError> {

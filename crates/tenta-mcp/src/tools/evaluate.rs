@@ -53,7 +53,8 @@ struct EvaluateArgs {
 
 handler!(evaluate_handler, EvaluateArgs, evaluate);
 
-fn to_json(value: &RemoteValue) -> Value {
+/// A value from the page as JSON; what JSON cannot hold becomes a string.
+pub(crate) fn to_json(value: &RemoteValue) -> Value {
     match value {
         RemoteValue::Undefined | RemoteValue::Null => Value::Null,
         RemoteValue::Bool(flag) => json!(flag),
@@ -98,7 +99,14 @@ async fn evaluate(
         timeout: Some(Duration::from_millis(args.timeout_ms.unwrap_or(10_000))),
         ..EvalOptions::default()
     };
+    let document = super::dom::shown_document(&page);
     let evaluation = page.evaluate_with(&args.expression, options).await?;
+    // A script that assigned `location` or submitted a form started a
+    // navigation; the result says so and the session history follows it.
+    let navigation = super::dom::page_navigation(session, &page, document).await;
+    if let Some(navigation) = &navigation {
+        session.history.visit(navigation.final_url.as_str());
+    }
     match evaluation.into_completion() {
         Completion::Value(value) => {
             let result = to_json(&value);
@@ -112,10 +120,20 @@ async fn evaluate(
                 text.push_str("\n[output cut at 60000 characters]");
                 truncated = true;
             }
+            if let Some(navigation) = &navigation {
+                text.push_str(&format!(
+                    "\n[The script navigated the page to {} (HTTP {}).]",
+                    navigation.final_url, navigation.status
+                ));
+            }
             Ok(ToolOutput::text(
                 text,
                 // A cut text means the value is too large to repeat as data.
-                json!({"result": if truncated { Value::Null } else { result }, "truncated": truncated}),
+                json!({
+                    "result": if truncated { Value::Null } else { result },
+                    "truncated": truncated,
+                    "navigation": navigation.as_ref().map(super::dom::navigation_json),
+                }),
             ))
         }
         Completion::Threw(details) => Err(ToolError::new(ErrorKind::ScriptError, details.message)),

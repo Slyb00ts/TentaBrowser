@@ -14,17 +14,26 @@ use tenta_mcp::{HttpOptions, HttpServer, stdio};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
-const TOOL_NAMES: [&str; 10] = [
+const TOOL_NAMES: [&str; 19] = [
     "browser_navigate",
     "browser_close",
+    "browser_back",
+    "browser_forward",
+    "browser_reload",
     "browser_snapshot",
+    "browser_extract",
     "browser_click",
     "browser_type",
     "browser_fill",
     "browser_press_key",
+    "browser_select_option",
+    "browser_hover",
     "browser_wait_for",
     "browser_evaluate",
     "browser_screenshot",
+    "browser_console_messages",
+    "browser_network_requests",
+    "browser_web_search",
 ];
 
 fn modern_meta() -> Value {
@@ -672,7 +681,10 @@ async fn stdio_speaks_newline_delimited_json_rpc() {
         .unwrap();
     let listed = read_json(&mut lines).await;
     assert_eq!(listed["id"], "a");
-    assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 10);
+    assert_eq!(
+        listed["result"]["tools"].as_array().unwrap().len(),
+        TOOL_NAMES.len()
+    );
 
     // A request cancelled in flight gets no response; the next one does.
     to_server
@@ -1419,7 +1431,10 @@ async fn batches_exist_only_in_the_two_oldest_revisions() {
                 .unwrap_or_else(|| panic!("an array, got {reply}"));
             assert_eq!(replies.len(), 2, "the notification has no reply: {reply}");
             assert_eq!(replies[0]["id"], 1);
-            assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 10);
+            assert_eq!(
+                replies[1]["result"]["tools"].as_array().unwrap().len(),
+                TOOL_NAMES.len()
+            );
         } else {
             assert_eq!(reply["error"]["code"], -32600, "{version}: {reply}");
         }

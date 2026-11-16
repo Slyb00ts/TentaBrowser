@@ -28,14 +28,12 @@ mod snapshot;
 pub mod stdio;
 pub mod tools;
 
-// MC3 builds `browser_web_search` on this crate.
-use tenta_search as _;
-
 pub use error::{ErrorKind, ToolError};
 pub use http::{HttpOptions, HttpServer, MIN_REMOTE_TOKEN_LEN};
 pub use server::{Connection, McpServer, supported_versions};
 pub use session::McpOptions;
 pub use tools::SCHEMA_VERSION;
+pub use tools::search::{SearchFuture, SearchHandle, WebSearch};
 
 /// The settle tunables MCP engines are built with: `busy_cap` 500 ms and
 /// `foreground_request_max` 2 s (`docs/spec/10-mcp.md` §3). Pass them to the

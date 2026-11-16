@@ -130,13 +130,14 @@ pub(super) async fn layout_of(_page: &Page) -> Option<Layout> {
     None
 }
 
-/// The element a `ref` or `selector` argument limits the snapshot to.
-async fn scope_of(
+/// The element a `ref` or `selector` argument limits a read to.
+pub(super) async fn scope_of(
     session: &BrowserSession,
     page: &Page,
-    args: &SnapshotArgs,
+    reference: Option<&str>,
+    selector: Option<&str>,
 ) -> Result<Option<tenta_core::NodeId>, ToolError> {
-    match (&args.reference, &args.selector) {
+    match (reference, selector) {
         (Some(_), Some(_)) => Err(ToolError::invalid("give `ref` or `selector`, not both")),
         (Some(reference), None) => Ok(Some(
             super::dom::resolve_ref(session, page, reference)
@@ -144,7 +145,7 @@ async fn scope_of(
                 .node,
         )),
         (None, Some(selector)) => {
-            let query = selector.clone();
+            let query = selector.to_owned();
             let found = read_doc(page, move |doc| {
                 doc.query_selector(doc.document_node(), &query)
                     .map_err(|_| ())
@@ -181,10 +182,9 @@ fn page_chunk(lines: &[String], from: usize, max_chars: usize) -> usize {
 async fn run(session: &mut BrowserSession, args: SnapshotArgs) -> Result<ToolOutput, ToolError> {
     let max_chars = args.max_chars.unwrap_or(30_000);
     let page = session.page().await?;
+    after_navigation(session, &page).await;
     let (url, title) = (
-        page.navigation()
-            .map(|navigation| navigation.final_url.to_string())
-            .unwrap_or_else(|| "about:blank".to_owned()),
+        super::dom::current_url(&page).await,
         page.title().unwrap_or_default(),
     );
 
@@ -208,7 +208,13 @@ async fn run(session: &mut BrowserSession, args: SnapshotArgs) -> Result<ToolOut
     } else {
         after_navigation(session, &page).await;
         let layout = layout_of(&page).await;
-        let scope = scope_of(session, &page, &args).await?;
+        let scope = scope_of(
+            session,
+            &page,
+            args.reference.as_deref(),
+            args.selector.as_deref(),
+        )
+        .await?;
         let options = Options {
             max_nodes: args.max_nodes.unwrap_or(3000),
             include_boxes: args.include_boxes,

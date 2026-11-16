@@ -92,6 +92,52 @@ pub async fn resolve_ref(
 pub struct Report {
     pub navigate: Option<String>,
     pub unsupported: Option<String>,
+    /// The navigation whose document the script ran in, to tell afterwards
+    /// whether the page has navigated since ([`shown_document`]).
+    pub document: u64,
+}
+
+/// Identifies the document the page shows: the id of the navigation that
+/// loaded it, 0 before any.
+pub fn shown_document(page: &Page) -> u64 {
+    page.navigation()
+        .map_or(0, |navigation| navigation.navigation_id)
+}
+
+/// The navigation the page started by itself since it showed `document`, once
+/// it has finished: a form submitted by POST, a script that assigned
+/// `location`, a link the page's own script followed. `None` when the page
+/// still shows that document.
+pub async fn page_navigation(
+    session: &BrowserSession,
+    page: &Page,
+    document: u64,
+) -> Option<Navigation> {
+    if page.navigation_in_flight() {
+        let _ = tokio::time::timeout(
+            session.options().navigation_timeout,
+            page.navigation_settled(),
+        )
+        .await;
+    }
+    page.navigation()
+        .filter(|navigation| navigation.navigation_id != document)
+}
+
+/// The URL of the document the page shows, which follows `history.pushState`
+/// and fragment navigations as the URL of the navigation that loaded it does
+/// not.
+pub async fn current_url(page: &Page) -> String {
+    let from_document = read_doc(page, |doc| doc.url().map(|url| url.to_string()))
+        .await
+        .ok()
+        .flatten();
+    from_document
+        .or_else(|| {
+            page.navigation()
+                .map(|navigation| navigation.final_url.to_string())
+        })
+        .unwrap_or_else(|| "about:blank".to_owned())
 }
 
 fn parse_report(value: RemoteValue) -> Report {
@@ -120,9 +166,13 @@ pub async fn run_script(
         return_by_value: true,
         ..EvalOptions::default()
     };
+    let document = shown_document(page);
     let evaluation = page.evaluate_with(expression, options).await?;
     match evaluation.into_completion() {
-        Completion::Value(value) => Ok(parse_report(value)),
+        Completion::Value(value) => Ok(Report {
+            document,
+            ..parse_report(value)
+        }),
         Completion::Threw(details) => Err(ToolError::new(
             ErrorKind::ScriptError,
             format!(

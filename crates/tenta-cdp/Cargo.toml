@@ -28,6 +28,10 @@ required-features = ["v8", "render"]
 name = "network"
 required-features = ["v8", "render"]
 
+[[test]]
+name = "interaction"
+required-features = ["v8", "render"]
+
 [dependencies]
 tenta-core = { workspace = true }
 tenta-browser = { workspace = true }

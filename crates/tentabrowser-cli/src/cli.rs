@@ -237,6 +237,11 @@ pub struct McpArgs {
     #[arg(long, value_name = "N", default_value_t = 16)]
     pub max_sessions: usize,
 
+    /// Point a search provider's plan at another endpoint for
+    /// `browser_web_search`: `<plan_id>=<url>`. Fixture replay; repeatable.
+    #[arg(long = "search-endpoint", value_name = "PLAN=URL", hide = true)]
+    pub search_endpoint: Vec<String>,
+
     /// Print the version of the tool list and its schemas, then exit.
     #[arg(long)]
     pub schema_version: bool,

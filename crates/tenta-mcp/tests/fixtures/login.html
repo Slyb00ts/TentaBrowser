@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><title>Log in</title></head>
+<body>
+<h1>Log in</h1>
+<form id="login" action="/api/echo?next=home" method="post">
+  <label for="user">User</label> <input id="user" name="user">
+  <label for="pass">Password</label> <input id="pass" name="pass" type="password">
+  <label><input type="checkbox" name="remember" value="yes"> Remember me</label>
+  <label for="role">Role</label>
+  <select id="role" name="role"><option value="u">User</option><option value="a">Admin</option></select>
+  <button name="action" value="login">Log in</button>
+</form>
+<p><a href="#help">Help</a> <a id="scripted" href="/about.html" onclick="event.preventDefault(); location.assign('/about.html?via=script');">About (scripted)</a></p>
+<label for="tags">Tags</label>
+<select id="tags" multiple><option value="a">Alpha</option><option value="b" selected>Beta</option><option value="c">Gamma</option></select>
+<button id="menu-button" type="button">Menu</button>
+<div id="menu" hidden>Menu content</div>
+<h2 id="help">Help</h2>
+<script>
+window.hashes = [];
+window.changes = [];
+document.getElementById('role').addEventListener('change', function (event) { changes.push('change:' + event.target.value); });
+document.getElementById('role').addEventListener('input', function (event) { changes.push('input:' + event.target.value); });
+document.getElementById('menu-button').addEventListener('mouseover', function () { document.getElementById('menu').hidden = false; });
+addEventListener('hashchange', function (event) { hashes.push(event.newURL.split('#')[1]); });
+</script>
+</body></html>

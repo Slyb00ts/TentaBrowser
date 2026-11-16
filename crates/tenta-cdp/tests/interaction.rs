@@ -955,17 +955,29 @@ async fn get_forms_encode_like_the_html_serializer_and_honour_formaction() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_fragment_link_a_post_form_and_enter_in_a_get_form_behave() {
+async fn a_post_form_is_submitted_by_the_page_itself() {
+    // The engine builds the entity body and starts the navigation; the host
+    // learns of it from the frame's events, as for any other navigation.
     let (fx, mut page) = nav_fixture().await;
+    click(&mut page, 20.0, 215.0).await;
+    assert!(navigated_to(&mut page).await.ends_with("/dest"));
+    fx.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fragment_link_and_enter_in_a_get_form_behave() {
+    let (fx, mut page) = nav_fixture().await;
+    // A link into the document moves to the fragment and loads nothing.
     click(&mut page, 20.0, 70.0).await;
-    click(&mut page, 20.0, 215.0).await; // POST form: no navigation
     page.result("Browser.getVersion", json!({})).await;
-    page.evaluate("1").await;
     assert_eq!(
-        page.evaluate("document.getElementsByTagName('title').length")
-            .await,
-        0,
-        "still on the first page"
+        page.evaluate(
+            "document.getElementsByTagName('title').length + '|' + location.hash + '|' + \
+             history.length"
+        )
+        .await,
+        "0|#x|2",
+        "still on the first page, at the fragment"
     );
     // Enter in a text field of a GET form submits through its button.
     click(&mut page, 30.0, 120.0).await;

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Fixture Article</title>
+<meta name="description" content="An article for the extraction tests.">
+<link rel="canonical" href="/article.html">
+</head>
+<body>
+<header><nav aria-label="Site">
+  <a href="/index.html">Home</a>
+  <a href="/about.html">About us</a>
+</nav></header>
+<article>
+  <h1>Reading pages as text</h1>
+  <p>An agent reads a page as text far more often than it looks at it. This paragraph is long
+  enough for the extractor to judge the article element as the main content of the page, which
+  is what the test below relies on, so it goes on for a few more words than a fixture usually
+  would and then a few more after that.</p>
+  <h2>What is kept</h2>
+  <p>Markdown keeps <a href="/about.html">links</a>, <strong>emphasis</strong> and lists, and the
+  second paragraph gives the article enough text to outweigh the navigation and the footer by a
+  wide margin, whatever the scoring thresholds are tuned to in the future.</p>
+  <ul><li>First point</li><li>Second point</li></ul>
+  <p hidden>Hidden paragraph.</p>
+  <form id="subscribe" action="/result.html" method="get">
+    <label>Email <input type="email" name="email"></label>
+    <button type="submit">Subscribe</button>
+  </form>
+</article>
+<footer><p>Footer boilerplate <a href="https://example.com/terms">Terms [legal]</a></p></footer>
+</body>
+</html>

@@ -113,6 +113,9 @@ const NAMED_BY_CONTENT: &[&str] = &[
 ];
 
 const MAX_NAME_CHARS: usize = 160;
+/// Options of a select that a snapshot line names, and how long each may be.
+const MAX_LISTED_OPTIONS: usize = 40;
+const MAX_OPTION_CHARS: usize = 60;
 const MAX_TEXT_CHARS: usize = 2000;
 const MAX_INDENT: usize = 24;
 
@@ -373,6 +376,31 @@ fn describe(
             value = Some("********".to_owned());
         }
     }
+    // A select shows what is selected now, by the selectedness rules, and
+    // names its options: that is what browser_select_option chooses among.
+    let mut choices = None;
+    if tag == Some(atoms::SELECT) {
+        let selected: Vec<String> = tenta_dom::forms::selected_options(doc, node.node)
+            .into_iter()
+            .map(|option| tenta_dom::forms::option_text(doc, option))
+            .collect();
+        value = Some(selected.join(", "));
+        let all = tenta_dom::forms::select_options(doc, node.node);
+        let mut listed: Vec<String> = all
+            .iter()
+            .take(MAX_LISTED_OPTIONS)
+            .map(|option| {
+                quote(
+                    &tenta_dom::forms::option_text(doc, *option),
+                    MAX_OPTION_CHARS,
+                )
+            })
+            .collect();
+        if all.len() > MAX_LISTED_OPTIONS {
+            listed.push(format!("... {} more", all.len() - MAX_LISTED_OPTIONS));
+        }
+        choices = Some(listed.join(", "));
+    }
     for (key, state) in &state {
         match state {
             Value::Bool(true) => line.push_str(&format!(" [{key}]")),
@@ -387,6 +415,9 @@ fn describe(
     }
     if let Some(value) = value.filter(|value| !value.is_empty()) {
         line.push_str(&format!(" value={}", quote(&value, MAX_NAME_CHARS)));
+    }
+    if let Some(choices) = choices {
+        line.push_str(&format!(" options=[{choices}]"));
     }
     if let Some(Value::String(url)) = url {
         line.push_str(&format!(" url={url}"));

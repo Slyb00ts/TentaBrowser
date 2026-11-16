@@ -114,7 +114,10 @@ fn the_schema_version_prints_and_exits() {
         .output()
         .expect("runs");
     assert!(output.status.success());
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1.1.0");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        tenta_mcp::SCHEMA_VERSION
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -131,7 +134,10 @@ async fn stdio_serves_a_session_and_keeps_stdout_clean() {
     client.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
 
     let listed = client.call("tools/list", json!({}));
-    assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 10);
+    assert_eq!(
+        listed["result"]["tools"].as_array().unwrap().len(),
+        tenta_mcp::tool_list().as_array().unwrap().len()
+    );
 
     let navigated = client.tool(
         "browser_navigate",
@@ -216,6 +222,62 @@ async fn the_full_build_drives_a_page_over_stdio() {
     assert_eq!(shot["content"][0]["mimeType"], "image/png");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn web_search_answers_from_a_recorded_serp_without_touching_the_page() {
+    let serps = FixtureServer::start(FixtureServerConfig::new(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../providers/fixtures"),
+    ))
+    .await
+    .expect("provider fixture server");
+    let endpoint = format!(
+        "duckduckgo_html={}",
+        serps.url("/duckduckgo_html/rust-browser-engine.html")
+    );
+    let home = temp_dir("cli-mcp-search");
+    let mut client = Stdio2::start(home.path(), &["--search-endpoint", &endpoint]);
+    client.call("initialize", json!({"protocolVersion": "2025-11-25"}));
+
+    let found = client.tool(
+        "browser_web_search",
+        json!({"query": "rust browser engine", "limit": 3}),
+    );
+    assert_ne!(found["isError"], true, "{found}");
+    let results = found["structuredContent"]["results"].as_array().unwrap();
+    assert_eq!(results.len(), 3, "{found}");
+    assert_eq!(results[0]["rank"], 1);
+    assert_eq!(results[0]["source"], "duckduckgo");
+    assert!(results[0]["url"].as_str().unwrap().starts_with("https://"));
+    let text = found["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.starts_with("<<<PAGE CONTENT "),
+        "web text is fenced: {text}"
+    );
+    assert!(
+        text.contains(&format!("1. {}", results[0]["title"].as_str().unwrap())),
+        "{text}"
+    );
+
+    // The same query again is answered from the cache.
+    let again = client.tool(
+        "browser_web_search",
+        json!({"query": "rust browser engine", "limit": 3}),
+    );
+    assert_eq!(
+        again["structuredContent"]["providers"][0]["cache_hit"], true,
+        "{again}"
+    );
+
+    let refused = client.tool(
+        "browser_web_search",
+        json!({"query": "rust", "provider": "not a plan!"}),
+    );
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert_eq!(
+        refused["structuredContent"]["error"]["type"],
+        "invalid_arguments"
+    );
+}
+
 #[test]
 fn http_announces_its_endpoint_and_serves_requests() {
     let home = temp_dir("cli-mcp-http");
@@ -250,7 +312,10 @@ fn http_announces_its_endpoint_and_serves_requests() {
     stream.read_to_string(&mut response).unwrap();
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     let payload: Value = serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-    assert_eq!(payload["result"]["tools"].as_array().unwrap().len(), 10);
+    assert_eq!(
+        payload["result"]["tools"].as_array().unwrap().len(),
+        tenta_mcp::tool_list().as_array().unwrap().len()
+    );
 }
 
 #[test]

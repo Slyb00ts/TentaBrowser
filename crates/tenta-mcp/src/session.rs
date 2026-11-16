@@ -5,12 +5,13 @@
 //! previous page is gone. Element refs live here: they name arena slots of
 //! the current document and die with it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use tenta_browser::{
-    BrowserContext, ContextOptions, Engine, Page, PageOptions, Settle, SettleState, Viewport,
+    BrowserContext, ContextOptions, Engine, Page, PageEvent, PageEvents, PageOptions, RemoteValue,
+    Settle, SettleState, Viewport,
 };
 use tenta_core::{Error, NodeId, NodeRef, Tier};
 use tenta_dom::Document;
@@ -35,6 +36,9 @@ pub struct McpOptions {
     pub system_fonts: bool,
     /// An HTTP session that has made no tool call is dropped after this long.
     pub unused_session_ttl: Duration,
+    /// The host's search subsystem; without one `browser_web_search` answers
+    /// `unsupported`.
+    pub search: Option<crate::tools::search::SearchHandle>,
 }
 
 impl Default for McpOptions {
@@ -47,6 +51,7 @@ impl Default for McpOptions {
             max_sessions: 16,
             system_fonts: false,
             unused_session_ttl: Duration::from_secs(60),
+            search: None,
         }
     }
 }
@@ -184,6 +189,292 @@ pub struct StoredSnapshot {
     pub lines: Vec<String>,
 }
 
+/// The text of the last extraction, kept so a continuation token returns the
+/// rest of the text the agent started reading, not a newer state of the page.
+pub struct StoredExtract {
+    pub id: u64,
+    pub nonce: String,
+    pub text: String,
+}
+
+/// Console lines a page log keeps; older ones are counted, not kept.
+pub const CONSOLE_CAP: usize = 500;
+/// Requests a page log keeps.
+pub const REQUEST_CAP: usize = 1000;
+/// Characters of one console message that are kept.
+const CONSOLE_MESSAGE_CAP: usize = 2000;
+
+/// One line of console output, or an uncaught exception.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsoleEntry {
+    /// `log`, `info`, `warning`, `error`, `debug` ..., or `exception`.
+    pub level: String,
+    pub text: String,
+    /// `url:line` of the call or the throw, when the engine knows it.
+    pub location: Option<String>,
+}
+
+/// One request the page made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RequestEntry {
+    id: tenta_core::RequestId,
+    pub method: String,
+    pub url: String,
+    pub resource_type: &'static str,
+    /// The response status, once a response head arrived.
+    pub status: Option<u16>,
+    pub from_cache: bool,
+    /// The `net::ERR_*` name of a failed request.
+    pub error: Option<String>,
+}
+
+/// What a page reported while it worked: console output, uncaught exceptions
+/// and network traffic of the current document, each bounded. A main-frame
+/// navigation starts both over, so the log describes the page being shown.
+#[derive(Debug, Default)]
+pub struct PageLog {
+    pub console: VecDeque<ConsoleEntry>,
+    /// Console lines dropped because the log was full or the reader lagged.
+    pub console_dropped: u64,
+    pub requests: VecDeque<RequestEntry>,
+    pub requests_dropped: u64,
+    /// Events the subscription lost; they may have been of either kind.
+    pub events_lost: u64,
+}
+
+/// An object a console call was given, the way a console prints it: its own
+/// members from the engine's shallow preview (`{answer: true}`, `[1, 2]`), or
+/// its description when there is no preview (an error prints its message).
+fn describe_handle(object: &tenta_browser::RemoteObject) -> String {
+    let Some(preview) = object
+        .preview
+        .as_ref()
+        .filter(|_| object.subtype.as_deref() != Some("error"))
+    else {
+        return object.description.clone();
+    };
+    let array = preview.subtype.as_deref() == Some("array");
+    let mut members: Vec<String> = preview
+        .properties
+        .iter()
+        .map(|property| {
+            let value = match (&property.value, property.kind.as_str()) {
+                (Some(value), "string") => format!("{value:?}"),
+                (Some(value), _) => value.clone(),
+                (None, kind) => kind.to_owned(),
+            };
+            if array {
+                value
+            } else {
+                format!("{}: {value}", property.name)
+            }
+        })
+        .collect();
+    if preview.overflow {
+        members.push("...".to_owned());
+    }
+    let (open, close) = if array { ('[', ']') } else { ('{', '}') };
+    format!("{open}{}{close}", members.join(", "))
+}
+
+fn console_text(args: &[RemoteValue]) -> String {
+    let mut out = String::new();
+    for (index, arg) in args.iter().enumerate() {
+        if index > 0 {
+            out.push(' ');
+        }
+        match arg {
+            RemoteValue::String(text) => out.push_str(text),
+            RemoteValue::Handle(object) => out.push_str(&describe_handle(object)),
+            other => match crate::tools::remote_to_json(other) {
+                serde_json::Value::String(text) => out.push_str(&text),
+                value => out.push_str(&value.to_string()),
+            },
+        }
+    }
+    clip(out)
+}
+
+fn clip(mut text: String) -> String {
+    if text.len() > CONSOLE_MESSAGE_CAP {
+        let mut end = CONSOLE_MESSAGE_CAP;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.push_str(" [cut]");
+    }
+    text
+}
+
+fn location(url: &str, line: Option<u32>) -> Option<String> {
+    // An inline script has no URL of its own (`<anonymous>`), and its line
+    // numbers count from the script's start, which would only mislead.
+    if url.is_empty() || url.starts_with('<') {
+        return None;
+    }
+    Some(match line {
+        // Engines count lines from zero; people and source maps from one.
+        Some(line) => format!("{url}:{}", line + 1),
+        None => url.to_owned(),
+    })
+}
+
+impl PageLog {
+    fn push_console(&mut self, entry: ConsoleEntry) {
+        if self.console.len() == CONSOLE_CAP {
+            self.console.pop_front();
+            self.console_dropped += 1;
+        }
+        self.console.push_back(entry);
+    }
+
+    fn request_mut(&mut self, id: tenta_core::RequestId) -> Option<&mut RequestEntry> {
+        self.requests.iter_mut().rev().find(|entry| entry.id == id)
+    }
+
+    /// Folds one page event into the log.
+    pub fn record(&mut self, event: PageEvent, main_frame: tenta_core::FrameId) {
+        match event {
+            PageEvent::NavigationStarted { frame, .. } if frame == main_frame => {
+                *self = PageLog::default();
+            }
+            PageEvent::Console(call) => {
+                let location = call
+                    .stack
+                    .first()
+                    .and_then(|frame| location(&frame.url, frame.line));
+                self.push_console(ConsoleEntry {
+                    level: call.kind,
+                    text: console_text(&call.args),
+                    location,
+                });
+            }
+            PageEvent::Exception(event) => {
+                let details = event.details;
+                let location = details
+                    .frames
+                    .first()
+                    .and_then(|frame| location(&frame.url, frame.line));
+                self.push_console(ConsoleEntry {
+                    level: "exception".to_owned(),
+                    text: clip(format!("{} {}", details.text, details.message)),
+                    location,
+                });
+            }
+            PageEvent::Request {
+                id,
+                url,
+                method,
+                resource_type,
+            } => {
+                if self.requests.len() == REQUEST_CAP {
+                    self.requests.pop_front();
+                    self.requests_dropped += 1;
+                }
+                self.requests.push_back(RequestEntry {
+                    id,
+                    method,
+                    url: url.into(),
+                    resource_type,
+                    status: None,
+                    from_cache: false,
+                    error: None,
+                });
+            }
+            PageEvent::Response {
+                id,
+                status,
+                from_cache,
+                ..
+            } => {
+                if let Some(entry) = self.request_mut(id) {
+                    entry.status = Some(status);
+                    entry.from_cache = from_cache;
+                }
+            }
+            PageEvent::RequestFailed { id, error, .. } => {
+                if let Some(entry) = self.request_mut(id) {
+                    entry.error = Some(error);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Moves a page's events into its log until the page closes. Reading them as
+/// they happen, instead of when a tool asks, keeps a busy page from
+/// overflowing the subscription's buffer between two tool calls.
+async fn pump(mut events: PageEvents, log: Arc<Mutex<PageLog>>, main_frame: tenta_core::FrameId) {
+    while let Some(event) = events.next_or_lag().await {
+        let mut log = log.lock().unwrap_or_else(PoisonError::into_inner);
+        match event {
+            Ok(event) => log.record(event, main_frame),
+            Err(lost) => log.events_lost += lost,
+        }
+    }
+}
+
+/// The URLs the session's page has shown, for `browser_back` and
+/// `browser_forward`.
+#[derive(Debug, Default)]
+pub struct History {
+    entries: Vec<String>,
+    /// Index of the entry the page shows; meaningless while `entries` is empty.
+    current: usize,
+}
+
+impl History {
+    /// Records that the page now shows `url`, as a navigation does: entries
+    /// ahead of the current one are dropped. Loading the current URL again
+    /// adds nothing.
+    pub fn visit(&mut self, url: &str) {
+        if self
+            .entries
+            .get(self.current)
+            .is_some_and(|entry| entry == url)
+        {
+            return;
+        }
+        if !self.entries.is_empty() {
+            self.entries.truncate(self.current + 1);
+        }
+        self.entries.push(url.to_owned());
+        self.current = self.entries.len() - 1;
+    }
+
+    pub fn current(&self) -> Option<&str> {
+        self.entries.get(self.current).map(String::as_str)
+    }
+
+    /// The entry `delta` steps away (negative is back), without moving.
+    pub fn peek(&self, delta: isize) -> Option<&str> {
+        let index = self.current.checked_add_signed(delta)?;
+        self.entries.get(index).map(String::as_str)
+    }
+
+    /// Moves `delta` steps, when such an entry exists.
+    pub fn step(&mut self, delta: isize) -> bool {
+        match self.current.checked_add_signed(delta) {
+            Some(index) if index < self.entries.len() => {
+                self.current = index;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Entries before and after the current one.
+    pub fn around(&self) -> (usize, usize) {
+        if self.entries.is_empty() {
+            (0, 0)
+        } else {
+            (self.current, self.entries.len() - 1 - self.current)
+        }
+    }
+}
+
 /// An agent's browser.
 pub struct BrowserSession {
     engine: Engine,
@@ -195,7 +486,11 @@ pub struct BrowserSession {
     javascript: bool,
     pub refs: Arc<Mutex<RefTable>>,
     pub snapshot: Option<StoredSnapshot>,
+    pub extract: Option<StoredExtract>,
     next_snapshot: u64,
+    /// Console output and requests of the current page.
+    log: Arc<Mutex<PageLog>>,
+    pub history: History,
 }
 
 impl BrowserSession {
@@ -219,7 +514,10 @@ impl BrowserSession {
             javascript,
             refs: Arc::default(),
             snapshot: None,
+            extract: None,
             next_snapshot: 1,
+            log: Arc::default(),
+            history: History::default(),
         })
     }
 
@@ -242,6 +540,11 @@ impl BrowserSession {
 
     pub fn locked_refs(&self) -> MutexGuard<'_, RefTable> {
         self.refs.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The current page's console output and requests.
+    pub fn log(&self) -> MutexGuard<'_, PageLog> {
+        self.log.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub fn next_snapshot_id(&mut self) -> u64 {
@@ -268,6 +571,9 @@ impl BrowserSession {
         if self.javascript {
             page.add_init_script(crate::interaction::SOURCE);
         }
+        // Subscribed before the first navigation, so its requests are seen.
+        self.log = Arc::default();
+        tokio::spawn(pump(page.events(), self.log.clone(), page.main_frame()));
         self.page = Some(page.clone());
         Ok(page)
     }
@@ -275,6 +581,9 @@ impl BrowserSession {
     /// Closes the page; the context lives on.
     pub async fn discard_page(&mut self) {
         self.snapshot = None;
+        self.extract = None;
+        self.history = History::default();
+        self.log = Arc::default();
         self.locked_refs().retire_all();
         if let Some(page) = self.page.take() {
             let _ = page.close().await;
