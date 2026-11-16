@@ -1607,7 +1607,7 @@ pub(crate) fn dispatch_at_from(
     trusted: bool,
 ) -> Result<bool, JsError> {
     // Step 1: validate + set up, under a short borrow of the event slab.
-    let type_ = {
+    let (type_, composed) = {
         let mut events = event_ctx.events.borrow_mut();
         let record = events
             .get_mut(key)
@@ -1623,7 +1623,7 @@ pub(crate) fn dispatch_at_from(
         // everything below — the listener table and the path — stays keyed by
         // the target itself.
         record.target = Some(target.target_override.unwrap_or(target.bits));
-        record.type_.clone()
+        (record.type_.clone(), record.composed)
     };
 
     // Step 2: build the propagation path under a short document borrow. DOM's
@@ -1631,19 +1631,56 @@ pub(crate) fn dispatch_at_from(
     // the event type is not "load". Detached nodes stop at their actual root.
     // Slot 0 is the page document (the same distinction as defaultView); other
     // documents have no browsing context. Direct Window dispatch stays alone.
-    let path: Vec<PathEntry> = {
+    //
+    // The way up is DOM's "get the parent": a slotted node goes to its slot,
+    // and a shadow root goes to its host unless the event is not composed and
+    // the root is that of the tree it was dispatched in. `targets` is what
+    // each entry's listeners see as `event.target` when the path left a
+    // shadow tree; `None` for a path that crossed no shadow boundary, which
+    // every listener sees with the one target.
+    let (path, targets): (Vec<PathEntry>, Option<Vec<u64>>) = {
         let doc = ctx.doc.borrow();
         let mut path = Vec::new();
+        let mut targets = None;
         path.push(target);
         if let TargetKey::Node(node) = target.target {
-            for ancestor in doc.ancestors(node.id) {
-                path.push(PathEntry::node(ctx.slot, doc.node_ref(ancestor)));
+            let first_root = doc.root_of(node.id);
+            let mut crossed = false;
+            let mut current = node.id;
+            for _ in 0..doc.slots() {
+                let Some(next) = doc.event_parent(current) else {
+                    break;
+                };
+                if doc.parent(current) != next {
+                    if !composed && current == first_root {
+                        break;
+                    }
+                    crossed = true;
+                }
+                path.push(PathEntry::node(ctx.slot, doc.node_ref(next)));
+                current = next;
             }
-            if ctx.slot == 0 && doc.is_connected(node.id) && type_ != "load" {
+            let reaches_document = current == doc.document_node();
+            if ctx.slot == 0 && reaches_document && type_ != "load" {
                 path.push(PathEntry::window());
             }
+            if crossed {
+                let document = doc.document_node();
+                targets = Some(
+                    path.iter()
+                        .map(|entry| {
+                            let current = match entry.target {
+                                TargetKey::Node(current) => current.id,
+                                _ => document,
+                            };
+                            let seen = doc.retarget(node.id, current);
+                            encode_node(ctx.slot, doc.node_ref(seen))
+                        })
+                        .collect::<Vec<u64>>(),
+                );
+            }
         }
-        path
+        (path, targets)
     };
     let bubbles = {
         let mut events = event_ctx.events.borrow_mut();
@@ -1685,15 +1722,32 @@ pub(crate) fn dispatch_at_from(
     if let Some(script) = script
         && !propagation_stopped(event_ctx, key)
     {
+        // An entry is "at target" when what it sees as the target is itself:
+        // the target, and every shadow host the path left a tree through.
+        let seen = |index: usize| targets.as_ref().map(|targets| targets[index]);
+        let at_target = |index: usize, entry: &PathEntry| match seen(index) {
+            Some(seen) => seen == entry.bits,
+            None => entry.target == target.target,
+        };
+
         // Step 4: capture pass, from the root down to and including the target.
-        for entry in path.iter().rev() {
-            let phase = if entry.target == target.target {
+        for (index, entry) in path.iter().enumerate().rev() {
+            let phase = if at_target(index, entry) {
                 PHASE_AT_TARGET
             } else {
                 PHASE_CAPTURING
             };
             let stop = invoke_listeners(
-                ctx, event_ctx, &*script, *entry, &type_, phase, true, key, event_bits,
+                ctx,
+                event_ctx,
+                &*script,
+                *entry,
+                &type_,
+                phase,
+                true,
+                key,
+                event_bits,
+                seen(index),
             );
             if stop {
                 break;
@@ -1704,16 +1758,30 @@ pub(crate) fn dispatch_at_from(
         // when the event bubbles).
         if !propagation_stopped(event_ctx, key) {
             for (index, entry) in path.iter().enumerate() {
-                if index > 0 && !bubbles {
-                    break;
-                }
-                let phase = if entry.target == target.target {
+                let phase = if at_target(index, entry) {
                     PHASE_AT_TARGET
                 } else {
                     PHASE_BUBBLING
                 };
+                if phase == PHASE_BUBBLING && !bubbles {
+                    // Without a shadow boundary on the path nothing above
+                    // the target is at target, so the pass is over.
+                    if targets.is_none() {
+                        break;
+                    }
+                    continue;
+                }
                 let stop = invoke_listeners(
-                    ctx, event_ctx, &*script, *entry, &type_, phase, false, key, event_bits,
+                    ctx,
+                    event_ctx,
+                    &*script,
+                    *entry,
+                    &type_,
+                    phase,
+                    false,
+                    key,
+                    event_bits,
+                    seen(index),
                 );
                 if stop {
                     break;
@@ -1756,6 +1824,7 @@ fn invoke_listeners(
     capture: bool,
     key: EventKey,
     event_bits: u64,
+    seen_target: Option<u64>,
 ) -> bool {
     let target = entry.target;
     let snapshot = ctx.listeners.borrow().snapshot_at(target, type_, capture);
@@ -1768,6 +1837,9 @@ fn invoke_listeners(
         if let Some(record) = events.get_mut(key) {
             record.current_target = Some(entry.bits);
             record.phase = phase;
+            if let Some(seen) = seen_target {
+                record.target = Some(seen);
+            }
         }
     }
 

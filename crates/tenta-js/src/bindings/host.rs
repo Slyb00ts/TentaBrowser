@@ -29,6 +29,7 @@ mod forms;
 mod geometry;
 mod media;
 mod mutation_observer;
+mod shadow;
 pub mod storage;
 mod tree_extras;
 
@@ -3932,8 +3933,10 @@ impl NodeOps for HostObject {
         if self.is_attr() {
             return false;
         }
+        // Connected in the standard's sense: a node in a shadow tree is
+        // connected when its host is.
         let (doc, id) = self.anchor();
-        doc.borrow().is_connected(id)
+        doc.borrow().is_composed_connected(id)
     }
 
     fn base_uri(&self) -> Result<String, JsError> {
@@ -3950,8 +3953,11 @@ impl NodeOps for HostObject {
     }
     fn get_root_node(
         &self,
-        _options: Option<crate::bindings::GetRootNodeOptions>,
+        options: Option<crate::bindings::GetRootNodeOptions>,
     ) -> Result<Handle<Node>, JsError> {
+        if options.is_some_and(|options| options.composed) {
+            return Ok(self.composed_root_node());
+        }
         Ok(self.root_node())
     }
     fn normalize(&self) -> Result<(), JsError> {
@@ -4890,6 +4896,29 @@ impl ElementOps for HostObject {
         let (doc, id) = self.anchor();
         let mut doc = doc.borrow_mut();
         let _ = doc.set_inner_html(id, value);
+    }
+
+    fn attach_shadow(
+        &self,
+        init: crate::bindings::ShadowRootInit,
+    ) -> Result<Handle<crate::bindings::ShadowRoot>, JsError> {
+        self.attach_shadow_root(init)
+    }
+
+    fn shadow_root(&self) -> Result<Option<Handle<crate::bindings::ShadowRoot>>, JsError> {
+        Ok(self.open_shadow_root())
+    }
+
+    fn assigned_slot(&self) -> Result<Option<Handle<crate::bindings::HTMLSlotElement>>, JsError> {
+        Ok(self.assigned_slot_handle())
+    }
+
+    fn slot(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("slot"))
+    }
+
+    fn set_slot(&self, value: &str) {
+        self.reflect_attribute("slot", value);
     }
 
     fn outer_html(&self) -> Result<String, JsError> {

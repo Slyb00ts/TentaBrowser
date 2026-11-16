@@ -390,3 +390,23 @@ async fn a_scripted_agent_session_runs_end_to_end() {
     let closed = client.tool("browser_close", json!({})).await;
     assert_eq!(closed.structured()["closed"], true);
 }
+
+/// A component that renders into a shadow tree is read and driven like any
+/// other part of the page: the snapshot shows the flat tree, with the slotted
+/// text in place, and a ref inside the shadow tree can be clicked.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shadow_tree_component_is_read_and_clicked() {
+    let (harness, client) = rendered().await;
+    client.navigate(&harness.url("/shadow.html")).await;
+    let snapshot = client.tool("browser_snapshot", json!({})).await;
+    snapshot.ok();
+    let text = snapshot.text();
+    assert!(text.contains("Press the button"), "{text}");
+    assert!(text.contains("Clicks: 0"), "{text}");
+    assert!(!text.contains("No hint"), "{text}");
+
+    let add = find_ref(&text, &["button", "Add one"]);
+    client.tool("browser_click", json!({"ref": add})).await.ok();
+    let after = client.tool("browser_snapshot", json!({})).await.text();
+    assert!(after.contains("Clicks: 1"), "{after}");
+}

@@ -1259,6 +1259,7 @@ fn node_interface(ctx: &SharedContext, node: tenta_core::NodeId) -> &'static str
                 Some(tag) if tag == atoms::VIDEO => "HTMLVideoElement",
                 Some(tag) if tag == atoms::AUDIO => "HTMLAudioElement",
                 Some(tag) if tag == atoms::CANVAS => "HTMLCanvasElement",
+                Some(tag) if tag == atoms::SLOT => "HTMLSlotElement",
                 _ => "HTMLElement",
             },
             Some(ns) if ns == atoms::NS_SVG => match doc.tag(node) {
@@ -1273,9 +1274,9 @@ fn node_interface(ctx: &SharedContext, node: tenta_core::NodeId) -> &'static str
         NodeKind::CData => "CDATASection",
         NodeKind::Comment => "Comment",
         NodeKind::Fragment => "DocumentFragment",
+        NodeKind::ShadowRoot => "ShadowRoot",
         NodeKind::DocType => "DocumentType",
         NodeKind::ProcessingInstruction => "ProcessingInstruction",
-        _ => "Node",
     }
 }
 

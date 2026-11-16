@@ -885,6 +885,12 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the HTMLCanvasElement interface");
+            tenta_js::bindings::install_html_slot_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLSlotElement interface");
             tenta_js::bindings::install_svg_graphics_element::<HostObject>(
                 scope,
                 interface_sink,
@@ -928,6 +934,12 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the DocumentFragment interface");
+            tenta_js::bindings::install_shadow_root::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the ShadowRoot interface");
             tenta_js::bindings::install_document::<HostObject>(
                 scope,
                 interface_sink,

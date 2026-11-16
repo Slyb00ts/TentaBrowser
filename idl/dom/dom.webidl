@@ -165,6 +165,14 @@ interface Element : Node {
   // Phase 2b-1: innerHTML (getter + setter - note: setter is fast-API eligible so non-throwing)
   attribute DOMString innerHTML;
 
+  // Shadow trees. `ShadowRootInit.mode` is declared optional so the host
+  // can give the TypeError for a missing or unknown mode itself; there are
+  // no IDL enumerations in this file. `shadowRoot` is null for a closed root.
+  [Throws] ShadowRoot attachShadow(ShadowRootInit init);
+  readonly attribute ShadowRoot? shadowRoot;
+  readonly attribute HTMLSlotElement? assignedSlot;
+  attribute DOMString slot;
+
   // Phase 2b-5: outerHTML (getter + [Throws] setter forces the fallible path)
   // and insertAdjacentHTML.
   [Throws] attribute DOMString outerHTML;
@@ -653,6 +661,39 @@ interface DocumentFragment : Node {
   Element? getElementById(DOMString elementId);
   Element? querySelector(DOMString selectors);
   [NewObject] NodeList querySelectorAll(DOMString selectors);
+};
+
+dictionary ShadowRootInit {
+  DOMString mode;
+  boolean delegatesFocus = false;
+  DOMString slotAssignment = "named";
+  boolean clonable = false;
+  boolean serializable = false;
+};
+
+// A shadow root is a DocumentFragment owned by its host. `innerHTML` parses
+// in the context of the host, as the fragment parsing algorithm has it.
+[Exposed=Window]
+interface ShadowRoot : DocumentFragment {
+  readonly attribute DOMString mode;
+  readonly attribute Element host;
+  readonly attribute boolean delegatesFocus;
+  readonly attribute DOMString slotAssignment;
+  attribute DOMString innerHTML;
+};
+
+dictionary AssignedNodesOptions {
+  boolean flatten = false;
+};
+
+// `<slot>`: named slot assignment only (`slotAssignment: "named"`), computed
+// when asked. `flatten` is accepted; a slot assigned to another slot is not
+// followed.
+[Exposed=Window]
+interface HTMLSlotElement : HTMLElement {
+  attribute DOMString name;
+  sequence<Node> assignedNodes(optional AssignedNodesOptions options = {});
+  sequence<Element> assignedElements(optional AssignedNodesOptions options = {});
 };
 
 // Phase 4b-3: <template> keeps its parsed children inert inside a separate

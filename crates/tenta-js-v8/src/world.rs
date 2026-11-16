@@ -901,6 +901,7 @@ impl WrapperWorld for V8World {
                                 Some(tag) if tag == atoms::VIDEO => "HTMLVideoElement",
                                 Some(tag) if tag == atoms::AUDIO => "HTMLAudioElement",
                                 Some(tag) if tag == atoms::CANVAS => "HTMLCanvasElement",
+                                Some(tag) if tag == atoms::SLOT => "HTMLSlotElement",
                                 _ => "HTMLElement",
                             },
                             Some(ns) if ns == atoms::NS_SVG => match doc.tag(node_id) {
@@ -919,12 +920,12 @@ impl WrapperWorld for V8World {
                         NodeKind::CData => "CDATASection",
                         NodeKind::Comment => "Comment",
                         NodeKind::Fragment => "DocumentFragment",
+                        NodeKind::ShadowRoot => "ShadowRoot",
                         // The two kinds `dom/nodes` reads most: a doctype and a
                         // processing instruction each have an interface of their
                         // own, and neither is a `Node`-only shell.
                         NodeKind::DocType => "DocumentType",
                         NodeKind::ProcessingInstruction => "ProcessingInstruction",
-                        _ => "Node",
                     }
                 };
 

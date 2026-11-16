@@ -142,3 +142,45 @@ async fn a_guarded_page_degrades_without_a_registry() {
         assert_eq!(text_of(&document, "#result"), "undefined:fallback");
     }
 }
+
+/// A component that renders into a shadow tree: the text the page hands back
+/// is the rendered one, with the shadow tree's own text and the slotted
+/// children in the places their slots give them.
+const SHADOW: &str = r#"<!doctype html><html><body>
+<main id="main">
+<user-card><span slot="name">Ada Lovelace</span><em>ignored without a slot</em></user-card>
+</main>
+<div id="result">unset</div>
+<script>
+  customElements.define('user-card', class extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({mode: 'open'}).innerHTML =
+        '<h2>Name: <slot name="name">nobody</slot></h2><p>Role: <slot name="role">guest</slot></p>';
+    }
+    connectedCallback() {
+      this.shadowRoot.querySelector('p').addEventListener('click', event => {
+        document.getElementById('result').textContent =
+          event.target.localName + '/' + event.composedPath().length;
+      });
+      document.addEventListener('click', event => {
+        document.getElementById('result').textContent += '|' + event.target.localName;
+      });
+      this.shadowRoot.querySelector('p').click();
+    }
+  });
+</script>
+</body></html>"#;
+
+#[tokio::test]
+async fn a_shadow_tree_is_part_of_the_text_the_page_returns() {
+    let (server, _files) = serve(&[("index.html", SHADOW)]).await;
+    let document = load(JsEngine::V8, &server).await;
+    let main = text_of(&document, "#main");
+    let lines: Vec<&str> = main.lines().map(str::trim).collect();
+    assert_eq!(lines, ["Name: Ada Lovelace", "Role: guest"]);
+    // Inside the tree the paragraph is the target; the document sees the host.
+    // The path is p, the shadow root, the host, main, body, html, the
+    // document and the window.
+    assert_eq!(text_of(&document, "#result"), "p/8|user-card");
+}

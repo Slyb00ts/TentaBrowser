@@ -38,7 +38,7 @@ pub use document::{
 pub use interner::{DocInterner, LocalName};
 pub use mutation::{
     LifecycleRecord, Mutation, MutationObserverSink, MutationRecord, NoopObserverSink,
-    RecordingObserverSink, ReplaceAllWith,
+    RecordingObserverSink, ReplaceAllWith, ShadowRootMode,
 };
 pub use navigation::{NavigationRequest, PostData};
 pub use selectors::{CompiledSelector, ElementRef, SelectorCache, TentaSelectorImpl};

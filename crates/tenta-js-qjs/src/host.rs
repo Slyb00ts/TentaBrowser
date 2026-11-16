@@ -899,6 +899,7 @@ fn install_bindings<'js>(ctx: &Ctx<'js>, global: &Object<'js>) -> rquickjs::Resu
     install_html_video_element::<HostObject>(ctx, global, registry)?;
     install_html_audio_element::<HostObject>(ctx, global, registry)?;
     install_html_canvas_element::<HostObject>(ctx, global, registry)?;
+    install_html_slot_element::<HostObject>(ctx, global, registry)?;
     install_svg_graphics_element::<HostObject>(ctx, global, registry)?;
     install_svgsvg_element::<HostObject>(ctx, global, registry)?;
     install_svga_element::<HostObject>(ctx, global, registry)?;
@@ -906,6 +907,7 @@ fn install_bindings<'js>(ctx: &Ctx<'js>, global: &Object<'js>) -> rquickjs::Resu
     install_dom_rect::<HostObject>(ctx, global, registry)?;
     install_dom_rect_list::<HostObject>(ctx, global, registry)?;
     install_document_fragment::<HostObject>(ctx, global, registry)?;
+    install_shadow_root::<HostObject>(ctx, global, registry)?;
     install_document::<HostObject>(ctx, global, registry)?;
     install_document_type::<HostObject>(ctx, global, registry)?;
     install_processing_instruction::<HostObject>(ctx, global, registry)?;

@@ -19,8 +19,15 @@ pub struct Resolved {
     pub description: String,
 }
 
-/// Child indexes from the document to `node`; `None` for a node outside the
-/// document's tree (detached, or inside a shadow root).
+/// The step of a path that enters an element's shadow root, where every
+/// other step is a child index. The page-side `nodeAt` knows it by the same
+/// number.
+pub const SHADOW_ROOT_STEP: u32 = u32::MAX;
+
+/// The way from the document to `node` for the page-side script: child
+/// indexes, with [`SHADOW_ROOT_STEP`] where the way enters a shadow root.
+/// `None` for a node that is not connected, and for one in a closed shadow
+/// tree, which script cannot reach from its host.
 pub fn path_of(doc: &Document, node: NodeId) -> Option<Vec<u32>> {
     if !doc.is_live(node) {
         return None;
@@ -31,7 +38,13 @@ pub fn path_of(doc: &Document, node: NodeId) -> Option<Vec<u32>> {
     while cursor != root {
         let parent = doc.parent(cursor);
         if parent == NodeId::NONE {
-            return None;
+            let host = doc.shadow_host(cursor)?;
+            if doc.shadow_root_mode(cursor) != Some(tenta_dom::ShadowRootMode::Open) {
+                return None;
+            }
+            path.push(SHADOW_ROOT_STEP);
+            cursor = host;
+            continue;
         }
         let index = doc.children(parent).position(|child| child == cursor)?;
         path.push(u32::try_from(index).ok()?);
@@ -282,6 +295,12 @@ pub enum Placement {
 #[cfg(feature = "render")]
 pub async fn place(page: &Page, node: NodeId) -> Result<Placement, ToolError> {
     use tenta_core::Error;
+    // The layout covers the document tree only. An element of a shadow tree
+    // has no box to aim at yet, which says nothing about whether it is
+    // shown, so it is acted on without a point, as on a page with no layout.
+    if read_doc(page, move |doc| doc.containing_shadow_root(node).is_some()).await? {
+        return Ok(Placement::Unavailable);
+    }
     match page.node_boxes(node).await {
         Ok(boxes) => Ok(boxes
             .first()

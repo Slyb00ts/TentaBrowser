@@ -50,8 +50,7 @@
 //!
 //! Customized built-in elements (`extends`, `is=`), form-associated custom
 //! elements, `adoptedCallback()` (nodes do not change documents here),
-//! `ElementInternals`, and scoped registries. Elements inside shadow trees
-//! are not walked.
+//! `ElementInternals`, and scoped registries.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -458,19 +457,15 @@ fn define<'s>(
     let local = Atom::from(name_text.as_str());
     let candidates: Vec<NodeRef> = {
         let doc = context.doc.borrow();
-        let root = doc.document_node();
-        let mut found = Vec::new();
-        let mut node = root;
-        while node.is_some() {
-            if doc.kind(node) == NodeKind::Element
-                && doc.namespace(node) == Some(atoms::NS_HTML)
-                && doc.tag(node) == Some(local)
-            {
-                found.push(doc.node_ref(node));
-            }
-            node = doc.next_in_subtree(node, root);
-        }
-        found
+        doc.shadow_including_subtree(doc.document_node())
+            .into_iter()
+            .filter(|node| {
+                doc.kind(*node) == NodeKind::Element
+                    && doc.namespace(*node) == Some(atoms::NS_HTML)
+                    && doc.tag(*node) == Some(local)
+            })
+            .map(|node| doc.node_ref(node))
+            .collect()
     };
     if !candidates.is_empty() {
         let definition = v8::Global::new(scope, definition);
@@ -709,26 +704,25 @@ fn upgrade_tree<'s>(
     }
 }
 
-/// The HTML elements at and under `root` whose names contain a hyphen, in
-/// tree order, with their names. Empty when `root` is no longer the node the
-/// reference was made for.
+/// The HTML elements at and under `root`, shadow trees included, whose names
+/// contain a hyphen, in shadow-including tree order, with their names. Empty
+/// when `root` is no longer the node the reference was made for.
 fn candidates_under(doc: &Document, root: NodeRef) -> Vec<(NodeRef, Atom)> {
-    let mut found = Vec::new();
     if !doc.is_live(root.id) || doc.node_ref(root.id) != root {
-        return found;
+        return Vec::new();
     }
-    let mut node = root.id;
-    while node.is_some() {
-        if doc.kind(node) == NodeKind::Element
-            && doc.namespace(node) == Some(atoms::NS_HTML)
-            && let Some(tag) = doc.tag(node)
-            && tag.as_str().contains('-')
-        {
-            found.push((doc.node_ref(node), tag));
-        }
-        node = doc.next_in_subtree(node, root.id);
-    }
-    found
+    doc.shadow_including_subtree(root.id)
+        .into_iter()
+        .filter(|node| {
+            doc.kind(*node) == NodeKind::Element && doc.namespace(*node) == Some(atoms::NS_HTML)
+        })
+        .filter_map(|node| {
+            let tag = doc.tag(node)?;
+            tag.as_str()
+                .contains('-')
+                .then(|| (doc.node_ref(node), tag))
+        })
+        .collect()
 }
 
 /// The wrapper of the element `node` names, if it is still that element.
@@ -872,7 +866,7 @@ fn upgrade(
     }
     let connected = {
         let doc = context.doc.borrow();
-        doc.is_live(node.id) && doc.node_ref(node.id) == node && doc.is_connected(node.id)
+        doc.is_live(node.id) && doc.node_ref(node.id) == node && doc.is_composed_connected(node.id)
     };
     if connected {
         set_private(scope, element, CONNECTED, yes.into());
@@ -1075,7 +1069,7 @@ fn apply(
                     let doc = context.doc.borrow();
                     doc.is_live(node.id)
                         && doc.node_ref(node.id) == node
-                        && doc.is_connected(node.id)
+                        && doc.is_composed_connected(node.id)
                 };
                 if !connected {
                     continue;

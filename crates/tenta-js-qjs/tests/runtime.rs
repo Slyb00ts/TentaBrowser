@@ -60,6 +60,31 @@ fn media_canvas_and_svg_elements_have_their_interfaces() {
     );
 }
 
+/// Shadow trees are in the shared bindings, so QuickJS has them too: the
+/// root, its separate tree, slots, and an event leaving through the host.
+#[test]
+fn shadow_trees_work_on_quickjs() {
+    let mut engine = page();
+    assert_js(
+        &mut engine,
+        "var host = document.body.appendChild(document.createElement('div')); \
+         host.innerHTML = '<b slot=title>T</b>'; \
+         var shadow = host.attachShadow({mode: 'open'}); \
+         shadow.innerHTML = '<slot name=title></slot><button id=go>go</button>'; \
+         var go = shadow.getElementById('go'), seen = []; \
+         host.addEventListener('click', function (e) { seen.push(e.target === host); }); \
+         go.click(); \
+         var threw = ''; \
+         try { host.attachShadow({mode: 'open'}); } catch (e) { threw = e.name; } \
+         [shadow instanceof ShadowRoot, shadow instanceof DocumentFragment, host.shadowRoot === shadow, \
+          shadow.host === host, shadow.mode, String(document.getElementById('go')), go.isConnected, \
+          go.getRootNode() === shadow, shadow.firstChild instanceof HTMLSlotElement, \
+          shadow.firstChild.assignedNodes().length, host.firstChild.assignedSlot === shadow.firstChild, \
+          seen.join(), threw].join('|')",
+        "true|true|true|true|open|null|true|true|true|1|true|true|NotSupportedError",
+    );
+}
+
 #[test]
 fn persistent_context_and_native_prototypes() {
     let mut engine = page();

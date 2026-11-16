@@ -78,6 +78,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `ResizeObserver`, `IntersectionObserver` (OB1) | Implemented on V8, built lazily; focused checks passed; not independently reviewed; records a model decision | Each target is reported once; everything counts as in view because nothing scrolls; see the section below |
 | Media, canvas and SVG interfaces (IF1) | Implemented on both engines (generated); focused checks passed; not independently reviewed | `HTMLMediaElement`/`Video`/`Audio`, `HTMLCanvasElement`, `SVGGraphicsElement`/`SVGSVGElement`/`SVGAElement`; no playback and no canvas context; see the section below |
 | `customElements` (CE1) | Implemented on V8, built lazily; focused checks passed; not independently reviewed | Autonomous custom elements: `define`/`get`/`getName`/`whenDefined`/`upgrade`, the HTML element constructor, upgrade and the connected, disconnected and attribute reactions; no customized built-ins, no shadow DOM yet; see the section below |
+| Shadow trees (SD1) | Script, events and extraction implemented on both engines; focused checks passed; not independently reviewed; **not styled, laid out or painted** | `attachShadow`, `ShadowRoot`, `shadowRoot`, slots, composed event paths with retargeting, flat-tree text and snapshot; a screenshot does not show shadow content; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
 
 QuickJS runtime implementation alone does not complete its timezone hook,
@@ -2205,7 +2206,10 @@ pages (amazon.com and imdb.com on the sweep; any client that passes
   the trace and the V8 source, not observed directly; a
   `--concurrent-recompilation-delay` run does not show it, because that
   delay sits before the job builds its graph. The tests now empty the array
-  before dropping it.
+  before dropping it. A third test of the same shape,
+  `refused_standalone_constructors_leave_exactly_the_published_records`,
+  failed once in a workspace run on 2026-11-16 and got the same change: 30
+  of 150 before it and 0 of 150 after, under the same starvation.
 - **Open:** preflight cache; `Response.type` `cors`;
   `Origin: null` after a tainted redirect chain; `data:` and `blob:` URLs in
   `fetch()`; QuickJS has neither `signal` nor the provenance correction.
@@ -2414,14 +2418,96 @@ the 35-site sweep (7 sites), and it ends the bundle that raises it.
   30.3 to 30.4 MiB both. All below the 10% floor; the `has` difference has
   the same sign in both sets and is the size one more flag read per call
   would have (0.7 ns).
-- **Open:** shadow DOM (`attachShadow`, `ShadowRoot`, slots), which most
-  component libraries use from the constructor, so until it lands such a
-  constructor throws and its element stays not upgraded; customized
-  built-in elements (`extends`, `is=`), which `define()` refuses with
-  `NotSupportedError`; form-associated custom elements and
-  `ElementInternals`; `adoptedCallback()`; the `:defined` pseudo-class still
-  matches every element; elements inside shadow trees are not walked;
-  QuickJS has no registry.
+- **Open:** customized built-in elements (`extends`, `is=`), which
+  `define()` refuses with `NotSupportedError`; form-associated custom
+  elements and `ElementInternals`; `adoptedCallback()`; the `:defined`
+  pseudo-class still matches every element; QuickJS has no registry. Shadow
+  trees came with SD1, and the upgrade walks include them.
+
+## SD1: shadow trees for script, events and extraction (P2 package)
+
+A component library's constructor calls `attachShadow()` first, so custom
+elements without it upgraded nothing that such a library defines.
+
+- **The tree** (`tenta-dom`). A shadow root is a container owned by its
+  host, outside the document tree, as `<template>` contents are; that part
+  existed and nothing used it. New: the mode
+  (`attach_shadow_root_with_mode`, `shadow_root_mode`), `shadow_host`,
+  `containing_shadow_root`, the shadow-including order
+  (`shadow_including_subtree`), and named slot assignment computed when
+  asked (`assigned_nodes`, `assigned_slot`): the first slot of a name takes
+  the host's children that ask for it, text goes to the default slot.
+- **Two meanings of connected.** `Document::is_connected` stays what the
+  indexes need, "in the document tree", so `getElementById`,
+  `getElementsByTagName` and `querySelector` on the document do not see
+  into a shadow tree. `is_composed_connected` is the standard's meaning
+  (the shadow-including root is the document), computed by walking out
+  through the hosts; `Node.isConnected`, the lifecycle log and the MCP ref
+  table use it.
+- **Script** (`idl/dom/dom.webidl`, `tenta_js::bindings::host::shadow`,
+  generated for both engines): `Element.attachShadow()` with the standard's
+  list of hosts and errors, `Element.shadowRoot` (null for a closed root),
+  `ShadowRoot` as a `DocumentFragment` with `mode`, `host`, `innerHTML`
+  (parsed in the context of the host), `delegatesFocus` and
+  `slotAssignment`; `HTMLSlotElement` with `name`, `assignedNodes()` and
+  `assignedElements()`; `Element.assignedSlot` and `Element.slot`;
+  `getRootNode({composed: true})`.
+- **Events** (`tenta_js::dom::events`). The propagation path follows DOM's
+  "get the parent": a slotted node goes to its slot, a shadow root to its
+  host unless the event is not composed and the root is that of the tree it
+  was dispatched in. When the path leaves a shadow tree, each entry's
+  listeners see the retargeted target (`Document::retarget`), and a host
+  the path left a tree through is at target, so it hears an event that does
+  not bubble. A path that crosses no boundary is built and walked as
+  before.
+- **Extraction** reads the flat tree: `extract::Walker` shows a host's
+  shadow tree in place of its children and a slot's assigned nodes in place
+  of the slot, so text, markdown, the snapshot and main-content extraction
+  return what is rendered. `textContent` and `innerHTML` are unchanged.
+- **Custom elements** walk shadow-including trees: `define()`, `upgrade()`
+  and the connected and disconnected reactions reach elements in shadow
+  trees, and the lifecycle log records an element that enters or leaves a
+  shadow tree whose host is connected.
+- **MCP.** The snapshot shows shadow tree elements, a ref inside an open
+  shadow tree can be acted on (the page-side path has a step that enters
+  `shadowRoot`), and a click there is dispatched without a point.
+- **Not done, and it shows.** Styles and layout do not cover shadow trees:
+  the cascade's node table and the layout are built over the document tree,
+  so shadow content has no computed style and no box. A **screenshot does
+  not show it**, `getBoundingClientRect()` inside a shadow tree is empty,
+  the snapshot cannot apply stylesheet visibility to it (it uses the
+  `hidden` attribute and the style attribute, as on a page with no layout),
+  and `<style>` inside a shadow root does nothing. A host's children that
+  are not slotted are still laid out as if there were no shadow tree.
+- **Checks:** `tenta-dom::shadow` 4; `tenta-js-v8::dom_shadow` 6 (validation,
+  the separate tree, slots, a custom element rendering into a shadow tree,
+  the event path with retargeting, events at slotted nodes);
+  `tenta-js-qjs::runtime` 1; `tenta-browser::custom_elements_js` 3 (one
+  new, over loopback); `tenta-mcp::scenario` 10 (one new: a component is
+  read and clicked through MCP at the render tier).
+- **Measured** (release, Fedora 43 x86_64, 25 interleaved pairs per set).
+  Against CE1 (cd44ad4): `bench/dom_calls.py` (`S-dom-calls`) `has` p50
+  27.62 to 27.78 ns, `get` 82.01 to 82.60 ns; `bench/js_xhr.py` (`S-js-xhr`)
+  navigation p50 17.68 to 17.36 ms, RSS p50 30.3 and 30.4 MiB.
+  `bench/dom_mutation_hooks.py` (`S-dom-mutation-hooks`, V8), which CE1
+  should have been measured with and was not, across three builds: before
+  CE1 (03babbd) to CE1, detached p50 44.03 to 47.88 ms and 43.73 to 47.79 ms
+  (+8.7%, +9.3%), connected 44.88 to 48.86 ms and 44.80 to 48.59 ms (+8.9%,
+  +8.5%); CE1 to this tree, detached 47.68 to 44.95 ms (-5.7%), connected
+  48.66 to 46.03 ms (-5.4%); before CE1 to this tree, detached 43.61 to
+  45.66 ms and 44.23 to 44.51 ms (+4.7%, +0.6%), connected 45.02 to 46.04 ms
+  and 44.92 to 45.87 ms (+2.3%, +2.1%). Everything is below the 10% floor.
+  The CE1 build is repeatably about 9% slower on this scenario and this
+  build, which contains all of CE1's work on the mutation path and more, is
+  not, so the cause is not that work as such; it has not been located.
+- **Open:** styles, layout and paint of the flat tree (`:host`,
+  `::slotted()`, scoped `<style>`, `adoptedStyleSheets`), which is what a
+  screenshot needs; declarative shadow DOM (`<template shadowrootmode>`);
+  `slotchange`; manual slot assignment and `flatten`; `composedPath()`
+  hiding closed trees; `ShadowRoot.activeElement`; whether scripts and
+  images inside a shadow tree load has not been checked; the CDP DOM domain
+  does not report shadow roots; a ref inside a closed shadow tree cannot be
+  acted on.
 
 ## Implementation queue and dependencies
 

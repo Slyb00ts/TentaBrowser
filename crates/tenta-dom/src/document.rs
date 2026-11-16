@@ -20,7 +20,7 @@ use crate::error::{
 use crate::interner::{DocInterner, LocalName};
 use crate::mutation::{
     LifecycleRecord, Mutation, MutationObserverSink, MutationRecord, NoopObserverSink,
-    ReplaceAllWith,
+    ReplaceAllWith, ShadowRootMode,
 };
 use crate::selectors::SelectorCache;
 use crate::text::{TextChunk, TextRope};
@@ -196,6 +196,9 @@ pub struct Document {
     /// it. Those fragments have no parent but are not independent detached
     /// roots: their lifetime is their host's (`docs/spec/04-dom-and-css.md` §1.1).
     hosts: HashMap<NodeId, NodeId>,
+    /// The shadow roots attached in closed mode. Open is the common mode and
+    /// keeps no entry.
+    closed_shadow_roots: Vec<NodeId>,
     /// The dirty value of a form control whose value has been set by script or
     /// by the user (`docs/spec/05-javascript.md` §9a). Presence *is* the
     /// standard's "dirty value flag": once set, the `value` content attribute
@@ -300,6 +303,7 @@ impl Document {
             extra_wrapper_claims: HashMap::new(),
             sweep_freed: Vec::new(),
             hosts: HashMap::new(),
+            closed_shadow_roots: Vec::new(),
             dirty_values: HashMap::new(),
             dirty_checkedness: HashMap::new(),
             dirty_selectedness: HashMap::new(),
@@ -1788,9 +1792,18 @@ impl Document {
         node
     }
 
-    /// Attaches a shadow root to `host` and returns it. The shadow root is
-    /// owned by its host, exactly like `<template>` contents.
+    /// Attaches an open shadow root to `host` and returns it. The shadow root
+    /// is owned by its host, exactly like `<template>` contents.
     pub fn attach_shadow_root(&mut self, host: NodeId) -> Result<NodeId> {
+        self.attach_shadow_root_with_mode(host, ShadowRootMode::Open)
+    }
+
+    /// Attaches a shadow root of the given mode to `host` and returns it.
+    pub fn attach_shadow_root_with_mode(
+        &mut self,
+        host: NodeId,
+        mode: ShadowRootMode,
+    ) -> Result<NodeId> {
         if self.kind(host) != NodeKind::Element {
             return Err(hierarchy_request("only elements can host a shadow root"));
         }
@@ -1806,8 +1819,229 @@ impl Document {
         let root = self.arena.alloc_container(NodeKind::ShadowRoot);
         self.arena.elements.shadow[data.get()] = root;
         self.hosts.insert(root, host);
+        if mode == ShadowRootMode::Closed {
+            self.closed_shadow_roots.push(root);
+        }
         self.bump_structure();
         Ok(root)
+    }
+
+    /// The mode of a shadow root, or `None` for any other node.
+    pub fn shadow_root_mode(&self, root: NodeId) -> Option<ShadowRootMode> {
+        (self.kind(root) == NodeKind::ShadowRoot).then(|| {
+            if self.closed_shadow_roots.contains(&root) {
+                ShadowRootMode::Closed
+            } else {
+                ShadowRootMode::Open
+            }
+        })
+    }
+
+    /// The element a shadow root is attached to, or `None` for any other
+    /// node.
+    pub fn shadow_host(&self, root: NodeId) -> Option<NodeId> {
+        if self.kind(root) != NodeKind::ShadowRoot {
+            return None;
+        }
+        self.hosts.get(&root).copied()
+    }
+
+    /// The shadow root whose tree `id` is in, if it is in one.
+    pub fn containing_shadow_root(&self, id: NodeId) -> Option<NodeId> {
+        let top = self.root_of(id);
+        (self.kind(top) == NodeKind::ShadowRoot).then_some(top)
+    }
+
+    /// Whether `id` is connected in the standard's sense: its
+    /// shadow-including root is the document. [`Self::is_connected`] is the
+    /// narrower question the indexes ask, whether the node is in the document
+    /// tree itself, and is false inside a shadow tree.
+    pub fn is_composed_connected(&self, id: NodeId) -> bool {
+        let mut node = id;
+        for _ in 0..self.slots() {
+            if self.is_connected(node) {
+                return true;
+            }
+            let top = self.root_of(node);
+            match self.shadow_host(top) {
+                Some(host) => node = host,
+                None => return top == self.document_node,
+            }
+        }
+        false
+    }
+
+    /// Whether `ancestor` is `node`, an ancestor of it, or an ancestor of a
+    /// shadow host on the way up from it (DOM "shadow-including inclusive
+    /// ancestor").
+    pub fn is_shadow_including_inclusive_ancestor(&self, ancestor: NodeId, node: NodeId) -> bool {
+        let mut node = node;
+        for _ in 0..self.slots() {
+            if self.is_inclusive_ancestor(ancestor, node) {
+                return true;
+            }
+            match self.shadow_host(self.root_of(node)) {
+                Some(host) => node = host,
+                None => return false,
+            }
+        }
+        false
+    }
+
+    /// What a listener on `current` sees as the target of an event whose
+    /// target is `target` (DOM "retarget"): `target` itself, unless it is in
+    /// a shadow tree `current` is outside of, in which case the host of the
+    /// outermost such tree.
+    pub fn retarget(&self, target: NodeId, current: NodeId) -> NodeId {
+        let mut target = target;
+        for _ in 0..self.slots() {
+            let root = self.root_of(target);
+            match self.shadow_host(root) {
+                Some(host) if !self.is_shadow_including_inclusive_ancestor(root, current) => {
+                    target = host;
+                }
+                _ => break,
+            }
+        }
+        target
+    }
+
+    /// The node an event at `node` goes to next on its way up (DOM "get the
+    /// parent"): the slot a slotted node is assigned to, else the parent,
+    /// else the host of a shadow root. `None` at the top.
+    pub fn event_parent(&self, node: NodeId) -> Option<NodeId> {
+        if let Some(slot) = self.assigned_slot(node) {
+            return Some(slot);
+        }
+        let parent = self.parent(node);
+        if parent.is_some() {
+            return Some(parent);
+        }
+        self.shadow_host(node)
+    }
+
+    /// Whether `id` is an HTML `<slot>` element.
+    pub fn is_slot(&self, id: NodeId) -> bool {
+        self.kind(id) == NodeKind::Element
+            && self.tag(id) == Some(atoms::SLOT)
+            && self.namespace(id) == Some(atoms::NS_HTML)
+    }
+
+    /// The slot name a child of a shadow host asks for: its `slot` attribute,
+    /// or the empty name of the default slot. `None` for a node that cannot
+    /// be slotted (a comment, a doctype).
+    fn slot_name_of(&self, child: NodeId) -> Option<&str> {
+        match self.kind(child) {
+            NodeKind::Element => Some(self.attribute(child, atoms::SLOT).unwrap_or("")),
+            NodeKind::Text | NodeKind::CData => Some(""),
+            _ => None,
+        }
+    }
+
+    /// The first slot named `name` in the tree of `root`, in tree order:
+    /// the one that name's slottables are assigned to.
+    fn first_slot_named(&self, root: NodeId, name: &str) -> Option<NodeId> {
+        let mut node = self.first_child(root);
+        while node.is_some() {
+            if self.is_slot(node) && self.attribute(node, atoms::NAME).unwrap_or("") == name {
+                return Some(node);
+            }
+            node = self.next_in_subtree(node, root);
+        }
+        None
+    }
+
+    /// The children of the shadow host that are assigned to `slot`, in tree
+    /// order (DOM "find slottables", named slot assignment). Empty when
+    /// `slot` is not a slot in a shadow tree, when an earlier slot has the
+    /// same name, or when no child asks for it.
+    pub fn assigned_nodes(&self, slot: NodeId) -> Vec<NodeId> {
+        if !self.is_slot(slot) {
+            return Vec::new();
+        }
+        let Some(root) = self.containing_shadow_root(slot) else {
+            return Vec::new();
+        };
+        let Some(host) = self.shadow_host(root) else {
+            return Vec::new();
+        };
+        let name = self.attribute(slot, atoms::NAME).unwrap_or("");
+        if self.first_slot_named(root, name) != Some(slot) {
+            return Vec::new();
+        }
+        let mut assigned = Vec::new();
+        let mut child = self.first_child(host);
+        while child.is_some() {
+            if self.slot_name_of(child) == Some(name) {
+                assigned.push(child);
+            }
+            child = self.next_sibling(child);
+        }
+        assigned
+    }
+
+    /// The slot `node` is assigned to: `node` is a child of a shadow host and
+    /// the host's shadow tree has a slot of the name it asks for.
+    pub fn assigned_slot(&self, node: NodeId) -> Option<NodeId> {
+        let host = self.parent(node);
+        if !host.is_some() {
+            return None;
+        }
+        let root = self.shadow_root(host)?;
+        let name = self.slot_name_of(node)?;
+        self.first_slot_named(root, name)
+    }
+
+    /// The children of `node` in the flat tree, which is the tree that is
+    /// rendered: a shadow host's are its shadow root's, a slot's are the nodes
+    /// assigned to it or else its own, and every other node's are its own.
+    /// `None` means "its own children", so the common case allocates nothing.
+    pub fn flat_children(&self, node: NodeId) -> Option<Vec<NodeId>> {
+        if self.kind(node) != NodeKind::Element {
+            return None;
+        }
+        if let Some(root) = self.shadow_root(node) {
+            let mut children = Vec::new();
+            let mut child = self.first_child(root);
+            while child.is_some() {
+                children.push(child);
+                child = self.next_sibling(child);
+            }
+            return Some(children);
+        }
+        if self.tag(node) == Some(atoms::SLOT) {
+            let assigned = self.assigned_nodes(node);
+            if !assigned.is_empty() {
+                return Some(assigned);
+            }
+        }
+        None
+    }
+
+    /// `root` and its shadow-including descendants, in shadow-including tree
+    /// order: a node, then its shadow tree, then its children. `<template>`
+    /// contents are not part of it.
+    pub fn shadow_including_subtree(&self, root: NodeId) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        let mut stack = vec![root];
+        let cap = self.slots();
+        while let Some(node) = stack.pop() {
+            if out.len() >= cap {
+                break;
+            }
+            out.push(node);
+            // Pushed in reverse so the shadow tree is visited first and the
+            // children follow in order.
+            let mut child = self.last_child(node);
+            while child.is_some() {
+                stack.push(child);
+                child = self.previous_sibling(child);
+            }
+            if let Some(shadow) = self.shadow_root(node) {
+                stack.push(shadow);
+            }
+        }
+        out
     }
 
     /// Copies `node` without its children. Text nodes share the rope chunk
@@ -2155,6 +2389,9 @@ impl Document {
                 self.note_deindex(*node, &mut touched);
                 self.release_owned_text(*node);
                 self.hosts.remove(node);
+                if !self.closed_shadow_roots.is_empty() {
+                    self.closed_shadow_roots.retain(|root| root != node);
+                }
                 self.element_prefixes.remove(node);
                 // A freed slot is reused under a fresh generation, so stale
                 // form state must not survive to alias the next element there.
@@ -2580,18 +2817,21 @@ impl Document {
     /// Returns an error if the element is not an Element node or if parsing
     /// or mutation operations fail.
     pub fn set_inner_html(&mut self, element: NodeId, html: &str) -> Result<()> {
-        // Verify that the node is an element
-        let ctx_name = self.element_name(element).ok_or_else(|| {
+        // A shadow root parses in the context of its host and replaces its
+        // own children. A `<template>`'s children live in its contents
+        // fragment, which is what the setter replaces (HTML's
+        // fragment-parsing steps: "if the context object is a template
+        // element, set it to the template's template contents"); the getter
+        // reads them from there too.
+        let (context, parent) = match self.shadow_host(element) {
+            Some(host) => (host, element),
+            None => (element, self.template_contents(element).unwrap_or(element)),
+        };
+        let ctx_name = self.element_name(context).ok_or_else(|| {
             tenta_core::Error::invalid("cannot set innerHTML on non-Element node")
         })?;
 
         let frag_root = self.parse_fragment(ctx_name, html)?;
-
-        // A `<template>`'s children live in its contents fragment, which is
-        // what the setter replaces (HTML's fragment-parsing steps: "if the
-        // context object is a template element, set it to the template's
-        // template contents"); the getter reads them from there too.
-        let parent = self.template_contents(element).unwrap_or(element);
 
         // The parser root remains inside a detached construction fragment.
         // Replacing all children emits one parent record; no page can observe
@@ -2938,6 +3178,13 @@ impl Document {
             self.mark_detached_root(child);
             return Ok(());
         }
+        // An element leaving a shadow tree is not in the document tree, so
+        // the connected flag below says nothing about it; the lifecycle log
+        // asks while the parent chain still exists.
+        let leaves_shadow_tree = self.lifecycle.is_some()
+            && self.kind(child) == NodeKind::Element
+            && !self.is_connected(child)
+            && self.is_composed_connected(child);
         self.adjust_ranges_for_removal(child, parent)?;
         let (i, p) = (self.index(child), self.index(parent));
         let prev = self.arena.nodes.prev[i];
@@ -2966,6 +3213,11 @@ impl Document {
                 if let Some(log) = &mut self.lifecycle {
                     log.push(LifecycleRecord::Disconnected(disconnected));
                 }
+            }
+        } else if leaves_shadow_tree {
+            let disconnected = self.node_ref(child);
+            if let Some(log) = &mut self.lifecycle {
+                log.push(LifecycleRecord::Disconnected(disconnected));
             }
         }
         self.mark_detached_root(child);
@@ -3011,6 +3263,17 @@ impl Document {
             }
         } else {
             self.invalidate_keep(child);
+            // Into a shadow tree whose host is connected: connected in the
+            // standard's sense, though not in the document tree.
+            if self.lifecycle.is_some()
+                && self.kind(child) == NodeKind::Element
+                && self.is_composed_connected(parent)
+            {
+                let connected = self.node_ref(child);
+                if let Some(log) = &mut self.lifecycle {
+                    log.push(LifecycleRecord::Connected(connected));
+                }
+            }
         }
         self.observer.record(MutationRecord::Inserted {
             parent,

@@ -246,10 +246,16 @@ pub fn build(
             (parent_visible, None)
         } else {
             match layout {
-                Some((layout, indexes)) => {
-                    let look = indexes.get(&node.node).and_then(|index| layout[*index]);
-                    (look.is_some(), look)
-                }
+                Some((layout, indexes)) => match indexes.get(&node.node) {
+                    Some(index) => {
+                        let look = layout[*index];
+                        (look.is_some(), look)
+                    }
+                    // Not in the document tree: an element of a shadow tree,
+                    // which the layout does not cover. It is shown as far as
+                    // its parent and its own style attribute allow.
+                    None => (parent_visible, None),
+                },
                 None => (true, None),
             }
         };

@@ -123,7 +123,9 @@ impl<'a> Walker<'a> {
 
     fn push_children(&mut self, node: NodeId, depth: usize, only: Option<NodeId>) {
         if depth + 1 > MAX_TRAVERSAL_DEPTH {
-            if self.document.first_child(node).is_some() {
+            if self.document.first_child(node).is_some()
+                || self.document.shadow_root(node).is_some()
+            {
                 self.truncated = true;
             }
             return;
@@ -133,6 +135,17 @@ impl<'a> Walker<'a> {
                 node: only,
                 depth: depth + 1,
             });
+            return;
+        }
+        // Extraction reads what is rendered, which is the flat tree: a shadow
+        // host shows its shadow tree, and a slot shows the nodes assigned to
+        // it.
+        if let Some(children) = self.document.flat_children(node) {
+            self.stack
+                .extend(children.into_iter().rev().map(|child| Event::Enter {
+                    node: child,
+                    depth: depth + 1,
+                }));
             return;
         }
         // Pushed forwards and reversed in place: collecting into a temporary

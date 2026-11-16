@@ -799,10 +799,16 @@
     return path.reverse();
   }
 
+  // A path is child indexes from the document; the step 4294967295 enters
+  // the shadow root of the element reached so far (an open one).
   function nodeAt(path) {
     let node = doc;
     for (let i = 0; i < path.length; i += 1) {
-      node = node && node.childNodes[path[i]];
+      if (path[i] === 4294967295) {
+        node = node && node.shadowRoot;
+      } else {
+        node = node && node.childNodes[path[i]];
+      }
     }
     return node || null;
   }

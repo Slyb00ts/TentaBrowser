@@ -111,7 +111,7 @@ impl IssuedRef {
             return Err(RefError::Stale);
         }
         let id = doc.resolve(self.node).map_err(|_| RefError::Stale)?;
-        if doc.is_connected(id) {
+        if doc.is_composed_connected(id) {
             Ok(id)
         } else {
             Err(RefError::Stale)

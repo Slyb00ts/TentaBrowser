@@ -111,6 +111,13 @@ pub enum MutationRecord {
     CharacterData { node: NodeId, old_value: String },
 }
 
+/// Whether a shadow root is reachable through its host (`Element.shadowRoot`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShadowRootMode {
+    Open,
+    Closed,
+}
+
 /// What happened to an element that a custom element definition may have to
 /// react to (HTML "custom element reactions"), in the order it happened.
 ///
@@ -123,9 +130,11 @@ pub enum MutationRecord {
 pub enum LifecycleRecord {
     /// An HTML element whose local name contains a hyphen was created.
     Created(NodeRef),
-    /// An element became connected, and its subtree with it.
+    /// An element became connected, and its shadow-including subtree with
+    /// it: its shadow-including root is now the document.
     Connected(NodeRef),
-    /// An element stopped being connected, and its subtree with it.
+    /// An element stopped being connected, and its shadow-including subtree
+    /// with it.
     Disconnected(NodeRef),
     /// An attribute of an element whose local name contains a hyphen changed.
     /// `old_value` is `None` when the attribute did not exist before.
