@@ -2500,6 +2500,29 @@ elements without it upgraded nothing that such a library defines.
   The CE1 build is repeatably about 9% slower on this scenario and this
   build, which contains all of CE1's work on the mutation path and more, is
   not, so the cause is not that work as such; it has not been located.
+- **The 35-site sweep after CE1 and SD1** (2026-11-16, same list and
+  driver as before). `customElements is not defined` is gone (8 messages
+  before). Uncaught errors went from 47 to 53, again because more code runs:
+  github.com now reaches `Unable to get document domain` (7) and
+  `HTMLMetaElement is not defined` (3), nytimes.com `No randomUUID function`
+  (5); 11 are still `Failed to fetch` for hosts the sweep machine's DNS
+  answers with `::`. Sites with no snapshot elements went from 5 to 6.
+- **A regression to know about: cloudflare.com no longer loads.** Its
+  bundle used to stop at `customElements is not defined` and the page kept
+  its server-rendered content (14 refs, 299 snapshot lines). The bundle now
+  runs, and a timer-driven script reads used values (`getComputedStyle` of
+  layout-dependent properties, element rectangles) after each change it
+  makes. Every such read lays the page out again in full, one layout of
+  that page takes 126 to 132 ms (95 layouts, 12.1 s, measured with a
+  temporary timer in `RenderSession::refresh_layout`), and the page is
+  closed for exceeding its script budget (15 s within 30 s), so the
+  navigation fails and the agent gets nothing. Stack samples put the time
+  in nested grid and flex sizing (container depth 4 on average, up to 9).
+  Neither custom elements nor shadow trees are involved beyond letting the
+  script run. What would address it: a cheaper layout for this shape of
+  page, layout that does not start over after every mutation, or a page
+  that survives its script budget with the document it has; the last is a
+  policy the specification owns.
 - **Open:** styles, layout and paint of the flat tree (`:host`,
   `::slotted()`, scoped `<style>`, `adoptedStyleSheets`), which is what a
   screenshot needs; declarative shadow DOM (`<template shadowrootmode>`);
