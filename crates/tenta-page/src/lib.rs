@@ -5,6 +5,7 @@
 //! pool of threads and implements [`PageThread`].
 
 pub mod clock;
+mod cors;
 pub mod document;
 pub mod error_page;
 pub mod event;

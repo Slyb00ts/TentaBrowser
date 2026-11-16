@@ -20,6 +20,47 @@ fn assert_js(engine: &mut Engine, source: &str, expected: &str) {
 }
 
 #[test]
+fn classic_scripts_are_sloppy_unless_they_opt_into_strict_mode() {
+    let mut engine = page();
+    // An undeclared assignment creates a global, and `this` of a plain call is
+    // the global object: both throw or differ under strict mode.
+    assert_js(
+        &mut engine,
+        "undeclared = 5; [typeof undeclared, (function () { return this === window; })()].join(',')",
+        "number,true",
+    );
+    engine
+        .run_script("fromPageScript = 7", ScriptKind::Classic)
+        .expect("a sloppy page script");
+    assert_js(&mut engine, "String(fromPageScript)", "7");
+    assert_js(
+        &mut engine,
+        "(function () { 'use strict'; try { alsoUndeclared = 1; return 'sloppy'; } \
+         catch (e) { return e.name; } })()",
+        "ReferenceError",
+    );
+}
+#[test]
+fn media_canvas_and_svg_elements_have_their_interfaces() {
+    let mut engine = page();
+    assert_js(
+        &mut engine,
+        "var ns = 'http://www.w3.org/2000/svg'; \
+         var v = document.createElement('video'), c = document.createElement('canvas'); \
+         var svg = document.createElementNS(ns, 'svg'), a = document.createElementNS(ns, 'a'); \
+         v.src = '/clip.mp4'; v.muted = true; \
+         [v instanceof HTMLVideoElement, v instanceof HTMLMediaElement, \
+          document.createElement('audio') instanceof HTMLAudioElement, \
+          c instanceof HTMLCanvasElement, svg instanceof SVGSVGElement, \
+          a instanceof SVGAElement, a instanceof SVGGraphicsElement, \
+          v.paused, v.readyState, v.canPlayType('video/mp4'), v.hasAttribute('muted'), \
+          c.width + 'x' + c.height, c.getContext('2d'), c.toDataURL(), \
+          v.play() instanceof Promise].join('|')",
+        "true|true|true|true|true|true|true|true|0||true|300x150||data:,|true",
+    );
+}
+
+#[test]
 fn persistent_context_and_native_prototypes() {
     let mut engine = page();
     assert_js(&mut engine, "globalThis.answer=40;answer+2", "42");

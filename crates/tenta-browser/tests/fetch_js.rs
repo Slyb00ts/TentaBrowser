@@ -195,27 +195,33 @@ async fn a_response_header_and_body_reach_script() {
     engine.close();
 }
 
-/// A cross-origin `fetch()` rejects with a `TypeError` and never reaches the
-/// network.
-///
-/// The request count is the non-vacuous half: a page that never called `fetch`
-/// at all would also show no mutation, so `requests_served() == 1` proves the
-/// document was the only thing the origin was ever asked for. This also pins
-/// slice 4a-1a's promised rejection shape — a rejected promise rather than a
+/// A `fetch()` to an origin that does not share its response rejects with a
+/// `TypeError`, and the body never reaches the page. `cors_js.rs` covers the
+/// protocol; this pins the rejection shape — a rejected promise rather than a
 /// synchronous throw — because a `catch` block is the only thing that can
 /// observe it.
+///
+/// The two fixture servers are two origins because they are two ports — RFC
+/// 6454 counts the port — so this needs no DNS and no host name.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_cross_origin_fetch_rejects_without_reaching_the_network() {
+async fn a_cross_origin_fetch_without_consent_rejects() {
+    let (target, _target_temp) =
+        serve_all(&[("data.json", "{\"secret\":\"the other origin's\"}")]).await;
+    let url = target.url("/data.json");
     let (server, _temp) = serve_all(&[(
         "index.html",
-        "<!doctype html><html><head></head><body>\
-         <div id=\"result\">unset</div>\
-         <script>\
-         fetch('http://other.test/x').catch(function (e) {\
-           document.getElementById('result').textContent = e.constructor.name;\
-         });\
-         </script>\
-         </body></html>",
+        &format!(
+            "<!doctype html><html><head></head><body>\
+             <div id=\"result\">unset</div>\
+             <script>\
+             fetch('{url}').then(function (r) {{ return r.text(); }}).then(function (text) {{\
+               document.getElementById('result').textContent = 'leaked ' + text;\
+             }}, function (e) {{\
+               document.getElementById('result').textContent = e.constructor.name;\
+             }});\
+             </script>\
+             </body></html>"
+        ),
     )])
     .await;
     let engine = js_engine(SettleConfig::library());
@@ -232,12 +238,13 @@ async fn a_cross_origin_fetch_rejects_without_reaching_the_network() {
     assert_eq!(
         text_of(&document, "#result"),
         "TypeError",
-        "the refusal reached script as a rejection, not a throw"
+        "the failure reached script as a rejection, not a throw"
     );
+    assert!(!document.text().contains("the other origin's"));
     assert_eq!(
-        server.requests_served(),
+        target.requests_served(),
         1,
-        "only the document: the refusal happened before the wire"
+        "the request was made, as a browser makes it; its answer was discarded"
     );
     engine.close();
 }

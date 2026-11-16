@@ -143,9 +143,9 @@ fn the_window_is_an_event_target() {
     // `addEventListener` is not enough for code that feature-detects event
     // support with `window instanceof EventTarget`.
     //
-    // `constructor` reports `EventTarget` because the chain joins there: a
-    // browser has `Window.prototype` and `WindowProperties.prototype` in
-    // between, and neither interface exists in this engine yet.
+    // The chain is the window, `Window.prototype`, `EventTarget.prototype`: a
+    // browser has `WindowProperties.prototype` between the last two, which
+    // does not exist in this engine.
     assert_eq!(
         eval(
             r#"
@@ -154,12 +154,13 @@ fn the_window_is_an_event_target() {
                 self instanceof EventTarget,
                 top instanceof EventTarget,
                 document instanceof EventTarget,
-                Object.getPrototypeOf(window) === EventTarget.prototype,
-                window.constructor === EventTarget,
+                Object.getPrototypeOf(window) === Window.prototype,
+                Object.getPrototypeOf(Window.prototype) === EventTarget.prototype,
+                window.constructor === Window,
             ].join(',');
         "#
         ),
-        "true,true,true,true,true,true"
+        "true,true,true,true,true,true,true"
     );
 }
 
@@ -177,7 +178,7 @@ fn chaining_the_window_to_event_target_keeps_its_own_properties() {
         eval(
             r#"
             [
-                Object.getPrototypeOf(window) === EventTarget.prototype,
+                Object.getPrototypeOf(window) === Window.prototype,
                 typeof document,
                 typeof setTimeout,
                 typeof EventTarget,

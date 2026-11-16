@@ -26,7 +26,8 @@ use std::sync::Arc;
 
 use tenta_core::{NativeMemoryBudget, Origin};
 use tenta_js::bindings::host::{
-    EventHandlerNonNull, HostObject, realm_context, refused_request_init_member, request_from_init,
+    EventHandlerNonNull, FetchSignal, HostObject, fetch_signal, realm_context,
+    refused_request_init_member, request_from_init, watch_fetch_signal,
 };
 use tenta_js::bindings::{
     AddEventListenerOptionsOrBoolean, CSSStyleProperties, Crypto, Element, Event, EventListener,
@@ -39,6 +40,7 @@ use tenta_js::dom::events::{EventHandlerName, HostValue, PromiseOutcome, Promise
 use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId};
 use tenta_js::fetch::FetchDriver;
 use tenta_js::geometry::{GeometryHost, ViewportMetrics, WindowMetric};
+use tenta_js::location::LocationPart;
 use tenta_js::xhr::XhrDriver;
 use tenta_net::CookieJar;
 
@@ -77,8 +79,8 @@ macro_rules! guarded_callback {
     };
 }
 
-guarded_callback!(guarded_window_onload_getter => window_onload_getter);
-guarded_callback!(guarded_window_onload_setter => window_onload_setter);
+guarded_callback!(guarded_window_handler_getter => window_handler_getter);
+guarded_callback!(guarded_window_handler_setter => window_handler_setter);
 guarded_callback!(guarded_window_local_storage_getter => window_local_storage_getter);
 guarded_callback!(guarded_window_session_storage_getter => window_session_storage_getter);
 guarded_callback!(guarded_window_crypto_getter => window_crypto_getter);
@@ -99,6 +101,24 @@ guarded_callback!(guarded_fetch => fetch);
 guarded_callback!(guarded_get_computed_style => get_computed_style);
 guarded_callback!(guarded_request_animation_frame => request_animation_frame);
 guarded_callback!(guarded_cancel_animation_frame => cancel_animation_frame);
+guarded_callback!(guarded_btoa => btoa);
+guarded_callback!(guarded_atob => atob);
+guarded_callback!(guarded_java_enabled => java_enabled);
+
+// After `guarded_callback!`, which the module uses.
+pub(crate) mod history;
+mod observers;
+mod window_extras;
+mod window_misc;
+guarded_callback!(guarded_location_constructor => location_constructor);
+guarded_callback!(guarded_location_part_getter => location_part_getter);
+guarded_callback!(guarded_location_to_string => location_to_string);
+guarded_callback!(guarded_location_part_setter => location_part_setter);
+guarded_callback!(guarded_location_assign => location_assign);
+guarded_callback!(guarded_location_replace => location_replace);
+guarded_callback!(guarded_location_reload => location_reload);
+guarded_callback!(guarded_window_location_setter => window_location_setter);
+guarded_callback!(guarded_window_location_getter => window_location_getter);
 
 /// Timer functions whose deadline has passed, in fire order, waiting for the
 /// engine to invoke them with the isolate in hand.
@@ -156,6 +176,16 @@ pub struct HostState {
     /// `.then` after a script entry would sit unrun for as long as the page
     /// happened to have no timer scheduled.
     pub microtasks_pending: std::cell::Cell<bool>,
+    /// The provenance the owed checkpoint runs under: `Tracked` once any entry
+    /// since the last checkpoint ran under it.
+    ///
+    /// A promise reaction is the continuation of the task that queued it, so
+    /// it inherits that task's provenance (`tenta_core::provenance`). The
+    /// checkpoint is often paid by a later drive method, outside the scope the
+    /// script ran in, and without this a `fetch()` made after an `await` would
+    /// count as something the page did on its own and no longer hold the
+    /// settle open.
+    pub microtask_origin: std::cell::Cell<Origin>,
     /// Image events delivered since the wrapper graph was last collected, and
     /// when that was. A collection is a full garbage collection, so a stream of
     /// one-event entries pays for it only now and then (`Engine::settle_images`).
@@ -209,6 +239,8 @@ pub struct HostState {
     /// The realm's inspection surface: the dispatcher, the sink its events go
     /// to and the rejections waiting to be reported.
     pub(crate) inspector: crate::inspector::InspectorState,
+    /// The realm's module map and the dynamic imports in flight.
+    pub(crate) modules: crate::modules::ModuleState,
 }
 
 impl HostState {
@@ -228,6 +260,7 @@ impl HostState {
             ready_frames: Rc::new(RefCell::new(VecDeque::new())),
             script_depth: std::cell::Cell::new(0),
             microtasks_pending: std::cell::Cell::new(false),
+            microtask_origin: std::cell::Cell::new(Origin::Background),
             image_graph_debt: std::cell::Cell::new((0, None)),
             fetch_driver: RefCell::new(None),
             cookies,
@@ -237,6 +270,7 @@ impl HostState {
             native_dispatch: std::cell::Cell::new(false),
             mutation_notify: RefCell::new(None),
             inspector: crate::inspector::InspectorState::new(),
+            modules: crate::modules::ModuleState::default(),
         })
     }
 
@@ -247,7 +281,16 @@ impl HostState {
     /// going through here.
     pub fn enter_script(&self) {
         self.script_depth.set(self.script_depth.get() + 1);
+        self.owe_checkpoint();
+    }
+
+    /// Records that a microtask checkpoint is owed, and under which
+    /// provenance; see [`Self::microtask_origin`].
+    pub fn owe_checkpoint(&self) {
         self.microtasks_pending.set(true);
+        if self.scheduler.current_origin() == Origin::Tracked {
+            self.microtask_origin.set(Origin::Tracked);
+        }
     }
 
     /// Marks the end of a script activation.
@@ -382,9 +425,361 @@ pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>, time_o
         global.set(scope, key.into(), global.into());
     }
 
+    define(scope, global, "btoa", guarded_btoa);
+    define(scope, global, "atob", guarded_atob);
+
     install_performance(scope, global, time_origin_ms);
     install_navigator(scope, global);
+    install_location(scope, global);
     install_window_event_target(scope, global);
+    history::install(scope, global);
+    window_extras::install(scope, global);
+    observers::install(scope, global);
+    window_misc::install(scope, global, time_origin_ms);
+}
+
+/// `btoa(data)`: `data` as a binary string, base64-encoded.
+fn btoa<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    base64_codec(
+        scope,
+        args,
+        rv,
+        "btoa",
+        tenta_js::base64::btoa,
+        "The string to be encoded contains characters outside of the Latin1 range.",
+    );
+}
+
+/// `atob(data)`: the binary string `data` encodes, forgivingly decoded.
+fn atob<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    base64_codec(
+        scope,
+        args,
+        rv,
+        "atob",
+        tenta_js::base64::atob,
+        "The string to be decoded is not correctly encoded.",
+    );
+}
+
+fn base64_codec<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+    name: &str,
+    codec: fn(&str) -> Option<String>,
+    refusal: &str,
+) {
+    if args.length() == 0 {
+        throw_type_error(
+            scope,
+            &format!(
+                "Failed to execute '{name}' on 'Window': 1 argument required, but only 0 present."
+            ),
+        );
+        return;
+    }
+    let data = match string_from_v8(scope, args.get(0)) {
+        Ok(data) => data,
+        Err(error) => return throw_js_error(scope, &error),
+    };
+    let Some(result) = codec(&data) else {
+        return throw_js_error(
+            scope,
+            &JsError::dom_exception("InvalidCharacterError", refusal),
+        );
+    };
+    match v8::String::new(scope, &result) {
+        Some(value) => rv.set(value.into()),
+        None => throw_js_error(scope, &JsError::range_error("Invalid string length")),
+    }
+}
+
+/// Installs `window.location` and the `Location` interface object.
+///
+/// Only the read side exists: the nine URL attributes and the stringifier.
+/// They are own properties of the one `Location` object, as
+/// `[LegacyUnforgeable]` makes them, and answer from the document's current
+/// URL on every read. Navigation through `location` (the setters, `assign`,
+/// `replace`, `reload`) is not built, so those members are absent instead of
+/// present and inert.
+fn install_location(scope: &mut v8::PinScope, global: v8::Local<v8::Object>) {
+    let interface = v8::FunctionTemplate::new(scope, guarded_location_constructor);
+    let name = v8::String::new(scope, "Location").expect("the interface name fits V8");
+    interface.set_class_name(name);
+    // A receiver that is not the `Location` object gets V8's own "Illegal
+    // invocation" before a callback runs.
+    let signature = v8::Signature::new(scope, interface);
+    let instance = interface.instance_template(scope);
+    for (index, part) in LocationPart::ALL.into_iter().enumerate() {
+        let data = v8::Integer::new(scope, index as i32);
+        let getter = v8::FunctionTemplate::builder(guarded_location_part_getter)
+            .data(data.into())
+            .signature(signature)
+            .length(0)
+            .build(scope);
+        // `origin` is read-only; every other component has a setter.
+        let setter = (part != LocationPart::Origin).then(|| {
+            v8::FunctionTemplate::builder(guarded_location_part_setter)
+                .data(data.into())
+                .signature(signature)
+                .length(1)
+                .build(scope)
+        });
+        let key = v8::String::new(scope, part.name()).expect("the member name fits V8");
+        instance.set_accessor_property(
+            key.into(),
+            Some(getter),
+            setter,
+            v8::PropertyAttribute::DONT_DELETE,
+        );
+    }
+    let methods: [(&str, v8::FunctionCallback, i32); 4] = [
+        (
+            "toString",
+            v8::MapFnTo::map_fn_to(guarded_location_to_string),
+            0,
+        ),
+        ("assign", v8::MapFnTo::map_fn_to(guarded_location_assign), 1),
+        (
+            "replace",
+            v8::MapFnTo::map_fn_to(guarded_location_replace),
+            1,
+        ),
+        ("reload", v8::MapFnTo::map_fn_to(guarded_location_reload), 0),
+    ];
+    for (name, callback, arity) in methods {
+        let method = v8::FunctionTemplate::builder_raw(callback)
+            .signature(signature)
+            .length(arity)
+            .build(scope);
+        let key = v8::String::new(scope, name).expect("the member name fits V8");
+        instance.set_with_attr(
+            key.into(),
+            method.into(),
+            v8::PropertyAttribute::READ_ONLY | v8::PropertyAttribute::DONT_DELETE,
+        );
+    }
+
+    let tag = v8::Symbol::get_to_string_tag(scope);
+    interface.prototype_template(scope).set_with_attr(
+        tag.into(),
+        name.into(),
+        v8::PropertyAttribute::READ_ONLY | v8::PropertyAttribute::DONT_ENUM,
+    );
+
+    let constructor = interface
+        .get_function(scope)
+        .expect("a template has a function instance in an entered context");
+    global.define_own_property(
+        scope,
+        name.into(),
+        constructor.into(),
+        v8::PropertyAttribute::DONT_ENUM,
+    );
+    let location = instance
+        .new_instance(scope)
+        .expect("the Location template instantiates in an entered context");
+    // The getter carries the object, so the realm needs no other slot for it.
+    let getter = v8::Function::builder(guarded_window_location_getter)
+        .data(location.into())
+        .length(0)
+        .build(scope)
+        .expect("function creation while a context is entered");
+    // `[PutForwards=href]`: assigning to `window.location` navigates.
+    let setter = v8::Function::builder(guarded_window_location_setter)
+        .length(1)
+        .build(scope)
+        .expect("function creation while a context is entered");
+    let mut descriptor = v8::PropertyDescriptor::new_from_get_set(getter.into(), setter.into());
+    descriptor.set_enumerable(true);
+    descriptor.set_configurable(false);
+    let key = v8::String::new(scope, "location").expect("the member name fits V8");
+    global.define_property(scope, key.into(), &descriptor);
+}
+
+/// `new Location()` and `Location()`: the interface has no constructor.
+fn location_constructor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    throw_type_error(scope, "Illegal constructor");
+}
+
+fn window_location_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let global = scope.get_current_context().global(scope);
+    if !args.this().strict_equals(global.into()) {
+        throw_js_error(scope, &JsError::type_error("Illegal invocation"));
+        return;
+    }
+    rv.set(args.data());
+}
+
+/// One URL component of the document's current URL; `about:blank` in a realm
+/// that has no document.
+fn location_part(scope: &mut v8::PinScope, part: LocationPart) -> String {
+    match window_host(scope) {
+        Ok(host) => host.location_part(part),
+        Err(_) => part.read(&tenta_js::location::document_location(None)),
+    }
+}
+
+fn location_part_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(part) = args
+        .data()
+        .integer_value(scope)
+        .and_then(|index| usize::try_from(index).ok())
+        .and_then(|index| LocationPart::ALL.get(index).copied())
+    else {
+        return;
+    };
+    let value = location_part(scope, part);
+    match v8::String::new(scope, &value) {
+        Some(value) => rv.set(value.into()),
+        None => throw_js_error(scope, &JsError::range_error("Invalid string length")),
+    }
+}
+
+/// Navigates to `reference`, resolved against the document's base URL: the
+/// body of the `href` setter, `assign` and `replace`.
+fn location_navigate(scope: &mut v8::PinScope, reference: &str, replace: bool) {
+    let host = match window_host(scope) {
+        Ok(host) => host,
+        Err(error) => return throw_js_error(scope, &error),
+    };
+    if let Err(error) = host.navigate_to_reference(reference, replace) {
+        throw_js_error(scope, &error);
+    }
+}
+
+/// A component setter: `href` parses its value, the others apply the URL
+/// Standard's setter to the document's URL.
+fn location_part_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(part) = args
+        .data()
+        .integer_value(scope)
+        .and_then(|index| usize::try_from(index).ok())
+        .and_then(|index| LocationPart::ALL.get(index).copied())
+    else {
+        return;
+    };
+    let value = match string_from_v8(scope, args.get(0)) {
+        Ok(value) => value,
+        Err(error) => return throw_js_error(scope, &error),
+    };
+    if part == LocationPart::Href {
+        return location_navigate(scope, &value, false);
+    }
+    let host = match window_host(scope) {
+        Ok(host) => host,
+        Err(error) => return throw_js_error(scope, &error),
+    };
+    host.navigate_by_setting(part, &value);
+}
+
+fn location_argument(
+    scope: &mut v8::PinScope,
+    args: &v8::FunctionCallbackArguments,
+    name: &str,
+) -> Option<String> {
+    if args.length() == 0 {
+        throw_type_error(
+            scope,
+            &format!(
+                "Failed to execute '{name}' on 'Location': 1 argument required, but only 0 present."
+            ),
+        );
+        return None;
+    }
+    match string_from_v8(scope, args.get(0)) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            throw_js_error(scope, &error);
+            None
+        }
+    }
+}
+
+fn location_assign<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if let Some(url) = location_argument(scope, &args, "assign") {
+        location_navigate(scope, &url, false);
+    }
+}
+
+fn location_replace<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if let Some(url) = location_argument(scope, &args, "replace") {
+        location_navigate(scope, &url, true);
+    }
+}
+
+fn location_reload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    match window_host(scope) {
+        Ok(host) => host.reload_document(),
+        Err(error) => throw_js_error(scope, &error),
+    }
+}
+
+/// `window.location = url`: the same as `location.href = url`.
+fn window_location_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let global = scope.get_current_context().global(scope);
+    if !args.this().strict_equals(global.into()) {
+        throw_js_error(scope, &JsError::type_error("Illegal invocation"));
+        return;
+    }
+    match string_from_v8(scope, args.get(0)) {
+        Ok(url) => location_navigate(scope, &url, false),
+        Err(error) => throw_js_error(scope, &error),
+    }
+}
+
+/// The stringifier: `href`.
+fn location_to_string<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let value = location_part(scope, LocationPart::Href);
+    match v8::String::new(scope, &value) {
+        Some(value) => rv.set(value.into()),
+        None => throw_js_error(scope, &JsError::range_error("Invalid string length")),
+    }
 }
 
 /// Installs the window's `EventTarget` members on the global object.
@@ -449,19 +844,36 @@ pub fn install_window_event_handlers(
     scope: &mut v8::PinScope,
     global_template: v8::Local<v8::ObjectTemplate>,
 ) {
-    let getter = v8::FunctionTemplate::builder(guarded_window_onload_getter)
-        .length(0)
-        .build(scope);
-    let setter = v8::FunctionTemplate::builder(guarded_window_onload_setter)
-        .length(1)
-        .build(scope);
-    let key = v8::String::new(scope, "onload").expect("the member name fits the V8 string limit");
-    global_template.set_accessor_property(
-        key.into(),
-        Some(getter),
-        Some(setter),
-        v8::PropertyAttribute::NONE,
-    );
+    // One getter and one setter serve every handler: the callback data is the
+    // handler's position in `EventHandlerName::of_window`.
+    for (index, name) in EventHandlerName::of_window().enumerate() {
+        let data = v8::Integer::new(scope, index as i32);
+        let getter = v8::FunctionTemplate::builder(guarded_window_handler_getter)
+            .data(data.into())
+            .length(0)
+            .build(scope);
+        let setter = v8::FunctionTemplate::builder(guarded_window_handler_setter)
+            .data(data.into())
+            .length(1)
+            .build(scope);
+        let key = v8::String::new(scope, name.as_str())
+            .expect("the member name fits the V8 string limit");
+        global_template.set_accessor_property(
+            key.into(),
+            Some(getter),
+            Some(setter),
+            v8::PropertyAttribute::NONE,
+        );
+    }
+}
+
+/// The handler a window accessor's callback data names.
+fn window_handler_name(
+    scope: &mut v8::PinScope,
+    args: &v8::FunctionCallbackArguments,
+) -> Option<EventHandlerName> {
+    let index = usize::try_from(args.data().integer_value(scope)?).ok()?;
+    EventHandlerName::of_window().nth(index)
 }
 
 /// Installs Window's readonly storage attributes on the real global template.
@@ -653,11 +1065,14 @@ fn window_storage_getter<'s>(
 /// WebIDL getter steps of an `EventHandler` attribute return: the value is
 /// stored as a nullable callback, and the conversion back turns "no handler"
 /// into the null value.
-fn window_onload_getter<'s>(
+fn window_handler_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
+    let Some(name) = window_handler_name(scope, &args) else {
+        return;
+    };
     let host = match window_host(scope) {
         Ok(host) => host,
         Err(error) => {
@@ -665,7 +1080,7 @@ fn window_onload_getter<'s>(
             return;
         }
     };
-    match host.event_handler(EventHandlerName::new("onload")) {
+    match host.event_handler(name) {
         Ok(Some(handler)) => match value_to_v8(scope, handler.bits()) {
             Ok(value) => rv.set(value),
             Err(error) => throw_js_error(scope, &error),
@@ -683,11 +1098,14 @@ fn window_onload_getter<'s>(
 /// the previous assignment registered ([`HostObject::set_event_handler`]).
 /// Assignment is otherwise total — the listener it registers never collides
 /// with the page's own, so nothing here can fail for a duplicate.
-fn window_onload_setter<'s>(
+fn window_handler_setter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
+    let Some(name) = window_handler_name(scope, &args) else {
+        return;
+    };
     let raw = args.get(0);
     let value = if raw.is_object() {
         match value_from_v8(scope, raw) {
@@ -707,7 +1125,7 @@ fn window_onload_setter<'s>(
             return;
         }
     };
-    if let Err(error) = host.set_event_handler(EventHandlerName::new("onload"), value) {
+    if let Err(error) = host.set_event_handler(name, value) {
         throw_js_error(scope, &error);
     }
 }
@@ -764,6 +1182,10 @@ pub fn install_window_prototype(
         .get(scope, key.into())
         .expect("the EventTarget constructor has a prototype object");
     let global = context.global(scope);
+    // `Window.prototype` sits between the global and `EventTarget.prototype`
+    // when the `Window` interface object could be made.
+    let prototype = window_misc::install_window_interface(scope, global, constructor, prototype)
+        .unwrap_or(prototype);
     let installed = global
         .set_prototype(scope, prototype)
         .expect("the global's prototype is settable before script has run");
@@ -1112,6 +1534,8 @@ fn install_navigator(scope: &mut v8::PinScope, global: v8::Local<v8::Object>) {
     set_number(scope, navigator, "maxTouchPoints", 0.0);
     set_bool(scope, navigator, "onLine", true);
     set_bool(scope, navigator, "cookieEnabled", true);
+    // No Java plug-in, as in every current browser.
+    define(scope, navigator, "javaEnabled", guarded_java_enabled);
     // Real Chrome reports `false` here; an undefined `webdriver` is itself an
     // automation-detection signal, so the Chrome-compat profile reports `false`.
     set_bool(scope, navigator, "webdriver", false);
@@ -1128,6 +1552,15 @@ fn install_navigator(scope: &mut v8::PinScope, global: v8::Local<v8::Object>) {
 
     let key = v8::String::new(scope, "navigator").expect("`navigator` fits the string limit");
     global.set(scope, key.into(), navigator.into());
+}
+
+/// `navigator.javaEnabled()`: false.
+fn java_enabled(
+    _scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    retval.set_bool(false);
 }
 
 /// Defines one own property on `target` whose value is a native function.
@@ -1151,6 +1584,28 @@ pub(crate) fn host_state(scope: &mut v8::PinScope) -> Option<Rc<HostState>> {
 /// `setTimeout(handler, delay)`: schedules `handler` after `delay` ms and
 /// returns the timer id. A missing or non-function handler, or a missing delay,
 /// is treated as a no-op / zero the way the web platform coerces them here.
+/// Queues `task` as a timer task with no delay, as `setTimeout(task, 0)`
+/// does, for a host algorithm that has to continue after the running script,
+/// and returns the timer's id.
+fn queue_task(scope: &mut v8::PinScope, task: v8::Local<v8::Function>) -> Option<u64> {
+    let state = host_state(scope)?;
+    let handler = v8::Global::new(scope, task);
+    let ready = state.ready.clone();
+    let scheduler = state.scheduler.clone();
+    let id = state.scheduler.set_timeout(
+        0,
+        Box::new(move || {
+            ready.borrow_mut().push_back(ReadyHandler {
+                handler,
+                nesting: scheduler.current_nesting(),
+                origin: scheduler.current_origin(),
+                timer: scheduler.defer_firing(),
+            });
+        }),
+    );
+    Some(id.as_u64())
+}
+
 fn set_timeout(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -1285,7 +1740,7 @@ fn fetch(
     };
     // `RequestInfo` is `(Request or USVString)`; only the second arm is
     // reachable, because `Request` is not a global this engine installs.
-    let (input, init) = {
+    let (input, mut init) = {
         v8::tc_scope!(let tc, scope);
         let converted = (|| -> Result<_, JsError> {
             let input = string_from_v8(tc, args.get(0))?;
@@ -1393,6 +1848,18 @@ fn fetch(
     // forbidden method, a body on a `GET` or a `HEAD`, and a header list that
     // cannot be filled.
     let origin = state.scheduler.current_origin();
+    // The signal is the one member that is the engine's rather than the
+    // request's. An aborted one rejects with its reason before anything is
+    // built, which is where the standard tests it.
+    let signal = match init.signal.take().flatten() {
+        Some(handle) => fetch_signal(&ctx, handle),
+        None => FetchSignal::None,
+    };
+    if let FetchSignal::Aborted(reason) = signal {
+        script.reject_promise_with_stored(promise.resolver, reason);
+        return_promise(scope, &mut retval, promise);
+        return;
+    }
     let request = match request_from_init(init, url, initiator, origin) {
         Ok(request) => request,
         Err(error) => {
@@ -1413,7 +1880,12 @@ fn fetch(
         // A refusal rejects the promise rather than throwing: the promise exists
         // precisely so a failure the driver reports reaches script as one.
         Err(error) => reject_promise(scope, &mut retval, &script, promise, error.message()),
-        Ok(()) => return_promise(scope, &mut retval, promise),
+        Ok(()) => {
+            if let FetchSignal::Live(key) = signal {
+                watch_fetch_signal(&ctx, promise.resolver, key);
+            }
+            return_promise(scope, &mut retval, promise);
+        }
     }
 }
 

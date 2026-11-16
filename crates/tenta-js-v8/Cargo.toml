@@ -18,10 +18,10 @@ tenta-js = { workspace = true, features = ["v8"] }
 # `tenta-js-v8` in `xtask/src/deps.rs`'s foundation order, so the edge is
 # allowed.
 tenta-net = { workspace = true }
+# A module is named by its URL: the module map is keyed by it and the page is
+# told which URLs a compiled module imports (`src/modules.rs`).
+url = { workspace = true }
 v8 = { workspace = true }
 
 [dev-dependencies]
 tenta-html = { workspace = true }
-# URL reflection tests need a document with a base URL, and
-# `Document::with_url` takes a `url::Url`.
-url = { workspace = true }

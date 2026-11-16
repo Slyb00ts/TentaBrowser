@@ -208,6 +208,23 @@ pub enum RedirectPolicy {
     Error,
 }
 
+/// Fetch's credentials mode, reduced to what the transport owns: cookies.
+///
+/// A request without credentials sends no `Cookie` header and ignores every
+/// `Set-Cookie` it is answered with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CredentialsMode {
+    /// Cookies are the jar's to decide on every hop. The default, and what a
+    /// navigation and a document's subresources use.
+    #[default]
+    Include,
+    /// Credentials only while the URL is same-origin with the initiator:
+    /// `fetch()`'s default. A request with no initiator has them.
+    SameOrigin,
+    /// No credentials on any hop.
+    Omit,
+}
+
 impl Default for RedirectPolicy {
     fn default() -> Self {
         RedirectPolicy::Follow { max: 20 }
@@ -274,6 +291,13 @@ pub struct Request {
     /// Whether a user gesture started this navigation, which is the only
     /// thing that makes Chrome send `Sec-Fetch-User: ?1`.
     pub user_activated: bool,
+    /// Whether the request carries credentials; see [`CredentialsMode`].
+    pub credentials: CredentialsMode,
+    /// Fails a redirect that leaves the origin of the URL it came from with
+    /// `ERR_UNSAFE_REDIRECT` instead of following it. Set for a request whose
+    /// method or headers need a CORS preflight, which a redirect target on
+    /// another origin has not answered.
+    pub same_origin_redirects: bool,
     /// The least-trusted classification any hop of the redirect chain has
     /// produced so far. `Sec-Fetch-Site` never rises above it.
     pub site_floor: FetchSite,
@@ -316,6 +340,8 @@ impl Request {
             referrer_policy: ReferrerPolicy::default(),
             mode: RequestMode::default(),
             user_activated: false,
+            credentials: CredentialsMode::default(),
+            same_origin_redirects: false,
             site_floor: FetchSite::NoOrigin,
             userinfo,
             tap: None,
@@ -413,6 +439,33 @@ impl Request {
         self
     }
 
+    /// Sets the credentials mode; see [`CredentialsMode`].
+    pub fn credentials(mut self, credentials: CredentialsMode) -> Self {
+        self.credentials = credentials;
+        self
+    }
+
+    /// Refuses redirects that leave the origin they came from; see
+    /// [`Request::same_origin_redirects`].
+    pub fn same_origin_redirects(mut self, only: bool) -> Self {
+        self.same_origin_redirects = only;
+        self
+    }
+
+    /// Whether this hop sends cookies and stores the ones it is answered
+    /// with. Evaluated against the current URL, so it follows the redirect
+    /// chain.
+    pub fn sends_credentials(&self) -> bool {
+        match self.credentials {
+            CredentialsMode::Include => true,
+            CredentialsMode::Omit => false,
+            CredentialsMode::SameOrigin => self
+                .initiator
+                .as_ref()
+                .is_none_or(|initiator| same_origin(initiator, &self.url)),
+        }
+    }
+
     /// `Sec-Fetch-Site` for this request, after the redirect chain.
     pub fn fetch_site(&self) -> FetchSite {
         FetchSite::classify(self.initiator.as_ref(), &self.url).min(self.site_floor)
@@ -492,6 +545,8 @@ impl Request {
             referrer_policy: self.referrer_policy,
             mode: self.mode,
             user_activated: self.user_activated,
+            credentials: self.credentials,
+            same_origin_redirects: self.same_origin_redirects,
             site_floor: self.site_floor,
             userinfo: self.userinfo.clone(),
             tap: self.tap.clone(),

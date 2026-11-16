@@ -19,7 +19,10 @@
 //! parse unless it carries `async` or `defer`, `async` executes as soon as it
 //! arrives, `defer` executes in document order once the document is parsed,
 //! `defer` and `async` are ignored on an inline script, and `nomodule` is a
-//! gate rather than a timing attribute.
+//! gate rather than a timing attribute. A module script never blocks the
+//! parse: it runs where a `defer` script would, or as soon as its graph has
+//! loaded when it carries `async`; the graph is loaded by `crate::page`'s
+//! module loader and the engine is told to run its root here.
 //!
 //! It lives in a thread-local keyed by page id because neither half of it is
 //! `Send`: a document held jointly with script is `Rc<RefCell<_>>`, and an
@@ -35,7 +38,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use hashbrown::HashMap;
 use tenta_core::atom::atoms;
-use tenta_core::{Error, NativeMemoryBudget, NativeMemoryFailure, Origin, PageId, Result};
+use tenta_core::{Error, NativeMemoryBudget, NativeMemoryFailure, NodeRef, Origin, PageId, Result};
 use tenta_dom::{SharedDocument, SharedSink};
 use tenta_html::{Encoding, Parser};
 use tenta_js::engine::{
@@ -47,9 +50,11 @@ use tenta_js::geometry::ViewportMetrics;
 use tenta_js::inspect::{
     self, BindingCall, Completion, ConsoleCall, ExceptionEvent, InspectError, InspectorSink,
 };
+use tenta_js::modules::{DynamicImport, is_javascript_mime_type};
 use tenta_js::xhr::{XhrCompletions, XhrDriver};
 use tenta_net::policy::cookies::Site;
-use tenta_net::{Client, NetError, Request, ResourceType};
+use tenta_net::request::same_origin;
+use tenta_net::{Client, CredentialsMode, NetError, Request, ResourceType};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use url::Url;
@@ -186,6 +191,14 @@ pub(crate) trait ScriptBudget: Send + Sync {
     fn entry_terminated(&self, entry: &'static str);
     /// Reports a page-level event from inside an engine entry.
     fn emit(&self, _event: crate::event::PageEvent) {}
+    /// Starts the navigation the document's script asked for. Called on the
+    /// page thread, after the engine entry that asked has returned.
+    fn request_navigation(&self, _request: tenta_dom::NavigationRequest) {}
+    /// Loads the modules the document's script asked for with `import()`.
+    /// Called on the page thread, after the engine entry that asked has
+    /// returned; each import is answered through
+    /// [`PageRuntime::finish_dynamic_import`].
+    fn request_imports(&self, _imports: Vec<DynamicImport>, _context: ImportContext) {}
     /// Whether anything is subscribed to page events, so events whose payload
     /// costs something to build can be skipped when nobody would read them.
     fn has_subscribers(&self) -> bool {
@@ -232,6 +245,14 @@ pub(crate) struct PageRuntime {
     page: PageId,
     engine: Box<dyn PageEngine>,
     document: SharedDocument,
+    /// How many inline module scripts this document has had, which names the
+    /// next one in the engine's module map.
+    inline_modules: u32,
+    /// One load per module URL, shared by every graph that needs the module:
+    /// the first loader to ask fetches and compiles it, the others wait for
+    /// that and read what it imports. A failure is kept too, so a module that
+    /// could not be loaded is not asked for again by this document.
+    module_loads: HashMap<String, ModuleLoad>,
     /// Whether a `tenta_html::Parser` is still writing into `document`.
     ///
     /// Page-loop reclamation stays deferred until parsing finishes. Engine
@@ -311,6 +332,114 @@ impl PageRuntime {
         if let Some(failure) = self.native_memory.first_failure() {
             self.script_budget.crash_native_memory(failure);
         }
+    }
+
+    /// Hands the page a navigation the document's script asked for
+    /// (`location.assign`, a form submission, an activated link) once the
+    /// engine entry that asked has returned. The script world leaves the
+    /// request on the document (`tenta_dom::navigation`).
+    fn forward_navigation_request(&mut self) {
+        let request = self.document.borrow_mut().take_navigation_request();
+        if let Some(request) = request {
+            self.script_budget.request_navigation(request);
+        }
+        self.forward_dynamic_imports();
+    }
+
+    /// Hands the page the `import()` calls the entry that just returned made.
+    /// It rides with [`Self::forward_navigation_request`] because both are
+    /// "what did script ask the page for", collected at the same moment.
+    fn forward_dynamic_imports(&mut self) {
+        if !self.engine.supports_modules() || self.script_budget.crash_reason().is_some() {
+            return;
+        }
+        let imports = self.engine.take_dynamic_imports();
+        if imports.is_empty() {
+            return;
+        }
+        let context = ImportContext {
+            document: Rc::downgrade(&self.document),
+            tracker: Rc::clone(&self.tracker),
+            document_url: self.document.borrow().url().cloned(),
+        };
+        self.script_budget.request_imports(imports, context);
+    }
+
+    /// The load of the module at `url`, created on the first ask.
+    pub(crate) fn module_load(&mut self, url: &str) -> ModuleLoad {
+        Rc::clone(self.module_loads.entry(url.to_owned()).or_default())
+    }
+
+    /// Compiles one module of a graph the page is loading and returns what it
+    /// imports. `None` means it did not compile; the engine has reported why.
+    pub(crate) fn compile_module(
+        &mut self,
+        key: &str,
+        source: &str,
+        base: &Url,
+    ) -> Option<Vec<Url>> {
+        if self.script_budget.crash_reason().is_some() {
+            return None;
+        }
+        let started = Instant::now();
+        let compiled = self.engine.compile_module(key, source, base);
+        self.check_engine_failure();
+        self.script_budget.charge(started.elapsed());
+        match compiled {
+            Ok(imports) => Some(imports),
+            Err(error) => {
+                tracing::warn!(
+                    page = ?self.page,
+                    module = %key,
+                    kind = ?error.kind,
+                    message = %error.message,
+                    "a module did not compile"
+                );
+                None
+            }
+        }
+    }
+
+    /// Runs the module `key`, whose graph is loaded, as a module script of the
+    /// document. `document.currentScript` is null for a module, as HTML has it.
+    pub(crate) fn run_module(&mut self, key: &str) {
+        if self.script_budget.crash_reason().is_some() {
+            return;
+        }
+        let started = Instant::now();
+        if let Err(error) = self.engine.run_module(key) {
+            tracing::warn!(
+                page = ?self.page,
+                module = %key,
+                kind = ?error.kind,
+                message = %error.message,
+                "a module script did not run to completion"
+            );
+        }
+        self.check_engine_failure();
+        self.forward_navigation_request();
+        self.script_budget.charge(started.elapsed());
+        if self.script_budget.crash_reason().is_some() {
+            return;
+        }
+        self.bounded("microtasks", |engine| engine.run_microtasks());
+    }
+
+    /// Answers one `import()`: `Ok` is the key of the module whose graph is
+    /// loaded, `Err` is why it could not be.
+    pub(crate) fn finish_dynamic_import(
+        &mut self,
+        id: u64,
+        outcome: std::result::Result<&str, &str>,
+    ) {
+        if self.script_budget.crash_reason().is_some() {
+            return;
+        }
+        self.bounded("import", |engine| engine.finish_dynamic_import(id, outcome));
+        if self.script_budget.crash_reason().is_some() {
+            return;
+        }
+        self.bounded("microtasks", |engine| engine.run_microtasks());
     }
 
     fn native_memory_error(&self) -> Option<Error> {
@@ -440,6 +569,8 @@ impl PageRuntime {
             // A parse-pause runtime starts with a parser in flight. A runtime
             // created for post-settle evaluation is marked parse-finished
             // before its first engine entry.
+            inline_modules: 0,
+            module_loads: HashMap::new(),
             parse_in_flight: true,
             tracker,
             pump: None,
@@ -611,6 +742,7 @@ impl PageRuntime {
         };
         let outcome = run(&mut *self.engine);
         self.check_engine_failure();
+        self.forward_navigation_request();
         let elapsed = started.elapsed();
         self.script_budget.charge(elapsed);
         // An engine that also enforces its own deadline may stop the entry
@@ -804,7 +936,7 @@ impl PageRuntime {
         );
         // One short borrow: everything the decision needs is copied out before
         // the engine is entered.
-        let (source, kind, src, timing) = {
+        let (source, kind, src, timing, nomodule, element) = {
             let document = self.document.borrow();
             let source = document.text_content(script);
             let kind = document.attribute(script, atoms::TYPE).map(str::to_owned);
@@ -813,8 +945,63 @@ impl PageRuntime {
                 asynchronous: document.has_attribute(script, atoms::ASYNC),
                 deferred: document.has_attribute(script, atoms::DEFER),
             };
-            (source, kind, src, timing)
+            let nomodule = document.has_attribute(script, atoms::NOMODULE);
+            // The element travels with the script to wherever it finally runs,
+            // so `document.currentScript` can name it there.
+            (
+                source,
+                kind,
+                src,
+                timing,
+                nomodule,
+                document.node_ref(script),
+            )
         };
+        let modules = self.engine.supports_modules();
+        if modules && let Some(kind) = kind.as_deref().map(str::trim) {
+            if kind.eq_ignore_ascii_case("importmap") {
+                if let Err(error) = self.engine.add_import_map(&source, base) {
+                    tracing::warn!(
+                        page = ?self.page,
+                        message = %error.message,
+                        "an import map was not applied"
+                    );
+                }
+                return Ok(ScriptStep::Done);
+            }
+            if kind.eq_ignore_ascii_case("module") {
+                let root = match &src {
+                    Some(src) => match base.join(src) {
+                        Ok(url) => ModuleRoot::External(url),
+                        Err(error) => {
+                            tracing::warn!(
+                                page = ?self.page,
+                                src = %src,
+                                %error,
+                                "a module script's src does not resolve; it does not run"
+                            );
+                            return Ok(ScriptStep::Done);
+                        }
+                    },
+                    None if source.trim().is_empty() => return Ok(ScriptStep::Done),
+                    None => {
+                        self.inline_modules += 1;
+                        ModuleRoot::Inline {
+                            key: format!("inline-module:{}", self.inline_modules),
+                            source,
+                            base: base.clone(),
+                        }
+                    }
+                };
+                // A module script never blocks the parse: it is deferred
+                // unless it carries `async`.
+                return Ok(ScriptStep::Deferred(if timing.asynchronous {
+                    DeferredTiming::AsyncModule(root)
+                } else {
+                    DeferredTiming::Module(root)
+                }));
+            }
+        }
         // Before `src`, because a module's text is not a classic script's:
         // running one inline would run it in the wrong scope.
         if let Some(kind) = &kind
@@ -827,13 +1014,14 @@ impl PageRuntime {
             );
             return Ok(ScriptStep::Done);
         }
-        // `nomodule` is deliberately not consulted anywhere here: it is a
-        // gate, not a timing attribute, and it says "do not run this in a user
-        // agent that supports module scripts". This one refuses `type=module`
-        // (P2 d-2c), so the gate is open and a `nomodule` script runs exactly
-        // like the same script without it — which leaves a lone external one
-        // parser-blocking, since it carries no `async` or `defer`. **When
-        // module support lands, this gate must close.**
+        // `nomodule` is a gate, not a timing attribute: it says "do not run
+        // this in a user agent that supports module scripts", and a page that
+        // ships one ships the same program as a module beside it. An engine
+        // without modules (QuickJS) leaves the gate open and runs it.
+        if modules && nomodule {
+            tracing::debug!(page = ?self.page, "a nomodule script is not run");
+            return Ok(ScriptStep::Done);
+        }
         if let Some(src) = &src {
             // The base is the document's, exactly as a recorded preload hint's
             // is resolved (`crate::fetch_policy`): the URL a relative `src`
@@ -853,11 +1041,11 @@ impl PageRuntime {
             // `async` wins when both are present; `defer` is the legacy
             // fallback the standard keeps for it.
             return Ok(if timing.asynchronous {
-                ScriptStep::Deferred(DeferredTiming::Async(url))
+                ScriptStep::Deferred(DeferredTiming::Async(url, element))
             } else if timing.deferred {
-                ScriptStep::Deferred(DeferredTiming::Defer(url))
+                ScriptStep::Deferred(DeferredTiming::Defer(url, element))
             } else {
-                ScriptStep::Fetch(url)
+                ScriptStep::Fetch(url, element)
             });
         }
         // Inline: `defer` and `async` are ignored on a script with no `src`,
@@ -866,7 +1054,7 @@ impl PageRuntime {
             tracing::debug!(page = ?self.page, "an empty script element runs nothing");
             return Ok(ScriptStep::Done);
         }
-        Ok(ScriptStep::Ready(source))
+        Ok(ScriptStep::Ready(source, element))
     }
 
     /// Runs `source` as a classic script against the tree.
@@ -885,6 +1073,19 @@ impl PageRuntime {
     /// handles at pressure checkpoints while the parse is paused; ordinary
     /// page-loop reclamation remains guarded by `turn`.
     pub(crate) fn run_source(&mut self, source: &str) {
+        self.run_script(source, None);
+    }
+
+    /// [`Self::run_source`] for the script of `element`, which is
+    /// `document.currentScript` while the script runs and no longer once it
+    /// has returned: a callback the script queued sees null.
+    pub(crate) fn run_script(&mut self, source: &str, element: Option<NodeRef>) {
+        self.document.borrow_mut().set_current_script(element);
+        self.run_classic(source);
+        self.document.borrow_mut().set_current_script(None);
+    }
+
+    fn run_classic(&mut self, source: &str) {
         if self.script_budget.crash_reason().is_some() {
             return;
         }
@@ -902,6 +1103,7 @@ impl PageRuntime {
             );
         }
         self.check_engine_failure();
+        self.forward_navigation_request();
         self.script_budget.charge(started.elapsed());
         // The script's own checkpoints are owed even when it threw, and the
         // checkpoint runs callback script the engine does not bound itself.
@@ -956,6 +1158,7 @@ impl PageRuntime {
         let checkpoint_fired = arm.as_ref().is_some_and(crate::watchdog::Arm::fired);
         drop(arm);
         self.check_engine_failure();
+        self.forward_navigation_request();
         self.script_budget.charge(checkpoint_elapsed);
         if let Some(error) = self.native_memory_error() {
             return Err(error);
@@ -1000,10 +1203,10 @@ enum ScriptStep {
     Done,
     /// An inline classic script: its text, to be run once the page has let
     /// stylesheets that block scripts finish loading.
-    Ready(String),
+    Ready(String, NodeRef),
     /// The script is classic and external with no `async` or `defer`: it is
     /// fetched now, and the parse resumes only once it has run.
-    Fetch(Url),
+    Fetch(Url, NodeRef),
     /// The script is classic and external with `async` or `defer`: its fetch
     /// runs in parallel with the parse, so the caller starts it and the parse
     /// resumes at once.
@@ -1019,10 +1222,41 @@ enum ScriptStep {
 pub(crate) enum DeferredTiming {
     /// `async`: fetched in parallel with the parse, run as soon as it arrives,
     /// in whatever order arrivals happen.
-    Async(Url),
+    Async(Url, NodeRef),
     /// `defer`: fetched in parallel with the parse, run in document order once
     /// the document is parsed and before `DOMContentLoaded`.
-    Defer(Url),
+    Defer(Url, NodeRef),
+    /// A module script: its graph loads in parallel with the parse and it runs
+    /// where a `defer` script would, in document order.
+    Module(ModuleRoot),
+    /// A module script with `async`: it runs as soon as its graph has loaded.
+    AsyncModule(ModuleRoot),
+}
+
+/// Where a module graph starts.
+pub(crate) enum ModuleRoot {
+    /// An inline `<script type="module">`: its text, the key the page gave it
+    /// in the module map, and the document's base URL it resolves against.
+    Inline {
+        key: String,
+        source: String,
+        base: Url,
+    },
+    /// A module named by URL: `<script type="module" src>` or `import()`.
+    External(Url),
+}
+
+/// The shared load of one module: what it imports once it is fetched and
+/// compiled, or why it could not be.
+pub(crate) type ModuleLoad = Rc<tokio::sync::OnceCell<std::result::Result<Vec<Url>, String>>>;
+
+/// What a dynamic import's loader needs from the runtime that asked for it.
+pub(crate) struct ImportContext {
+    /// The tree the importing script belongs to, held weakly for the reason
+    /// a parallel script's task holds it weakly.
+    pub document: std::rc::Weak<RefCell<tenta_dom::Document>>,
+    pub tracker: Rc<RefCell<SettleTracker>>,
+    pub document_url: Option<Url>,
 }
 
 /// What the parse knows about its document when it hands a script out
@@ -1034,6 +1268,7 @@ pub(crate) enum DeferredTiming {
 /// origin is still a first-party request of this page. Both are owned rather
 /// than borrowed because a `defer`/`async` script is fetched by a task that
 /// outlives the parse pause which discovered it.
+#[derive(Clone)]
 pub(crate) struct ScriptMeta {
     /// The document's base URL: its `<base href>` resolved against its URL, or
     /// its URL when it declares none.
@@ -1256,11 +1491,11 @@ pub(crate) async fn run_pending_script(
         runtime.run_pending_script(parser, &meta.base)
     })
     .ok_or_else(|| Error::unsupported("the JavaScript runtime was unavailable"))?;
-    let url = match step? {
+    let (url, element) = match step? {
         ScriptStep::Done => return Ok(PendingScript::Done),
-        ScriptStep::Ready(source) => return Ok(PendingScript::Ready(source)),
+        ScriptStep::Ready(source, element) => return Ok(PendingScript::Ready(source, element)),
         ScriptStep::Deferred(timing) => return Ok(PendingScript::Deferred(timing)),
-        ScriptStep::Fetch(url) => url,
+        ScriptStep::Fetch(url, element) => (url, element),
     };
     let Some(body) = fetch_script(config, meta, &url, tracker).await else {
         // A script that could not be fetched is a page-level fact, not a failed
@@ -1275,23 +1510,30 @@ pub(crate) async fn run_pending_script(
         );
         return Ok(PendingScript::Done);
     };
-    Ok(PendingScript::Ready(source))
+    Ok(PendingScript::Ready(source, element))
 }
 
 /// What the page does with the script its parse is paused on.
 pub(crate) enum PendingScript {
     /// Nothing: the script was skipped or could not be fetched.
     Done,
-    /// The script's text, still to run.
-    Ready(String),
+    /// The script's text, still to run, and its element.
+    Ready(String, NodeRef),
     /// A parallel script to start.
     Deferred(DeferredTiming),
 }
 
 /// Runs a script [`run_pending_script`] handed out, if the same engine is still
 /// bound to the same tree.
-pub(crate) fn run_script_source(page: PageId, document: &SharedDocument, source: &str) {
-    let ran = with_runtime_for(page, document, |runtime| runtime.run_source(source));
+pub(crate) fn run_script_source(
+    page: PageId,
+    document: &SharedDocument,
+    source: &str,
+    element: Option<NodeRef>,
+) {
+    let ran = with_runtime_for(page, document, |runtime| {
+        runtime.run_script(source, element)
+    });
     if ran.is_none() {
         tracing::debug!(
             ?page,
@@ -1465,6 +1707,123 @@ async fn read_script_body(
         tracked.complete(&body);
     }
     Ok(Some(body))
+}
+
+/// One fetched module script.
+pub(crate) struct FetchedModule {
+    /// The URL the response came from, after redirects: what the module's own
+    /// specifiers resolve against.
+    pub url: Url,
+    pub source: String,
+}
+
+/// Fetches one module script (HTML's "fetch a single module script").
+///
+/// It differs from a classic script's fetch in the three ways the standard
+/// has it differ: the request is a CORS request with `same-origin`
+/// credentials, so a module from another origin has to be shared with the
+/// document (`crate::cors`); the response has to be JavaScript by its MIME
+/// type; and the text is always UTF-8.
+///
+/// `Err` is the reason there is no module, for the message an `import()`
+/// rejects with.
+pub(crate) async fn fetch_module(
+    config: &PageConfig,
+    meta: &ScriptMeta,
+    url: &Url,
+    tracker: &Rc<RefCell<SettleTracker>>,
+) -> std::result::Result<FetchedModule, String> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(format!("only http and https modules can be loaded ({url})"));
+    }
+    let remaining = meta.deadline.saturating_duration_since(config.clock.now());
+    if remaining.is_zero() {
+        return Err(format!(
+            "the deadline passed before {url} could be requested"
+        ));
+    }
+    let request_id = next_request_id();
+    let mut request = script_request(config, meta, url, remaining)
+        .map_err(|error| format!("the request for {url} cannot be built: {}", error.message))?
+        .credentials(CredentialsMode::SameOrigin);
+    // A module script is fetched in `cors` mode, unlike a classic one: that
+    // is what puts `Origin` on a request to another origin, which the server
+    // decides whether to share the module by.
+    request.mode = tenta_net::request::RequestMode::Cors;
+    tracker
+        .borrow_mut()
+        .note_parser_request_started(request_id, RequestClass::Script);
+    let mut tracked = config.net.begin(&mut request, request_id, None);
+    let fetched = read_module_body(&config.client, request, &mut tracked, &meta.document_url).await;
+    tracker.borrow_mut().note_request_done(request_id);
+    match fetched {
+        Ok(module) => Ok(module),
+        Err(reason) => {
+            if let Some(tracked) = &mut tracked {
+                tracked.failed_with("net::ERR_FAILED");
+            }
+            tracing::warn!(page = ?config.id, url = %url, %reason, "a module script was not loaded");
+            Err(format!("Failed to fetch module {url}: {reason}"))
+        }
+    }
+}
+
+/// Sends a module's request, applies the checks a module response has to pass
+/// and reads its text.
+async fn read_module_body(
+    client: &Client,
+    request: Request,
+    tracked: &mut Option<crate::network::Tracked>,
+    document_url: &Url,
+) -> std::result::Result<FetchedModule, String> {
+    let response = client
+        .send(request)
+        .await
+        .map_err(|error| error.error_text().to_string())?;
+    if let Some(tracked) = tracked {
+        tracked.response(&response);
+    }
+    if !response.status.is_success() {
+        return Err(format!("HTTP {}", response.status.as_u16()));
+    }
+    let cross_origin = !same_origin(document_url, &response.url)
+        || response
+            .redirects
+            .iter()
+            .any(|hop| !same_origin(document_url, &hop.url));
+    if cross_origin {
+        let headers: Vec<(String, Vec<u8>)> = response
+            .headers
+            .iter()
+            .map(|(name, value)| (name.clone(), value.as_bytes().to_vec()))
+            .collect();
+        crate::cors::check_response(
+            &crate::cors::serialized_origin(document_url),
+            false,
+            &headers,
+        )
+        .map_err(|failure| failure.to_string())?;
+    }
+    let content_type = response.header("content-type").unwrap_or("").to_owned();
+    if !is_javascript_mime_type(&content_type) {
+        return Err(format!(
+            "the server answered with the MIME type \"{content_type}\", which is not JavaScript"
+        ));
+    }
+    let url = response.url.clone();
+    let body = response
+        .body
+        .collect()
+        .await
+        .map_err(|error| error.error_text().to_string())?;
+    if let Some(tracked) = tracked {
+        tracked.complete(&body);
+    }
+    // A module is UTF-8 whatever the document is; a byte order mark is not
+    // part of its text.
+    let text = String::from_utf8_lossy(&body);
+    let source = text.strip_prefix('\u{feff}').unwrap_or(&text).to_owned();
+    Ok(FetchedModule { url, source })
 }
 
 /// Decodes the text of an external classic script.
@@ -1836,6 +2195,8 @@ mod tests {
                 page: PageId(1),
                 engine: Box::new(engine),
                 document,
+                inline_modules: 0,
+                module_loads: HashMap::new(),
                 parse_in_flight,
                 tracker: Rc::new(RefCell::new(SettleTracker::new(
                     crate::settle::SettleConfig::library(),
@@ -1878,8 +2239,11 @@ mod tests {
         /// else. The wake is the driver's other half and has no meaning here,
         /// where the test drives `turn` itself.
         fn complete(&self, resolver: u64, message: &str) {
-            self.fetches
-                .push(resolver, FetchOutcome::Failed(message.to_owned()));
+            self.fetches.push(
+                resolver,
+                FetchOutcome::Failed(message.to_owned()),
+                Origin::Tracked,
+            );
         }
 
         /// Records an XHR completion the way a driver would. `request` is the
@@ -1889,6 +2253,7 @@ mod tests {
             self.xhrs.push(
                 XhrHandle { target, request },
                 FetchOutcome::Failed(message.to_owned()),
+                Origin::Tracked,
             );
         }
 

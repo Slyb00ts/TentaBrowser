@@ -160,28 +160,21 @@ async fn the_fixture_page_settles_its_marker_once_the_fetch_half_works() {
 }
 
 // ---------------------------------------------------------------------------
-// The two cross-origin gates, end to end
+// Requests to another origin, end to end (`cors_js.rs` covers the protocol)
 // ---------------------------------------------------------------------------
 
-/// Gate 1: a URL that is not same-origin with the document is refused before
-/// anything is sent, and the page sees the standard's *request error steps*.
+/// A URL on an origin that does not share its response: the request is made,
+/// as a browser makes it, and the page sees the standard's *request error
+/// steps* instead of the answer.
 ///
 /// The two fixture servers are two origins because they are two ports — RFC 6454
-/// counts the port — so this needs no DNS and no host name. The request count on
-/// the second server is the non-vacuous half: a page that never called `send()`
-/// would also show `status === 0`, so `requests_served() == 0` there is what
-/// proves the refusal happened before the wire.
-///
-/// The refusal is *synchronous*, and that turn is this engine's rather than the
-/// standard's: the standard runs `send()`'s fetch in parallel, so a network
-/// error reaches the page after `send()` returns. `XhrDriver`'s doc records the
-/// deviation; this test is what pins it. The page records the order — the
-/// handler's line runs before the statement after `send()` — because a driver
-/// that deferred the refusal would reach the same final state on a later turn,
-/// and only the ordering tells the two apart.
+/// counts the port — so this needs no DNS and no host name. The failure arrives
+/// after `send()` returns, which the recorded order pins: the network error is
+/// the answer to a request, not a refusal to make one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_cross_origin_xhr_is_refused_before_it_reaches_the_other_origin() {
-    let (target, _target_temp) = serve_all(&[("data.json", "{\"ok\":true}")]).await;
+async fn a_cross_origin_xhr_without_consent_is_a_network_error() {
+    let (target, _target_temp) =
+        serve_all(&[("data.json", "{\"secret\":\"the other origin's\"}")]).await;
     let url = target.url("/data.json");
     let (server, _temp) = serve_all(&[(
         "index.html",
@@ -192,12 +185,14 @@ async fn a_cross_origin_xhr_is_refused_before_it_reaches_the_other_origin() {
              var order = [];\
              var xhr = new XMLHttpRequest();\
              xhr.open('GET', '{url}');\
-             xhr.onload = function () {{ order.push('load'); }};\
-             xhr.onerror = function () {{ order.push('error'); }};\
+             xhr.onload = function () {{ order.push('load ' + xhr.responseText); done(); }};\
+             xhr.onerror = function () {{ order.push('error'); done(); }};\
+             function done() {{\
+               document.getElementById('result').textContent =\
+                 xhr.readyState + '@' + xhr.status + '@' + order.join(',');\
+             }}\
              xhr.send();\
              order.push('after send');\
-             document.getElementById('result').textContent =\
-               'error@' + xhr.readyState + '@' + xhr.status + '@' + order.join(',');\
              </script>\
              </body></html>"
         ),
@@ -216,31 +211,30 @@ async fn a_cross_origin_xhr_is_refused_before_it_reaches_the_other_origin() {
     let document = page.take_document().await.expect("document");
     assert_eq!(
         text_of(&document, "#result"),
-        "error@4@0@error,after send",
-        "the request error steps ran inside `send()` — DONE, the network error's \
-         status, the `error` event, and only then the statement after the call"
+        "4@0@after send,error",
+        "DONE, the network error's status, and the `error` event after `send()` returned"
     );
-    assert_eq!(
-        target.requests_served(),
-        0,
-        "the other origin was never asked for anything"
+    assert!(
+        !document.text().contains("the other origin's"),
+        "the body the other origin did not share is nowhere in the document"
     );
+    assert_eq!(target.requests_served(), 1, "the request was made");
     assert_eq!(server.requests_served(), 1, "only the document");
     engine.close();
 }
 
-/// Gate 2: a same-origin URL that redirects off-origin is a failure, and the
-/// cross-origin body never reaches the page.
+/// A same-origin URL that redirects to an origin that does not share its
+/// response is a failure, and the cross-origin body never reaches the page.
 ///
-/// `Client::send` follows redirects internally, so this is the case gate 1
-/// cannot see: the URL the page named *is* same-origin, and the transport is what
-/// leaves the origin. Dropping gate 2 would hand the page the other origin's body
-/// and header list behind a refusal that looked complete.
+/// `Client::send` follows redirects internally, so the URL the page named *is*
+/// same-origin and the transport is what leaves the origin. The check on the
+/// final response is made against the whole chain; without it the page would
+/// be handed the other origin's body and header list.
 ///
 /// Both halves of the assertion matter. `#result` holding `error@0` rather than
 /// the body is the leak assertion — the page's `onload` would have put that body
 /// in the same slot. And `requests_served() == 1` on the other origin is what
-/// proves the gate closed a *real* leak path: the redirected request really was
+/// proves a *real* leak path was closed: the redirected request really was
 /// made, and its answer was discarded after the fact rather than never asked
 /// for.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

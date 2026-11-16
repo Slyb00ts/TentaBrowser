@@ -41,20 +41,23 @@ use std::time::Duration;
 
 use tenta_core::{NativeMemoryBudget, TimerRule};
 use tenta_net::CookieJar;
+use url::Url;
 
 use crate::bindings::host::SharedDocument;
 use crate::event_loop::ProvenanceSink;
 use crate::fetch::{FetchCompletion, FetchDriver};
 use crate::geometry::{GeometryHost, ViewportMetrics};
 use crate::image::{ImageEvent, ImageHost};
+use crate::modules::DynamicImport;
 use crate::storage::PageStorage;
 use crate::xhr::{XhrCompletion, XhrDriver};
 
 /// How a script was delivered to the document.
 ///
-/// Only classic scripts exist today. Module scripts need the module map and
-/// the import graph (`docs/spec/05-javascript.md`), so the enum is here to
-/// keep the call sites honest when they land rather than to be matched on now.
+/// [`PageEngine::run_script`] runs classic scripts. A module script is not a
+/// kind of it: a module is compiled into the engine's module map and its root
+/// is run once the page has loaded the graph
+/// ([`PageEngine::compile_module`], [`PageEngine::run_module`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
 pub enum ScriptKind {
@@ -403,6 +406,64 @@ pub trait PageEngine {
     /// checkpoints that script queued before the engine's own loop notices.
     fn run_microtasks(&mut self);
 
+    /// Whether this engine runs module scripts. One that does not leaves
+    /// `<script type="module">` unrun and runs `nomodule` scripts, which is
+    /// what a page ships for exactly that case.
+    fn supports_modules(&self) -> bool {
+        false
+    }
+
+    /// Adds a document's import map (the text of a `<script
+    /// type="importmap">`) to the realm's. `base` is the document's base URL.
+    fn add_import_map(&mut self, json: &str, base: &Url) -> Result<(), ScriptError> {
+        let _ = (json, base);
+        Err(modules_unsupported())
+    }
+
+    /// Whether the module `key` is in the realm's module map.
+    fn has_module(&self, key: &str) -> bool {
+        let _ = key;
+        false
+    }
+
+    /// Compiles `source` into the module map under `key` — the module's URL,
+    /// or a name of the page's own for an inline module script — and returns
+    /// the URLs it imports statically, resolved against `base` and through the
+    /// import map. Nothing runs. The page loads those modules the same way and
+    /// then runs the root with [`Self::run_module`], so that every module the
+    /// engine asks for while linking is already there.
+    fn compile_module(
+        &mut self,
+        key: &str,
+        source: &str,
+        base: &Url,
+    ) -> Result<Vec<Url>, ScriptError> {
+        let _ = (key, source, base);
+        Err(modules_unsupported())
+    }
+
+    /// Links and evaluates the module `key`. The caller performs the microtask
+    /// checkpoint, as for [`Self::run_script`].
+    fn run_module(&mut self, key: &str) -> Result<(), ScriptError> {
+        let _ = key;
+        Err(modules_unsupported())
+    }
+
+    /// The `import()` calls script has made since the last call. The page
+    /// loads each one's graph and answers with
+    /// [`Self::finish_dynamic_import`].
+    fn take_dynamic_imports(&mut self) -> Vec<DynamicImport> {
+        Vec::new()
+    }
+
+    /// Settles the promise of the `import()` named `id`: `Ok` is the key of
+    /// the module, whose graph is in the module map; `Err` is why it could not
+    /// be loaded, which rejects the promise with a `TypeError`. The caller
+    /// performs the microtask checkpoint.
+    fn finish_dynamic_import(&mut self, id: u64, outcome: Result<&str, &str>) {
+        let _ = (id, outcome);
+    }
+
     /// Forces a collection and then clears the wrapper bookkeeping for every
     /// node whose wrapper the collector freed.
     ///
@@ -445,4 +506,12 @@ pub trait PageEngineFactory: Send + Sync + 'static {
         document: SharedDocument,
         config: &PageEngineConfig,
     ) -> Result<Box<dyn PageEngine>, String>;
+}
+
+/// The failure every module operation reports on an engine without modules.
+fn modules_unsupported() -> ScriptError {
+    ScriptError {
+        kind: ScriptErrorKind::Uncaught,
+        message: "this engine does not run module scripts".to_owned(),
+    }
 }

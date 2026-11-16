@@ -328,7 +328,7 @@ impl Engine {
             let dispatcher = dispatcher.restore(ctx)?;
             let finish = |extra, mode| finish_with(&dispatcher, argument, extra, mode);
             if kind != "call" {
-                return match ctx.eval::<Value, _>(source) {
+                return match crate::eval_classic::<Value>(ctx, source) {
                     Ok(value) => finish(value, "value"),
                     Err(error) if error.is_exception() => finish(ctx.catch(), "thrown"),
                     Err(error) => Err(error),
@@ -344,7 +344,7 @@ impl Engine {
             for index in 2..prepared.len() {
                 arguments.push(prepared.get::<Value>(index)?);
             }
-            let function = match ctx.eval::<Value, _>(format!("({source}\n)")) {
+            let function = match crate::eval_classic::<Value>(ctx, format!("({source}\n)")) {
                 Ok(value) => value,
                 Err(error) if error.is_exception() => return finish(ctx.catch(), "thrown"),
                 Err(error) => return Err(error),

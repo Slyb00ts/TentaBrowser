@@ -4,14 +4,18 @@
 //! P2 surfaces and conformance gates remain tracked in `docs/spec/16-roadmap.md`.
 //! Dependency direction is enforced by `cargo xtask lint-deps`.
 
+pub mod base64;
 pub mod bindings;
 pub mod dom;
 pub mod engine;
 pub mod event_loop;
 pub mod fetch;
 pub mod geometry;
+pub mod history;
 pub mod image;
 pub mod inspect;
+pub mod location;
+pub mod modules;
 pub mod storage;
 pub mod structured_clone;
 pub mod stylesheets;

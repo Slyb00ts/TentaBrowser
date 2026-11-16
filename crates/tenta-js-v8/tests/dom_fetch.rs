@@ -29,7 +29,8 @@ use tenta_core::atom::atoms;
 use tenta_dom::{Document, Mutation};
 use tenta_js::engine::PageEngine;
 use tenta_js::fetch::{
-    FetchCompletion, FetchDriver, FetchOutcome, FetchRequest, FetchStartError, FetchedResponse,
+    Credentials, FetchCompletion, FetchDriver, FetchOutcome, FetchRequest, FetchStartError,
+    FetchedResponse, Mode, Redirect,
 };
 use tenta_js_v8::Engine;
 use url::Url;
@@ -64,6 +65,8 @@ fn document() -> Rc<RefCell<Document>> {
 struct Recorder {
     requests: RefCell<Vec<FetchRequest>>,
     resolvers: RefCell<Vec<u64>>,
+    /// The resolvers the engine asked the driver to end.
+    aborted: RefCell<Vec<u64>>,
     fail_next: Cell<bool>,
 }
 
@@ -90,6 +93,10 @@ impl FetchDriver for Recorder {
             true => Err(FetchStartError::new("the driver refuses")),
             false => Ok(()),
         }
+    }
+
+    fn abort(&self, resolver: u64) {
+        self.aborted.borrow_mut().push(resolver);
     }
 }
 
@@ -135,7 +142,11 @@ fn response(url: &str, status: u16, body: Option<&str>) -> FetchOutcome {
 
 /// A completion that settles `resolver` with `outcome`.
 fn completion(resolver: u64, outcome: FetchOutcome) -> FetchCompletion {
-    FetchCompletion { resolver, outcome }
+    FetchCompletion {
+        resolver,
+        outcome,
+        origin: Origin::Tracked,
+    }
 }
 
 /// Runs `source` and returns its completion value, with no checkpoint.
@@ -619,7 +630,7 @@ fn the_served_members_reach_the_driver_and_a_refusal_does_not() {
 
     // Both conversion failures return rejected promises before the driver runs.
     assert_eq!(
-        rejected(&mut engine, "fetch('/a', { mode: 'cors' })"),
+        rejected(&mut engine, "fetch('/a', { mode: 'navigate' })"),
         "TypeError: Failed to execute 'fetch': the RequestInit member 'mode' is not implemented"
     );
     assert_eq!(
@@ -947,32 +958,20 @@ fn a_key_the_dictionary_does_not_name_is_ignored() {
     );
 }
 
-/// Each of the twelve members this engine does not serve is refused *by name*,
-/// with the message shape this engine has always used for the refusal.
-///
-/// The names come from the IDL, so this is the JS-side half of the presence
-/// test: a member the page named is a member whether the value is `null`,
-/// `false` or an object, because a dictionary member is what `Get` found and
-/// not what it returned.
+/// A member whose value this engine cannot serve is refused *by name*, with the
+/// message shape this engine has always used for the refusal.
 #[test]
 fn every_unserved_member_is_refused_by_name() {
     let (mut engine, recorder) = engine();
 
     for (member, literal) in [
-        ("referrer", "''"),
+        ("referrer", "'https://elsewhere.test/'"),
         ("referrerPolicy", "'no-referrer'"),
-        ("mode", "'cors'"),
-        ("credentials", "'omit'"),
-        ("cache", "'no-store'"),
-        ("redirect", "'follow'"),
-        // The falsy and null-valued spellings are the ones a `Get`-and-truthy
-        // test would get wrong.
-        ("integrity", "''"),
-        ("keepalive", "false"),
-        ("signal", "null"),
-        ("duplex", "'half'"),
-        ("priority", "'low'"),
-        ("window", "null"),
+        ("mode", "'navigate'"),
+        ("cache", "'only-if-cached'"),
+        ("redirect", "'manual'"),
+        ("integrity", "'sha256-abc'"),
+        ("window", "{}"),
     ] {
         assert_eq!(
             rejected(
@@ -990,6 +989,120 @@ fn every_unserved_member_is_refused_by_name() {
         recorder.requests.borrow().len(),
         0,
         "a refused initializer never reaches the driver"
+    );
+}
+
+/// The modes the page names reach the driver, and a member written out with
+/// its default is the request the engine sends anyway.
+#[test]
+fn the_modes_of_an_initializer_reach_the_driver() {
+    let (mut engine, recorder) = engine();
+    eval(
+        &mut engine,
+        "fetch('/x', {credentials: 'include', mode: 'same-origin', redirect: 'error', cache: 'no-store'});
+         fetch('/y', {credentials: 'omit', mode: 'cors', redirect: 'follow', cache: 'default',
+                      integrity: '', keepalive: false, signal: null, duplex: 'half',
+                      priority: 'low', window: null, referrer: 'about:client', referrerPolicy: ''});
+         fetch('/z');
+         'started'",
+    );
+    let requests = recorder.requests.borrow();
+    assert_eq!(requests.len(), 3);
+    let modes = |request: &FetchRequest| {
+        (
+            request.credentials,
+            request.mode,
+            request.redirect,
+            request.bypass_cache,
+        )
+    };
+    assert_eq!(
+        modes(&requests[0]),
+        (
+            Credentials::Include,
+            Mode::SameOrigin,
+            Redirect::Error,
+            true
+        )
+    );
+    assert_eq!(
+        modes(&requests[1]),
+        (Credentials::Omit, Mode::Cors, Redirect::Follow, false)
+    );
+    assert_eq!(
+        modes(&requests[2]),
+        (Credentials::SameOrigin, Mode::Cors, Redirect::Follow, false)
+    );
+}
+
+/// Aborting the signal a `fetch()` was given rejects its promise with the
+/// signal's reason — the same value, not a copy — and tells the driver to end
+/// the request. A request that was answered first is no longer the signal's
+/// to abort, and a signal that is already aborted makes no request at all.
+#[test]
+fn a_signal_aborts_the_requests_it_was_given_to() {
+    let (mut engine, recorder) = engine();
+    eval(
+        &mut engine,
+        "globalThis.log = [];
+         globalThis.first = new AbortController();
+         globalThis.second = new AbortController();
+         globalThis.why = {why: 'changed my mind'};
+         fetch('/a', {signal: first.signal}).catch(e => { log.push('a ' + e.name + ' ' + (e === first.signal.reason)); });
+         fetch('/b', {signal: first.signal}).catch(e => { log.push('b ' + e.name); });
+         fetch('/c', {signal: second.signal}).then(r => { log.push('c ' + r.status); }, e => { log.push('c rejected'); });
+         fetch('/d', {signal: second.signal}).catch(e => { log.push('d ' + (e === why)); });
+         'started'",
+    );
+    let resolvers = recorder.resolvers();
+    assert_eq!(resolvers.len(), 4);
+
+    eval(&mut engine, "first.abort(); 'aborted'");
+    engine.run_microtasks();
+    assert_eq!(
+        eval(&mut engine, "log.join('|')"),
+        "a AbortError true|b AbortError"
+    );
+    let mut aborted = recorder.aborted.borrow().clone();
+    aborted.sort_unstable();
+    let mut expected = vec![resolvers[0], resolvers[1]];
+    expected.sort_unstable();
+    assert_eq!(
+        aborted, expected,
+        "the driver was told to end both requests"
+    );
+
+    // `/c` is answered before its signal aborts; `/d` is still in flight.
+    engine.settle_fetches(vec![completion(
+        resolvers[2],
+        response("http://fixture.test/c", 200, Some("ok")),
+    )]);
+    engine.run_microtasks();
+    eval(&mut engine, "second.abort(why); 'aborted'");
+    engine.run_microtasks();
+    assert_eq!(eval(&mut engine, "log.slice(2).join('|')"), "c 200|d true");
+    assert_eq!(
+        recorder.aborted.borrow().len(),
+        3,
+        "only `/d` was left for the second signal to end"
+    );
+
+    // A late answer for an aborted request finds its promise settled.
+    engine.settle_fetches(vec![completion(
+        resolvers[0],
+        response("http://fixture.test/a", 200, Some("late")),
+    )]);
+    engine.run_microtasks();
+    assert_eq!(eval(&mut engine, "log.length"), "4");
+
+    assert_eq!(
+        rejected(&mut engine, "fetch('/e', {signal: first.signal})"),
+        "AbortError: The operation was aborted."
+    );
+    assert_eq!(
+        recorder.requests.borrow().len(),
+        4,
+        "an aborted signal makes no request"
     );
 }
 

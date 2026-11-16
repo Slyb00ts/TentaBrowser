@@ -668,17 +668,27 @@ Deliberate deviations in this slice, each with the slice that removes it:
   a synchronous throw versus a rejected promise, so a page wrapping the call in
   `try`/`catch` sees it differently. `Request` arrives with the request-body
   work.
-- `RequestInit` (slice b-6.5) is the Fetch Standard's dictionary, declared in
-  full in `idl/fetch/Request.webidl`, with **three of its fifteen members
-  served** — `method`, `headers` and `body` — and the other twelve refused *by
-  name* (`"the RequestInit member 'signal' is not implemented"`,
-  `tenta_js::bindings::host::refused_request_init_member`). Two of the twelve
-  are worth naming on their own: `signal` is not waiting on the interface —
-  `AbortSignal` landed with `d-3` — but on the plumbing, because the driver
-  would have to take a signal handle and abort the request it is already
-  running, which is `4a-abort`; and `credentials`/`mode`/`cache`/`redirect` are
-  CORS and redirect policy this engine has not built.
-  Three deviations this slice makes from the *old* refusal, each deliberate:
+- `RequestInit` (slice b-6.5, widened by CO1 on 2026-11-16) is the Fetch
+  Standard's dictionary, declared in full in `idl/fetch/Request.webidl`.
+  Served: `method`, `headers`, `body`; `credentials` in all three modes and
+  `mode` as `cors`, `same-origin` or `no-cors` (the driver runs the CORS
+  protocol, see the next section; a `no-cors` request to another origin
+  resolves with an opaque `Response`, and only a simple method and
+  form-safe headers go out); `redirect` as `follow` or `error`; `cache` as `default`,
+  or as `no-store`, `reload` and `no-cache`, which all go to the network;
+  `signal` on V8 (aborting rejects the promise with the signal's reason and
+  ends the request; QuickJS refuses a non-null `signal`). `keepalive`,
+  `priority` and `duplex` are accepted with any value: the first only matters
+  to a request that outlives its page, the second is a hint, and the third has
+  one value. A value that would send a different request than the page wrote
+  is still refused *by name*
+  (`"the RequestInit member 'mode' is not implemented"`,
+  `tenta_js::bindings::host::refused_request_init_member`): `mode`
+  `navigate`, `redirect: "manual"`, `cache`
+  `force-cache` and `only-if-cached`, a non-empty `integrity`, a `referrer`
+  other than `about:client`, a `referrerPolicy` other than the default, a
+  non-null `window`.
+  Three deviations the slice made from the *old* refusal, each deliberate:
   (1) a key the dictionary does not name is **ignored**, because that is what a
   dictionary conversion does, where the refusal refused every key;
   (2) a member is read with `Get`, so an inherited or non-enumerable property
@@ -692,13 +702,13 @@ Deliberate deviations in this slice, each with the slice that removes it:
   throw on the argument-conversion path is a synchronous throw where a browser
   *rejects*: the standard runs the `Request` constructor inside `fetch()`'s
   promise and rejects with whatever it throws, and this engine has no `Request`
-  to construct. (c) The refusal is by **presence, not value**, so it
-  over-refuses: a page that writes out the standard's default explicitly
-  (`{keepalive: false}`, `{signal: null}`, `{window: null}`, `{integrity: ""}`,
-  `{cache: "default"}`) asks for exactly the request this engine would have sent
-  and is refused where a browser proceeds. That is the deliberately chosen error
-  direction — a wrong acceptance sends a request the page did not ask for, a
-  wrong refusal says so (`tenta_js::bindings::host::refused_request_init_member`).
+  to construct. (c) **Changed by CO1, and a decision to record:** the refusal
+  was by presence, so a page that wrote out a default (`{signal: null}`,
+  `{cache: "default"}`) or named a mode (`{credentials: "include"}`) was
+  refused where a browser proceeds. It is now by value: a member is accepted
+  when the engine sends the request the page wrote. The earlier error
+  direction — refuse rather than risk sending something else — still governs
+  every value the engine cannot honour.
 - With no driver installed, `fetch` rejects with
   `TypeError: fetch is not available` instead of throwing or leaving the promise
   pending. A page that has loaded always has a driver once the `tenta-net`
@@ -714,7 +724,7 @@ Deliberate deviations in this slice, each with the slice that removes it:
   cannot get them wrong.
 - A response's `url` and `redirected` are the driver's report; no redirect is
   followed in the engine layer (the driver's transport is what follows them —
-  see the next section), and CORS and `Response.type` other than `basic` are
+  see the next section), and `Response.type` other than `basic` is
   absent. The forbidden request-header names are **not** absent, and an earlier
   revision of this bullet said they were: `is_forbidden_request_header` is
   applied on two paths — through `HeadersGuard::Request` for `RequestInit`'s
@@ -761,23 +771,50 @@ five seconds for `SettleConfig::library()`), is reclassified as background, and
 the navigation reports `Settled { busy: true }` about five seconds later. That
 distinction is what the end-to-end test asserts on.
 
-Cross-origin is refused at **two** gates, and both are required:
+Requests to another origin go through the CORS protocol (CO1, 2026-11-16;
+`crates/tenta-page/src/cors.rs` holds the decisions and
+`crates/tenta-page/src/fetch.rs` makes the requests). `fetch()` and
+`XMLHttpRequest` share it:
 
 1. **Before anything is registered or sent**, in `start`. A URL that is not
-   same-origin (RFC 6454, `same_origin` in `tenta-net`, compared against
-   `FetchRequest.initiator` — the document — and never against
-   `FetchRequest.origin`, which is task provenance) becomes
-   `Err(FetchStartError)`, which the seam turns into a `TypeError` *rejection*:
-   no synchronous throw, no network, no settle registration.
-2. **On the final URL, before the body is read.** `Client::send` follows
-   redirects internally, so a same-origin URL can redirect off-origin and the
-   transport would then hand script a cross-origin body and header list. Gate 1
-   alone would leave that leak behind the refusal it performs.
+   `http:` or `https:`, and a cross-origin URL in `same-origin` mode, become
+   `Err(FetchStartError)`, which the seam turns into a `TypeError` *rejection*
+   (the *request error steps* for XHR): no network, no settle registration.
+   "Cross-origin" is RFC 6454's (`same_origin` in `tenta-net`), compared
+   against `FetchRequest.initiator` — the document — and never against
+   `FetchRequest.origin`, which is task provenance.
+2. **The preflight.** A cross-origin request whose method is not `GET`,
+   `HEAD` or `POST`, or which carries an author header that is not
+   CORS-safelisted, is preceded by an `OPTIONS` request naming the method and
+   the header names. The real request is sent only when the answer has an ok
+   status and allows the origin, the method and every such header.
+3. **On the final response, before the body is read.** `Client::send`
+   follows redirects internally, so the check covers the whole chain: when
+   any URL of it is off the document's origin, the response must carry an
+   `Access-Control-Allow-Origin` that names the origin (or `*` when the
+   credentials mode is not `include`), and `Access-Control-Allow-Credentials:
+   true` when it is. A response that fails is dropped unread and script sees
+   `TypeError: Failed to fetch`; the reason goes to the log. A shared
+   response's headers are cut down to the CORS-safelisted ones and those
+   `Access-Control-Expose-Headers` names.
 
-Neither gate is CORS, and there is no CORS or preflight code anywhere in the
-workspace, so a page can only fetch its own origin. Keeping the refusal
-engine-authored and stable means a page can branch on "the promise rejected
-with a `TypeError`" and not on this engine's internal names.
+Credentials are cookies here. `tenta_net::CredentialsMode` is evaluated per
+hop by the transport: `fetch()`'s default (`same-origin`) and an XHR without
+`withCredentials` send and store cookies only while the URL is same-origin
+with the document, `include`/`withCredentials = true` always, `omit` never.
+`tenta-net` now writes `Origin` on any request that owes one, whether or not a
+profile places the header.
+
+`mode: "no-cors"` skips all of the above for a request to another origin:
+it is sent, its answer is read and dropped, and script gets an opaque
+`Response` (`type` `opaque`, status 0, no headers, no body).
+
+Not built: a preflight cache (every non-simple request is preflighted),
+`Response.type` `cors` (a shared cross-origin response still says `basic`),
+and a tainted `Origin: null` after a cross-origin redirect chain. A request
+that needed a preflight does not follow a redirect to another origin
+(`Request::same_origin_redirects`), where a browser would preflight the new
+URL.
 
 Deliberate deviations in this slice, each with the slice that removes it:
 
@@ -1464,6 +1501,18 @@ touching them (`crates/tenta-js/src/bindings/host/mutation_observer.rs`):
   `Engine::checkpoint`. `ScriptHost::invoke_mutation_callback` has a refusing default so a
   backend without the microtask (QuickJS today) compiles and never delivers.
 
+### `location`, `atob` and `btoa`: handwritten window members (P2 `LOC1`)
+
+These are installed by the engine hosts, like `navigator` and `performance`,
+not generated: every `Location` attribute is `[LegacyUnforgeable]`, so the
+members are own properties of the one instance and there is no prototype
+surface for the generator to emit. The shared logic is
+`crates/tenta-js/src/location.rs` (component getters, also used by the `URL`
+host) and `crates/tenta-js/src/base64.rs`; the hosts are `install_location`
+and the `btoa`/`atob` functions in `crates/tenta-js-v8/src/host.rs` and
+`crates/tenta-js-qjs/src/host.rs`. Only the read side exists; the members that
+navigate are absent until session history is built.
+
 ### Geometry, computed style and document sheets (P3 `CSS1`)
 
 Four more host records answer from the page rather than from the arena
@@ -1654,7 +1703,7 @@ generated code:
   asynchronous and a blocking request would deadlock the page's turn loop), a
   non-null `username`/`password` throws it (this engine sends no credentialed
   request, and what the network layer does with URL userinfo is unverified),
-  `withCredentials = true` throws it (the shared cookie jar decides on its own),
+  `withCredentials = true` threw it until CO1 and is now stored and honoured,
   `responseType` accepts only `""` and `"text"`, and `send()`'s body is declared
   as `XMLHttpRequestBodyInit` and narrowed to the two arms `BodyInit` is —
   `(BufferSource or USVString)` — because `FormData` has an entry list but no

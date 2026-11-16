@@ -242,10 +242,12 @@ fn a_page_drives_an_engine_through_the_trait_object_alone() {
         FetchCompletion {
             resolver: 1,
             outcome: FetchOutcome::Failed("stub".to_string()),
+            origin: tenta_core::Origin::Tracked,
         },
         FetchCompletion {
             resolver: 2,
             outcome: FetchOutcome::Failed("stub".to_string()),
+            origin: tenta_core::Origin::Tracked,
         },
     ]);
     assert_eq!(recorder.lock().unwrap().settled, 2);
@@ -258,6 +260,7 @@ fn a_page_drives_an_engine_through_the_trait_object_alone() {
                 request: 1,
             },
             outcome: FetchOutcome::Failed("stub".to_string()),
+            origin: tenta_core::Origin::Tracked,
         },
         XhrCompletion {
             handle: XhrHandle {
@@ -265,6 +268,7 @@ fn a_page_drives_an_engine_through_the_trait_object_alone() {
                 request: 2,
             },
             outcome: FetchOutcome::Failed("stub".to_string()),
+            origin: tenta_core::Origin::Tracked,
         },
     ]);
     assert_eq!(

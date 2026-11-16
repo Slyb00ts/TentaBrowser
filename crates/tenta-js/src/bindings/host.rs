@@ -21,12 +21,16 @@ pub mod computed_style;
 mod crypto;
 #[cfg(any(feature = "v8", feature = "quickjs"))]
 pub mod cssom;
+mod dataset;
 #[cfg(any(feature = "v8", feature = "quickjs"))]
 pub mod doc_sheets;
 mod focus;
+mod forms;
 mod geometry;
+mod media;
 mod mutation_observer;
 pub mod storage;
+mod tree_extras;
 
 pub use focus::{
     blur_element, fire_lost_focus, flush_autofocus, focus_element, is_focusable_area, tab_index,
@@ -64,30 +68,30 @@ use super::{
     CDATASectionOps, CSSStyleProperties, Callback, CharacterDataOps, Comment, CommentOps,
     CompositionEventConstructor, CompositionEventInit, CompositionEventOps, CustomEventConstructor,
     CustomEventInit, CustomEventOps, DOMImplementation, DOMImplementationOps, DOMParserConstructor,
-    DOMParserOps, DOMParserSupportedType, DOMTokenList, DOMTokenListOps, DocumentConstructor,
-    DocumentFragment, DocumentFragmentOps, DocumentOps, DocumentType, DocumentTypeOps, Element,
-    ElementOps, EndingType, Event, EventConstructor, EventInit, EventListener,
-    EventListenerOptionsOrBoolean, EventOps, EventTarget, EventTargetConstructor, EventTargetOps,
-    FileConstructor, FileOps, FileOrUsvString, FilePropertyBag, FocusEventConstructor,
-    FocusEventInit, FocusEventOps, FocusOptions, FormDataConstructor, FormDataOps,
-    HTMLAnchorElementOps, HTMLButtonElementOps, HTMLCollection, HTMLCollectionOps,
-    HTMLDivElementOps, HTMLElement, HTMLElementOps, HTMLFormElement, HTMLFormElementOps,
-    HTMLIFrameElementOps, HTMLImageElementOps, HTMLInputElementOps, HTMLLabelElementOps,
-    HTMLLinkElementOps, HTMLOptionElementOps, HTMLParagraphElementOps, HTMLScriptElementOps,
-    HTMLSelectElementOps, HTMLSpanElementOps, HTMLStyleElementOps, HTMLTemplateElementOps,
-    HTMLTextAreaElementOps, Handle, Headers, HeadersConstructor, HeadersInit, HeadersOps,
-    IterableEntries, JsError, KeyboardEventConstructor, KeyboardEventInit, KeyboardEventOps,
-    MouseEventConstructor, MouseEventInit, MouseEventOps, NamedNodeMap, NamedNodeMapOps, Node,
-    NodeList, NodeListOps, NodeOps, NodeOrDomString, ProcessingInstruction,
-    ProcessingInstructionOps, ProgressEventConstructor, ProgressEventInit, ProgressEventOps,
-    Promise, Range, RangeConstructor, RangeOps, Realm, RequestInit, ResponseConstructor,
-    ResponseInit, ResponseOps, ResponseType, SVGElementOps, StaticRangeConstructor,
-    StaticRangeInit, StaticRangeOps, Text, TextDecodeOptions, TextDecoderConstructor,
-    TextDecoderOps, TextDecoderOptions, TextEncoderConstructor, TextEncoderOps, TextOps,
-    UIEventConstructor, UIEventInit, UIEventOps, URLConstructor, URLOps, URLSearchParams,
-    URLSearchParamsConstructor, URLSearchParamsOps, WheelEventConstructor, WheelEventInit,
-    WheelEventOps, Window, WindowProxy, XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps,
-    XMLHttpRequestOps, XMLHttpRequestResponseType, XMLSerializerConstructor, XMLSerializerOps,
+    DOMParserOps, DOMParserSupportedType, DOMStringMap, DOMTokenList, DOMTokenListOps,
+    DocumentConstructor, DocumentFragment, DocumentFragmentOps, DocumentOps, DocumentType,
+    DocumentTypeOps, Element, ElementOps, EndingType, Event, EventConstructor, EventInit,
+    EventListener, EventListenerOptionsOrBoolean, EventOps, EventTarget, EventTargetConstructor,
+    EventTargetOps, FileConstructor, FileOps, FileOrUsvString, FilePropertyBag,
+    FocusEventConstructor, FocusEventInit, FocusEventOps, FocusOptions, FormDataConstructor,
+    FormDataOps, HTMLAnchorElementOps, HTMLCollection, HTMLCollectionOps, HTMLDivElementOps,
+    HTMLElement, HTMLElementOps, HTMLFormElement, HTMLIFrameElementOps, HTMLImageElementOps,
+    HTMLLabelElementOps, HTMLLinkElementOps, HTMLParagraphElementOps, HTMLScriptElementOps,
+    HTMLSpanElementOps, HTMLStyleElementOps, HTMLTemplateElementOps, Handle, Headers,
+    HeadersConstructor, HeadersInit, HeadersOps, IterableEntries, JsError,
+    KeyboardEventConstructor, KeyboardEventInit, KeyboardEventOps, MouseEventConstructor,
+    MouseEventInit, MouseEventOps, NamedNodeMap, NamedNodeMapOps, Node, NodeList, NodeListOps,
+    NodeOps, NodeOrDomString, ProcessingInstruction, ProcessingInstructionOps,
+    ProgressEventConstructor, ProgressEventInit, ProgressEventOps, Promise, Range,
+    RangeConstructor, RangeOps, Realm, ReferrerPolicy, RequestCache, RequestCredentials,
+    RequestInit, RequestMode, RequestRedirect, ResponseConstructor, ResponseInit, ResponseOps,
+    ResponseType, SVGElementOps, StaticRangeConstructor, StaticRangeInit, StaticRangeOps, Text,
+    TextDecodeOptions, TextDecoderConstructor, TextDecoderOps, TextDecoderOptions,
+    TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
+    URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
+    WheelEventConstructor, WheelEventInit, WheelEventOps, Window, WindowProxy,
+    XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps, XMLHttpRequestOps,
+    XMLHttpRequestResponseType, XMLSerializerConstructor, XMLSerializerOps,
 };
 #[cfg(any(feature = "v8", feature = "quickjs"))]
 use super::{CSSOps, CSSStyleDeclarationOps};
@@ -99,6 +103,7 @@ use crate::dom::events::{
 use crate::event_loop::SharedClock;
 use crate::fetch::{FetchOutcome, FetchRequest, FetchStartError, FetchedResponse, header_pairs};
 use crate::image::{ImageEvent, ImageHost, ImageSnapshot};
+use crate::location::{LocationPart, document_location};
 use crate::storage::PageStorage;
 use crate::xhr::{XhrHandle, XhrRequest};
 
@@ -1712,6 +1717,17 @@ pub struct HostContext {
     /// reassigned (reassignment reuses the listener, so its position does not
     /// move) and to remove it when the handler is set to null.
     pub handlers: RefCell<HashMap<(TargetKey, EventHandlerName), ListenerId>>,
+    /// What is known about the event handler content attributes that have
+    /// been turned into handlers, or overridden by script; see
+    /// [`crate::dom::events::sync_attribute_handler`].
+    pub attribute_handlers:
+        RefCell<HashMap<(TargetKey, EventHandlerName), crate::dom::events::SeenHandlerAttribute>>,
+    /// The `fetch()` calls that were given an `AbortSignal` and are still in
+    /// flight: the promise's resolver, and the signal that aborts it, in the
+    /// order the calls were made, which is the order an abort ends them in. An entry
+    /// leaves when the request is answered or the signal aborts, so a
+    /// resolver's bits are never found here after their promise has settled.
+    pub fetch_signals: RefCell<Vec<(u64, HostKey)>>,
     /// The live event records for this world.
     pub events: RefCell<EventSlab>,
     /// The live `URL`, `URLSearchParams`, `Headers`, `AbortController`,
@@ -1895,6 +1911,8 @@ impl HostContext {
             snapshots: RefCell::new(SnapshotSlab::new(doc)),
             listeners: RefCell::new(ListenerTable::new()),
             handlers: RefCell::new(HashMap::new()),
+            attribute_handlers: RefCell::new(HashMap::new()),
+            fetch_signals: RefCell::new(Vec::new()),
             events: RefCell::new(EventSlab::new()),
             host_records: RefCell::new(HostSlab::new()),
             attr_index: RefCell::new(HashMap::new()),
@@ -1960,6 +1978,8 @@ impl HostContext {
             snapshots: RefCell::new(SnapshotSlab::new(doc)),
             listeners: RefCell::new(ListenerTable::new()),
             handlers: RefCell::new(HashMap::new()),
+            attribute_handlers: RefCell::new(HashMap::new()),
+            fetch_signals: RefCell::new(Vec::new()),
             events: RefCell::new(EventSlab::new()),
             host_records: RefCell::new(HostSlab::new()),
             attr_index: RefCell::new(HashMap::new()),
@@ -2638,6 +2658,16 @@ pub enum HostObject {
         /// A generational reference to the element whose `class` the list reflects.
         owner: NodeRef,
     },
+    /// A wrapper for the `DOMStringMap` (`dataset`) of `owner`: the element's
+    /// `data-*` attributes under camel-cased names. Like the token list, the
+    /// element is the state and the handle is derived from its [`NodeRef`].
+    DataSet {
+        /// The context the map's owner lives in.
+        ctx: SharedContext,
+        /// A generational reference to the element whose `data-*` attributes
+        /// the map is.
+        owner: NodeRef,
+    },
     /// A wrapper for the live `NamedNodeMap` (`attributes`) of `owner`.
     ///
     /// It is the same shape as [`HostObject::TokenList`] — the element is the
@@ -2733,6 +2763,11 @@ impl HostObject {
         Self::TokenList { ctx, owner }
     }
 
+    /// Builds a `DOMStringMap` host for the `dataset` of `owner` in `ctx`.
+    pub fn dataset_map(ctx: SharedContext, owner: NodeRef) -> Self {
+        Self::DataSet { ctx, owner }
+    }
+
     /// Builds a `NamedNodeMap` host for the `attributes` of `owner` in `ctx`.
     pub fn named_node_map(ctx: SharedContext, owner: NodeRef) -> Self {
         Self::NamedNodeMap { ctx, owner }
@@ -2763,6 +2798,170 @@ impl HostObject {
         Self::Window { ctx }
     }
 
+    /// One component of the URL `window.location` reports: the document's URL,
+    /// or `about:blank` for a document without one.
+    pub fn location_part(&self, part: LocationPart) -> String {
+        let doc = self.context().doc.borrow();
+        part.read(&document_location(doc.url()))
+    }
+
+    /// The shared steps of `history.pushState` and `history.replaceState` that
+    /// concern the URL: resolves `url` against the document's base URL, checks
+    /// that the document may be rewritten to it, makes it the document's URL
+    /// and returns it. Without `url` the document keeps its URL, which is
+    /// returned.
+    pub fn rewrite_document_url(&self, url: Option<&str>) -> Result<String, JsError> {
+        let mut doc = self.context().doc.borrow_mut();
+        let current = document_location(doc.url());
+        let Some(input) = url else {
+            return Ok(current.into());
+        };
+        let base = doc.base_url().cloned().unwrap_or_else(|| current.clone());
+        let target = crate::history::rewritten_url(&current, &base, input)
+            .map_err(|refusal| JsError::dom_exception("SecurityError", refusal.message()))?;
+        doc.set_url(Some(target.clone()));
+        Ok(target.into())
+    }
+
+    /// `window.matchMedia(query)`: the serialised media query list and
+    /// whether it matches now. The environment is the page's viewport as the
+    /// layout reports it, or `fallback` (the configured viewport) for a page
+    /// without one; the screen is a light, fine-pointer one, as the render
+    /// tier's is.
+    ///
+    /// Stylo is linked only with a script engine (`tenta-css/stylo`), which is
+    /// also the only time anything can call this.
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    pub fn match_media(
+        &self,
+        query: &str,
+        fallback: &crate::geometry::ViewportMetrics,
+    ) -> (String, bool) {
+        let viewport = self
+            .script_host()
+            .ok()
+            .and_then(|script| script.geometry_host())
+            .map_or(*fallback, |geometry| geometry.viewport());
+        let env = tenta_css::cascade::StyleEnv {
+            viewport: (viewport.inner_width as f32, viewport.inner_height as f32),
+            device_pixel_ratio: viewport.device_pixel_ratio as f32,
+            ..tenta_css::cascade::StyleEnv::default()
+        };
+        let result = tenta_css::cascade::match_media(query, &env);
+        (result.media, result.matches)
+    }
+
+    /// Asks the page to navigate, on behalf of script in the page's document.
+    /// The request is taken by the page once the running script entry returns;
+    /// a document that is not the page's (one a `DOMParser` made) has no
+    /// browsing context to navigate, and its request is dropped.
+    pub fn request_navigation(&self, request: tenta_dom::NavigationRequest) {
+        let ctx = self.context();
+        if ctx.slot == 0 {
+            ctx.doc.borrow_mut().request_navigation(request);
+        }
+    }
+
+    /// Navigates the page's document to `target`, as `location.assign` and an
+    /// activated link do. A target that differs from the document's URL only
+    /// in its fragment stays in the document: the URL is rewritten here and
+    /// the script world adds the session history entry and queues
+    /// `hashchange` ([`ScriptHost::fragment_navigated`]). Anything else
+    /// becomes a request the page takes after this script entry. A
+    /// `javascript:` target is ignored.
+    pub fn navigate_to(&self, target: Url, replace: bool) -> crate::location::Navigated {
+        use crate::location::Navigated;
+        if target.scheme() == "javascript" {
+            return Navigated::Ignored;
+        }
+        let ctx = self.context();
+        let current = document_location(ctx.doc.borrow().url());
+        if crate::location::is_fragment_navigation(&current, &target) {
+            let (old_url, new_url): (String, String) = (current.into(), target.clone().into());
+            if ctx.slot == 0 {
+                ctx.doc.borrow_mut().set_url(Some(target));
+                if old_url != new_url
+                    && let Some(script) = ctx.script.borrow().clone()
+                {
+                    script.fragment_navigated(&old_url, &new_url, replace);
+                }
+            }
+            return Navigated::Fragment { old_url, new_url };
+        }
+        self.request_navigation(tenta_dom::NavigationRequest {
+            url: target,
+            post: None,
+            replace,
+        });
+        Navigated::Requested
+    }
+
+    /// [`Self::navigate_to`] for a URL reference script supplied, resolved
+    /// against the document's base URL: the `href` setter, `assign` and
+    /// `replace`. A reference that does not parse is a `SyntaxError`.
+    pub fn navigate_to_reference(
+        &self,
+        reference: &str,
+        replace: bool,
+    ) -> Result<crate::location::Navigated, JsError> {
+        let (_, target) = self.resolve_navigation_url(reference)?;
+        Ok(self.navigate_to(target, replace))
+    }
+
+    /// A `location` component setter other than `href`: the URL Standard's
+    /// setter on a copy of the document's URL, then a navigation to the
+    /// result. `hash` always navigates, even to the fragment the document
+    /// already has; the others only when the URL changed.
+    pub fn navigate_by_setting(
+        &self,
+        part: LocationPart,
+        value: &str,
+    ) -> crate::location::Navigated {
+        let current = document_location(self.context().doc.borrow().url());
+        let mut target = current.clone();
+        part.write(&mut target, value);
+        if part == LocationPart::Hash || target != current {
+            self.navigate_to(target, false)
+        } else {
+            crate::location::Navigated::Ignored
+        }
+    }
+
+    /// Loads the document's URL again, as `location.reload` does.
+    pub fn reload_document(&self) {
+        let current = document_location(self.context().doc.borrow().url());
+        self.request_navigation(tenta_dom::NavigationRequest {
+            url: current,
+            post: None,
+            replace: true,
+        });
+    }
+
+    /// The document's URL (`about:blank` without one) and the URL `reference`
+    /// resolves to against the document's base URL.
+    pub fn resolve_navigation_url(&self, reference: &str) -> Result<(Url, Url), JsError> {
+        let doc = self.context().doc.borrow();
+        let current = document_location(doc.url());
+        let base = doc.base_url().cloned().unwrap_or_else(|| current.clone());
+        let target = base.join(reference).map_err(|_| {
+            JsError::dom_exception("SyntaxError", &format!("'{reference}' is not a valid URL."))
+        })?;
+        Ok((current, target))
+    }
+
+    /// Makes `url`, the URL of a session history entry this document made, the
+    /// document's URL again, as a same-document traversal does. A string that
+    /// is not a URL the document may have is ignored.
+    pub fn restore_document_url(&self, url: &str) {
+        let mut doc = self.context().doc.borrow_mut();
+        let current = document_location(doc.url());
+        if let Ok(target) = Url::parse(url)
+            && crate::history::can_rewrite(&current, &target)
+        {
+            doc.set_url(Some(target));
+        }
+    }
+
     /// Builds the host for the `URL`, `URLSearchParams` or `Headers` record at
     /// `key`.
     pub fn host_record(ctx: SharedContext, key: HostKey) -> Self {
@@ -2779,6 +2978,7 @@ impl HostObject {
             | HostObject::StaticHtmlCollection { ctx, .. }
             | HostObject::Event { ctx, .. }
             | HostObject::TokenList { ctx, .. }
+            | HostObject::DataSet { ctx, .. }
             | HostObject::NamedNodeMap { ctx, .. }
             | HostObject::Style { ctx, .. }
             | HostObject::Host { ctx, .. }
@@ -3035,7 +3235,39 @@ impl HostObject {
         let target = self
             .target_key()
             .ok_or_else(|| JsError::type_error("the receiver is not an event target"))?;
-        self.context().set_event_handler(target, name, value);
+        let ctx = self.context();
+        ctx.set_event_handler(target, name, value);
+        // The assignment stands over the element's content attribute until the
+        // attribute changes, so the attribute's present value is marked seen.
+        let attribute_owner = match target {
+            TargetKey::Node(node) => ctx.doc.borrow().resolve(node).ok(),
+            // The window's handlers are fed by `<body>`'s attributes.
+            TargetKey::Window => ctx.doc.borrow().body(),
+            TargetKey::Host(_) => None,
+        };
+        if matches!(target, TargetKey::Node(_) | TargetKey::Window) {
+            let source = attribute_owner.and_then(|id| {
+                ctx.doc
+                    .borrow()
+                    .attribute_str(id, name.as_str())
+                    .map(str::to_owned)
+            });
+            let mut seen = ctx.attribute_handlers.borrow_mut();
+            match source {
+                Some(source) => {
+                    seen.insert(
+                        (target, name),
+                        crate::dom::events::SeenHandlerAttribute {
+                            source,
+                            compiled: false,
+                        },
+                    );
+                }
+                None => {
+                    seen.remove(&(target, name));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -3048,7 +3280,26 @@ impl HostObject {
         let target = self
             .target_key()
             .ok_or_else(|| JsError::type_error("the receiver is not an event target"))?;
-        Ok(self.context().event_handler(target, name))
+        let ctx = self.context();
+        // Reading the attribute is one of the two moments a content attribute
+        // is compiled (`typeof element.onclick === "function"` after
+        // `setAttribute("onclick", ...)` is a common feature test).
+        if let Some(script) = ctx.script.borrow().clone() {
+            match target {
+                TargetKey::Node(node)
+                    if EventHandlerName::for_event(name.event_type()) == Some(name) =>
+                {
+                    crate::dom::events::sync_attribute_handler(ctx, &*script, node, name);
+                }
+                TargetKey::Window
+                    if EventHandlerName::for_window_event(name.event_type()) == Some(name) =>
+                {
+                    crate::dom::events::sync_window_attribute_handler(ctx, &*script, name);
+                }
+                _ => {}
+            }
+        }
+        Ok(ctx.event_handler(target, name))
     }
 
     /// Reads the `URL` this host stands for, or returns `default` when the host
@@ -3316,6 +3567,7 @@ impl HostObject {
             }
             HostObject::Event { key, .. } => encode_event(slot, *key),
             HostObject::TokenList { owner, .. } => encode_token_list(slot, *owner),
+            HostObject::DataSet { owner, .. } => encode_dataset(slot, *owner),
             HostObject::NamedNodeMap { owner, .. } => encode_named_node_map(slot, *owner),
             HostObject::Style { owner, .. } => encode_style(slot, *owner),
             HostObject::Host { key, .. } => encode_host(slot, *key),
@@ -3334,6 +3586,7 @@ impl HostObject {
             HostObject::NodeList { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::HtmlCollection { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::TokenList { ctx, owner } => (&ctx.doc, owner.id),
+            HostObject::DataSet { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::NamedNodeMap { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::Style { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::StaticNodeList { ctx, .. } => (&ctx.doc, NodeId::NONE),
@@ -3677,6 +3930,28 @@ impl NodeOps for HostObject {
         }
         let (doc, id) = self.anchor();
         doc.borrow().is_connected(id)
+    }
+
+    fn base_uri(&self) -> Result<String, JsError> {
+        Ok(self.base_uri_value())
+    }
+    fn is_equal_node(&self, other_node: Option<Handle<Node>>) -> Result<bool, JsError> {
+        Ok(self.equals_node(other_node))
+    }
+    fn is_same_node(&self, other_node: Option<Handle<Node>>) -> Result<bool, JsError> {
+        Ok(self.is_same(other_node))
+    }
+    fn compare_document_position(&self, other: Handle<Node>) -> Result<u16, JsError> {
+        Ok(self.document_position(other))
+    }
+    fn get_root_node(
+        &self,
+        _options: Option<crate::bindings::GetRootNodeOptions>,
+    ) -> Result<Handle<Node>, JsError> {
+        Ok(self.root_node())
+    }
+    fn normalize(&self) -> Result<(), JsError> {
+        self.normalize_subtree()
     }
 
     fn has_child_nodes(&self) -> bool {
@@ -4264,6 +4539,45 @@ impl ElementOps for HostObject {
             .map(|child| Handle::from_bits(encode_node(self.slot(), doc.node_ref(child)))))
     }
 
+    fn previous_element_sibling(&self) -> Result<Option<Handle<Element>>, JsError> {
+        Ok(self.element_sibling(false))
+    }
+    fn next_element_sibling(&self) -> Result<Option<Handle<Element>>, JsError> {
+        Ok(self.element_sibling(true))
+    }
+    fn insert_adjacent_element(
+        &self,
+        r#where: &str,
+        element: Handle<Element>,
+    ) -> Result<Option<Handle<Element>>, JsError> {
+        self.insert_adjacent_node(r#where, element)
+    }
+    fn insert_adjacent_text(&self, r#where: &str, data: &str) -> Result<(), JsError> {
+        self.insert_adjacent_string(r#where, data)
+    }
+    fn webkit_matches_selector(&self, selectors: &str) -> Result<bool, JsError> {
+        let (doc, id) = self.anchor();
+        doc.borrow().matches(id, selectors).map_err(|_| {
+            JsError::dom_exception(
+                "SyntaxError",
+                &format!("'{selectors}' is not a valid selector."),
+            )
+        })
+    }
+    // Nothing scrolls.
+    fn scroll_into_view(&self, _arg: Option<bool>) -> Result<(), JsError> {
+        Ok(())
+    }
+    fn scroll_to(&self, _x: Option<f64>, _y: Option<f64>) -> Result<(), JsError> {
+        Ok(())
+    }
+    fn scroll(&self, _x: Option<f64>, _y: Option<f64>) -> Result<(), JsError> {
+        Ok(())
+    }
+    fn scroll_by(&self, _x: Option<f64>, _y: Option<f64>) -> Result<(), JsError> {
+        Ok(())
+    }
+
     fn matches(&self, selectors: &str) -> bool {
         // Spec: `matches` throws a `SyntaxError` on an invalid selector, but the
         // generated fast-API signature is infallible (`-> bool`) — the generator
@@ -4606,7 +4920,172 @@ impl ElementOps for HostObject {
     }
 }
 
+/// The getter and setter of each event handler IDL attribute of the
+/// `GlobalEventHandlers` mixin (`idl/dom/dom.webidl`), for the `Ops` trait of
+/// an interface that includes it. Every one is the same two lines over
+/// [`HostObject::event_handler`] and [`HostObject::set_event_handler`].
+macro_rules! event_handler_attributes {
+    ($($getter:ident, $setter:ident => $name:literal;)*) => {
+        $(
+            fn $getter(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
+                self.event_handler(EventHandlerName::new($name))
+            }
+            fn $setter(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
+                self.set_event_handler(EventHandlerName::new($name), value)
+            }
+        )*
+    };
+}
+
+/// The members of the `GlobalEventHandlers` mixin, in the mixin's order.
+macro_rules! global_event_handlers {
+    () => {
+        event_handler_attributes! {
+            onabort, set_onabort => "onabort";
+            onauxclick, set_onauxclick => "onauxclick";
+            onbeforeinput, set_onbeforeinput => "onbeforeinput";
+            onbeforematch, set_onbeforematch => "onbeforematch";
+            onbeforetoggle, set_onbeforetoggle => "onbeforetoggle";
+            onblur, set_onblur => "onblur";
+            oncancel, set_oncancel => "oncancel";
+            oncanplay, set_oncanplay => "oncanplay";
+            oncanplaythrough, set_oncanplaythrough => "oncanplaythrough";
+            onchange, set_onchange => "onchange";
+            onclick, set_onclick => "onclick";
+            onclose, set_onclose => "onclose";
+            oncommand, set_oncommand => "oncommand";
+            oncontextlost, set_oncontextlost => "oncontextlost";
+            oncontextmenu, set_oncontextmenu => "oncontextmenu";
+            oncontextrestored, set_oncontextrestored => "oncontextrestored";
+            oncopy, set_oncopy => "oncopy";
+            oncuechange, set_oncuechange => "oncuechange";
+            oncut, set_oncut => "oncut";
+            ondblclick, set_ondblclick => "ondblclick";
+            ondrag, set_ondrag => "ondrag";
+            ondragend, set_ondragend => "ondragend";
+            ondragenter, set_ondragenter => "ondragenter";
+            ondragleave, set_ondragleave => "ondragleave";
+            ondragover, set_ondragover => "ondragover";
+            ondragstart, set_ondragstart => "ondragstart";
+            ondrop, set_ondrop => "ondrop";
+            ondurationchange, set_ondurationchange => "ondurationchange";
+            onemptied, set_onemptied => "onemptied";
+            onended, set_onended => "onended";
+            onerror, set_onerror => "onerror";
+            onfocus, set_onfocus => "onfocus";
+            onformdata, set_onformdata => "onformdata";
+            oninput, set_oninput => "oninput";
+            oninvalid, set_oninvalid => "oninvalid";
+            onkeydown, set_onkeydown => "onkeydown";
+            onkeypress, set_onkeypress => "onkeypress";
+            onkeyup, set_onkeyup => "onkeyup";
+            onload, set_onload => "onload";
+            onloadeddata, set_onloadeddata => "onloadeddata";
+            onloadedmetadata, set_onloadedmetadata => "onloadedmetadata";
+            onloadstart, set_onloadstart => "onloadstart";
+            onmousedown, set_onmousedown => "onmousedown";
+            onmouseenter, set_onmouseenter => "onmouseenter";
+            onmouseleave, set_onmouseleave => "onmouseleave";
+            onmousemove, set_onmousemove => "onmousemove";
+            onmouseout, set_onmouseout => "onmouseout";
+            onmouseover, set_onmouseover => "onmouseover";
+            onmouseup, set_onmouseup => "onmouseup";
+            onpaste, set_onpaste => "onpaste";
+            onpause, set_onpause => "onpause";
+            onplay, set_onplay => "onplay";
+            onplaying, set_onplaying => "onplaying";
+            onprogress, set_onprogress => "onprogress";
+            onratechange, set_onratechange => "onratechange";
+            onreset, set_onreset => "onreset";
+            onresize, set_onresize => "onresize";
+            onscroll, set_onscroll => "onscroll";
+            onscrollend, set_onscrollend => "onscrollend";
+            onsecuritypolicyviolation, set_onsecuritypolicyviolation => "onsecuritypolicyviolation";
+            onseeked, set_onseeked => "onseeked";
+            onseeking, set_onseeking => "onseeking";
+            onselect, set_onselect => "onselect";
+            onslotchange, set_onslotchange => "onslotchange";
+            onstalled, set_onstalled => "onstalled";
+            onsubmit, set_onsubmit => "onsubmit";
+            onsuspend, set_onsuspend => "onsuspend";
+            ontimeupdate, set_ontimeupdate => "ontimeupdate";
+            ontoggle, set_ontoggle => "ontoggle";
+            onvolumechange, set_onvolumechange => "onvolumechange";
+            onwaiting, set_onwaiting => "onwaiting";
+            onwebkitanimationend, set_onwebkitanimationend => "onwebkitanimationend";
+            onwebkitanimationiteration, set_onwebkitanimationiteration => "onwebkitanimationiteration";
+            onwebkitanimationstart, set_onwebkitanimationstart => "onwebkitanimationstart";
+            onwebkittransitionend, set_onwebkittransitionend => "onwebkittransitionend";
+            onwheel, set_onwheel => "onwheel";
+            onanimationstart, set_onanimationstart => "onanimationstart";
+            onanimationiteration, set_onanimationiteration => "onanimationiteration";
+            onanimationend, set_onanimationend => "onanimationend";
+            onanimationcancel, set_onanimationcancel => "onanimationcancel";
+            ontransitionrun, set_ontransitionrun => "ontransitionrun";
+            ontransitionstart, set_ontransitionstart => "ontransitionstart";
+            ontransitionend, set_ontransitionend => "ontransitionend";
+            ontransitioncancel, set_ontransitioncancel => "ontransitioncancel";
+            ongotpointercapture, set_ongotpointercapture => "ongotpointercapture";
+            onlostpointercapture, set_onlostpointercapture => "onlostpointercapture";
+            onpointerdown, set_onpointerdown => "onpointerdown";
+            onpointermove, set_onpointermove => "onpointermove";
+            onpointerup, set_onpointerup => "onpointerup";
+            onpointercancel, set_onpointercancel => "onpointercancel";
+            onpointerover, set_onpointerover => "onpointerover";
+            onpointerout, set_onpointerout => "onpointerout";
+            onpointerenter, set_onpointerenter => "onpointerenter";
+            onpointerleave, set_onpointerleave => "onpointerleave";
+        }
+    };
+}
+
 impl DocumentOps for HostObject {
+    global_event_handlers!();
+
+    fn visibility_state(&self) -> Result<String, JsError> {
+        Ok("visible".to_owned())
+    }
+    fn hidden(&self) -> bool {
+        false
+    }
+    fn forms(&self) -> Result<Handle<HTMLCollection>, JsError> {
+        self.document_elements(|doc, node| doc.tag(node) == Some(atoms::FORM))
+    }
+    fn images(&self) -> Result<Handle<HTMLCollection>, JsError> {
+        self.document_elements(|doc, node| doc.tag(node) == Some(atoms::IMG))
+    }
+    fn links(&self) -> Result<Handle<HTMLCollection>, JsError> {
+        self.document_elements(tree_extras::is_link)
+    }
+    fn scripts(&self) -> Result<Handle<HTMLCollection>, JsError> {
+        self.document_elements(|doc, node| doc.tag(node) == Some(atoms::SCRIPT))
+    }
+    fn embeds(&self) -> Result<Handle<HTMLCollection>, JsError> {
+        self.document_elements(|doc, node| doc.tag(node) == Some(atoms::EMBED))
+    }
+    fn anchors(&self) -> Result<Handle<HTMLCollection>, JsError> {
+        self.document_elements(|doc, node| {
+            doc.tag(node) == Some(atoms::A) && doc.attribute_str(node, "name").is_some()
+        })
+    }
+    fn get_elements_by_name(&self, element_name: &str) -> Result<Handle<NodeList>, JsError> {
+        self.elements_named(element_name)
+    }
+    fn import_node(&self, node: Handle<Node>, deep: Option<bool>) -> Result<Handle<Node>, JsError> {
+        self.import(node, deep.unwrap_or(false))
+    }
+    fn adopt_node(&self, node: Handle<Node>) -> Result<Handle<Node>, JsError> {
+        self.adopt(node)
+    }
+
+    fn current_script(&self) -> Result<Option<Handle<Element>>, JsError> {
+        let (doc, _) = self.anchor();
+        let doc = doc.borrow();
+        Ok(doc
+            .current_script()
+            .map(|script| Handle::from_bits(encode_node(self.slot(), doc.node_ref(script)))))
+    }
+
     fn element_from_point(&self, x: f64, y: f64) -> Result<Option<Handle<Element>>, JsError> {
         Ok(self.geo_element_from_point(x, y))
     }
@@ -5768,6 +6247,12 @@ impl NodeListOps for HostObject {
 impl CharacterDataOps for HostObject {
     fn remove(&self) {
         self.remove_from_parent();
+    }
+    fn previous_element_sibling(&self) -> Result<Option<Handle<Element>>, JsError> {
+        Ok(self.element_sibling(false))
+    }
+    fn next_element_sibling(&self) -> Result<Option<Handle<Element>>, JsError> {
+        Ok(self.element_sibling(true))
     }
 
     fn before(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
@@ -7212,6 +7697,96 @@ impl ProgressEventOps for HostObject {
 }
 
 impl HTMLElementOps for HostObject {
+    global_event_handlers!();
+
+    fn title(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("title"))
+    }
+    fn set_title(&self, value: &str) {
+        self.reflect_attribute("title", value);
+    }
+    fn lang(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("lang"))
+    }
+    fn set_lang(&self, value: &str) {
+        self.reflect_attribute("lang", value);
+    }
+    fn dir(&self) -> Result<String, JsError> {
+        // Limited to known values: anything else reads as the empty string.
+        let given = self.reflect_string("dir").to_ascii_lowercase();
+        Ok(match given.as_str() {
+            "ltr" | "rtl" | "auto" => given,
+            _ => String::new(),
+        })
+    }
+    fn set_dir(&self, value: &str) {
+        self.reflect_attribute("dir", value);
+    }
+    fn hidden(&self) -> bool {
+        self.reflect_bool("hidden")
+    }
+    fn set_hidden(&self, value: bool) {
+        self.set_reflect_bool("hidden", value);
+    }
+    fn inert(&self) -> bool {
+        self.reflect_bool("inert")
+    }
+    fn set_inert(&self, value: bool) {
+        self.set_reflect_bool("inert", value);
+    }
+    fn access_key(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("accesskey"))
+    }
+    fn set_access_key(&self, value: &str) {
+        self.reflect_attribute("accesskey", value);
+    }
+
+    fn inner_text(&self) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        // An element that is not rendered reads as its text content; one in
+        // the document reads as the text extractor lays it out.
+        if doc.is_connected(id) {
+            // Line breaks at either end are not part of the rendered text.
+            Ok(tenta_dom::extract::text(&doc, id)
+                .trim_matches('\n')
+                .to_owned())
+        } else {
+            Ok(doc.text_content(id))
+        }
+    }
+
+    fn set_inner_text(&self, value: &str) -> Result<(), JsError> {
+        let (doc, id) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        doc.mutate(Mutation::ReplaceAll {
+            parent: id,
+            replacement: ReplaceAllWith::Empty,
+        })
+        .map_err(|e| mutation_error(&e))?;
+        // Each line break becomes a `<br>`; the text between them, text nodes.
+        let normalised = value.replace("\r\n", "\n").replace('\r', "\n");
+        for (index, line) in normalised.split('\n').enumerate() {
+            if index > 0 {
+                let br = doc.create_html_element(atoms::BR);
+                doc.mutate(Mutation::Append {
+                    parent: id,
+                    child: br,
+                })
+                .map_err(|e| mutation_error(&e))?;
+            }
+            if !line.is_empty() {
+                let text = doc.create_text(line);
+                doc.mutate(Mutation::Append {
+                    parent: id,
+                    child: text,
+                })
+                .map_err(|e| mutation_error(&e))?;
+            }
+        }
+        Ok(())
+    }
+
     fn offset_parent(&self) -> Result<Option<Handle<Element>>, JsError> {
         Ok(self.geo_offset_parent())
     }
@@ -7238,7 +7813,11 @@ impl HTMLElementOps for HostObject {
         }
         let result = self.dispatch_synthetic_click(doc, id);
         self.context().click_in_progress.borrow_mut().remove(&id);
-        result
+        // A click nobody cancelled activates the element.
+        if result? {
+            self.activate_after_click()?;
+        }
+        Ok(())
     }
 
     fn style(&self) -> Result<Handle<CSSStyleProperties>, JsError> {
@@ -7251,6 +7830,10 @@ impl HTMLElementOps for HostObject {
 
     fn blur(&self) -> Result<(), JsError> {
         self.unfocus_steps()
+    }
+
+    fn dataset(&self) -> Result<Handle<DOMStringMap>, JsError> {
+        Ok(self.dataset_handle())
     }
 
     fn tab_index(&self) -> i32 {
@@ -7389,19 +7972,6 @@ impl HTMLImageElementOps for HostObject {
         }
         Ok(Promise::from_bits(promise.promise))
     }
-
-    fn onload(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
-        self.event_handler(EventHandlerName::new("onload"))
-    }
-    fn set_onload(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
-        self.set_event_handler(EventHandlerName::new("onload"), value)
-    }
-    fn onerror(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
-        self.event_handler(EventHandlerName::new("onerror"))
-    }
-    fn set_onerror(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
-        self.set_event_handler(EventHandlerName::new("onerror"), value)
-    }
 }
 
 impl HostObject {
@@ -7447,131 +8017,6 @@ impl HTMLLabelElementOps for HostObject {
     }
     fn set_html_for(&self, value: &str) {
         self.reflect_attribute("for", value);
-    }
-}
-
-impl HTMLFormElementOps for HostObject {
-    fn name(&self) -> Result<String, JsError> {
-        Ok(self.reflect_string("name"))
-    }
-    fn set_name(&self, value: &str) {
-        self.reflect_attribute("name", value);
-    }
-    fn action(&self) -> Result<String, JsError> {
-        Ok(self.reflect_url("action"))
-    }
-    fn set_action(&self, value: &str) {
-        self.reflect_attribute("action", value);
-    }
-}
-
-impl HTMLInputElementOps for HostObject {
-    fn name(&self) -> Result<String, JsError> {
-        Ok(self.reflect_string("name"))
-    }
-    fn set_name(&self, value: &str) {
-        self.reflect_attribute("name", value);
-    }
-    fn placeholder(&self) -> Result<String, JsError> {
-        Ok(self.reflect_string("placeholder"))
-    }
-    fn set_placeholder(&self, value: &str) {
-        self.reflect_attribute("placeholder", value);
-    }
-    fn disabled(&self) -> bool {
-        self.reflect_bool("disabled")
-    }
-    fn set_disabled(&self, value: bool) {
-        self.set_reflect_bool("disabled", value);
-    }
-    fn value(&self) -> Result<String, JsError> {
-        Ok(self.control_value("value"))
-    }
-    fn set_value(&self, value: &str) {
-        self.set_control_value(value);
-    }
-    fn checked(&self) -> bool {
-        let (doc, id) = self.anchor();
-        let doc = doc.borrow();
-        match doc.dirty_checkedness(id) {
-            Some(checked) => checked,
-            None => doc.attribute_str(id, "checked").is_some(),
-        }
-    }
-    fn set_checked(&self, value: bool) {
-        let (doc, id) = self.anchor();
-        doc.borrow_mut().set_dirty_checkedness(id, value);
-    }
-}
-
-impl HTMLButtonElementOps for HostObject {
-    fn name(&self) -> Result<String, JsError> {
-        Ok(self.reflect_string("name"))
-    }
-    fn set_name(&self, value: &str) {
-        self.reflect_attribute("name", value);
-    }
-    fn disabled(&self) -> bool {
-        self.reflect_bool("disabled")
-    }
-    fn set_disabled(&self, value: bool) {
-        self.set_reflect_bool("disabled", value);
-    }
-}
-
-impl HTMLSelectElementOps for HostObject {
-    fn name(&self) -> Result<String, JsError> {
-        Ok(self.reflect_string("name"))
-    }
-    fn set_name(&self, value: &str) {
-        self.reflect_attribute("name", value);
-    }
-    fn disabled(&self) -> bool {
-        self.reflect_bool("disabled")
-    }
-    fn set_disabled(&self, value: bool) {
-        self.set_reflect_bool("disabled", value);
-    }
-}
-
-impl HTMLTextAreaElementOps for HostObject {
-    fn name(&self) -> Result<String, JsError> {
-        Ok(self.reflect_string("name"))
-    }
-    fn set_name(&self, value: &str) {
-        self.reflect_attribute("name", value);
-    }
-    fn placeholder(&self) -> Result<String, JsError> {
-        Ok(self.reflect_string("placeholder"))
-    }
-    fn set_placeholder(&self, value: &str) {
-        self.reflect_attribute("placeholder", value);
-    }
-    fn disabled(&self) -> bool {
-        self.reflect_bool("disabled")
-    }
-    fn set_disabled(&self, value: bool) {
-        self.set_reflect_bool("disabled", value);
-    }
-    fn value(&self) -> Result<String, JsError> {
-        // A textarea's default is its raw value - the child text - rather than
-        // an attribute, so fall back to `textContent` when nothing is dirty.
-        match self.dirty_value() {
-            Some(dirty) => Ok(dirty),
-            None => Ok(<Self as NodeOps>::text_content(self)?.unwrap_or_default()),
-        }
-    }
-    fn set_value(&self, value: &str) {
-        self.set_control_value(value);
-    }
-}
-
-impl HTMLOptionElementOps for HostObject {
-    fn disabled(&self) -> bool {
-        self.reflect_bool("disabled")
-    }
-    fn set_disabled(&self, value: bool) {
-        self.set_reflect_bool("disabled", value);
     }
 }
 
@@ -7693,18 +8138,6 @@ impl HTMLLinkElementOps for HostObject {
     fn set_disabled(&self, value: bool) {
         self.set_reflect_bool("disabled", value);
     }
-    fn onload(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
-        self.event_handler(EventHandlerName::new("onload"))
-    }
-    fn set_onload(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
-        self.set_event_handler(EventHandlerName::new("onload"), value)
-    }
-    fn onerror(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
-        self.event_handler(EventHandlerName::new("onerror"))
-    }
-    fn set_onerror(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
-        self.set_event_handler(EventHandlerName::new("onerror"), value)
-    }
     fn sheet(&self) -> Result<Option<Handle<crate::bindings::CSSStyleSheet>>, JsError> {
         Ok(self.element_sheet())
     }
@@ -7729,24 +8162,14 @@ impl HTMLStyleElementOps for HostObject {
     fn set_disabled(&self, value: bool) {
         self.set_reflect_bool("disabled", value);
     }
-    fn onload(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
-        self.event_handler(EventHandlerName::new("onload"))
-    }
-    fn set_onload(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
-        self.set_event_handler(EventHandlerName::new("onload"), value)
-    }
-    fn onerror(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
-        self.event_handler(EventHandlerName::new("onerror"))
-    }
-    fn set_onerror(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
-        self.set_event_handler(EventHandlerName::new("onerror"), value)
-    }
     fn sheet(&self) -> Result<Option<Handle<crate::bindings::CSSStyleSheet>>, JsError> {
         Ok(self.element_sheet())
     }
 }
 
 impl SVGElementOps for HostObject {
+    global_event_handlers!();
+
     fn style(&self) -> Result<Handle<CSSStyleProperties>, JsError> {
         self.style_handle()
     }
@@ -7759,6 +8182,10 @@ impl SVGElementOps for HostObject {
         self.unfocus_steps()
     }
 
+    fn dataset(&self) -> Result<Handle<DOMStringMap>, JsError> {
+        Ok(self.dataset_handle())
+    }
+
     fn tab_index(&self) -> i32 {
         self.tab_index_value()
     }
@@ -7768,6 +8195,37 @@ impl SVGElementOps for HostObject {
     }
 }
 impl DocumentFragmentOps for HostObject {
+    // The queries are the element's, which scope themselves to the subtree of
+    // the node they are asked of.
+    fn first_element_child(&self) -> Result<Option<Handle<Element>>, JsError> {
+        <Self as ElementOps>::first_element_child(self)
+    }
+    fn last_element_child(&self) -> Result<Option<Handle<Element>>, JsError> {
+        <Self as ElementOps>::last_element_child(self)
+    }
+    fn child_element_count(&self) -> u32 {
+        <Self as ElementOps>::child_element_count(self)
+    }
+    fn children(&self) -> Result<Handle<HTMLCollection>, JsError> {
+        <Self as ElementOps>::children(self)
+    }
+    fn query_selector(&self, selectors: &str) -> Result<Option<Handle<Element>>, JsError> {
+        <Self as ElementOps>::query_selector(self, selectors)
+    }
+    fn query_selector_all(&self, selectors: &str) -> Result<Handle<NodeList>, JsError> {
+        <Self as ElementOps>::query_selector_all(self, selectors)
+    }
+    fn get_element_by_id(&self, element_id: &str) -> Result<Option<Handle<Element>>, JsError> {
+        // A fragment is not in the document, so the document's id index does
+        // not know its elements: the first match in tree order is found here.
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        Ok(doc
+            .descendants(id)
+            .find(|node| doc.element_id(*node) == Some(element_id))
+            .map(|node| Handle::from_bits(encode_node(self.slot(), doc.node_ref(node)))))
+    }
+
     fn append(&self, nodes: Vec<NodeOrDomString>) -> Result<(), JsError> {
         self.mutate_with_nodes(nodes, Document::append_nodes)
     }
@@ -9809,15 +10267,11 @@ impl URLOps for HostObject {
     fn origin(&self) -> Result<String, JsError> {
         // An opaque origin serializes as `"null"`, which is what the `url`
         // crate's own serialization returns; a `blob:` URL is the common case.
-        Ok(self.with_url(String::from("null"), |url| {
-            url.origin().ascii_serialization()
-        }))
+        Ok(self.with_url(String::from("null"), |url| LocationPart::Origin.read(url)))
     }
 
     fn protocol(&self) -> Result<String, JsError> {
-        // The getter appends the `:` of the scheme delimiter, which the parser
-        // keeps out of `scheme()`.
-        Ok(self.with_url(String::new(), |url| format!("{}:", url.scheme())))
+        Ok(self.with_url(String::new(), |url| LocationPart::Protocol.read(url)))
     }
 
     fn set_protocol(&self, value: &str) {
@@ -9854,15 +10308,7 @@ impl URLOps for HostObject {
     }
 
     fn host(&self) -> Result<String, JsError> {
-        // The spec's `host` is the hostname followed by `:` and the port when
-        // there is one, so it is assembled rather than read from one accessor.
-        Ok(self.with_url(String::new(), |url| {
-            let host = url.host_str().unwrap_or("");
-            match url.port() {
-                Some(port) => format!("{host}:{port}"),
-                None => host.to_owned(),
-            }
-        }))
+        Ok(self.with_url(String::new(), |url| LocationPart::Host.read(url)))
     }
 
     fn set_host(&self, value: &str) {
@@ -9883,7 +10329,7 @@ impl URLOps for HostObject {
     }
 
     fn hostname(&self) -> Result<String, JsError> {
-        Ok(self.with_url(String::new(), |url| url.host_str().unwrap_or("").to_owned()))
+        Ok(self.with_url(String::new(), |url| LocationPart::Hostname.read(url)))
     }
 
     fn set_hostname(&self, value: &str) {
@@ -9893,9 +10339,7 @@ impl URLOps for HostObject {
     }
 
     fn port(&self) -> Result<String, JsError> {
-        Ok(self.with_url(String::new(), |url| {
-            url.port().map(|port| port.to_string()).unwrap_or_default()
-        }))
+        Ok(self.with_url(String::new(), |url| LocationPart::Port.read(url)))
     }
 
     fn set_port(&self, value: &str) {
@@ -9903,7 +10347,7 @@ impl URLOps for HostObject {
     }
 
     fn pathname(&self) -> Result<String, JsError> {
-        Ok(self.with_url(String::new(), |url| url.path().to_owned()))
+        Ok(self.with_url(String::new(), |url| LocationPart::Pathname.read(url)))
     }
 
     fn set_pathname(&self, value: &str) {
@@ -9911,12 +10355,7 @@ impl URLOps for HostObject {
     }
 
     fn search(&self) -> Result<String, JsError> {
-        Ok(self.with_url(String::new(), |url| match url.query() {
-            // A null query and the empty query both serialize to "": a bare `?`
-            // is not part of `search`.
-            Some(query) if !query.is_empty() => format!("?{query}"),
-            _ => String::new(),
-        }))
+        Ok(self.with_url(String::new(), |url| LocationPart::Search.read(url)))
     }
 
     fn set_search(&self, value: &str) {
@@ -9942,10 +10381,7 @@ impl URLOps for HostObject {
     }
 
     fn hash(&self) -> Result<String, JsError> {
-        Ok(self.with_url(String::new(), |url| match url.fragment() {
-            Some(fragment) if !fragment.is_empty() => format!("#{fragment}"),
-            _ => String::new(),
-        }))
+        Ok(self.with_url(String::new(), |url| LocationPart::Hash.read(url)))
     }
 
     fn set_hash(&self, value: &str) {
@@ -10600,6 +11036,30 @@ impl AbortControllerOps for HostObject {
             return Ok(());
         }
 
+        // The abort algorithms `fetch()` added: each request that was given
+        // this signal has its promise rejected with the reason and its
+        // transport ended. They run before the event, as the abort steps
+        // order them, so an `abort` listener already sees the rejection queued.
+        let aborted: Vec<u64> = {
+            let mut fetches = ctx.fetch_signals.borrow_mut();
+            let resolvers: Vec<u64> = fetches
+                .iter()
+                .filter(|(_, key)| *key == signal)
+                .map(|(resolver, _)| *resolver)
+                .collect();
+            fetches.retain(|(_, key)| *key != signal);
+            resolvers
+        };
+        if !aborted.is_empty() {
+            let script = ctx.script.borrow().as_ref().map(Rc::clone);
+            if let (Some(script), Some(bits)) = (script, reason) {
+                for resolver in aborted {
+                    script.abort_fetch(resolver);
+                    script.reject_promise_with_stored(resolver, bits);
+                }
+            }
+        }
+
         // Steps 3 and 4: `dependentSignalsToAbort`. `AbortSignal.any` is the
         // only producer of a dependent signal and it is deferred, so the list is
         // always empty here — the steps are not reordered around it, they simply
@@ -10894,6 +11354,24 @@ pub fn insert_fetched_response(ctx: &SharedContext, data: FetchedResponse) -> Ho
     )
 }
 
+/// Builds the `Response` of a `no-cors` request to another origin: an *opaque
+/// filtered response*, which tells script nothing about what was answered
+/// (<https://fetch.spec.whatwg.org/#concept-filtered-response-opaque>).
+pub fn insert_opaque_response(ctx: &SharedContext) -> HostKey {
+    insert_response(
+        ctx,
+        HeaderList::default(),
+        NewResponse {
+            status: 0,
+            status_text: Vec::new(),
+            url: Some(String::new()),
+            response_type: ResponseType::Opaque,
+            redirected: false,
+            body: None,
+        },
+    )
+}
+
 impl ResponseConstructor for HostObject {
     fn construct(
         realm: &Realm,
@@ -11146,73 +11624,121 @@ impl ResponseOps for HostObject {
 /// the `fetch` global names it for the throws of its own argument conversion.
 const FETCH_CONTEXT: &str = "Failed to execute 'fetch'";
 
-/// The `RequestInit` member this engine cannot serve, or `None` when it can
-/// serve every one the page named.
+/// The `RequestInit` member this engine cannot serve as the page wrote it, or
+/// `None` when it can serve every one the page named.
 ///
 /// `RequestInit` declares the Fetch Standard's fifteen members
-/// (`idl/fetch/Request.webidl`) and this engine serves three of them. The other
-/// twelve are refused *by name* rather than ignored, because ignoring one means
-/// sending a different request than the page asked for, silently: a `mode` or a
-/// `credentials` this engine has no CORS to honour, a `signal` it has no
-/// cancellation to reach, an `integrity` it does not check. The refusal names
-/// the member so that a page can tell which one it was.
+/// (`idl/fetch/Request.webidl`). A member is refused *by name* rather than
+/// ignored whenever ignoring it would send a different request than the page
+/// asked for: a `mode` of `no-cors` (there are no opaque responses), a
+/// `redirect` of `manual` (no opaque-redirect ones either), a `cache` mode that
+/// must be answered from the cache, an `integrity` that is not checked, a
+/// `referrer` or `referrerPolicy` other than the default. The refusal names the
+/// member so that a page can tell which one it was.
+///
+/// What is served: `method`, `headers` and `body`; `credentials` in all three
+/// modes and `mode` as `cors` or `same-origin` (the driver runs the CORS
+/// protocol); `redirect` as `follow` or `error`; `cache` as `default`, or as
+/// `no-store`, `reload` and `no-cache`, which all go to the network;
+/// `signal`, which each backend handles itself and refuses on its own when it
+/// cannot. `keepalive`, `priority` and `duplex` are accepted with any value:
+/// the first only matters to a request that outlives its page, the second is
+/// a hint, and the third has one value.
+///
+/// A member written out with its default value — `{integrity: ""}`,
+/// `{window: null}`, `{referrer: "about:client"}` — is the request this engine
+/// sends anyway and is accepted.
 ///
 /// The order is the dictionary's own declaration order, which is the standard's,
 /// so a call naming two unserved members always reports the same one.
-///
-/// Presence is the `Option` a member of a dictionary without a default is, and
-/// it is `Some` for a member the page *named* even when the value is `null`:
-/// `{signal: null}` is a present `signal`, exactly as
-/// `{keepalive: false}` is a present `keepalive`. `method`, `headers` and `body`
-/// are the three that are served and so the three this never names.
-///
-/// **The refusal is by presence and not by value, so it over-refuses, and that
-/// is deliberate.** A page that writes out the standard's default explicitly —
-/// `{keepalive: false}`, `{signal: null}`, `{window: null}`, `{integrity: ""}`,
-/// `{cache: "default"}` — asks for exactly the request this engine would have
-/// sent anyway, and is refused here where a browser proceeds. Being
-/// value-aware would mean deciding, per member, which values this engine's
-/// behaviour happens to coincide with, and a wrong acceptance sends a request
-/// the page did not ask for while a wrong refusal only says so. The two error
-/// directions are not equally bad, so this errs at the visible one.
 pub fn refused_request_init_member(init: &RequestInit) -> Option<&'static str> {
-    if init.referrer.is_some() {
+    if init
+        .referrer
+        .as_deref()
+        .is_some_and(|referrer| referrer != "about:client")
+    {
         return Some("referrer");
     }
-    if init.referrer_policy.is_some() {
+    if init.referrer_policy.is_some_and(|policy| {
+        !matches!(
+            policy,
+            ReferrerPolicy::EmptyString | ReferrerPolicy::StrictOriginWhenCrossOrigin
+        )
+    }) {
         return Some("referrerPolicy");
     }
-    if init.mode.is_some() {
+    // `navigate` is not a mode a page may ask for; the other three are served.
+    if init.mode == Some(RequestMode::Navigate) {
         return Some("mode");
     }
-    if init.credentials.is_some() {
-        return Some("credentials");
-    }
-    if init.cache.is_some() {
+    if init
+        .cache
+        .is_some_and(|cache| matches!(cache, RequestCache::ForceCache | RequestCache::OnlyIfCached))
+    {
         return Some("cache");
     }
-    if init.redirect.is_some() {
+    if init.redirect == Some(RequestRedirect::Manual) {
         return Some("redirect");
     }
-    if init.integrity.is_some() {
+    if init
+        .integrity
+        .as_deref()
+        .is_some_and(|integrity| !integrity.is_empty())
+    {
         return Some("integrity");
     }
-    if init.keepalive.is_some() {
-        return Some("keepalive");
-    }
-    if init.signal.is_some() {
-        return Some("signal");
-    }
-    if init.duplex.is_some() {
-        return Some("duplex");
-    }
-    if init.priority.is_some() {
-        return Some("priority");
-    }
-    if init.window.is_some() {
+    if init
+        .window
+        .is_some_and(|window| window.0 != AnyValue::NULL.0)
+    {
         return Some("window");
     }
     None
+}
+
+/// What the `signal` a `fetch()` call was given says about the request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FetchSignal {
+    /// Already aborted: the promise rejects with this stored reason and no
+    /// request is made.
+    Aborted(u64),
+    /// Not aborted. Once the driver has the request,
+    /// [`watch_fetch_signal`] ties the two together.
+    Live(HostKey),
+    /// Not a signal of this world; the request proceeds without one.
+    None,
+}
+
+/// Reads the state of the `AbortSignal` a `fetch()` initializer named.
+pub fn fetch_signal(ctx: &SharedContext, handle: Handle<AbortSignal>) -> FetchSignal {
+    let decoded = decode(handle.bits());
+    if decoded.tag != TAG_HOST {
+        return FetchSignal::None;
+    }
+    let key = decoded.host_key();
+    match ctx.host_records.borrow().get(key) {
+        Some(HostRecord::Signal(record)) => match record.reason {
+            Some(bits) => FetchSignal::Aborted(bits),
+            None => FetchSignal::Live(key),
+        },
+        _ => FetchSignal::None,
+    }
+}
+
+/// Makes aborting `signal` reject the promise `resolver` names and end its
+/// request. The entry is dropped by [`forget_fetch_signal`] when the request
+/// is answered first.
+pub fn watch_fetch_signal(ctx: &SharedContext, resolver: u64, signal: HostKey) {
+    ctx.fetch_signals.borrow_mut().push((resolver, signal));
+}
+
+/// Drops the tie [`watch_fetch_signal`] made: the request was answered.
+pub fn forget_fetch_signal(ctx: &SharedContext, resolver: u64) {
+    let mut fetches = ctx.fetch_signals.borrow_mut();
+    // Almost always empty: only a request that was given a signal is here.
+    if !fetches.is_empty() {
+        fetches.retain(|(watched, _)| *watched != resolver);
+    }
 }
 
 /// The request `fetch()` sends, built from the converted `RequestInit`. This is
@@ -11291,6 +11817,40 @@ pub fn request_from_init(
         None => http::Method::GET,
     };
 
+    // The modes. Every value `refused_request_init_member` let through has an
+    // arm here, and the ones it refuses fall to the default they never reach.
+    let credentials = match init.credentials {
+        Some(RequestCredentials::Omit) => crate::fetch::Credentials::Omit,
+        Some(RequestCredentials::Include) => crate::fetch::Credentials::Include,
+        Some(RequestCredentials::SameOrigin) | None => crate::fetch::Credentials::SameOrigin,
+    };
+    let mode = match init.mode {
+        Some(RequestMode::SameOrigin) => crate::fetch::Mode::SameOrigin,
+        Some(RequestMode::NoCors) => crate::fetch::Mode::NoCors,
+        _ => crate::fetch::Mode::Cors,
+    };
+    // The *Request* constructor's `no-cors` steps: only a CORS-safelisted
+    // method, and the header list's guard becomes `"request-no-cors"`, under
+    // which a header a form could not have sent is dropped.
+    if mode == crate::fetch::Mode::NoCors
+        && !matches!(
+            method,
+            http::Method::GET | http::Method::HEAD | http::Method::POST
+        )
+    {
+        return Err(JsError::type_error(format!(
+            "{FETCH_CONTEXT}: '{method}' is unsupported in no-cors mode"
+        )));
+    }
+    let redirect = match init.redirect {
+        Some(RequestRedirect::Error) => crate::fetch::Redirect::Error,
+        _ => crate::fetch::Redirect::Follow,
+    };
+    let bypass_cache = matches!(
+        init.cache,
+        Some(RequestCache::NoStore | RequestCache::Reload | RequestCache::NoCache)
+    );
+
     // Step 2. The list is the request's, so its guard is `"request"` and a
     // forbidden request-header name is dropped rather than faulted.
     let mut headers = match init.headers {
@@ -11325,6 +11885,10 @@ pub fn request_from_init(
         body,
         initiator,
         origin,
+        credentials,
+        mode,
+        redirect,
+        bypass_cache,
     })
 }
 
@@ -12615,12 +13179,14 @@ impl HostObject {
             .url()
             .cloned()
             .unwrap_or_else(|| url.clone());
+        let with_credentials = self.with_xhr(false, |record| record.with_credentials);
         let request = XhrRequest {
             url,
             method,
             headers,
             body,
             initiator,
+            with_credentials,
         };
         // The borrow of the script slot is taken and released *before* the call:
         // a driver runs from inside `start_xhr`, and a borrow held across it
@@ -12955,16 +13521,9 @@ impl XMLHttpRequestOps for HostObject {
     }
 
     fn set_with_credentials(&self, value: bool) -> Result<(), JsError> {
-        // The standard stores the value and lets the fetch layer decide whether
-        // credentials travel. Here the shared cookie jar decides on its own
-        // policy, with no per-request opt-out, so accepting `true` would silently
-        // mean the opposite of what it says.
-        if value {
-            return Err(JsError::dom_exception(
-                "NotSupportedError",
-                "this engine cannot opt a request in to cross-origin credentials",
-            ));
-        }
+        // The value is stored and `send()` hands it to the driver, which sends
+        // cookies to another origin only when it is set and shares the response
+        // only when that origin allows credentials by name.
         self.with_xhr_mut((), |record| record.with_credentials = value);
         Ok(())
     }
@@ -13332,7 +13891,11 @@ pub fn deliver_xhr_completion(
     }
     match outcome {
         FetchOutcome::Response(data) => xhr_handle_response(ctx, target, key, data),
-        FetchOutcome::Failed(_) => xhr_request_error_steps(ctx, target, key, "error"),
+        // An `XMLHttpRequest` is never `no-cors`, so an opaque answer is one
+        // it cannot use: a network error.
+        FetchOutcome::Failed(_) | FetchOutcome::Opaque => {
+            xhr_request_error_steps(ctx, target, key, "error")
+        }
     }
     true
 }
@@ -14004,7 +14567,9 @@ impl HostObject {
     /// Window, if any. If no listener created a wrapper for
     /// it, its slab record is removed here so a transient click leaks nothing;
     /// when a wrapper exists, the world's dead-event sweep reclaims the record.
-    fn dispatch_synthetic_click(&self, doc: &SharedDocument, id: NodeId) -> Result<(), JsError> {
+    /// Dispatches a synthetic `click` at the element and reports whether it
+    /// was left uncancelled.
+    fn dispatch_synthetic_click(&self, doc: &SharedDocument, id: NodeId) -> Result<bool, JsError> {
         let ctx = self.context();
         let target = {
             let doc = doc.borrow();
@@ -14012,7 +14577,7 @@ impl HostObject {
             // its arena slot may already belong to an unrelated node, so a
             // dispatch here would be attributed to that node's listeners.
             if !doc.is_live(id) {
-                return Ok(());
+                return Ok(false);
             }
             doc.node_ref(id)
         };
@@ -14053,7 +14618,7 @@ impl HostObject {
         if orphaned {
             ctx.events.borrow_mut().remove(key);
         }
-        dispatch_result.map(|_| ())
+        dispatch_result
     }
 }
 
@@ -14645,6 +15210,10 @@ pub const TAG_HOST: u8 = 9;
 /// that list — cannot be derived from the element alone and is a host record
 /// instead.
 pub const TAG_NAMED_NODE_MAP: u8 = 10;
+/// Handle tag for an element's `DOMStringMap` (`dataset`); it anchors to the
+/// owning element's node like the token list, which is what makes
+/// `element.dataset === element.dataset` hold.
+pub const TAG_DATASET: u8 = 11;
 
 /// The tag field's width. Every tag has to be below this, and the four bits the
 /// document slot took from the tag are why `TAG_HOST` multiplexes by record.
@@ -14671,7 +15240,7 @@ impl DecodedHandle {
     pub fn node_anchor(&self) -> Option<NodeId> {
         match self.tag {
             TAG_NODE | TAG_NODE_LIST | TAG_HTML_COLLECTION | TAG_TOKEN_LIST | TAG_STYLE
-            | TAG_NAMED_NODE_MAP => Some(self.node_id),
+            | TAG_NAMED_NODE_MAP | TAG_DATASET => Some(self.node_id),
             // Snapshot tags 3 and 4, TAG_EVENT, TAG_WINDOW and TAG_HOST: none of
             // them is anchored to a node. A window handle and a host handle are
             // deliberately excluded so a sweep cannot mistake their small
@@ -14763,6 +15332,15 @@ pub fn encode_html_collection(slot: u16, owner: NodeRef) -> u64 {
 /// Uses the same minted-generation precondition as [`encode_node`].
 pub fn encode_token_list(slot: u16, owner: NodeRef) -> u64 {
     pack(TAG_TOKEN_LIST, slot, owner)
+}
+
+/// Packs a `dataset` owner's reference into a [`TAG_DATASET`] handle.
+///
+/// # Panics
+///
+/// Uses the same minted-generation precondition as [`encode_node`].
+pub fn encode_dataset(slot: u16, owner: NodeRef) -> u64 {
+    pack(TAG_DATASET, slot, owner)
 }
 
 /// Packs a `NamedNodeMap` owner's reference into a [`TAG_NAMED_NODE_MAP`] handle.

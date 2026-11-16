@@ -78,6 +78,7 @@ include!(concat!(env!("OUT_DIR"), "/node_list_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/named_node_map_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/attr_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/dom_token_list_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/dom_string_map_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/style_sheet_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_style_sheet_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_rule_ops.rs"));
@@ -92,6 +93,13 @@ include!(concat!(env!("OUT_DIR"), "/css_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_div_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_span_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_paragraph_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_media_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_video_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_audio_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_canvas_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/svg_graphics_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/svgsvg_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/svga_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_anchor_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_image_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_label_element_ops.rs"));
@@ -159,6 +167,7 @@ include!(concat!(env!("OUT_DIR"), "/node_list_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/named_node_map_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/attr_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/dom_token_list_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/dom_string_map_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/style_sheet_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_style_sheet_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_rule_register.rs"));
@@ -182,6 +191,16 @@ include!(concat!(
     env!("OUT_DIR"),
     "/html_paragraph_element_register.rs"
 ));
+include!(concat!(env!("OUT_DIR"), "/html_media_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_video_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_audio_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_canvas_element_register.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/svg_graphics_element_register.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/svgsvg_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/svga_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_anchor_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_image_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_label_element_register.rs"));
@@ -288,6 +307,8 @@ include!(concat!(env!("OUT_DIR"), "/attr_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/dom_token_list_v8.rs"));
 #[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/dom_string_map_v8.rs"));
+#[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/style_sheet_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/css_style_sheet_v8.rs"));
@@ -315,6 +336,20 @@ include!(concat!(env!("OUT_DIR"), "/html_div_element_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_span_element_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/html_paragraph_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_media_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_video_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_audio_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_canvas_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/svg_graphics_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/svgsvg_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/svga_element_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/html_anchor_element_v8.rs"));
 #[cfg(feature = "v8")]
@@ -456,6 +491,8 @@ pub mod quickjs {
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/dom_token_list_qjs.rs"));
     #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/dom_string_map_qjs.rs"));
+    #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/style_sheet_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/css_style_sheet_qjs.rs"));
@@ -483,6 +520,20 @@ pub mod quickjs {
     include!(concat!(env!("OUT_DIR"), "/html_span_element_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/html_paragraph_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_media_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_video_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_audio_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_canvas_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/svg_graphics_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/svgsvg_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/svga_element_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/html_anchor_element_qjs.rs"));
     #[cfg(feature = "quickjs")]
@@ -2706,89 +2757,50 @@ mod request_init {
         );
     }
 
-    /// Twelve of the fifteen members are refused, each one *by name*, and a
-    /// member the page named is present whatever its value — `null` and `false`
-    /// included, because a dictionary member's presence is what `Get` found and
-    /// not what it returned.
+    /// A member is refused, *by name*, when its value asks for a request this
+    /// engine would not send as written.
     #[test]
-    fn every_member_this_engine_cannot_serve_is_refused_by_name() {
-        let cases: [(&str, RequestInit); 12] = [
+    fn every_value_this_engine_cannot_serve_is_refused_by_name() {
+        let cases: [(&str, RequestInit); 7] = [
             (
                 "referrer",
                 RequestInit {
-                    referrer: Some(String::new()),
+                    referrer: Some("https://elsewhere.test/".to_owned()),
                     ..Default::default()
                 },
             ),
             (
                 "referrerPolicy",
                 RequestInit {
-                    referrer_policy: Some(ReferrerPolicy::EmptyString),
+                    referrer_policy: Some(ReferrerPolicy::NoReferrer),
                     ..Default::default()
                 },
             ),
             (
                 "mode",
                 RequestInit {
-                    mode: Some(RequestMode::Cors),
-                    ..Default::default()
-                },
-            ),
-            (
-                "credentials",
-                RequestInit {
-                    credentials: Some(RequestCredentials::Omit),
+                    mode: Some(RequestMode::Navigate),
                     ..Default::default()
                 },
             ),
             (
                 "cache",
                 RequestInit {
-                    cache: Some(RequestCache::Default),
+                    cache: Some(RequestCache::OnlyIfCached),
                     ..Default::default()
                 },
             ),
             (
                 "redirect",
                 RequestInit {
-                    redirect: Some(RequestRedirect::Follow),
+                    redirect: Some(RequestRedirect::Manual),
                     ..Default::default()
                 },
             ),
             (
                 "integrity",
                 RequestInit {
-                    integrity: Some(String::new()),
-                    ..Default::default()
-                },
-            ),
-            // `false` — a named member with the falsy value is still named.
-            (
-                "keepalive",
-                RequestInit {
-                    keepalive: Some(false),
-                    ..Default::default()
-                },
-            ),
-            // `null` — the nullable arm, present and null, is still present.
-            (
-                "signal",
-                RequestInit {
-                    signal: Some(None),
-                    ..Default::default()
-                },
-            ),
-            (
-                "duplex",
-                RequestInit {
-                    duplex: Some(RequestDuplex::Half),
-                    ..Default::default()
-                },
-            ),
-            (
-                "priority",
-                RequestInit {
-                    priority: Some(RequestPriority::Low),
+                    integrity: Some("sha256-abc".to_owned()),
                     ..Default::default()
                 },
             ),
@@ -2796,7 +2808,7 @@ mod request_init {
             (
                 "window",
                 RequestInit {
-                    window: Some(AnyValue::NULL),
+                    window: Some(AnyValue(AnyValue::NULL.0 ^ 1)),
                     ..Default::default()
                 },
             ),
@@ -2806,9 +2818,43 @@ mod request_init {
             assert_eq!(
                 refused_request_init_member(&init),
                 Some(name),
-                "the member `{name}` is not served, so it must be refused by name"
+                "the member `{name}` is not served with this value, so it must be refused by name"
             );
         }
+    }
+
+    /// The members the engine serves, and the defaults written out, name the
+    /// request it sends anyway and are accepted; the modes reach the request.
+    #[test]
+    fn served_members_and_written_out_defaults_are_accepted() {
+        let init = RequestInit {
+            referrer: Some("about:client".to_owned()),
+            referrer_policy: Some(ReferrerPolicy::EmptyString),
+            mode: Some(RequestMode::SameOrigin),
+            credentials: Some(RequestCredentials::Include),
+            cache: Some(RequestCache::NoStore),
+            redirect: Some(RequestRedirect::Error),
+            integrity: Some(String::new()),
+            keepalive: Some(true),
+            signal: Some(None),
+            duplex: Some(RequestDuplex::Half),
+            priority: Some(RequestPriority::Low),
+            window: Some(AnyValue::NULL),
+            ..Default::default()
+        };
+        assert_eq!(refused_request_init_member(&init), None);
+
+        let request = request_for(init).expect("a served initializer");
+        assert_eq!(request.credentials, crate::fetch::Credentials::Include);
+        assert_eq!(request.mode, crate::fetch::Mode::SameOrigin);
+        assert_eq!(request.redirect, crate::fetch::Redirect::Error);
+        assert!(request.bypass_cache);
+
+        let plain = request_for(RequestInit::default()).expect("an empty initializer");
+        assert_eq!(plain.credentials, crate::fetch::Credentials::SameOrigin);
+        assert_eq!(plain.mode, crate::fetch::Mode::Cors);
+        assert_eq!(plain.redirect, crate::fetch::Redirect::Follow);
+        assert!(!plain.bypass_cache);
     }
 
     /// Only one name is reported however many members are named, and it is the
@@ -2819,7 +2865,7 @@ mod request_init {
         let init = RequestInit {
             window: Some(AnyValue::NULL),
             keepalive: Some(true),
-            mode: Some(RequestMode::NoCors),
+            mode: Some(RequestMode::Navigate),
             // `method` and `body` are served, so naming them changes nothing.
             method: Some(b"POST".to_vec()),
             body: Some(Some(text("hi"))),

@@ -204,6 +204,20 @@ pub struct Document {
     /// The dirty checkedness of a checkbox or radio, keyed the same way:
     /// presence is the "dirty checkedness flag", the value is the checkedness.
     dirty_checkedness: HashMap<NodeId, bool>,
+    /// The selectedness script or input gave an `<option>`, keyed the same
+    /// way: presence is the option's dirtiness, the value its selectedness.
+    /// Which options of a `<select>` are selected follows from these and the
+    /// `selected` attributes (`crate::forms::selected_options`).
+    dirty_selectedness: HashMap<NodeId, bool>,
+    /// The text selection of a text control, once script or input set one; a
+    /// control without an entry has its caret at the end of its value.
+    text_selections: HashMap<NodeId, crate::forms::TextSelection>,
+    /// The navigation this document's script asked for and the page has not
+    /// taken yet; see [`crate::navigation`].
+    navigation_request: Option<crate::navigation::NavigationRequest>,
+    /// The `<script>` element whose classic script is running, which is what
+    /// `document.currentScript` reports; `None` outside one.
+    current_script: Option<NodeRef>,
     /// The element holding focus, if any. It is a generational reference so a
     /// swept and reused arena slot can never inherit focus; whether the element
     /// is still focused is decided by [`Self::focused_element`].
@@ -284,6 +298,10 @@ impl Document {
             hosts: HashMap::new(),
             dirty_values: HashMap::new(),
             dirty_checkedness: HashMap::new(),
+            dirty_selectedness: HashMap::new(),
+            text_selections: HashMap::new(),
+            navigation_request: None,
+            current_script: None,
             focused: None,
             focus_visible: false,
             lost_focus: None,
@@ -1064,6 +1082,19 @@ impl Document {
     /// then on the `value` content attribute no longer feeds the IDL value.
     pub fn set_dirty_value(&mut self, id: NodeId, value: String) {
         self.dirty_values.insert(id, value);
+        // Setting the value moves the caret to its end and drops the
+        // selection, which is what a control without a stored one has.
+        self.text_selections.remove(&id);
+    }
+
+    /// The text selection stored for a text control, if one was set.
+    pub fn stored_text_selection(&self, id: NodeId) -> Option<crate::forms::TextSelection> {
+        self.text_selections.get(&id).copied()
+    }
+
+    /// Stores a text control's selection.
+    pub fn store_text_selection(&mut self, id: NodeId, selection: crate::forms::TextSelection) {
+        self.text_selections.insert(id, selection);
     }
 
     /// The dirty checkedness of a checkbox or radio, or `None` while its dirty
@@ -1075,6 +1106,59 @@ impl Document {
     /// Sets a control's checkedness, raising its dirty checkedness flag.
     pub fn set_dirty_checkedness(&mut self, id: NodeId, checked: bool) {
         self.dirty_checkedness.insert(id, checked);
+    }
+
+    /// Drops a control's dirty value, as a form reset does: the `value`
+    /// content attribute feeds the value again.
+    pub fn clear_dirty_value(&mut self, id: NodeId) {
+        self.dirty_values.remove(&id);
+        self.text_selections.remove(&id);
+    }
+
+    /// Drops a control's dirty checkedness, as a form reset does.
+    pub fn clear_dirty_checkedness(&mut self, id: NodeId) {
+        self.dirty_checkedness.remove(&id);
+    }
+
+    /// The selectedness script or input gave an `<option>`, or `None` while
+    /// its `selected` content attribute still decides.
+    pub fn dirty_selectedness(&self, id: NodeId) -> Option<bool> {
+        self.dirty_selectedness.get(&id).copied()
+    }
+
+    /// Sets an option's own selectedness. `crate::forms::set_selected` is the
+    /// operation that also keeps a single `<select>` to one selected option.
+    pub fn set_dirty_selectedness(&mut self, id: NodeId, selected: bool) {
+        self.dirty_selectedness.insert(id, selected);
+    }
+
+    /// Drops an option's own selectedness, as a form reset does.
+    pub fn clear_dirty_selectedness(&mut self, id: NodeId) {
+        self.dirty_selectedness.remove(&id);
+    }
+
+    /// Names the `<script>` element whose classic script the page is about to
+    /// run, or `None` once it has returned.
+    pub fn set_current_script(&mut self, element: Option<NodeRef>) {
+        self.current_script = element;
+    }
+
+    /// The `<script>` element whose classic script is running, if it still
+    /// exists.
+    pub fn current_script(&self) -> Option<NodeId> {
+        self.resolve(self.current_script?).ok()
+    }
+
+    /// Records that script asked the page to navigate. A later request
+    /// replaces an earlier one that has not been taken, as a second
+    /// `location.assign` in one task supersedes the first.
+    pub fn request_navigation(&mut self, request: crate::navigation::NavigationRequest) {
+        self.navigation_request = Some(request);
+    }
+
+    /// The pending navigation request, which is then no longer pending.
+    pub fn take_navigation_request(&mut self) -> Option<crate::navigation::NavigationRequest> {
+        self.navigation_request.take()
     }
 
     /// The element that holds focus, or `None` when the viewport does.
@@ -1994,6 +2078,8 @@ impl Document {
                 // form state must not survive to alias the next element there.
                 self.dirty_values.remove(node);
                 self.dirty_checkedness.remove(node);
+                self.dirty_selectedness.remove(node);
+                self.text_selections.remove(node);
                 self.detached_roots.remove(node);
                 self.arena.free(*node);
                 stats.nodes_freed += 1;
@@ -2419,11 +2505,17 @@ impl Document {
 
         let frag_root = self.parse_fragment(ctx_name, html)?;
 
+        // A `<template>`'s children live in its contents fragment, which is
+        // what the setter replaces (HTML's fragment-parsing steps: "if the
+        // context object is a template element, set it to the template's
+        // template contents"); the getter reads them from there too.
+        let parent = self.template_contents(element).unwrap_or(element);
+
         // The parser root remains inside a detached construction fragment.
         // Replacing all children emits one parent record; no page can observe
         // this private source. The empty tree is reclaimed by the normal sweep.
         self.mutate(Mutation::ReplaceAll {
-            parent: element,
+            parent,
             replacement: ReplaceAllWith::ChildrenOf(frag_root),
         })
     }

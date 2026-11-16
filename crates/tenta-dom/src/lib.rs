@@ -13,11 +13,14 @@
 //! (`docs/spec/02-architecture.md` §3).
 
 pub mod arena;
+pub mod compare;
 pub mod document;
 pub mod error;
 pub mod extract;
+pub mod forms;
 pub mod interner;
 pub mod mutation;
+pub mod navigation;
 pub mod selectors;
 pub mod serialize;
 pub mod shared_sink;
@@ -37,6 +40,7 @@ pub use mutation::{
     Mutation, MutationObserverSink, MutationRecord, NoopObserverSink, RecordingObserverSink,
     ReplaceAllWith,
 };
+pub use navigation::{NavigationRequest, PostData};
 pub use selectors::{CompiledSelector, ElementRef, SelectorCache, TentaSelectorImpl};
 pub use shared_sink::{SharedDocument, SharedSink};
 pub use text::{CHUNK_MAX, CHUNK_TARGET, TextChunk};

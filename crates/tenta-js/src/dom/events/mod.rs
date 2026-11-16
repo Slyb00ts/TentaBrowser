@@ -169,6 +169,26 @@ pub trait ScriptHost {
     /// Propagates an already-sticky page-memory failure through this engine.
     fn native_buffer_memory_failure(&self) -> JsError;
 
+    /// Tells the script world that a navigation stayed in the document
+    /// because only the fragment changed (`location.hash = ...`, a link to
+    /// `#section`): the document's URL is already `new_url`, and what is owed
+    /// is the session history entry (none when `replace`) and a queued
+    /// `hashchange` event. An engine without a session history does nothing.
+    fn fragment_navigated(&self, _old_url: &str, _new_url: &str, _replace: bool) {}
+
+    /// Compiles the value of an event handler content attribute
+    /// (`<button onclick="...">`) into the function the handler calls: `body`
+    /// is a function body with one parameter, `event`, whose scope chain is
+    /// the element, its form owner if any, and its document, in that order of
+    /// lookup. `element` is the element's handle bits and `name` the handler's
+    /// attribute name, which names the function.
+    ///
+    /// Returns the function as stored value bits carrying one stored
+    /// reference, or `None` when `body` does not parse (the syntax error is
+    /// reported, not thrown) or the engine cannot compile handlers.
+    fn compile_event_handler(&self, _element: u64, _name: &str, _body: &str) -> Option<u64> {
+        None
+    }
     /// Drops one owned reference to a stored value (a callback, or a
     /// `CustomEvent` detail).
     fn release_value(&self, bits: u64);
@@ -276,6 +296,25 @@ pub trait ScriptHost {
     /// whose steps raise nothing, so the caller ignores the answer; it exists so
     /// a driver that is asked to end something it does not hold can say so.
     fn abort_xhr(&self, handle: XhrHandle) -> bool;
+
+    /// Ends the transport of the `fetch()` whose promise `resolver` names: the
+    /// page aborted the signal it passed. The promise is rejected separately,
+    /// with [`Self::reject_promise_with_stored`]. A backend with no way to end
+    /// a request does nothing.
+    fn abort_fetch(&self, resolver: u64) {
+        let _ = resolver;
+    }
+
+    /// Rejects the promise `resolver` names with the JavaScript value stored
+    /// at `bits`, which stays the caller's: the rejection takes its own
+    /// reference. This is how a promise is rejected with a value the page
+    /// supplied, such as an abort reason, which no [`HostValue`] can describe.
+    /// `false` when the promise was already settled or the backend cannot do
+    /// this.
+    fn reject_promise_with_stored(&self, resolver: u64, bits: u64) -> bool {
+        let _ = (resolver, bits);
+        false
+    }
 
     /// Schedules `task` to run once, `delay_ms` from now, on the page's own
     /// clock — the one `performance.now()` and `Event.timeStamp` read.
@@ -752,6 +791,284 @@ impl EventHandlerName {
     /// The event type the handler's listener listens for: `onload` → `load`.
     pub fn event_type(self) -> &'static str {
         self.0.strip_prefix("on").unwrap_or(self.0)
+    }
+}
+
+/// The event handler content attributes of the `GlobalEventHandlers` mixin
+/// (`idl/dom/dom.webidl`), sorted so an event type finds its handler by
+/// binary search. `<button onclick="...">` is one of these; an attribute that
+/// merely starts with `on` is not.
+const GLOBAL_EVENT_HANDLERS: [&str; 94] = [
+    "onabort",
+    "onanimationcancel",
+    "onanimationend",
+    "onanimationiteration",
+    "onanimationstart",
+    "onauxclick",
+    "onbeforeinput",
+    "onbeforematch",
+    "onbeforetoggle",
+    "onblur",
+    "oncancel",
+    "oncanplay",
+    "oncanplaythrough",
+    "onchange",
+    "onclick",
+    "onclose",
+    "oncommand",
+    "oncontextlost",
+    "oncontextmenu",
+    "oncontextrestored",
+    "oncopy",
+    "oncuechange",
+    "oncut",
+    "ondblclick",
+    "ondrag",
+    "ondragend",
+    "ondragenter",
+    "ondragleave",
+    "ondragover",
+    "ondragstart",
+    "ondrop",
+    "ondurationchange",
+    "onemptied",
+    "onended",
+    "onerror",
+    "onfocus",
+    "onformdata",
+    "ongotpointercapture",
+    "oninput",
+    "oninvalid",
+    "onkeydown",
+    "onkeypress",
+    "onkeyup",
+    "onload",
+    "onloadeddata",
+    "onloadedmetadata",
+    "onloadstart",
+    "onlostpointercapture",
+    "onmousedown",
+    "onmouseenter",
+    "onmouseleave",
+    "onmousemove",
+    "onmouseout",
+    "onmouseover",
+    "onmouseup",
+    "onpaste",
+    "onpause",
+    "onplay",
+    "onplaying",
+    "onpointercancel",
+    "onpointerdown",
+    "onpointerenter",
+    "onpointerleave",
+    "onpointermove",
+    "onpointerout",
+    "onpointerover",
+    "onpointerup",
+    "onprogress",
+    "onratechange",
+    "onreset",
+    "onresize",
+    "onscroll",
+    "onscrollend",
+    "onsecuritypolicyviolation",
+    "onseeked",
+    "onseeking",
+    "onselect",
+    "onslotchange",
+    "onstalled",
+    "onsubmit",
+    "onsuspend",
+    "ontimeupdate",
+    "ontoggle",
+    "ontransitioncancel",
+    "ontransitionend",
+    "ontransitionrun",
+    "ontransitionstart",
+    "onvolumechange",
+    "onwaiting",
+    "onwebkitanimationend",
+    "onwebkitanimationiteration",
+    "onwebkitanimationstart",
+    "onwebkittransitionend",
+    "onwheel",
+];
+
+/// The event handlers of HTML's `WindowEventHandlers` mixin, sorted. A window
+/// has these and the global ones; as content attributes they are written on
+/// `<body>` and set the window's handler.
+const WINDOW_EVENT_HANDLERS: [&str; 18] = [
+    "onafterprint",
+    "onbeforeprint",
+    "onbeforeunload",
+    "onhashchange",
+    "onlanguagechange",
+    "onmessage",
+    "onmessageerror",
+    "onoffline",
+    "ononline",
+    "onpagehide",
+    "onpagereveal",
+    "onpageshow",
+    "onpageswap",
+    "onpopstate",
+    "onrejectionhandled",
+    "onstorage",
+    "onunhandledrejection",
+    "onunload",
+];
+
+/// The global handlers that, written on `<body>`, set the window's handler
+/// instead of the element's (HTML's "Window-reflecting body element event
+/// handler set").
+const WINDOW_REFLECTING: [&str; 6] = [
+    "onblur", "onerror", "onfocus", "onload", "onresize", "onscroll",
+];
+
+fn find(table: &'static [&'static str], event_type: &str) -> Option<EventHandlerName> {
+    table
+        .binary_search_by(|name| name[2..].cmp(event_type))
+        .ok()
+        .map(|index| EventHandlerName(table[index]))
+}
+
+impl EventHandlerName {
+    /// The handler of the `GlobalEventHandlers` mixin that listens for
+    /// `event_type`, if there is one: `click` → `onclick`.
+    pub fn for_event(event_type: &str) -> Option<EventHandlerName> {
+        find(&GLOBAL_EVENT_HANDLERS, event_type)
+    }
+
+    /// The window's handler for `event_type`: a global one or one of the
+    /// `WindowEventHandlers` mixin (`popstate` → `onpopstate`).
+    pub fn for_window_event(event_type: &str) -> Option<EventHandlerName> {
+        find(&WINDOW_EVENT_HANDLERS, event_type).or_else(|| Self::for_event(event_type))
+    }
+
+    /// Every event handler IDL attribute of a window, global ones first.
+    pub fn of_window() -> impl Iterator<Item = EventHandlerName> {
+        GLOBAL_EVENT_HANDLERS
+            .iter()
+            .chain(WINDOW_EVENT_HANDLERS.iter())
+            .map(|name| EventHandlerName(name))
+    }
+
+    /// Whether this handler's content attribute on `<body>` belongs to the
+    /// window.
+    fn reflects_to_window(self) -> bool {
+        WINDOW_REFLECTING.contains(&self.0) || WINDOW_EVENT_HANDLERS.contains(&self.0)
+    }
+}
+
+/// What [`HostContext::attribute_handlers`] remembers about one handler: the
+/// content attribute value last acted on, and whether the handler in force was
+/// compiled from it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SeenHandlerAttribute {
+    /// The attribute's value when it was last looked at.
+    pub source: String,
+    /// The current handler is the function compiled from `source`; `false`
+    /// once script assigned the IDL attribute, which then stands until the
+    /// content attribute changes.
+    pub compiled: bool,
+}
+
+/// Brings the event handler named `name` on the element `node` in line with
+/// its event handler content attribute (HTML §8.1.8.1), which nothing else
+/// tracks: the parser and `setAttribute` write attributes without telling the
+/// script world. It is called where a handler is about to be used, before a
+/// dispatch walks its path and when script reads the IDL attribute.
+///
+/// An attribute whose value differs from the one last seen replaces the
+/// handler with the function compiled from it (`None` when the body does not
+/// compile, which removes the handler); an attribute that was removed takes
+/// the handler it had supplied with it. A handler script assigned stays until
+/// the attribute changes. One deviation follows from looking late: writing
+/// the attribute's current value again does not displace a handler assigned
+/// after the first write.
+pub(crate) fn sync_attribute_handler(
+    ctx: &HostContext,
+    script: &dyn ScriptHost,
+    node: NodeRef,
+    name: EventHandlerName,
+) {
+    let source = {
+        let doc = ctx.doc.borrow();
+        match doc.resolve(node) {
+            // On `<body>` these attributes are the window's, not the element's.
+            Ok(id) if name.reflects_to_window() && doc.body() == Some(id) => return,
+            Ok(id) => doc.attribute_str(id, name.as_str()).map(str::to_owned),
+            Err(_) => return,
+        }
+    };
+    apply_attribute_handler(ctx, script, TargetKey::Node(node), node, name, source);
+}
+
+/// The window's counterpart of [`sync_attribute_handler`]: the window's
+/// handler named `name` follows the attribute of that name on `<body>`, when
+/// it is one a body element forwards (`<body onload="...">`). The function is
+/// compiled with the body element in scope, as the standard has it.
+pub(crate) fn sync_window_attribute_handler(
+    ctx: &HostContext,
+    script: &dyn ScriptHost,
+    name: EventHandlerName,
+) {
+    if !name.reflects_to_window() {
+        return;
+    }
+    let (body, source) = {
+        let doc = ctx.doc.borrow();
+        let Some(body) = doc.body() else {
+            return;
+        };
+        (
+            doc.node_ref(body),
+            doc.attribute_str(body, name.as_str()).map(str::to_owned),
+        )
+    };
+    apply_attribute_handler(ctx, script, TargetKey::Window, body, name, source);
+}
+
+/// Makes the handler `name` of `target` agree with `source`, the present value
+/// of the content attribute that feeds it; `scope` is the element the
+/// attribute is written on.
+fn apply_attribute_handler(
+    ctx: &HostContext,
+    script: &dyn ScriptHost,
+    target: TargetKey,
+    scope: NodeRef,
+    name: EventHandlerName,
+    source: Option<String>,
+) {
+    let node = scope;
+    let key = (target, name);
+    let seen = ctx.attribute_handlers.borrow().get(&key).cloned();
+    match (seen, source) {
+        (None, None) => {}
+        (Some(seen), Some(source)) if seen.source == source => {}
+        (_, Some(source)) => {
+            let bits = encode_node(ctx.slot, node);
+            let compiled = script.compile_event_handler(bits, name.as_str(), &source);
+            ctx.set_event_handler(
+                target,
+                name,
+                compiled.map(crate::bindings::Callback::from_bits),
+            );
+            ctx.attribute_handlers.borrow_mut().insert(
+                key,
+                SeenHandlerAttribute {
+                    source,
+                    compiled: true,
+                },
+            );
+        }
+        (Some(seen), None) => {
+            if seen.compiled {
+                ctx.set_event_handler(target, name, None);
+            }
+            ctx.attribute_handlers.borrow_mut().remove(&key);
+        }
     }
 }
 
@@ -1340,6 +1657,28 @@ pub(crate) fn dispatch_at_from(
 
     let event_bits = encode_event(event_ctx.slot, key);
     let script = ctx.script.borrow().clone();
+
+    // An event handler content attribute becomes a handler when it is first
+    // needed, which is here: every element on the path that carries
+    // `on<type>` gets its handler compiled, or dropped, before any listener
+    // runs. Most event types have no handler attribute and skip this.
+    if let Some(script) = &script
+        && let Some(name) = EventHandlerName::for_window_event(&type_)
+    {
+        for entry in &path {
+            match entry.target {
+                TargetKey::Node(node) => {
+                    if EventHandlerName::for_event(&type_).is_some() {
+                        sync_attribute_handler(ctx, &**script, node, name);
+                    }
+                }
+                TargetKey::Window if ctx.slot == 0 => {
+                    sync_window_attribute_handler(ctx, &**script, name);
+                }
+                _ => {}
+            }
+        }
+    }
 
     // Pre-set stop flags suppress the first invocation. Later invocations
     // stop through the existing loop checks; exit cleanup still resets flags.

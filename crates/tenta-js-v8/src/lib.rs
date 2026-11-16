@@ -8,6 +8,7 @@
 
 mod host;
 mod inspector;
+mod modules;
 mod observer;
 mod page_engine;
 mod promise;
@@ -499,6 +500,10 @@ impl Engine {
         // The event loop owns "when a task runs"; V8 must not drain microtasks on
         // its own, so the engine can run them at the HTML checkpoint instead.
         isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
+        // Module scripts: `import()` leaves a request for the page to load, and
+        // `import.meta` names the module's URL (`crate::modules`).
+        isolate.set_host_import_module_dynamically_callback(modules::dynamic_import_callback);
+        isolate.set_host_initialize_import_meta_object_callback(modules::import_meta_callback);
 
         let heap_guard = max_heap_bytes.map(|_| {
             let mut guard = Box::new(HeapGuard {
@@ -685,51 +690,53 @@ impl Engine {
         // chained to `EventTarget.prototype` once the context exists
         // (`host::install_window_prototype`).
         let event_target;
+        // The interface objects are not put on the template the global object
+        // is built from. V8 instantiates every function template it finds
+        // there while it bootstraps the context, with each prototype in fast
+        // mode, where every added member copies the prototype's descriptor
+        // array: the cost grew with the square of an interface's member count
+        // and came to more than half of building an engine. The generated
+        // installers still want a template to write to, so they get one that
+        // is never instantiated, and `install_constructors` defines the
+        // interface objects on the global once the context exists.
+        let interface_sink = v8::ObjectTemplate::new(scope);
         let mut registry = world::SkeletonRegistry::default();
         {
             // Install interfaces parent-first: EventTarget is the root (Node
             // inherits it), so it must precede Node.
             event_target = tenta_js::bindings::install_event_target::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the EventTarget interface");
-            tenta_js::bindings::install_node::<HostObject>(scope, global_template, &mut registry)
+            tenta_js::bindings::install_node::<HostObject>(scope, interface_sink, &mut registry)
                 .expect("install the Node interface");
             tenta_js::bindings::install_character_data::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the CharacterData interface");
-            tenta_js::bindings::install_text::<HostObject>(scope, global_template, &mut registry)
+            tenta_js::bindings::install_text::<HostObject>(scope, interface_sink, &mut registry)
                 .expect("install the Text interface");
             // CDATASection : Text, so it installs after Text. A `CData` node's
             // wrapper is picked by kind in `world.rs`.
             tenta_js::bindings::install_cdata_section::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the CDATASection interface");
-            tenta_js::bindings::install_comment::<HostObject>(
-                scope,
-                global_template,
-                &mut registry,
-            )
-            .expect("install the Comment interface");
-            tenta_js::bindings::install_element::<HostObject>(
-                scope,
-                global_template,
-                &mut registry,
-            )
-            .expect("install the Element interface");
+            tenta_js::bindings::install_comment::<HostObject>(scope, interface_sink, &mut registry)
+                .expect("install the Comment interface");
+            tenta_js::bindings::install_element::<HostObject>(scope, interface_sink, &mut registry)
+                .expect("install the Element interface");
             // SVGElement : Element — installs after Element; SVG-namespace
             // elements get this prototype (see world.rs interface selection).
             tenta_js::bindings::install_svg_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the SVGElement interface");
@@ -738,7 +745,7 @@ impl Engine {
             // the HTMLElement prototype; see world.rs interface selection).
             tenta_js::bindings::install_html_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLElement interface");
@@ -747,7 +754,7 @@ impl Engine {
             // `HTMLI` capital run per the generator's word splitter.)
             tenta_js::bindings::install_htmli_frame_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLIFrameElement interface");
@@ -755,7 +762,7 @@ impl Engine {
             // DocumentFragment, so DocumentFragment must be installed too.
             tenta_js::bindings::install_html_template_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLTemplateElement interface");
@@ -764,122 +771,165 @@ impl Engine {
             // global constructor for `instanceof` (see world.rs tag selection).
             tenta_js::bindings::install_html_div_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLDivElement interface");
             tenta_js::bindings::install_html_span_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLSpanElement interface");
             tenta_js::bindings::install_html_paragraph_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLParagraphElement interface");
             tenta_js::bindings::install_html_anchor_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLAnchorElement interface");
             tenta_js::bindings::install_html_image_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLImageElement interface");
             tenta_js::bindings::install_html_label_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLLabelElement interface");
             tenta_js::bindings::install_html_form_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLFormElement interface");
             tenta_js::bindings::install_html_input_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLInputElement interface");
             tenta_js::bindings::install_html_button_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLButtonElement interface");
             tenta_js::bindings::install_html_select_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLSelectElement interface");
             tenta_js::bindings::install_html_text_area_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLTextAreaElement interface");
             tenta_js::bindings::install_html_option_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLOptionElement interface");
             tenta_js::bindings::install_html_script_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLScriptElement interface");
             tenta_js::bindings::install_html_link_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLLinkElement interface");
             tenta_js::bindings::install_html_style_element::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLStyleElement interface");
+            // IF1: media, canvas and the SVG interfaces, each after its parent.
+            tenta_js::bindings::install_html_media_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLMediaElement interface");
+            tenta_js::bindings::install_html_video_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLVideoElement interface");
+            tenta_js::bindings::install_html_audio_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLAudioElement interface");
+            tenta_js::bindings::install_html_canvas_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLCanvasElement interface");
+            tenta_js::bindings::install_svg_graphics_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the SVGGraphicsElement interface");
+            tenta_js::bindings::install_svgsvg_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the SVGSVGElement interface");
+            tenta_js::bindings::install_svga_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the SVGAElement interface");
             // `DOMRect` extends `DOMRectReadOnly`, so the base installs first.
             tenta_js::bindings::install_dom_rect_read_only::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the DOMRectReadOnly interface");
             tenta_js::bindings::install_dom_rect::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the DOMRect interface");
             tenta_js::bindings::install_dom_rect_list::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the DOMRectList interface");
             tenta_js::bindings::install_document_fragment::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the DocumentFragment interface");
             tenta_js::bindings::install_document::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the Document interface");
@@ -889,13 +939,13 @@ impl Engine {
             // rather than the `Node` shell (see world.rs interface selection).
             tenta_js::bindings::install_document_type::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the DocumentType interface");
             tenta_js::bindings::install_processing_instruction::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the ProcessingInstruction interface");
@@ -904,19 +954,19 @@ impl Engine {
             // has a prototype and a global constructor.
             tenta_js::bindings::install_dom_implementation::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the DOMImplementation interface");
             tenta_js::bindings::install_dom_parser::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the DOMParser interface");
             tenta_js::bindings::install_xml_serializer::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the XMLSerializer interface");
@@ -926,178 +976,182 @@ impl Engine {
             // host record under TAG_HOST (see `HostRecord::Range`).
             tenta_js::bindings::install_abstract_range::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the AbstractRange interface");
             tenta_js::bindings::install_static_range::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the StaticRange interface");
-            tenta_js::bindings::install_range::<HostObject>(scope, global_template, &mut registry)
+            tenta_js::bindings::install_range::<HostObject>(scope, interface_sink, &mut registry)
                 .expect("install the Range interface");
             // Neither is a node: both are host records under TAG_HOST. A record
             // is installed with its observer, which hands the callback its
             // `MutationRecord`s.
             tenta_js::bindings::install_mutation_record::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the MutationRecord interface");
             tenta_js::bindings::install_mutation_observer::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the MutationObserver interface");
             tenta_js::bindings::install_node_list::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the NodeList interface");
             tenta_js::bindings::install_html_collection::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the HTMLCollection interface");
             tenta_js::bindings::install_dom_token_list::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the DOMTokenList interface");
+            tenta_js::bindings::install_dom_string_map::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the DOMStringMap interface");
             // `Attr : Node` requires Node's template to be installed first.
             // `NamedNodeMap` is independent and resolves Attr wrappers through
             // the isolate's template cache when its members run.
-            tenta_js::bindings::install_attr::<HostObject>(scope, global_template, &mut registry)
+            tenta_js::bindings::install_attr::<HostObject>(scope, interface_sink, &mut registry)
                 .expect("install the Attr interface");
             tenta_js::bindings::install_named_node_map::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the NamedNodeMap interface");
             tenta_js::bindings::install_style_sheet::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the StyleSheet interface");
             tenta_js::bindings::install_css_style_sheet::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the CSSStyleSheet interface");
             tenta_js::bindings::install_css_rule::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the CSSRule interface");
             tenta_js::bindings::install_css_grouping_rule::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the CSSGroupingRule interface");
             tenta_js::bindings::install_css_style_rule::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the CSSStyleRule interface");
             tenta_js::bindings::install_css_rule_list::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the CSSRuleList interface");
             tenta_js::bindings::install_style_sheet_list::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the StyleSheetList interface");
             tenta_js::bindings::install_css_style_declaration::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the CSSStyleDeclaration interface");
             tenta_js::bindings::install_css_style_properties::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the CSSStyleProperties interface");
+            // A namespace is a plain object, not an interface object: it has no
+            // function template to instantiate later, and stays on the template.
             tenta_js::bindings::install_css::<HostObject>(scope, global_template, &mut registry)
                 .expect("install the CSS namespace");
-            tenta_js::bindings::install_storage::<HostObject>(
-                scope,
-                global_template,
-                &mut registry,
-            )
-            .expect("install the Storage interface");
-            tenta_js::bindings::install_crypto::<HostObject>(scope, global_template, &mut registry)
+            tenta_js::bindings::install_storage::<HostObject>(scope, interface_sink, &mut registry)
+                .expect("install the Storage interface");
+            tenta_js::bindings::install_crypto::<HostObject>(scope, interface_sink, &mut registry)
                 .expect("install the Crypto interface");
             // Event has no DOM parent (its prototype chain roots at Object), so
             // its install order relative to the node types is free.
-            tenta_js::bindings::install_event::<HostObject>(scope, global_template, &mut registry)
+            tenta_js::bindings::install_event::<HostObject>(scope, interface_sink, &mut registry)
                 .expect("install the Event interface");
             // CustomEvent's prototype chain roots at Event, so it installs after.
             tenta_js::bindings::install_custom_event::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the CustomEvent interface");
             // UIEvent : Event, then the UI event subclasses (parent-first).
             tenta_js::bindings::install_ui_event::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the UIEvent interface");
             tenta_js::bindings::install_composition_event::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the CompositionEvent interface");
             tenta_js::bindings::install_focus_event::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the FocusEvent interface");
             tenta_js::bindings::install_keyboard_event::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the KeyboardEvent interface");
             tenta_js::bindings::install_mouse_event::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the MouseEvent interface");
             tenta_js::bindings::install_wheel_event::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the WheelEvent interface");
             // ProgressEvent's prototype chain also roots at Event.
             tenta_js::bindings::install_progress_event::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the ProgressEvent interface");
@@ -1109,31 +1163,27 @@ impl Engine {
             // the interface name alone.
             tenta_js::bindings::install_url_search_params::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the URLSearchParams interface");
-            tenta_js::bindings::install_url::<HostObject>(scope, global_template, &mut registry)
+            tenta_js::bindings::install_url::<HostObject>(scope, interface_sink, &mut registry)
                 .expect("install the URL interface");
-            tenta_js::bindings::install_headers::<HostObject>(
-                scope,
-                global_template,
-                &mut registry,
-            )
-            .expect("install the Headers interface");
+            tenta_js::bindings::install_headers::<HostObject>(scope, interface_sink, &mut registry)
+                .expect("install the Headers interface");
             // `AbortSignal : EventTarget`, so `EventTarget` must already be in
             // the template cache; `AbortController` roots at `Object`. Installing
             // the signal first keeps the two in dependency order, and both are
             // independent of the URL block above.
             tenta_js::bindings::install_abort_signal::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the AbortSignal interface");
             tenta_js::bindings::install_abort_controller::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the AbortController interface");
@@ -1143,13 +1193,13 @@ impl Engine {
             // consumer of the buffer-source conversion after the toy fixture.
             tenta_js::bindings::install_text_encoder::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the TextEncoder interface");
             tenta_js::bindings::install_text_decoder::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the TextDecoder interface");
@@ -1159,7 +1209,7 @@ impl Engine {
             // `Headers` through the same record it hands out here.
             tenta_js::bindings::install_response::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the Response interface");
@@ -1169,13 +1219,13 @@ impl Engine {
             // `EventTarget` before it, which the block above already did.
             tenta_js::bindings::install_xml_http_request_event_target::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the XMLHttpRequestEventTarget interface");
             tenta_js::bindings::install_xml_http_request::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the XMLHttpRequest interface");
@@ -1185,9 +1235,9 @@ impl Engine {
             // generated `install_file` also demands `BlobOps` and
             // `BlobConstructor` of its type parameter, which is the same fact
             // stated in the type system.
-            tenta_js::bindings::install_blob::<HostObject>(scope, global_template, &mut registry)
+            tenta_js::bindings::install_blob::<HostObject>(scope, interface_sink, &mut registry)
                 .expect("install the Blob interface");
-            tenta_js::bindings::install_file::<HostObject>(scope, global_template, &mut registry)
+            tenta_js::bindings::install_file::<HostObject>(scope, interface_sink, &mut registry)
                 .expect("install the File interface");
             // `FormData` roots at `Object` too, and it is installed after `File`
             // for a reason that is not a prototype chain: one of its operations
@@ -1195,7 +1245,7 @@ impl Engine {
             // hands the page is created from the template this call caches.
             tenta_js::bindings::install_form_data::<HostObject>(
                 scope,
-                global_template,
+                interface_sink,
                 &mut registry,
             )
             .expect("install the FormData interface");
@@ -1211,6 +1261,9 @@ impl Engine {
         {
             let mut context_scope = v8::ContextScope::new(scope, local);
             v8::scope!(let inner, &mut context_scope);
+            registry
+                .install_constructors(inner, local)
+                .expect("define the interface objects on the global");
             host::install(inner, local, host.scheduler.clock().time_origin_ms());
             registry
                 .link_constructor_prototypes(inner)
@@ -1464,6 +1517,104 @@ impl Engine {
         let host = Rc::clone(&self.host);
         self.run_with(timeout, |tc| compile_and_run(tc, source, Some(&host)))
             .map(|_| ())
+    }
+
+    /// Whether the module `key` has been compiled into this realm's module
+    /// map.
+    pub fn has_module(&self, key: &str) -> bool {
+        self.host.modules.has(key)
+    }
+
+    /// Adds a document's import map to the realm's. `base` is the document's
+    /// base URL, which the map's own URLs resolve against.
+    pub fn add_import_map(&mut self, json: &str, base: &url::Url) -> Result<(), JsError> {
+        let map = tenta_js::modules::ImportMap::parse(json, base)
+            .map_err(|message| JsError { message })?;
+        self.host.modules.merge_import_map(map);
+        Ok(())
+    }
+
+    /// Compiles `source` as the module `key`, whose specifiers resolve against
+    /// `base`, and returns the URLs it imports statically. Nothing runs: the
+    /// caller loads those modules too and then runs the root
+    /// ([`Self::run_module`]).
+    fn compile_module_classified(
+        &mut self,
+        key: &str,
+        source: &str,
+        base: &url::Url,
+    ) -> Result<Vec<url::Url>, ScriptFailure> {
+        let host = Rc::clone(&self.host);
+        let timeout = self.script_timeout;
+        self.run_with(timeout, |tc| modules::compile(tc, &host, key, source, base))
+    }
+
+    /// Links and evaluates the module `key`, every import of which has been
+    /// compiled.
+    fn run_module_classified(&mut self, key: &str) -> Result<(), ScriptFailure> {
+        let host = Rc::clone(&self.host);
+        let timeout = self.script_timeout;
+        self.run_with(timeout, |tc| modules::run(tc, &host, key))
+    }
+
+    /// [`Self::compile_module_classified`] for a caller outside the page
+    /// boundary.
+    pub fn compile_module(
+        &mut self,
+        key: &str,
+        source: &str,
+        base: &url::Url,
+    ) -> Result<Vec<url::Url>, JsError> {
+        self.compile_module_classified(key, source, base)
+            .map_err(|failure| JsError {
+                message: failure.message,
+            })
+    }
+
+    /// [`Self::run_module_classified`] for a caller outside the page boundary.
+    pub fn run_module(&mut self, key: &str) -> Result<(), JsError> {
+        self.run_module_classified(key).map_err(|failure| JsError {
+            message: failure.message,
+        })
+    }
+
+    /// The `import()` calls script has made since the last call, each with the
+    /// URL to load. One whose specifier does not resolve is rejected here.
+    pub fn take_dynamic_imports(&mut self) -> Vec<tenta_js::modules::DynamicImport> {
+        // Asked after every entry; almost always there is nothing, and that
+        // answer must not enter the isolate.
+        if !self.host.modules.has_imports() {
+            return Vec::new();
+        }
+        let _entry = self.entered();
+        if self.native_failure().is_some() {
+            return Vec::new();
+        }
+        let base = self.dom.as_ref().and_then(|dom| {
+            let document = dom.ctx.doc.borrow();
+            document.base_url().or(document.url()).cloned()
+        });
+        let host = Rc::clone(&self.host);
+        v8::scope!(let handle_scope, &mut self.isolate);
+        let context = v8::Local::new(handle_scope, &self.context);
+        let mut context_scope = v8::ContextScope::new(handle_scope, context);
+        v8::scope!(let scope, &mut context_scope);
+        let imports = host.modules.take_imports(scope, base.as_ref());
+        // A rejection made here has reactions to run.
+        host.owe_checkpoint();
+        imports
+    }
+
+    /// Settles the promise of the `import()` named `id`: `Ok` is the key of
+    /// the module, whose whole graph has been compiled; `Err` is why it could
+    /// not be loaded.
+    pub fn finish_dynamic_import(&mut self, id: u64, outcome: Result<&str, &str>) {
+        let host = Rc::clone(&self.host);
+        let timeout = self.script_timeout;
+        let _ = self.run_with(timeout, |tc| {
+            modules::finish_import(tc, &host, id, outcome);
+            Ok(())
+        });
     }
 
     /// Discards a termination left pending on the isolate by a watchdog that
@@ -1793,7 +1944,20 @@ impl Engine {
         }
         self.discard_stray_termination();
         self.queue_observer_notification();
-        self.isolate.perform_microtask_checkpoint();
+        // The reactions continue the tasks that queued them, so they run under
+        // the provenance those tasks left behind (`HostState::microtask_origin`).
+        let owed = self
+            .host
+            .microtask_origin
+            .replace(tenta_core::Origin::Background);
+        let scheduler = self.host.scheduler.clone();
+        if owed == tenta_core::Origin::Tracked {
+            scheduler.with_origin(tenta_core::Origin::Tracked, || {
+                self.isolate.perform_microtask_checkpoint();
+            });
+        } else {
+            self.isolate.perform_microtask_checkpoint();
+        }
         self.host.microtasks_pending.set(false);
         self.flush_rejections();
         if self.dom.is_some() {
@@ -1875,6 +2039,9 @@ impl Engine {
                 return;
             };
             for completion in completions {
+                // The request is over, so its signal no longer has anything
+                // of it to abort.
+                tenta_js::bindings::host::forget_fetch_signal(&dom.ctx, completion.resolver);
                 // A completion whose value cannot be built is skipped rather
                 // than aborting the batch: the promises after it in the batch
                 // did nothing wrong.
@@ -1896,7 +2063,7 @@ impl Engine {
             }
         }
         if queued {
-            self.host.microtasks_pending.set(true);
+            self.host.owe_checkpoint();
         }
         self.graph_checkpoint();
     }
@@ -1969,7 +2136,7 @@ impl Engine {
             }
             let type_ = match completion.outcome {
                 FetchOutcome::Response(_) => "load",
-                FetchOutcome::Failed(_) => "error",
+                FetchOutcome::Failed(_) | FetchOutcome::Opaque => "error",
             };
             let mut record = EventRecord::new(
                 type_.to_owned(),
@@ -2535,6 +2702,8 @@ impl Drop for Engine {
         // The inspector's dispatcher and any unreported rejections are
         // `v8::Global`s in the same position.
         self.host.inspector.clear();
+        // The module map's records and the resolvers of imports in flight.
+        self.host.modules.clear();
         clear_v8_callback_admission(&mut self.isolate);
 
         // Drain the wrapper world while the isolate is still alive: this
@@ -2739,6 +2908,15 @@ fn build_completion(
             let message = v8::String::new(scope, &message)?;
             let error = construct_global(scope, "TypeError", &[message.into()])?;
             Some((dom.state.borrow_mut().store_value(scope, error), true))
+        }
+        FetchOutcome::Opaque => {
+            let key = tenta_js::bindings::host::insert_opaque_response(&dom.ctx);
+            let wrapper = handle_to_v8::<tenta_js::bindings::Response>(
+                scope,
+                Handle::from_bits(encode_host(dom.ctx.slot, key)),
+            )
+            .ok()?;
+            Some((dom.state.borrow_mut().store_value(scope, wrapper), false))
         }
     }
 }

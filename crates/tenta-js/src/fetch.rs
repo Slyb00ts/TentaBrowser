@@ -60,6 +60,52 @@ pub struct FetchRequest {
     /// [`Origin::Background`] and does not. That asymmetry is the settle
     /// machine's own rule, so it is carried rather than assumed.
     pub origin: Origin,
+    /// When cookies travel with the request.
+    pub credentials: Credentials,
+    /// Whether the request may leave the document's origin.
+    pub mode: Mode,
+    /// What a redirect does.
+    pub redirect: Redirect,
+    /// Whether the HTTP cache is bypassed: the `cache` modes `no-store`,
+    /// `reload` and `no-cache`, all of which ask for an answer from the
+    /// network.
+    pub bypass_cache: bool,
+}
+
+/// Fetch's *credentials mode*.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Credentials {
+    /// Never.
+    Omit,
+    /// Only while the request stays on the document's origin: the default.
+    #[default]
+    SameOrigin,
+    /// Always, which a cross-origin server has to allow by name.
+    Include,
+}
+
+/// Fetch's request *mode*, for the two a page-made request can be served in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    /// Cross-origin requests go through the CORS protocol: the default.
+    #[default]
+    Cors,
+    /// A request that leaves the document's origin fails.
+    SameOrigin,
+    /// A request to another origin is made without the CORS protocol and its
+    /// response is opaque. Only a method and headers a form could have sent
+    /// are allowed.
+    NoCors,
+}
+
+/// Fetch's *redirect mode*, for the two a page-made request can be served in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Redirect {
+    /// Redirects are followed: the default.
+    #[default]
+    Follow,
+    /// A redirect is a network error.
+    Error,
 }
 
 impl FetchRequest {
@@ -82,6 +128,10 @@ impl FetchRequest {
             body: None,
             initiator,
             origin,
+            credentials: Credentials::default(),
+            mode: Mode::default(),
+            redirect: Redirect::default(),
+            bypass_cache: false,
         }
     }
 }
@@ -123,6 +173,10 @@ pub enum FetchOutcome {
     /// for a network error — a fetch failure is an exception, never a
     /// response with a failure status.
     Failed(String),
+    /// A `no-cors` request reached another origin. Script is told that the
+    /// request completed and nothing else: the `Response` is *opaque*, with
+    /// status 0, no headers and no body, whatever the server answered.
+    Opaque,
 }
 
 /// A completed response, mirroring
@@ -161,6 +215,12 @@ pub struct FetchCompletion {
     /// [`PromiseRef::resolver`]: crate::dom::events::PromiseRef::resolver
     pub resolver: u64,
     pub outcome: FetchOutcome,
+    /// The provenance of the request this answers, which the task that
+    /// delivers the answer inherits: the completion of a request a tracked
+    /// task made is itself tracked, so a page that loads its data in a chain
+    /// of requests keeps the settle open link by link
+    /// (`tenta_core::provenance`).
+    pub origin: Origin,
 }
 
 /// Why a driver would not take a request.
@@ -221,6 +281,15 @@ pub trait FetchDriver {
     /// caller because only the driver knows whether it can serve the request —
     /// a cross-origin URL is the first case.
     fn start(&self, request: FetchRequest, resolver: u64) -> Result<(), FetchStartError>;
+
+    /// Ends the request that was started for `resolver`, if it is still
+    /// running: the page aborted the `AbortSignal` it passed to `fetch()`. The
+    /// promise is the engine's to reject; the driver stops the transport and
+    /// leaves no completion behind. A driver that cannot end a request ignores
+    /// this, and its late completion finds the promise already settled.
+    fn abort(&self, resolver: u64) {
+        let _ = resolver;
+    }
 }
 
 /// The completions a driver is waiting for the page to pick up.
@@ -246,10 +315,12 @@ impl FetchCompletions {
     /// first.
     ///
     /// See [`FetchDriver::start`] for what the caller owes in addition to this.
-    pub fn push(&self, resolver: u64, outcome: FetchOutcome) {
-        self.queue
-            .borrow_mut()
-            .push_back(FetchCompletion { resolver, outcome });
+    pub fn push(&self, resolver: u64, outcome: FetchOutcome, origin: Origin) {
+        self.queue.borrow_mut().push_back(FetchCompletion {
+            resolver,
+            outcome,
+            origin,
+        });
     }
 
     /// Takes every completion recorded so far, in the order they were pushed,
@@ -272,15 +343,20 @@ mod tests {
         FetchCompletion {
             resolver,
             outcome: FetchOutcome::Failed(message.to_owned()),
+            origin: Origin::Tracked,
         }
     }
 
     #[test]
     fn take_all_hands_the_completions_back_in_push_order() {
         let table = FetchCompletions::new();
-        table.push(7, FetchOutcome::Failed("first".to_owned()));
-        table.push(1, FetchOutcome::Failed("second".to_owned()));
-        table.push(4, FetchOutcome::Failed("third".to_owned()));
+        table.push(7, FetchOutcome::Failed("first".to_owned()), Origin::Tracked);
+        table.push(
+            1,
+            FetchOutcome::Failed("second".to_owned()),
+            Origin::Tracked,
+        );
+        table.push(4, FetchOutcome::Failed("third".to_owned()), Origin::Tracked);
         assert_eq!(
             table.take_all(),
             vec![failed("first", 7), failed("second", 1), failed("third", 4),],
@@ -290,7 +366,7 @@ mod tests {
     #[test]
     fn take_all_empties_the_table() {
         let table = FetchCompletions::new();
-        table.push(1, FetchOutcome::Failed("only".to_owned()));
+        table.push(1, FetchOutcome::Failed("only".to_owned()), Origin::Tracked);
         assert_eq!(table.take_all().len(), 1);
         assert!(
             table.take_all().is_empty(),
@@ -306,9 +382,13 @@ mod tests {
     #[test]
     fn a_completion_pushed_after_a_drain_is_delivered_by_the_next_one() {
         let table = FetchCompletions::new();
-        table.push(1, FetchOutcome::Failed("before".to_owned()));
+        table.push(
+            1,
+            FetchOutcome::Failed("before".to_owned()),
+            Origin::Tracked,
+        );
         assert_eq!(table.take_all(), vec![failed("before", 1)]);
-        table.push(2, FetchOutcome::Failed("after".to_owned()));
+        table.push(2, FetchOutcome::Failed("after".to_owned()), Origin::Tracked);
         assert_eq!(
             table.take_all(),
             vec![failed("after", 2)],

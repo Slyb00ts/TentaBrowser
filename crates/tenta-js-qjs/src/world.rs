@@ -1050,6 +1050,7 @@ impl QuickJsWrapperWorld for World {
                         ("HTMLCollection", HostObject::html_collection(owner, node))
                     }
                     TAG_TOKEN_LIST => ("DOMTokenList", HostObject::token_list(owner, node)),
+                    TAG_DATASET => ("DOMStringMap", HostObject::dataset_map(owner, node)),
                     TAG_NAMED_NODE_MAP => ("NamedNodeMap", HostObject::named_node_map(owner, node)),
                     TAG_STYLE => ("CSSStyleProperties", HostObject::style(owner, node)),
                     TAG_NODE => {
@@ -1255,9 +1256,16 @@ fn node_interface(ctx: &SharedContext, node: tenta_core::NodeId) -> &'static str
                 Some(tag) if tag == atoms::SCRIPT => "HTMLScriptElement",
                 Some(tag) if tag == atoms::LINK => "HTMLLinkElement",
                 Some(tag) if tag == atoms::STYLE => "HTMLStyleElement",
+                Some(tag) if tag == atoms::VIDEO => "HTMLVideoElement",
+                Some(tag) if tag == atoms::AUDIO => "HTMLAudioElement",
+                Some(tag) if tag == atoms::CANVAS => "HTMLCanvasElement",
                 _ => "HTMLElement",
             },
-            Some(ns) if ns == atoms::NS_SVG => "SVGElement",
+            Some(ns) if ns == atoms::NS_SVG => match doc.tag(node) {
+                Some(tag) if tag == atoms::SVG => "SVGSVGElement",
+                Some(tag) if tag == atoms::A => "SVGAElement",
+                _ => "SVGElement",
+            },
             _ => "Element",
         },
         NodeKind::Document => "Document",

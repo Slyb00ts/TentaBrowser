@@ -31,4 +31,6 @@ pub use policy::cookies::CookieJar;
 pub use policy::private_network::DestinationPolicy;
 pub use policy::session_cache::SessionCache;
 pub use profile::{ClientProfile, Profile};
-pub use request::{Priority, PriorityClass, RedirectPolicy, Request, ResourceType};
+pub use request::{
+    CredentialsMode, Priority, PriorityClass, RedirectPolicy, Request, ResourceType,
+};

@@ -373,6 +373,7 @@ async fn handle_api(
             .expect("static response"),
         "redirect" => redirect(req.uri().query(), body_delay),
         "cookie" => cookie(req, body_delay),
+        "cors" => cors(req, body_delay),
         "status" => status(req.uri().query(), body_delay),
         "sse" => {
             let first = tokio::time::Instant::now() + body_delay + SSE_INTERVAL;
@@ -448,6 +449,71 @@ fn status(query: Option<&str>, body_delay: Duration) -> Response<FixtureBody> {
         code.as_u16()
     );
     response
+        .body(FixtureBody::bytes(body, body_delay))
+        .expect("static response")
+}
+
+/// `/api/cors?origin=<value>&credentials=1&methods=<list>&headers=<list>&expose=<list>`:
+/// an endpoint whose CORS policy is the query's. Each parameter becomes the
+/// `Access-Control-Allow-*` (or `-Expose-Headers`) header of the same meaning,
+/// and one that is absent sends no such header. An `OPTIONS` request is
+/// answered `204` with the policy alone; any other method is answered with
+/// what the request carried, as JSON, and an `X-Request-Id` header for
+/// `expose` to name. With `module=1` the same answer is a JavaScript module
+/// instead (`export default { ... }`), for a page that imports from another
+/// origin.
+fn cors(req: Request<Incoming>, body_delay: Duration) -> Response<FixtureBody> {
+    let query = req.uri().query();
+    let param = |name: &str| {
+        query_param(query, name)
+            .map(percent_decode)
+            .and_then(|value| HeaderValue::from_str(&value).ok())
+    };
+    let preflight = req.method() == hyper::Method::OPTIONS;
+    let mut response = Response::builder().header(header::CACHE_CONTROL, "no-store");
+    if let Some(origin) = param("origin") {
+        response = response.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+    }
+    if query_param(query, "credentials").is_some() {
+        response = response.header(header::ACCESS_CONTROL_ALLOW_CREDENTIALS, "true");
+    }
+    if preflight {
+        if let Some(methods) = param("methods") {
+            response = response.header(header::ACCESS_CONTROL_ALLOW_METHODS, methods);
+        }
+        if let Some(headers) = param("headers") {
+            response = response.header(header::ACCESS_CONTROL_ALLOW_HEADERS, headers);
+        }
+        return response
+            .status(StatusCode::NO_CONTENT)
+            .body(FixtureBody::bytes("", body_delay))
+            .expect("static response");
+    }
+    if let Some(expose) = param("expose") {
+        response = response.header(header::ACCESS_CONTROL_EXPOSE_HEADERS, expose);
+    }
+    let carried = |name: header::HeaderName| {
+        req.headers()
+            .get(name)
+            .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned())
+    };
+    let body = serde_json::json!({
+        "method": req.method().as_str(),
+        "origin": carried(header::ORIGIN),
+        "cookie": carried(header::COOKIE),
+        "token": carried(header::HeaderName::from_static("x-token")),
+        "contentType": carried(header::CONTENT_TYPE),
+    })
+    .to_string();
+    let (content_type, body) = if query_param(query, "module").is_some() {
+        ("text/javascript", format!("export default {body};\n"))
+    } else {
+        ("application/json", body)
+    };
+    response
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header("x-request-id", "cors-1")
         .body(FixtureBody::bytes(body, body_delay))
         .expect("static response")
 }

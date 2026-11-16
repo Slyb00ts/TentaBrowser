@@ -310,6 +310,9 @@ impl ClientShared {
 
     /// The `Cookie` header value for `request`, from this context's jar.
     fn cookie_header(&self, request: &Request) -> Option<String> {
+        if !request.sends_credentials() {
+            return None;
+        }
         self.cookies.as_ref()?.cookie_header(
             &request.url,
             request.first_party.as_ref(),
@@ -321,6 +324,9 @@ impl ClientShared {
 
     /// Hands every `Set-Cookie` of one hop to the jar.
     fn store_cookies(&self, request: &Request, headers: &[(String, HeaderValue)]) {
+        if !request.sends_credentials() {
+            return;
+        }
         let Some(jar) = &self.cookies else { return };
         let now = SystemTime::now();
         for (name, value) in headers {
@@ -2692,6 +2698,12 @@ fn follow_redirect(
     }
     let previous = request.url.clone();
     let cross_origin = origin(&previous) != origin(&target);
+    if cross_origin && request.same_origin_redirects {
+        return Err(NetError::new(
+            ErrorName::UnsafeRedirect,
+            "a redirect to another origin is refused for this request",
+        ));
+    }
 
     // 303, and 301/302 on POST, become GET without a body (Fetch §4.4).
     let drop_body = match status.as_u16() {

@@ -24,9 +24,9 @@ use tenta_core::NodeRef;
 use tenta_core::atom::atoms;
 use tenta_dom::NodeKind;
 use tenta_js::bindings::host::{
-    DocumentSet, HostObject, HostRecord, SharedContext, TAG_EVENT, TAG_HOST, TAG_HTML_COLLECTION,
-    TAG_NAMED_NODE_MAP, TAG_NODE, TAG_NODE_LIST, TAG_STATIC_HTML_COLLECTION, TAG_STATIC_NODE_LIST,
-    TAG_STYLE, TAG_TOKEN_LIST, TAG_WINDOW, decode, encode_window,
+    DocumentSet, HostObject, HostRecord, SharedContext, TAG_DATASET, TAG_EVENT, TAG_HOST,
+    TAG_HTML_COLLECTION, TAG_NAMED_NODE_MAP, TAG_NODE, TAG_NODE_LIST, TAG_STATIC_HTML_COLLECTION,
+    TAG_STATIC_NODE_LIST, TAG_STYLE, TAG_TOKEN_LIST, TAG_WINDOW, decode, encode_window,
 };
 use tenta_js::bindings::{
     InterfaceDescriptor, InterfaceRegistry, WRAPPER_HOST_FIELD, WRAPPER_TAG, WrapperWorld,
@@ -866,6 +866,8 @@ impl WrapperWorld for V8World {
                     "HTMLCollection"
                 } else if decoded.tag == TAG_TOKEN_LIST {
                     "DOMTokenList"
+                } else if decoded.tag == TAG_DATASET {
+                    "DOMStringMap"
                 } else if decoded.tag == TAG_NAMED_NODE_MAP {
                     "NamedNodeMap"
                 } else if decoded.tag == TAG_STYLE {
@@ -896,9 +898,16 @@ impl WrapperWorld for V8World {
                                 Some(tag) if tag == atoms::SCRIPT => "HTMLScriptElement",
                                 Some(tag) if tag == atoms::LINK => "HTMLLinkElement",
                                 Some(tag) if tag == atoms::STYLE => "HTMLStyleElement",
+                                Some(tag) if tag == atoms::VIDEO => "HTMLVideoElement",
+                                Some(tag) if tag == atoms::AUDIO => "HTMLAudioElement",
+                                Some(tag) if tag == atoms::CANVAS => "HTMLCanvasElement",
                                 _ => "HTMLElement",
                             },
-                            Some(ns) if ns == atoms::NS_SVG => "SVGElement",
+                            Some(ns) if ns == atoms::NS_SVG => match doc.tag(node_id) {
+                                Some(tag) if tag == atoms::SVG => "SVGSVGElement",
+                                Some(tag) if tag == atoms::A => "SVGAElement",
+                                _ => "SVGElement",
+                            },
                             _ => "Element",
                         },
                         NodeKind::Document => "Document",
@@ -925,6 +934,8 @@ impl WrapperWorld for V8World {
                     HostObject::html_collection(ctx.clone(), node)
                 } else if decoded.tag == TAG_TOKEN_LIST {
                     HostObject::token_list(ctx.clone(), node)
+                } else if decoded.tag == TAG_DATASET {
+                    HostObject::dataset_map(ctx.clone(), node)
                 } else if decoded.tag == TAG_NAMED_NODE_MAP {
                     HostObject::named_node_map(ctx.clone(), node)
                 } else if decoded.tag == TAG_STYLE {
@@ -1390,6 +1401,51 @@ pub struct SkeletonRegistry {
 }
 
 impl SkeletonRegistry {
+    /// Defines every registered interface object on the global of `context`,
+    /// as the non-enumerable data property Web IDL gives an interface object,
+    /// in registration order. This is the installation the generated
+    /// installers would do through the global object template; doing it after
+    /// the context exists is what keeps it out of V8's bootstrap, where it is
+    /// several times more expensive (`Engine::install_dom`).
+    pub fn install_constructors(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        context: v8::Local<v8::Context>,
+    ) -> Result<(), JsError> {
+        let global = context.global(scope);
+        for descriptor in &self.descriptors {
+            // A namespace object was put on the global template by its
+            // installer; only interfaces have a constructor to define.
+            if descriptor.kind != tenta_js::bindings::DefinitionKind::Interface {
+                continue;
+            }
+            let template = cached_template(scope, descriptor.name).ok_or_else(|| {
+                JsError::type_error(format!("{} template is missing", descriptor.name))
+            })?;
+            let constructor = template
+                .get_function(scope)
+                .ok_or_else(tenta_js::bindings::v8_pending_exception_error)?;
+            let name = v8::String::new(scope, descriptor.name)
+                .ok_or_else(|| JsError::range_error("Invalid string length"))?;
+            match global.define_own_property(
+                scope,
+                name.into(),
+                constructor.into(),
+                v8::PropertyAttribute::DONT_ENUM,
+            ) {
+                Some(true) => {}
+                Some(false) => {
+                    return Err(JsError::type_error(format!(
+                        "{} could not be defined on the global",
+                        descriptor.name
+                    )));
+                }
+                None => return Err(tenta_js::bindings::v8_pending_exception_error()),
+            }
+        }
+        Ok(())
+    }
+
     /// FunctionTemplate inheritance establishes instance chains, but Web IDL
     /// also links the constructor functions in each realm. Templates were
     /// installed under a bootstrap context; resolve them again only after the

@@ -12,9 +12,9 @@
 //! One driver serves both routes rather than two drivers sharing helpers. The
 //! two differ in exactly two things — the resource type the request carries and
 //! which table the answer is left in — while *everything* else is the same code
-//! path, and it is the same code path on purpose: **both cross-origin gates live
-//! here**, and a second driver would be a second place for gate 2 to be
-//! forgotten. See [`NetFetchDriver`] for the two gates and why both are needed.
+//! path, and it is the same code path on purpose: **the CORS checks live
+//! here**, and a second driver would be a second place for one to be
+//! forgotten. See [`NetFetchDriver`] for the checks and why each is needed.
 //!
 //! It lives in `tenta-page` because that is the only crate that can see
 //! everything it needs — `tenta-net`, the `tenta_js::fetch` seam, the
@@ -23,16 +23,22 @@
 //! holds no engine, and neither `tenta-js` nor `tenta-js-v8` gains an edge to
 //! the network tier.
 //!
+//! # Requests to other origins
+//!
+//! A request that leaves the document's origin goes through the CORS protocol
+//! (`crate::cors`): it is sent with an `Origin` header and, unless the page
+//! asked for credentials, without cookies; a method or a header a form could
+//! not have sent is preflighted first; and the response reaches script only
+//! when the server names the page's origin, with only the headers the server
+//! exposes. A response that fails the check is a network error, exactly as a
+//! transport failure is, and the reason goes to the log. See
+//! [`NetFetchDriver`] for where each step sits.
+//!
 //! # What this does not do
 //!
-//! There is no CORS and no preflight, and `RequestInit` reaches the request only
-//! through the three members the engine serves (`method`, `headers`, `body`) —
-//! the rest are refused before a request is built
-//! (`tenta_js::bindings::host::refused_request_init_member`). There is no
-//! streaming `Response.body` and no `AbortSignal`-driven cancellation. A
-//! request that leaves the document's origin is *refused* rather than made and
-//! then filtered, which is the one security property this module owns: see
-//! [`NetFetchDriver`] for the two gates and why both are needed.
+//! There is no preflight cache and no streaming `Response.body`. A request that needed a preflight does not
+//! follow a redirect to another origin, which would need a preflight of its
+//! own.
 //!
 //! XHR's own `abort()` reaches the transport here, and the same machinery
 //! answers `open()`'s step 10: both are [`XhrDriver::abort`], which names the
@@ -53,26 +59,28 @@ use std::rc::Rc;
 
 use tenta_core::RequestId;
 use tenta_js::fetch::{
-    FetchCompletions, FetchDriver, FetchOutcome, FetchRequest, FetchStartError, FetchedResponse,
+    Credentials, FetchCompletions, FetchDriver, FetchOutcome, FetchRequest, FetchStartError,
+    FetchedResponse, Mode, Redirect,
 };
 use tenta_js::xhr::{XhrCompletions, XhrDriver, XhrHandle};
 use tenta_net::policy::cookies::Site;
-use tenta_net::request::same_origin;
-use tenta_net::{Client, NetError, Request, ResourceType, Response};
+use tenta_net::request::{RedirectPolicy, same_origin};
+use tenta_net::{Client, CredentialsMode, NetError, Request, ResourceType, Response};
 use tokio::task::JoinHandle;
 use url::Url;
 
+use crate::cors;
 use crate::page::{PageConfig, next_request_id};
 use crate::settle::{RequestClass, SettleTracker};
 use crate::task::{catch_unwind_future, panic_message};
 
-/// The rejection a request that leaves the document's origin gets, from either
-/// gate.
-///
-/// Engine-authored and stable on purpose: what a page may branch on is that the
-/// promise rejected with a `TypeError`, never which of this engine's internal
-/// names refused it.
-const CROSS_ORIGIN: &str = "Failed to fetch: cross-origin requests are not supported yet";
+/// The rejection a request in `same-origin` mode gets when it would leave the
+/// document's origin, before it is sent or after a redirect took it there.
+const CROSS_ORIGIN: &str =
+    "Failed to fetch: the request mode is 'same-origin' and the URL is on another origin";
+
+/// The rejection a URL that is not `http:` or `https:` gets.
+const UNSUPPORTED_SCHEME: &str = "Failed to fetch: only http and https URLs can be fetched";
 
 /// The rejection every transport failure gets.
 ///
@@ -103,22 +111,24 @@ const INVALID_HEADER: &str = "Failed to fetch: a request header cannot be sent";
 /// than XHR and is kept: it is the *fetch* module, and the shared gates below are
 /// its reason to be one driver.)
 ///
-/// # The cross-origin gates
-///
-/// Neither gate is CORS, and both are required.
+/// # Requests to other origins
 ///
 /// 1. **Before the request is sent** (`FetchDriver::start`). A URL that is not
-///    same-origin with the document is refused, which the seam turns into a
-///    `TypeError` rejection: no synchronous throw, no network, and no settle
+///    `http:` or `https:` is refused, and so is a cross-origin URL in
+///    `same-origin` mode: no synchronous throw, no network, and no settle
 ///    registration. This is exactly what [`FetchStartError`] is for.
-/// 2. **On the final URL, before the body is read.** `Client::send` follows
-///    redirects internally, so a same-origin URL can redirect off-origin and
-///    the transport would then hand script a cross-origin body and header list.
-///    Gate 1 alone would therefore leave a cross-origin body leak behind the
-///    refusal, which is a worse failure than the one it prevents.
+/// 2. **The preflight.** A cross-origin request whose method or author headers
+///    are not CORS-safelisted is preceded by an `OPTIONS` request, and is sent
+///    only if the answer allows it.
+/// 3. **On the final response, before the body is read.** `Client::send`
+///    follows redirects internally, so the check is made against the whole
+///    chain: when any URL of it is off the document's origin the response has
+///    to pass the CORS check, and its headers are cut down to the ones script
+///    may read. A response that fails is dropped unread.
 ///
-/// The gate subsumes the scheme check: a `data:` or `ftp:` URL is not
-/// same-origin with an `http:` document, so no separate test is needed.
+/// Credentials follow the request's mode hop by hop in the transport
+/// (`tenta_net::CredentialsMode`), so a same-origin request that is redirected
+/// to another origin stops carrying cookies at that hop.
 pub(crate) struct NetFetchDriver {
     /// The page's transport handle, cloned per request. Cloning is cheap and
     /// every clone talks to the same io thread, pool and cookie jar.
@@ -193,6 +203,9 @@ struct Inflight {
     /// `target` bits are the object that made the request, so two objects that
     /// hold the same request id are still told apart.
     xhr: Option<XhrHandle>,
+    /// The resolver of the promise the request settles, or `None` on the XHR
+    /// route: what a `fetch()` whose signal aborted is found by.
+    resolver: Option<u64>,
     /// The settle registration the request holds, which has to be released by
     /// whoever ends it.
     ///
@@ -215,8 +228,48 @@ impl NetFetchDriver {
         resource_type: ResourceType,
         delivery: Delivery,
     ) -> Result<(), FetchStartError> {
-        // Gate 1, before anything is registered and before anything is sent.
-        same_origin_allowed(&request.initiator, &request.url)?;
+        // Step 1, before anything is registered and before anything is sent.
+        if !matches!(request.url.scheme(), "http" | "https") {
+            return Err(FetchStartError::new(UNSUPPORTED_SCHEME));
+        }
+        let cross_origin = !same_origin(&request.initiator, &request.url);
+        if cross_origin && request.mode == Mode::SameOrigin {
+            return Err(FetchStartError::new(CROSS_ORIGIN));
+        }
+        let mut request = request;
+        if request.mode == Mode::NoCors {
+            // The `"request-no-cors"` guard: a header a form could not have
+            // sent is not sent. With the method already limited to the simple
+            // ones, nothing is left that a preflight would have to ask about.
+            let unsafe_names = cors::unsafe_header_names(&request.headers);
+            request
+                .headers
+                .retain(|(name, _)| !unsafe_names.contains(&name.to_ascii_lowercase()));
+        }
+        let policy = CorsPolicy {
+            origin: cors::serialized_origin(&request.initiator),
+            initiator: request.initiator.clone(),
+            credentials: request.credentials == Credentials::Include,
+            same_origin_only: request.mode == Mode::SameOrigin,
+            opaque: request.mode == Mode::NoCors,
+        };
+        // Step 2's request, built here so a header the transport cannot carry
+        // is a start refusal like the real request's.
+        let preflight =
+            if cross_origin && cors::needs_preflight(&request.method, &request.headers) {
+                let built = preflight_request(&request, resource_type, &self.extra_headers)
+                    .map_err(|error| {
+                        tracing::warn!(url = %request.url, %error, "a preflight cannot be built");
+                        FetchStartError::new(INVALID_HEADER)
+                    })?;
+                Some(Preflight {
+                    request: built,
+                    method: request.method.clone(),
+                    unsafe_headers: cors::unsafe_header_names(&request.headers),
+                })
+            } else {
+                None
+            };
         // Built before the registration, so a header the transport cannot put
         // on the wire leaves no trace in the settle machine. The refusal is a
         // start refusal rather than a `Failed` outcome: the request cannot be
@@ -240,8 +293,8 @@ impl NetFetchDriver {
         // from reclassification. The provenance is the calling task's, verbatim
         // — a request from a timer is `Background` and does not hold the settle
         // open, which is the settle machine's own rule rather than this
-        // driver's. It is *not* what the cross-origin gate above compares; that
-        // one is the initiator's, the document URL (`same_origin_allowed`).
+        // driver's. It is *not* what the cross-origin test above compares; that
+        // one is the initiator's, the document URL.
         let request_id = next_request_id();
         let mut tracked = self.net.begin(&mut net, request_id, None);
         self.tracker.borrow_mut().note_request_started(
@@ -253,14 +306,15 @@ impl NetFetchDriver {
         // task body below is one body for both routes: the two differ in this
         // and in nothing else, and a second body is a second place for the
         // push-then-wake order and the panic path to drift.
+        let origin = request.origin;
         let push: Rc<dyn Fn(FetchOutcome)> = match delivery {
             Delivery::Resolver(resolver) => {
                 let completions = Rc::clone(&self.completions);
-                Rc::new(move |outcome| completions.push(resolver, outcome))
+                Rc::new(move |outcome| completions.push(resolver, outcome, origin))
             }
             Delivery::Xhr(handle) => {
                 let completions = Rc::clone(&self.xhrs);
-                Rc::new(move |outcome| completions.push(handle, outcome))
+                Rc::new(move |outcome| completions.push(handle, outcome, origin))
             }
         };
         // The task captures the pieces and never `self`: an `Rc` to the driver
@@ -268,11 +322,20 @@ impl NetFetchDriver {
         // so the driver would never drop and [`Drop`] would abort nothing.
         let client = self.client.clone();
         let tracker = Rc::clone(&self.tracker);
-        let initiator = request.initiator.clone();
+        let hub = self.net.clone();
         let handle = tokio::task::spawn_local(async move {
             let fetched = catch_unwind_future(async move {
+                if let Some(preflight) = preflight
+                    && let Err(failure) = run_preflight(&client, &hub, preflight, &policy).await
+                {
+                    tracing::warn!(%failure, "a cross-origin request failed its preflight");
+                    if let Some(tracked) = &mut tracked {
+                        tracked.failed_with("net::ERR_FAILED");
+                    }
+                    return FetchOutcome::Failed(FAILED.to_owned());
+                }
                 match client.send(net).await {
-                    Ok(response) => fetched_response(response, &initiator, &mut tracked).await,
+                    Ok(response) => fetched_response(response, &policy, &mut tracked).await,
                     Err(error) => {
                         if let Some(tracked) = &mut tracked {
                             tracked.failed(&error);
@@ -319,6 +382,7 @@ impl NetFetchDriver {
             // `Delivery` is `Copy`, so the handle the task's closure took is
             // still available here: the task and the list name the same request.
             xhr: delivery.xhr(),
+            resolver: delivery.resolver(),
             request_id,
             task: handle,
         });
@@ -353,11 +417,141 @@ impl Delivery {
             Delivery::Xhr(handle) => Some(handle),
         }
     }
+    /// The resolver the request settles, or `None` on the XHR route.
+    fn resolver(self) -> Option<u64> {
+        match self {
+            Delivery::Resolver(resolver) => Some(resolver),
+            Delivery::Xhr(_) => None,
+        }
+    }
+}
+
+/// What the CORS checks of one request compare against.
+struct CorsPolicy {
+    /// The document's URL.
+    initiator: Url,
+    /// Its origin, as `Access-Control-Allow-Origin` has to spell it.
+    origin: String,
+    /// Whether the credentials mode is `include`, which rules the wildcards
+    /// out and needs the server's `Access-Control-Allow-Credentials`.
+    credentials: bool,
+    /// Whether the mode is `same-origin`, so a redirect off the origin fails
+    /// the request whatever the server allows.
+    same_origin_only: bool,
+    /// Whether the mode is `no-cors`: a cross-origin response is not checked
+    /// and not shared, script gets an opaque one instead.
+    opaque: bool,
+}
+
+/// A preflight to make before the request it stands in front of.
+struct Preflight {
+    request: Request,
+    /// The real request's method and non-safelisted header names: what the
+    /// answer has to allow.
+    method: http::Method,
+    unsafe_headers: Vec<String>,
+}
+
+/// The CORS-preflight request for `request`
+/// (<https://fetch.spec.whatwg.org/#cors-preflight-fetch>): an `OPTIONS` to the
+/// same URL that names the method and the headers the real one will carry. It
+/// never carries credentials and does not follow redirects.
+fn preflight_request(
+    request: &FetchRequest,
+    resource_type: ResourceType,
+    extra_headers: &[(String, String)],
+) -> Result<Request, NetError> {
+    let mut out = Request::new(http::Method::OPTIONS, request.url.clone())
+        .resource_type(resource_type)
+        .initiator(request.initiator.clone())
+        .credentials(CredentialsMode::Omit)
+        .redirect(RedirectPolicy::Manual)
+        .header("Accept", "*/*")?
+        .header("Access-Control-Request-Method", request.method.as_str())?;
+    out.first_party = Site::from_url(&request.initiator);
+    let names = cors::unsafe_header_names(&request.headers);
+    if !names.is_empty() {
+        out = out.header("Access-Control-Request-Headers", &names.join(","))?;
+    }
+    for (name, value) in extra_headers {
+        out = out.header(name, value)?;
+    }
+    Ok(out)
+}
+
+/// Sends the preflight and checks its answer. `Err` is why the real request
+/// must not be sent.
+async fn run_preflight(
+    client: &Client,
+    hub: &crate::network::NetworkHub,
+    mut preflight: Preflight,
+    policy: &CorsPolicy,
+) -> Result<(), String> {
+    let mut tracked = hub.begin(&mut preflight.request, next_request_id(), None);
+    let response = match client.send(preflight.request).await {
+        Ok(response) => response,
+        Err(error) => {
+            if let Some(tracked) = &mut tracked {
+                tracked.failed(&error);
+            }
+            return Err(format!("the preflight failed: {}", error.error_text()));
+        }
+    };
+    if let Some(tracked) = &mut tracked {
+        tracked.response(&response);
+    }
+    let status = response.status.as_u16();
+    let headers: Vec<(String, Vec<u8>)> = response
+        .headers
+        .iter()
+        .map(|(name, value)| (name.clone(), value.as_bytes().to_vec()))
+        .collect();
+    // The body of a preflight answer means nothing; reading it to the end is
+    // what returns the connection to the pool.
+    let body = response.body.collect().await;
+    if let Some(tracked) = &mut tracked {
+        match &body {
+            Ok(body) => tracked.complete(body),
+            Err(error) => tracked.failed(error),
+        }
+    }
+    cors::check_preflight(
+        &policy.origin,
+        policy.credentials,
+        &preflight.method,
+        &preflight.unsafe_headers,
+        status,
+        &headers,
+    )
+    .map_err(|failure| failure.to_string())
 }
 
 impl FetchDriver for NetFetchDriver {
     fn start(&self, request: FetchRequest, resolver: u64) -> Result<(), FetchStartError> {
         self.send(request, ResourceType::Fetch, Delivery::Resolver(resolver))
+    }
+
+    /// Ends the request behind `resolver`, as [`XhrDriver::abort`] ends one
+    /// behind a handle: the task is aborted, so no completion is left behind,
+    /// and the settle registration it could no longer release is released
+    /// here.
+    fn abort(&self, resolver: u64) {
+        let mut inflight = self.inflight.borrow_mut();
+        let Some(index) = inflight
+            .iter()
+            .position(|entry| entry.resolver == Some(resolver))
+        else {
+            return;
+        };
+        let entry = inflight.swap_remove(index);
+        drop(inflight);
+        if entry.task.is_finished() {
+            return;
+        }
+        entry.task.abort();
+        self.tracker
+            .borrow_mut()
+            .note_request_done(entry.request_id);
     }
 }
 
@@ -470,7 +664,23 @@ fn net_request(
         // `.referrer()` is deliberately not called: the initiator supplies the
         // default, and overriding it here would bypass the referrer policy.
         .initiator(request.initiator.clone())
-        .max_body_bytes(max_body_bytes);
+        .max_body_bytes(max_body_bytes)
+        // The transport applies the mode hop by hop, so a redirect that
+        // leaves the document's origin stops carrying cookies there.
+        .credentials(match request.credentials {
+            Credentials::Omit => CredentialsMode::Omit,
+            Credentials::SameOrigin => CredentialsMode::SameOrigin,
+            Credentials::Include => CredentialsMode::Include,
+        })
+        // A request that needs a preflight has one for its own origin at
+        // most, so it may not be redirected to another.
+        .same_origin_redirects(cors::needs_preflight(&request.method, &request.headers));
+    if request.redirect == Redirect::Error {
+        out = out.redirect(RedirectPolicy::Error);
+    }
+    if request.bypass_cache {
+        out = out.reload();
+    }
     // What the request is first-party to is the **document**, not the request
     // URL: a request a page makes to a third-party origin is still a
     // first-party request of that page.
@@ -502,27 +712,11 @@ fn net_request(
     // The task is bounded anyway: the driver's `Drop` aborts it with the
     // navigation. No policy in this slice is better than a wrong one.
     //
-    // The redirect policy is left at its default (`Follow { max: 20 }`), which
-    // is what makes gate 2 below load-bearing. `user_activated` stays false: no
-    // gesture started a `fetch()`.
+    // The redirect policy is `Follow { max: 20 }` unless the page asked for
+    // `error`, which is what makes the check on the final response
+    // load-bearing. `user_activated` stays false: no gesture started a
+    // `fetch()`.
     Ok(out)
-}
-
-/// Whether a request the document at `initiator` made may reach `url`; `Err` is
-/// the refusal both cross-origin gates report.
-///
-/// Compared against [`FetchRequest::initiator`] — the document URL — and *not*
-/// against [`FetchRequest::origin`], which is task provenance and a different
-/// thing entirely. Origin equality is RFC 6454's: scheme, host and port.
-///
-/// The same check answers both gates. In `start` it is an `Err`; at completion
-/// it is a `Failed` outcome, because by then the request has already been made
-/// and the promise exists to be rejected.
-fn same_origin_allowed(initiator: &Url, url: &Url) -> Result<(), FetchStartError> {
-    if same_origin(initiator, url) {
-        return Ok(());
-    }
-    Err(FetchStartError::new(CROSS_ORIGIN))
 }
 
 /// What the transport answered, as the seam's outcome.
@@ -541,22 +735,57 @@ fn same_origin_allowed(initiator: &Url, url: &Url) -> Result<(), FetchStartError
 /// it decoded the body, so it does not lie about the bytes the engine holds.
 async fn fetched_response(
     response: Response,
-    initiator: &Url,
+    policy: &CorsPolicy,
     tracked: &mut Option<crate::network::Tracked>,
 ) -> FetchOutcome {
-    // Gate 2: the final URL, before the body is read. A same-origin URL that
+    // Step 3: the whole chain, before the body is read. A same-origin URL that
     // redirected off-origin is the case `Client::send` cannot report any other
     // way, because it follows redirects internally. Dropping the `Response`
     // returns the connection.
-    if let Err(refusal) = same_origin_allowed(initiator, &response.url) {
-        tracing::warn!(
-            url = %response.url,
-            "a response was redirected off the requesting origin; it is discarded"
-        );
+    let cross_origin = !same_origin(&policy.initiator, &response.url)
+        || response
+            .redirects
+            .iter()
+            .any(|hop| !same_origin(&policy.initiator, &hop.url));
+    let mut headers: Vec<(String, Vec<u8>)> = response
+        .headers
+        .iter()
+        // `as_bytes()`, never `to_str()`: a header value may be obs-text, and a
+        // `to_str()` that failed would blank the header instead of carrying it.
+        .map(|(name, value)| (name.clone(), value.as_bytes().to_vec()))
+        .collect();
+    if cross_origin && policy.opaque {
+        // The request was made, which is all a `no-cors` caller wanted of
+        // it; the answer is read to the end for a host that watches the
+        // traffic and is not handed to script.
         if let Some(tracked) = tracked {
-            tracked.failed_with("net::ERR_FAILED");
+            tracked.response(&response);
+            if let Ok(body) = response.body.collect().await {
+                tracked.complete(&body);
+            }
         }
-        return FetchOutcome::Failed(refusal.message().to_owned());
+        return FetchOutcome::Opaque;
+    }
+    if cross_origin {
+        let refusal = if policy.same_origin_only {
+            Some("the request mode is 'same-origin' and a redirect left the origin".to_owned())
+        } else {
+            cors::check_response(&policy.origin, policy.credentials, &headers)
+                .err()
+                .map(|failure| failure.to_string())
+        };
+        if let Some(reason) = refusal {
+            tracing::warn!(
+                url = %response.url,
+                %reason,
+                "a cross-origin response is not shared with the page; it is discarded"
+            );
+            if let Some(tracked) = tracked {
+                tracked.failed_with("net::ERR_FAILED");
+            }
+            return FetchOutcome::Failed(FAILED.to_owned());
+        }
+        headers = cors::exposed_headers(policy.credentials, headers);
     }
     if let Some(tracked) = tracked {
         tracked.response(&response);
@@ -565,13 +794,6 @@ async fn fetched_response(
     let status = response.status.as_u16();
     let url = response.url.to_string();
     let redirected = !response.redirects.is_empty();
-    let headers = response
-        .headers
-        .into_iter()
-        // `as_bytes()`, never `to_str()`: a header value may be obs-text, and a
-        // `to_str()` that failed would blank the header instead of carrying it.
-        .map(|(name, value)| (name, value.as_bytes().to_vec()))
-        .collect();
     // Read to completion rather than streamed: the seam is frozen to bytes
     // (`FetchedResponse::body`), so there is nowhere for a stream to go until
     // `d-5b`. `Some(vec![])` for an empty body is correct — `None` would mean
@@ -692,6 +914,7 @@ mod tests {
         match outcome {
             FetchOutcome::Response(fetched) => fetched,
             FetchOutcome::Failed(message) => panic!("expected a response, got: {message}"),
+            FetchOutcome::Opaque => panic!("expected a response, got an opaque one"),
         }
     }
 
@@ -779,52 +1002,47 @@ mod tests {
         );
     }
 
-    /// Origin equality is RFC 6454's, so the gate subsumes the scheme check: a
-    /// `data:` URL is not same-origin with an `http:` document, and neither is
-    /// the same host on another port or another scheme.
-    #[test]
-    fn the_gate_is_rfc_6454_origin_equality() {
-        let initiator = url("http://origin.test:8080/page");
-        assert!(same_origin_allowed(&initiator, &url("http://origin.test:8080/x")).is_ok());
-        assert!(
-            same_origin_allowed(&initiator, &url("http://origin.test/x")).is_err(),
-            "a different port is a different origin"
-        );
-        assert!(same_origin_allowed(&initiator, &url("https://origin.test:8080/x")).is_err());
-        assert!(same_origin_allowed(&initiator, &url("http://other.test:8080/x")).is_err());
-        assert!(
-            same_origin_allowed(&initiator, &url("data:text/plain,hello")).is_err(),
-            "a scheme the document is not served over is not same-origin"
-        );
-        assert_eq!(
-            same_origin_allowed(&initiator, &url("http://other.test/x"))
-                .expect_err("refused")
-                .message(),
-            CROSS_ORIGIN
-        );
+    /// The checks of one request made by the document at `initiator`, in the
+    /// default mode.
+    fn policy(initiator: &Url) -> CorsPolicy {
+        CorsPolicy {
+            initiator: initiator.clone(),
+            origin: cors::serialized_origin(initiator),
+            credentials: false,
+            same_origin_only: false,
+            opaque: false,
+        }
     }
 
-    /// The refusal is checked before the registration, so a cross-origin
-    /// `fetch()` leaves the settle machine exactly as it found it — no
+    /// The refusals are checked before the registration, so a request that is
+    /// refused leaves the settle machine exactly as it found it — no
     /// foreground request holding the settle open and nothing counted for
     /// CDP's idle signals.
     ///
     /// This is also what makes the test possible outside a `LocalSet`: the
     /// refusal returns before the `spawn_local` that a sent request would need.
     #[test]
-    fn a_cross_origin_request_is_refused_before_it_registers() {
+    fn a_request_that_cannot_be_made_is_refused_before_it_registers() {
         let (tracker, _clock) = tracker();
         let driver = driver(Rc::clone(&tracker));
-        let request = FetchRequest::get(
+        let mut same_origin_mode = FetchRequest::get(
             url("http://other.test/x"),
             url("http://origin.test/page"),
             Origin::Tracked,
         );
-
-        let error =
-            FetchDriver::start(&driver, request, 7).expect_err("a cross-origin request is refused");
-
+        same_origin_mode.mode = Mode::SameOrigin;
+        let error = FetchDriver::start(&driver, same_origin_mode, 7)
+            .expect_err("same-origin mode does not leave the origin");
         assert_eq!(error.message(), CROSS_ORIGIN);
+
+        let data = FetchRequest::get(
+            url("data:text/plain,hello"),
+            url("http://origin.test/page"),
+            Origin::Tracked,
+        );
+        let error = FetchDriver::start(&driver, data, 8).expect_err("not an http URL");
+        assert_eq!(error.message(), UNSUPPORTED_SCHEME);
+
         assert_eq!(
             tracker.borrow().pending().foreground_requests,
             0,
@@ -841,28 +1059,174 @@ mod tests {
         );
     }
 
-    /// Gate 2. `Client::send` follows redirects internally, so a same-origin
-    /// URL can end up answering from another origin; the response is discarded
-    /// rather than delivered, body and headers included.
-    #[tokio::test]
-    async fn a_cross_origin_final_url_after_a_redirect_is_a_failure() {
-        let initiator = url("http://origin.test/page");
-        let answered = response(
+    /// A response that came from another origin after a redirect, with the
+    /// headers the server answered with.
+    fn redirected_off_origin(headers: Vec<(&'static str, HeaderValue)>) -> Response {
+        response(
             200,
             url("http://other.test/elsewhere"),
-            vec![("content-type", HeaderValue::from_static("text/plain"))],
+            headers,
             vec![RedirectHop {
                 url: url("http://origin.test/moved"),
                 status: 302,
                 location: Some("http://other.test/elsewhere".to_owned()),
                 from_cache: false,
             }],
-            b"a body script must never see",
+            b"a body script sees only with the server's consent",
+        )
+    }
+
+    /// Step 3. `Client::send` follows redirects internally, so a same-origin
+    /// URL can end up answering from another origin; without the server's
+    /// consent the response is discarded rather than delivered, body and
+    /// headers included, and script is told only that the fetch failed.
+    #[tokio::test]
+    async fn a_cross_origin_response_without_consent_is_a_failure() {
+        let initiator = url("http://origin.test/page");
+        let answered = redirected_off_origin(vec![(
+            "content-type",
+            HeaderValue::from_static("text/plain"),
+        )]);
+        let outcome = fetched_response(answered, &policy(&initiator), &mut None).await;
+        assert_eq!(outcome, FetchOutcome::Failed(FAILED.to_owned()));
+
+        let other_origin = redirected_off_origin(vec![(
+            "access-control-allow-origin",
+            HeaderValue::from_static("http://third.test"),
+        )]);
+        let outcome = fetched_response(other_origin, &policy(&initiator), &mut None).await;
+        assert_eq!(outcome, FetchOutcome::Failed(FAILED.to_owned()));
+    }
+
+    /// With consent the response is delivered, cut down to the headers the
+    /// server exposes.
+    #[tokio::test]
+    async fn a_cross_origin_response_is_shared_when_the_server_names_the_origin() {
+        let initiator = url("http://origin.test/page");
+        let answered = redirected_off_origin(vec![
+            ("content-type", HeaderValue::from_static("text/plain")),
+            (
+                "access-control-allow-origin",
+                HeaderValue::from_static("http://origin.test"),
+            ),
+            ("x-internal", HeaderValue::from_static("hidden")),
+            ("x-request-id", HeaderValue::from_static("r1")),
+            (
+                "access-control-expose-headers",
+                HeaderValue::from_static("X-Request-Id"),
+            ),
+        ]);
+        let fetched = resolved(fetched_response(answered, &policy(&initiator), &mut None).await);
+        assert_eq!(fetched.url, "http://other.test/elsewhere");
+        assert!(fetched.redirected);
+        assert_eq!(
+            fetched.headers,
+            vec![
+                ("content-type".to_owned(), b"text/plain".to_vec()),
+                ("x-request-id".to_owned(), b"r1".to_vec()),
+            ]
         );
+    }
 
-        let outcome = fetched_response(answered, &initiator, &mut None).await;
+    /// Credentials rule the wildcard out, and `same-origin` mode rules out the
+    /// redirect whatever the server allows.
+    #[tokio::test]
+    async fn credentials_and_same_origin_mode_tighten_the_check() {
+        let initiator = url("http://origin.test/page");
+        let wildcard = || {
+            redirected_off_origin(vec![(
+                "access-control-allow-origin",
+                HeaderValue::from_static("*"),
+            )])
+        };
+        let shared = fetched_response(wildcard(), &policy(&initiator), &mut None).await;
+        assert!(matches!(shared, FetchOutcome::Response(_)));
 
-        assert_eq!(outcome, FetchOutcome::Failed(CROSS_ORIGIN.to_owned()));
+        let mut with_credentials = policy(&initiator);
+        with_credentials.credentials = true;
+        let outcome = fetched_response(wildcard(), &with_credentials, &mut None).await;
+        assert_eq!(outcome, FetchOutcome::Failed(FAILED.to_owned()));
+
+        let mut same_origin_mode = policy(&initiator);
+        same_origin_mode.same_origin_only = true;
+        let outcome = fetched_response(wildcard(), &same_origin_mode, &mut None).await;
+        assert_eq!(outcome, FetchOutcome::Failed(FAILED.to_owned()));
+    }
+
+    /// The modes a request carries reach the transport, and a request that
+    /// needs a preflight may not be redirected to another origin.
+    #[test]
+    fn the_modes_reach_the_transport_request() {
+        let initiator = url("https://origin.test/page");
+        let mut request = FetchRequest::get(
+            url("https://api.other.test/items"),
+            initiator,
+            Origin::Tracked,
+        );
+        let plain = net_request(&request, ResourceType::Fetch, 4096, &[]).expect("built");
+        assert_eq!(plain.credentials, CredentialsMode::SameOrigin);
+        assert_eq!(plain.redirect, RedirectPolicy::default());
+        assert!(!plain.same_origin_redirects && !plain.bypass_cache_lookup);
+
+        request.credentials = Credentials::Include;
+        request.redirect = Redirect::Error;
+        request.bypass_cache = true;
+        request.method = http::Method::PUT;
+        let net = net_request(&request, ResourceType::Fetch, 4096, &[]).expect("built");
+        assert_eq!(net.credentials, CredentialsMode::Include);
+        assert_eq!(net.redirect, RedirectPolicy::Error);
+        assert!(net.same_origin_redirects && net.bypass_cache_lookup);
+    }
+
+    /// The preflight names what the real request will carry and carries none
+    /// of it itself.
+    #[test]
+    fn a_preflight_names_the_method_and_the_unsafe_headers() {
+        let initiator = url("https://origin.test/page");
+        let mut request = FetchRequest::get(
+            url("https://api.other.test/items/1"),
+            initiator,
+            Origin::Tracked,
+        );
+        request.method = http::Method::PUT;
+        request.headers = vec![
+            ("content-type".to_owned(), "application/json".to_owned()),
+            ("X-Token".to_owned(), "t".to_owned()),
+            ("accept".to_owned(), "application/json".to_owned()),
+        ];
+        request.body = Some(b"{}".to_vec());
+        let extra = [("x-page".to_owned(), "1".to_owned())];
+
+        let mut preflight =
+            preflight_request(&request, ResourceType::Fetch, &extra).expect("built");
+
+        assert_eq!(preflight.method, http::Method::OPTIONS);
+        assert_eq!(preflight.url, request.url);
+        assert_eq!(preflight.credentials, CredentialsMode::Omit);
+        assert_eq!(preflight.redirect, RedirectPolicy::Manual);
+        assert!(
+            preflight
+                .body
+                .take_bytes()
+                .is_none_or(|body| body.is_empty())
+        );
+        let header = |name: &str| {
+            preflight
+                .headers
+                .iter()
+                .find(|(header, _)| header.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.to_str().expect("ascii").to_owned())
+        };
+        assert_eq!(
+            header("access-control-request-method").as_deref(),
+            Some("PUT")
+        );
+        assert_eq!(
+            header("access-control-request-headers").as_deref(),
+            Some("content-type,x-token")
+        );
+        assert_eq!(header("x-page").as_deref(), Some("1"));
+        assert!(header("x-token").is_none() && header("content-type").is_none());
     }
 
     /// The other route, and the only thing `net_request` does differently for
@@ -896,19 +1260,16 @@ mod tests {
         );
     }
 
-    /// Gate 1 on the XHR route. The refusal is the same one the `fetch` route
-    /// reports and is checked in the same place — before the registration and
-    /// before the spawn — so a cross-origin `xhr.send()` leaves the settle
-    /// machine exactly as it found it and leaves no task behind.
-    ///
-    /// XHR is the route where this matters most: a page's XHR is the request
-    /// shape a cross-origin call is most often written with.
+    /// The start refusal on the XHR route. It is the same one the `fetch`
+    /// route reports and is checked in the same place — before the
+    /// registration and before the spawn — so a refused `xhr.send()` leaves the
+    /// settle machine exactly as it found it and leaves no task behind.
     #[test]
-    fn a_cross_origin_xhr_is_refused_before_it_registers() {
+    fn an_xhr_that_cannot_be_made_is_refused_before_it_registers() {
         let (tracker, _clock) = tracker();
         let driver = driver(Rc::clone(&tracker));
         let request = FetchRequest::get(
-            url("http://other.test/x"),
+            url("ftp://other.test/x"),
             url("http://origin.test/page"),
             Origin::Tracked,
         );
@@ -917,10 +1278,9 @@ mod tests {
             request: 2,
         };
 
-        let error = XhrDriver::start(&driver, request, handle)
-            .expect_err("a cross-origin request is refused");
+        let error = XhrDriver::start(&driver, request, handle).expect_err("not an http URL");
 
-        assert_eq!(error.message(), CROSS_ORIGIN);
+        assert_eq!(error.message(), UNSUPPORTED_SCHEME);
         assert_eq!(tracker.borrow().pending().foreground_requests, 0);
         assert_eq!(tracker.borrow().in_flight_for_idle(), 0);
         assert!(driver.inflight.borrow().is_empty());
@@ -1092,6 +1452,7 @@ mod tests {
             assert!(finished.is_finished(), "the task under test has ended");
             driver.inflight.borrow_mut().push(Inflight {
                 xhr: Some(handle),
+                resolver: None,
                 request_id: RequestId(9),
                 task: finished,
             });
@@ -1135,7 +1496,7 @@ mod tests {
             b"{\"ok\":true}",
         );
 
-        let fetched = resolved(fetched_response(answered, &initiator, &mut None).await);
+        let fetched = resolved(fetched_response(answered, &policy(&initiator), &mut None).await);
 
         assert_eq!(fetched.url, target.to_string());
         assert_eq!(fetched.status, 200);
@@ -1168,7 +1529,7 @@ mod tests {
             b"<h1>HTTP 503</h1>",
         );
 
-        let fetched = resolved(fetched_response(answered, &initiator, &mut None).await);
+        let fetched = resolved(fetched_response(answered, &policy(&initiator), &mut None).await);
 
         assert_eq!(fetched.status, 503);
         assert!(!fetched.redirected, "nothing redirected");
@@ -1238,6 +1599,7 @@ mod tests {
             });
             driver.inflight.borrow_mut().push(Inflight {
                 xhr: None,
+                resolver: None,
                 request_id: RequestId(1),
                 task: handle,
             });

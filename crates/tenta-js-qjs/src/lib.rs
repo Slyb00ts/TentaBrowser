@@ -195,7 +195,7 @@ impl Engine {
         timeout: Option<Duration>,
     ) -> Result<String, JsError> {
         self.entry_with(timeout, false, |ctx| {
-            let value: Value = ctx.eval(source)?;
+            let value: Value = eval_classic(ctx, source)?;
             Coerced::<String>::from_js(ctx, value).map(|v| v.0)
         })
     }
@@ -485,6 +485,19 @@ impl Drop for Engine {
         self.state.world.reclaim();
     }
 }
+/// Evaluates page source as a classic script: global code that is sloppy
+/// unless it says `"use strict"`. The binding's own default forces strict
+/// mode, under which an ordinary page script that assigns an undeclared name
+/// or reads `this` in a plain function call throws.
+pub(crate) fn eval_classic<'js, V: FromJs<'js>>(
+    ctx: &Ctx<'js>,
+    source: impl Into<Vec<u8>>,
+) -> rquickjs::Result<V> {
+    let mut options = rquickjs::context::EvalOptions::default();
+    options.strict = false;
+    ctx.eval_with_options(source, options)
+}
+
 fn initialization_error(error: rquickjs::Error) -> ScriptError {
     ScriptError {
         kind: ScriptErrorKind::Terminated,

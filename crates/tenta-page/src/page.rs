@@ -47,6 +47,7 @@ mod evaluate;
 mod geometry;
 #[cfg(feature = "render")]
 mod image_loader;
+mod modules;
 mod retained;
 #[cfg(feature = "render")]
 mod screenshot;
@@ -118,6 +119,13 @@ pub struct Goto {
     pub timeout: Duration,
     /// `Referer` header to send.
     pub referer: Option<String>,
+    /// The entity body of a POST navigation (a form submission); `None` is a
+    /// GET.
+    pub post: Option<tenta_dom::PostData>,
+    /// The document that started the navigation, for one a page begins
+    /// itself: it decides `Origin`, `Sec-Fetch-Site` and the default
+    /// `Referer`. `None` is a navigation the host issued.
+    pub initiator: Option<Url>,
 }
 
 impl Default for Goto {
@@ -126,6 +134,8 @@ impl Default for Goto {
             wait_until: Settle::Load,
             timeout: Duration::from_secs(30),
             referer: None,
+            post: None,
+            initiator: None,
         }
     }
 }
@@ -147,6 +157,21 @@ impl Goto {
 
     pub fn referer(mut self, referer: impl Into<String>) -> Self {
         self.referer = Some(referer.into());
+        self
+    }
+
+    /// Makes the navigation a POST with `body` as its entity body.
+    pub fn post(mut self, content_type: impl Into<String>, body: Vec<u8>) -> Self {
+        self.post = Some(tenta_dom::PostData {
+            content_type: content_type.into(),
+            body,
+        });
+        self
+    }
+
+    /// Names the document that started the navigation.
+    pub fn initiator(mut self, url: Url) -> Self {
+        self.initiator = Some(url);
         self
     }
 }
@@ -381,6 +406,9 @@ impl PageState {
 }
 
 pub(crate) struct PageInner {
+    /// This page, for the one caller that has only `&self`: a navigation the
+    /// document's script asks for arrives through [`ScriptBudget`].
+    this: std::sync::Weak<PageInner>,
     config: PageConfig,
     frame: FrameId,
     state: Mutex<PageState>,
@@ -556,6 +584,22 @@ impl ScriptBudget for PageInner {
         self.emit(PageEvent::ScriptTerminated { entry });
     }
 
+    fn request_navigation(&self, request: tenta_dom::NavigationRequest) {
+        if let Some(inner) = self.this.upgrade() {
+            start_requested_navigation(inner, request);
+        }
+    }
+
+    fn request_imports(
+        &self,
+        imports: Vec<tenta_js::modules::DynamicImport>,
+        context: runtime::ImportContext,
+    ) {
+        if let Some(inner) = self.this.upgrade() {
+            start_dynamic_imports(inner, imports, context);
+        }
+    }
+
     fn emit(&self, event: PageEvent) {
         PageInner::emit(self, event);
     }
@@ -646,7 +690,8 @@ impl Page {
         let frame = next_frame_id();
         config.net.bind_frame(frame);
         Page {
-            inner: Arc::new(PageInner {
+            inner: Arc::new_cyclic(|this| PageInner {
+                this: this.clone(),
                 frame,
                 state: Mutex::new(PageState {
                     document: Some(initial_document(config.javascript)),
@@ -1088,6 +1133,62 @@ impl Drop for InFlight {
     }
 }
 
+/// How long a navigation the page started itself may take.
+const REQUESTED_NAVIGATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Starts the navigation the page's own script asked for: a `location`
+/// assignment, a form submission or an activated link. It is an ordinary
+/// navigation with no caller awaiting it, so its outcome is what the page
+/// shows and reports: the new document or the error document, the events, and
+/// [`Page::navigation`]. The page counts it as in flight from this moment, so
+/// a host that asks right after the script entry that caused it sees it.
+///
+/// Only `http` and `https` targets are followed, the same as for a navigation
+/// an action reports to a host; anything else is dropped.
+fn start_requested_navigation(inner: Arc<PageInner>, request: tenta_dom::NavigationRequest) {
+    if !matches!(request.url.scheme(), "http" | "https") {
+        tracing::debug!(
+            page = ?inner.config.id,
+            scheme = request.url.scheme(),
+            "a navigation the page asked for was not followed: only http and https are"
+        );
+        return;
+    }
+    let initiator = inner
+        .state
+        .lock()
+        .navigation
+        .as_ref()
+        .map(|navigation| navigation.final_url.clone());
+    let options = Goto {
+        timeout: REQUESTED_NAVIGATION_TIMEOUT,
+        post: request.post,
+        initiator,
+        ..Goto::default()
+    };
+    let in_flight = InFlight::enter(&inner);
+    let thread = Arc::clone(&inner.config.thread);
+    let page = Page {
+        inner: Arc::clone(&inner),
+    };
+    let guard = match page.begin_navigation(request.url, options, None) {
+        Ok(guard) => guard,
+        // The page is closed or crashed: there is nothing to navigate.
+        Err(_) => return,
+    };
+    let posted = thread.post_job(Box::new(move || {
+        Box::pin(async move {
+            let _in_flight = in_flight;
+            if let Err(error) = guard.await {
+                tracing::debug!(%error, "a navigation the page asked for did not complete");
+            }
+        })
+    }));
+    if posted.is_err() {
+        tracing::debug!("the page thread is shutting down; the navigation was not started");
+    }
+}
+
 /// The navigation itself, running on the page thread.
 /// `generation` is the navigation generation at the time goto_url was called;
 /// if it changes, a concurrent goto or close cancelled this navigation.
@@ -1157,7 +1258,12 @@ async fn navigate(
     inner.emit(PageEvent::Request {
         id: request_id,
         url: url.clone(),
-        method: "GET".to_owned(),
+        method: if options.post.is_some() {
+            "POST"
+        } else {
+            "GET"
+        }
+        .to_owned(),
         resource_type: "document",
     });
     tracker
@@ -1944,12 +2050,29 @@ impl Drop for ScriptJobs {
 /// settle until the drain runs it.
 struct DeferredEntry {
     url: Url,
-    /// The script's decoded text, or `None` when it has none: the fetch failed,
-    /// the origin answered with a status that is not ok, or the document's
-    /// encoding could not decode it.
-    text: oneshot::Receiver<Option<String>>,
+    /// The script, or `None` when there is nothing to run: the fetch failed,
+    /// the origin answered with a status that is not ok, the document's
+    /// encoding could not decode it, or a module's graph did not load.
+    script: oneshot::Receiver<Option<DeferredScript>>,
     pending: PendingScripts,
 }
+
+/// What a deferred entry runs once its turn comes.
+enum DeferredScript {
+    /// A classic script's decoded text and its `<script>` element, which is
+    /// `document.currentScript` while the script runs.
+    Classic {
+        source: String,
+        element: tenta_core::NodeRef,
+    },
+    /// A module script whose graph is loaded, by its key in the module map.
+    Module { key: String },
+}
+
+/// How long an `import()` made after the navigation is over may take to load
+/// its graph. The navigation's own deadline bounds a module script the parser
+/// found; a later import has none to inherit.
+const IMPORT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Starts the parallel fetch of one `defer`/`async` external classic script.
 ///
@@ -1990,13 +2113,13 @@ fn start_deferred_script(
         // `async` waits only for its own fetch: its task runs the script the
         // moment the text arrives, which is why the count it holds ends with
         // that task rather than with the parse.
-        runtime::DeferredTiming::Async(url) => {
+        runtime::DeferredTiming::Async(url, element) => {
             let handle = tokio::task::spawn_local(async move {
                 let fetched = catch_unwind_future(async {
                     let source =
                         fetch_deferred_script(&inner, &tracker, &meta, &url, encoding).await;
                     if let Some(source) = source {
-                        run_fetched_script(page, &document, &url, &source);
+                        run_fetched_script(page, &document, &url, &source, element);
                         // What it inserted is script's, never the parser's.
                         #[cfg(feature = "render")]
                         sweep_script_sheets(&inner, &tracker, &document, meta.navigation);
@@ -2018,7 +2141,7 @@ fn start_deferred_script(
         // `defer` waits for the document too, and for every deferred script
         // before it, so its task only delivers the text: the drain decides when
         // it runs, and owns the count until it has.
-        runtime::DeferredTiming::Defer(url) => {
+        runtime::DeferredTiming::Defer(url, element) => {
             let (sender, text) = oneshot::channel();
             // The entry keeps the URL for the drain's log lines; the task needs
             // its own copy for the fetch and its own messages.
@@ -2030,7 +2153,8 @@ fn start_deferred_script(
                             .await;
                     // A receiver that is gone means the navigation ended before
                     // the drain reached this script; the text has nowhere to go.
-                    let _ = sender.send(source);
+                    let _ = sender
+                        .send(source.map(|source| DeferredScript::Classic { source, element }));
                 })
                 .await;
                 if let Err(payload) = fetched {
@@ -2041,9 +2165,151 @@ fn start_deferred_script(
                     );
                 }
             });
-            jobs.deferred.push(DeferredEntry { url, text, pending });
+            jobs.deferred.push(DeferredEntry {
+                url,
+                script: text,
+                pending,
+            });
             jobs.inflight.push(handle);
         }
+        // A module script with `async` runs when its graph has loaded, like an
+        // `async` classic script runs when its text has.
+        runtime::DeferredTiming::AsyncModule(root) => {
+            let handle = tokio::task::spawn_local(async move {
+                let loaded = catch_unwind_future(async {
+                    match modules::load_graph(&inner, &tracker, &meta, &document, root).await {
+                        Ok(key) => {
+                            run_loaded_module(page, &document, &key);
+                            #[cfg(feature = "render")]
+                            sweep_script_sheets(&inner, &tracker, &document, meta.navigation);
+                        }
+                        Err(reason) => {
+                            tracing::warn!(?page, %reason, "an async module script did not load")
+                        }
+                    }
+                })
+                .await;
+                if let Err(payload) = loaded {
+                    let reason = panic_message(&payload);
+                    inner.mark_crashed(&reason);
+                    if let Some(document) = document.upgrade() {
+                        drop(runtime::take_runtime_for(page, &document));
+                    }
+                    tracing::error!(?page, reason, "an async module script task panicked");
+                }
+                drop(pending);
+            });
+            jobs.inflight.push(handle);
+        }
+        // A module script without `async` is deferred: its graph loads in
+        // parallel with the parse and it runs in document order with the
+        // `defer` scripts, before `DOMContentLoaded`.
+        runtime::DeferredTiming::Module(root) => {
+            let (sender, script) = oneshot::channel();
+            let url = match &root {
+                runtime::ModuleRoot::External(url) => url.clone(),
+                runtime::ModuleRoot::Inline { .. } => meta.document_url.clone(),
+            };
+            let handle = tokio::task::spawn_local(async move {
+                let loaded = catch_unwind_future(async {
+                    let key = modules::load_graph(&inner, &tracker, &meta, &document, root).await;
+                    if let Err(reason) = &key {
+                        tracing::warn!(?page, %reason, "a module script did not load");
+                    }
+                    let _ = sender.send(key.ok().map(|key| DeferredScript::Module { key }));
+                })
+                .await;
+                if let Err(payload) = loaded {
+                    tracing::error!(
+                        ?page,
+                        reason = %panic_message(&payload),
+                        "the load of a module script panicked"
+                    );
+                }
+            });
+            jobs.deferred.push(DeferredEntry {
+                url,
+                script,
+                pending,
+            });
+            jobs.inflight.push(handle);
+        }
+    }
+}
+
+/// Runs a module whose graph is loaded, if this navigation's engine is still
+/// bound to the tree. See [`run_fetched_script`] for why the tree is named
+/// weakly.
+fn run_loaded_module(page: PageId, document: &Weak<RefCell<DomDocument>>, key: &str) {
+    let Some(document) = document.upgrade() else {
+        return;
+    };
+    if runtime::with_runtime_for(page, &document, |runtime| runtime.run_module(key)).is_none() {
+        tracing::debug!(
+            ?page,
+            module = %key,
+            "a module script did not run: its engine is no longer bound to this tree"
+        );
+    }
+}
+
+/// Loads the graphs the page's script asked for with `import()` and answers
+/// each import when its graph is there.
+///
+/// Each import is its own task on the page thread, and each holds the settle
+/// while it loads: an `import()` is how a page built from modules gets its
+/// code, so a navigation that settled with one in flight would hand back a
+/// page that has not started.
+fn start_dynamic_imports(
+    inner: Arc<PageInner>,
+    imports: Vec<tenta_js::modules::DynamicImport>,
+    context: runtime::ImportContext,
+) {
+    let page = inner.config.id;
+    let navigation = inner.state.lock().navigation_generation;
+    for import in imports {
+        let inner = Arc::clone(&inner);
+        let tracker = Rc::clone(&context.tracker);
+        let document = context.document.clone();
+        let document_url = context
+            .document_url
+            .clone()
+            .unwrap_or_else(|| import.url.clone());
+        // Held from here rather than from inside the task: the task has not
+        // run yet when the entry that made the import returns, and the settle
+        // must not be judged finished in between.
+        let pending = PendingScripts::hold(&tracker);
+        tokio::task::spawn_local(async move {
+            let meta = runtime::ScriptMeta {
+                base: document_url.clone(),
+                document_url,
+                deadline: inner.config.clock.now() + IMPORT_TIMEOUT,
+                navigation,
+            };
+            let root = runtime::ModuleRoot::External(import.url);
+            let loaded = catch_unwind_future(modules::load_graph(
+                &inner, &tracker, &meta, &document, root,
+            ))
+            .await;
+            let outcome = match loaded {
+                Ok(outcome) => outcome,
+                Err(payload) => {
+                    tracing::error!(
+                        ?page,
+                        reason = %panic_message(&payload),
+                        "the load of a dynamic import panicked"
+                    );
+                    Err("the module could not be loaded".to_owned())
+                }
+            };
+            if let Some(document) = document.upgrade() {
+                let outcome = outcome.as_ref().map(String::as_str).map_err(String::as_str);
+                runtime::with_runtime_for(page, &document, |runtime| {
+                    runtime.finish_dynamic_import(import.id, outcome)
+                });
+            }
+            drop(pending);
+        });
     }
 }
 
@@ -2095,6 +2361,7 @@ fn run_fetched_script(
     document: &Weak<RefCell<DomDocument>>,
     url: &Url,
     source: &str,
+    element: tenta_core::NodeRef,
 ) {
     let Some(document) = document.upgrade() else {
         tracing::debug!(
@@ -2104,7 +2371,11 @@ fn run_fetched_script(
         );
         return;
     };
-    if runtime::with_runtime_for(page, &document, |runtime| runtime.run_source(source)).is_none() {
+    if runtime::with_runtime_for(page, &document, |runtime| {
+        runtime.run_script(source, Some(element))
+    })
+    .is_none()
+    {
         tracing::debug!(
             ?page,
             url = %url,
@@ -2149,7 +2420,7 @@ async fn drain_deferred(
     for entry in entries {
         let DeferredEntry {
             url,
-            mut text,
+            script: mut text,
             pending,
         } = entry;
         // Registered before the check, so a bump between the two is not lost
@@ -2181,8 +2452,13 @@ async fn drain_deferred(
             }
         };
         match received {
-            Ok(Some(source)) => {
-                run_fetched_script(page, &document, &url, &source);
+            Ok(Some(DeferredScript::Classic { source, element })) => {
+                run_fetched_script(page, &document, &url, &source, element);
+                #[cfg(feature = "render")]
+                sweep_script_sheets(inner, &tracker, &document, generation);
+            }
+            Ok(Some(DeferredScript::Module { key })) => {
+                run_loaded_module(page, &document, &key);
                 #[cfg(feature = "render")]
                 sweep_script_sheets(inner, &tracker, &document, generation);
             }
@@ -2269,7 +2545,7 @@ async fn drive_parse(
         )
         .await?;
         let deferred = match pending_script {
-            runtime::PendingScript::Ready(source) => {
+            runtime::PendingScript::Ready(source, element) => {
                 #[cfg(feature = "render")]
                 sheet_loader::wait_for_blocking_sheets(
                     inner,
@@ -2279,7 +2555,7 @@ async fn drive_parse(
                     deadline,
                 )
                 .await;
-                runtime::run_script_source(config.id, document, &source);
+                runtime::run_script_source(config.id, document, &source, Some(element));
                 // What the script inserted is its own, not the parser's: it
                 // does not block the scripts after it.
                 #[cfg(feature = "render")]
@@ -3181,9 +3457,26 @@ fn commit_error_document(
 }
 
 fn build_request(config: &PageConfig, url: &Url, options: &Goto) -> Result<Request> {
-    let mut request = Request::new(http::Method::GET, url.clone())
+    let method = if options.post.is_some() {
+        http::Method::POST
+    } else {
+        http::Method::GET
+    };
+    let mut request = Request::new(method, url.clone())
         .resource_type(ResourceType::Document)
         .user_activated(true);
+    if let Some(post) = &options.post {
+        request.body = post.body.clone().into();
+        request = request
+            .header("content-type", &post.content_type)
+            .map_err(|err| Error::invalid(err.to_string()))?;
+    }
+    if let Some(initiator) = &options.initiator {
+        request = request.initiator(initiator.clone());
+        if options.referer.is_none() {
+            request = request.referrer(initiator.clone());
+        }
+    }
     // The transport gets a slightly later deadline than the page, so the
     // page's own timer is the one that decides and the error is `Timeout`
     // rather than a race between two clocks.

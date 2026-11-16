@@ -278,6 +278,28 @@ pub fn settle_promise(host: &V8ScriptHost, resolver: u64, outcome: PromiseOutcom
     host.with_context(|scope| settle_in(host, scope, resolver, outcome).unwrap_or(false))
 }
 
+/// Rejects the promise `resolver` names with the value stored at `bits`. The
+/// stored value stays its owner's: the settlement holds a second reference to
+/// the same JavaScript value, which the microtask releases.
+pub fn reject_with_stored(host: &V8ScriptHost, resolver: u64, bits: u64) -> bool {
+    host.with_context(|scope| {
+        let Some(state) = state_of(scope) else {
+            return false;
+        };
+        // `null` is the prelude's sentinel rather than a stored value.
+        let value = if bits == tenta_js::bindings::AnyValue::NULL.0 {
+            v8::null(scope).into()
+        } else {
+            let Some(value) = state.world.borrow().load_value(scope, bits) else {
+                return false;
+            };
+            value
+        };
+        let stored = state.world.borrow_mut().store_value(scope, value);
+        queue_settlement(&state, scope, resolver, stored, true, true)
+    })
+}
+
 /// The body of [`settle_promise`], in the scope its caller has already entered:
 /// a second [`V8ScriptHost::with_context`] inside the first would nest a
 /// `CallbackScope`, which is not legal.

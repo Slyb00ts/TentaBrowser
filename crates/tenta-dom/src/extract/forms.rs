@@ -92,27 +92,6 @@ fn label_for(document: &Document, control: NodeId) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-fn is_disabled_in_fieldset(document: &Document, node: NodeId) -> bool {
-    // A control inside a <fieldset disabled> is disabled, except if it's inside
-    // that fieldset's first <legend> element.
-    for ancestor in document.ancestors(node) {
-        if document.tag(ancestor) == Some(atoms::FIELDSET)
-            && document.has_attribute(ancestor, atoms::DISABLED)
-        {
-            // Check if node is inside the first <legend> of this fieldset
-            let first_child = document.first_child(ancestor);
-            if first_child.is_some() && document.tag(first_child) == Some(atoms::LEGEND) {
-                // Check if node is inside this legend
-                if node == first_child || document.ancestors(node).any(|a| a == first_child) {
-                    return false; // Inside the first legend, not disabled
-                }
-            }
-            return true; // Inside disabled fieldset, not in first legend
-        }
-    }
-    false
-}
-
 fn field(document: &Document, node: NodeId) -> Field {
     let tag = document.tag(node).unwrap_or(atoms::EMPTY);
     let field_type = if tag == atoms::INPUT {
@@ -128,8 +107,18 @@ fn field(document: &Document, node: NodeId) -> Field {
     } else {
         tag.as_str().to_owned()
     };
-    let value = if tag == atoms::TEXTAREA {
-        Some(document.text_content(node))
+    // What the control holds now: a value script or input set wins over the
+    // content attribute. A password is the exception: only the attribute is
+    // reported, so a typed secret never leaves the page through an extraction.
+    let value = if field_type == "password" {
+        document.attribute(node, atoms::VALUE).map(str::to_owned)
+    } else if tag == atoms::TEXTAREA {
+        Some(crate::forms::control_value(document, node))
+    } else if tag == atoms::INPUT {
+        match document.dirty_value(node) {
+            Some(dirty) => Some(dirty.to_owned()),
+            None => document.attribute(node, atoms::VALUE).map(str::to_owned),
+        }
     } else {
         document.attribute(node, atoms::VALUE).map(str::to_owned)
     };
@@ -145,8 +134,8 @@ fn field(document: &Document, node: NodeId) -> Field {
                         .map(str::to_owned)
                         .unwrap_or_else(|| label.clone()),
                     label,
-                    selected: document.has_attribute(option, atoms::SELECTED),
-                    disabled: document.has_attribute(option, atoms::DISABLED),
+                    selected: crate::forms::is_selected(document, option),
+                    disabled: crate::forms::is_option_disabled(document, option),
                 }
             })
             .collect()
@@ -165,9 +154,8 @@ fn field(document: &Document, node: NodeId) -> Field {
             .attribute(node, atoms::PLACEHOLDER)
             .map(str::to_owned),
         required: document.has_attribute(node, atoms::REQUIRED),
-        disabled: document.has_attribute(node, atoms::DISABLED)
-            || is_disabled_in_fieldset(document, node),
-        checked: document.has_attribute(node, atoms::CHECKED),
+        disabled: crate::forms::is_disabled(document, node),
+        checked: crate::forms::is_checked(document, node),
         multiple: document.has_attribute(node, atoms::MULTIPLE),
         options,
     }

@@ -224,8 +224,17 @@ impl PageEngine for Engine {
 
     /// Named explicitly so the inherent method is what runs and a later trait
     /// default cannot shadow it.
+    ///
+    /// Each run of completions is entered under the provenance of the requests
+    /// it answers, which the checkpoint that runs their reactions inherits
+    /// (`HostState::microtask_origin`): the reactions are where the page's next
+    /// request is made, and it has to be `Tracked` to keep the settle open for
+    /// a page that loads its data link by link.
     fn settle_fetches(&mut self, completions: Vec<FetchCompletion>) {
-        Engine::settle_fetches(self, completions);
+        let scheduler = self.host.scheduler.clone();
+        for (origin, run) in runs_by_origin(completions, |completion| completion.origin) {
+            scheduler.with_origin(origin, || Engine::settle_fetches(self, run));
+        }
     }
 
     /// Installs the driver the page's XHR objects hand their requests to.
@@ -242,8 +251,13 @@ impl PageEngine for Engine {
 
     /// Named explicitly so the inherent method is what runs and a later trait
     /// default cannot shadow it.
+    ///
+    /// Entered under the requests' provenance, like [`Self::settle_fetches`].
     fn settle_xhr(&mut self, completions: Vec<XhrCompletion>) {
-        Engine::settle_xhr(self, completions);
+        let scheduler = self.host.scheduler.clone();
+        for (origin, run) in runs_by_origin(completions, |completion| completion.origin) {
+            scheduler.with_origin(origin, || Engine::settle_xhr(self, run));
+        }
     }
 
     fn set_image_host(&mut self, host: Rc<dyn ImageHost>) {
@@ -293,6 +307,61 @@ impl PageEngine for Engine {
 
     fn run_microtasks(&mut self) {
         Engine::run_microtasks(self)
+    }
+
+    fn supports_modules(&self) -> bool {
+        true
+    }
+
+    fn add_import_map(&mut self, json: &str, base: &url::Url) -> Result<(), ScriptError> {
+        Engine::add_import_map(self, json, base).map_err(|error| ScriptError {
+            kind: ScriptErrorKind::Syntax,
+            message: error.message,
+        })
+    }
+
+    fn has_module(&self, key: &str) -> bool {
+        Engine::has_module(self, key)
+    }
+
+    /// Compiled under [`Origin::Tracked`]: a module script the document named
+    /// is part of loading it, like a classic one.
+    fn compile_module(
+        &mut self,
+        key: &str,
+        source: &str,
+        base: &url::Url,
+    ) -> Result<Vec<url::Url>, ScriptError> {
+        let scheduler = self.host.scheduler.clone();
+        scheduler
+            .with_origin(Origin::Tracked, || {
+                self.compile_module_classified(key, source, base)
+            })
+            .map_err(|failure| ScriptError {
+                kind: failure.kind,
+                message: failure.message,
+            })
+    }
+
+    fn run_module(&mut self, key: &str) -> Result<(), ScriptError> {
+        let scheduler = self.host.scheduler.clone();
+        scheduler
+            .with_origin(Origin::Tracked, || self.run_module_classified(key))
+            .map_err(|failure| ScriptError {
+                kind: failure.kind,
+                message: failure.message,
+            })
+    }
+
+    fn take_dynamic_imports(&mut self) -> Vec<tenta_js::modules::DynamicImport> {
+        Engine::take_dynamic_imports(self)
+    }
+
+    fn finish_dynamic_import(&mut self, id: u64, outcome: Result<&str, &str>) {
+        let scheduler = self.host.scheduler.clone();
+        scheduler.with_origin(Origin::Tracked, || {
+            Engine::finish_dynamic_import(self, id, outcome);
+        });
     }
 
     /// Forces a full collection and then applies the wrapper bookkeeping the
@@ -413,4 +482,19 @@ impl PageEngineFactory for V8EngineFactory {
         engine.host.viewport.set(config.viewport);
         Ok(Box::new(engine))
     }
+}
+
+/// Splits `items` into consecutive runs that share a provenance, keeping
+/// their order: a batch of completions is delivered in the order it arrived,
+/// and each run under the provenance of the requests it answers.
+fn runs_by_origin<T>(items: Vec<T>, origin_of: impl Fn(&T) -> Origin) -> Vec<(Origin, Vec<T>)> {
+    let mut runs: Vec<(Origin, Vec<T>)> = Vec::new();
+    for item in items {
+        let origin = origin_of(&item);
+        match runs.last_mut() {
+            Some((last, run)) if *last == origin => run.push(item),
+            _ => runs.push((origin, vec![item])),
+        }
+    }
+    runs
 }

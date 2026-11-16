@@ -15,6 +15,7 @@ use tenta_js::dom::events::{
 use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId};
 use tenta_js::fetch::{FetchDriver, FetchStartError};
 use tenta_js::geometry::{GeometryHost, ViewportMetrics, WindowMetric};
+use tenta_js::location::LocationPart;
 use tenta_js::xhr::{XhrDriver, XhrHandle, XhrRequest};
 
 type SavedFunction = Persistent<Function<'static>>;
@@ -55,7 +56,7 @@ impl Handler {
             function.call::<_, Value>((This(ctx.globals()), Rest(args)))?;
         } else {
             let source = Coerced::<String>::from_js(ctx, callback)?.0;
-            ctx.eval::<Value, _>(source)?;
+            crate::eval_classic::<Value>(ctx, source)?;
         }
         Ok(())
     }
@@ -623,6 +624,8 @@ pub(crate) fn install<'js>(ctx: &Ctx<'js>, state: &Rc<State>) -> rquickjs::Resul
         )?;
     }
     install_exception(ctx)?;
+    install_base64(ctx, &global)?;
+    install_location(ctx, &global, state)?;
     let state_fetch = state.clone();
     global.set(
         "fetch",
@@ -638,7 +641,14 @@ pub(crate) fn install<'js>(ctx: &Ctx<'js>, state: &Rc<State>) -> rquickjs::Resul
                             &ctx,
                             init.0.unwrap_or_else(|| Value::new_undefined(ctx.clone())),
                         )?;
-                        if let Some(member) = refused_request_init_member(&init) {
+                        // This backend has no abort algorithms, so a signal
+                        // that could abort is refused rather than ignored.
+                        let member = refused_request_init_member(&init).or(matches!(
+                            init.signal,
+                            Some(Some(_))
+                        )
+                        .then_some("signal"));
+                        if let Some(member) = member {
                             return Err(rquickjs::Exception::throw_type(
                                 &ctx,
                                 &format!("RequestInit member {member} is not implemented"),
@@ -726,6 +736,93 @@ pub(crate) fn install<'js>(ctx: &Ctx<'js>, state: &Rc<State>) -> rquickjs::Resul
     Ok(())
 }
 
+/// `btoa` and `atob`, the binary-string codecs.
+fn install_base64<'js>(ctx: &Ctx<'js>, global: &Object<'js>) -> rquickjs::Result<()> {
+    type Codec = fn(&str) -> Option<String>;
+    let codecs: [(&'static str, Codec, &'static str); 2] = [
+        (
+            "btoa",
+            tenta_js::base64::btoa,
+            "The string to be encoded contains characters outside of the Latin1 range.",
+        ),
+        (
+            "atob",
+            tenta_js::base64::atob,
+            "The string to be decoded is not correctly encoded.",
+        ),
+    ];
+    for (name, codec, refusal) in codecs {
+        global.set(
+            name,
+            Function::new(ctx.clone(), move |ctx: Ctx<'js>, args: Rest<Value<'js>>| {
+                quickjs_callback_boundary(&ctx, name, || {
+                    let Some(data) = args.0.first() else {
+                        return Err(rquickjs::Exception::throw_type(
+                            &ctx,
+                            &format!(
+                                "Failed to execute '{name}' on 'Window': 1 argument required, \
+                                 but only 0 present."
+                            ),
+                        ));
+                    };
+                    let data = Coerced::<String>::from_js(&ctx, data.clone())?.0;
+                    codec(&data).ok_or_else(|| {
+                        throw_quickjs_error(
+                            &ctx,
+                            &JsError::dom_exception("InvalidCharacterError", refusal),
+                        )
+                    })
+                })
+            })?,
+        )?;
+    }
+    Ok(())
+}
+
+/// `window.location`, read side only: the nine URL attributes and the
+/// stringifier as own properties of one object, answering from the document's
+/// current URL. Navigation through `location` is not built, so its setters and
+/// methods are absent. Unlike the V8 host this one has no `Location` interface
+/// object and does not check the receiver of the getters.
+fn install_location<'js>(
+    ctx: &Ctx<'js>,
+    global: &Object<'js>,
+    state: &Rc<State>,
+) -> rquickjs::Result<()> {
+    let location = Object::new(ctx.clone())?;
+    for part in LocationPart::ALL {
+        let state = state.clone();
+        location.prop(
+            part.name(),
+            rquickjs::object::Accessor::new_get(move |ctx: Ctx<'js>| {
+                quickjs_callback_boundary(&ctx, part.name(), || {
+                    Ok(HostObject::window(state.world.host.clone()).location_part(part))
+                })
+            })
+            .enumerable(),
+        )?;
+    }
+    let state = state.clone();
+    location.prop(
+        "toString",
+        rquickjs::object::Property::from(Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+            quickjs_callback_boundary(&ctx, "Location.toString", || {
+                Ok(HostObject::window(state.world.host.clone()).location_part(LocationPart::Href))
+            })
+        })?)
+        .enumerable(),
+    )?;
+    location.prop(
+        rquickjs::atom::PredefinedAtom::SymbolToStringTag,
+        rquickjs::object::Property::from("Location").configurable(),
+    )?;
+    // Not writable and not configurable: the property is unforgeable.
+    global.prop(
+        "location",
+        rquickjs::object::Property::from(location).enumerable(),
+    )
+}
+
 fn dom_exception<'js>(ctx: &Ctx<'js>, name: &str, message: &str) -> rquickjs::Result<Value<'js>> {
     quickjs_dom_exception(ctx, name, message)
 }
@@ -798,6 +895,13 @@ fn install_bindings<'js>(ctx: &Ctx<'js>, global: &Object<'js>) -> rquickjs::Resu
     install_html_script_element::<HostObject>(ctx, global, registry)?;
     install_html_link_element::<HostObject>(ctx, global, registry)?;
     install_html_style_element::<HostObject>(ctx, global, registry)?;
+    install_html_media_element::<HostObject>(ctx, global, registry)?;
+    install_html_video_element::<HostObject>(ctx, global, registry)?;
+    install_html_audio_element::<HostObject>(ctx, global, registry)?;
+    install_html_canvas_element::<HostObject>(ctx, global, registry)?;
+    install_svg_graphics_element::<HostObject>(ctx, global, registry)?;
+    install_svgsvg_element::<HostObject>(ctx, global, registry)?;
+    install_svga_element::<HostObject>(ctx, global, registry)?;
     install_dom_rect_read_only::<HostObject>(ctx, global, registry)?;
     install_dom_rect::<HostObject>(ctx, global, registry)?;
     install_dom_rect_list::<HostObject>(ctx, global, registry)?;
@@ -814,6 +918,7 @@ fn install_bindings<'js>(ctx: &Ctx<'js>, global: &Object<'js>) -> rquickjs::Resu
     install_node_list::<HostObject>(ctx, global, registry)?;
     install_html_collection::<HostObject>(ctx, global, registry)?;
     install_dom_token_list::<HostObject>(ctx, global, registry)?;
+    install_dom_string_map::<HostObject>(ctx, global, registry)?;
     install_attr::<HostObject>(ctx, global, registry)?;
     install_named_node_map::<HostObject>(ctx, global, registry)?;
     install_style_sheet::<HostObject>(ctx, global, registry)?;

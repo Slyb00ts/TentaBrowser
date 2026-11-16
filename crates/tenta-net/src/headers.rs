@@ -232,6 +232,15 @@ pub fn build(
             HeaderValue::from_static("keep-alive"),
         );
     }
+    // `Origin` is part of the CORS protocol rather than of a fingerprint: a
+    // server decides whether to share its response by it, so a request that
+    // owes one carries it even when no profile placed it.
+    if let Some(origin) = &derived.origin
+        && !contains(&ordered, "origin")
+        && let Ok(value) = HeaderValue::from_str(origin)
+    {
+        push(&mut ordered, "Origin", value);
+    }
     if let Some(cookie) = cookie
         && !contains(&ordered, "cookie")
         && let Ok(value) = HeaderValue::from_str(&cookie)

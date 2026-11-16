@@ -17,12 +17,12 @@ use tenta_net::error::ErrorName;
 use tenta_net::hooks::{
     BoxFuture, FulfilledResponse, Hooks, Interception, Interceptor, Observer, RequestTap,
 };
-use tenta_net::policy::cache::HttpCache;
+use tenta_net::policy::cache::{CacheRequest, HttpCache};
 use tenta_net::policy::cookies::{CookieJar, CookiePolicy, SameSiteContext, Site};
 use tenta_net::policy::private_network::DestinationPolicy;
 use tenta_net::policy::session_cache::{SessionCache, SessionKey};
 use tenta_net::profile::{ClientProfile, Profile};
-use tenta_net::request::{RedirectPolicy, Request};
+use tenta_net::request::{CredentialsMode, RedirectPolicy, Request, ResourceType};
 use tenta_net::{Client, NetError};
 use url::Url;
 
@@ -837,6 +837,122 @@ async fn set_cookie_is_stored_and_sent_back_on_the_next_request() {
     );
 }
 
+/// A `fetch()`-shaped request from the document at `initiator`.
+fn fetch_from(initiator: &str, url: &str, credentials: CredentialsMode) -> Request {
+    Request::get(url)
+        .expect("request")
+        .resource_type(ResourceType::Fetch)
+        .initiator(Url::parse(initiator).expect("initiator"))
+        .credentials(credentials)
+}
+
+#[tokio::test]
+async fn a_request_without_credentials_neither_sends_nor_stores_cookies() {
+    let server = TestServer::start().await;
+    let runtime = runtime();
+    let jar = CookieJar::new();
+    let client = cookie_client(&runtime, jar.clone());
+    let page = server.url("/hello");
+
+    let omitted = fetch_from(&page, &server.url("/set-cookie"), CredentialsMode::Omit);
+    client.send(omitted).await.expect("response");
+    assert_eq!(jar.len(), 0, "a Set-Cookie without credentials is ignored");
+
+    client
+        .send(navigation(&server.url("/set-cookie")))
+        .await
+        .expect("response");
+    assert_eq!(jar.len(), 1);
+    let omitted = fetch_from(&page, &server.url("/needs-cookie"), CredentialsMode::Omit);
+    let response = client.send(omitted).await.expect("response");
+    assert_eq!(response.text().await.expect("body"), "none");
+    let included = fetch_from(
+        &page,
+        &server.url("/needs-cookie"),
+        CredentialsMode::Include,
+    );
+    let response = client.send(included).await.expect("response");
+    assert_eq!(response.text().await.expect("body"), "sid=42");
+}
+
+#[tokio::test]
+async fn same_origin_credentials_stop_at_the_initiators_origin() {
+    let server = TestServer::start().await;
+    // Another port is another origin; a cookie does not care about the port.
+    let other = TestServer::start().await;
+    let runtime = runtime();
+    let jar = CookieJar::new();
+    let client = cookie_client(&runtime, jar.clone());
+    let page = server.url("/hello");
+    client
+        .send(navigation(&server.url("/set-cookie")))
+        .await
+        .expect("response");
+
+    let same = fetch_from(
+        &page,
+        &server.url("/needs-cookie"),
+        CredentialsMode::SameOrigin,
+    );
+    let response = client.send(same).await.expect("response");
+    assert_eq!(response.text().await.expect("body"), "sid=42");
+
+    let cross = fetch_from(
+        &page,
+        &other.url("/needs-cookie"),
+        CredentialsMode::SameOrigin,
+    );
+    let response = client.send(cross).await.expect("response");
+    assert_eq!(response.text().await.expect("body"), "none");
+    // The request that leaves the origin says where it came from, with or
+    // without a browser profile to place the header: CORS depends on it.
+    let origin = server.url("");
+    assert_eq!(
+        other.state.last().header("origin").as_deref(),
+        Some(origin.trim_end_matches('/')),
+    );
+    assert!(server.state.last().header("origin").is_none());
+
+    // The mode follows the redirect chain: the hop that leaves the origin
+    // loses the cookie the first hop carried.
+    let target = other.url("/needs-cookie");
+    let redirected = fetch_from(
+        &page,
+        &server.url(&format!("/redirect-to?url={target}")),
+        CredentialsMode::SameOrigin,
+    );
+    let response = client.send(redirected).await.expect("response");
+    assert_eq!(response.redirects.len(), 1);
+    assert_eq!(response.text().await.expect("body"), "none");
+    assert_eq!(
+        server.state.last().header("cookie").as_deref(),
+        Some("sid=42"),
+        "the same-origin hop carried it"
+    );
+}
+
+#[tokio::test]
+async fn a_request_can_refuse_redirects_that_leave_the_origin() {
+    let server = TestServer::start().await;
+    let other = TestServer::start().await;
+    let runtime = runtime();
+    let client = plain_client(&runtime);
+
+    let within = Request::get(&server.url("/redirect/2"))
+        .expect("request")
+        .same_origin_redirects(true);
+    let response = client.send(within).await.expect("response");
+    assert_eq!(response.redirects.len(), 2);
+
+    let target = other.url("/hello");
+    let leaving = Request::get(&server.url(&format!("/redirect-to?url={target}")))
+        .expect("request")
+        .same_origin_redirects(true);
+    let err = client.send(leaving).await.expect_err("must be refused");
+    assert_eq!(err.name, ErrorName::UnsafeRedirect);
+    assert_eq!(other.state.hits(), 0, "the other origin was never asked");
+}
+
 #[tokio::test]
 async fn the_cookie_header_sits_where_the_profile_puts_it() {
     let server = TestServer::start().await;
@@ -1534,11 +1650,19 @@ async fn a_stale_while_revalidate_entry_answers_at_once_and_refreshes_behind_it(
 
     // The refresh was started, not skipped.
     common::wait_for(|| server.state.hits() >= 2).await;
+    // The stored entry is replaced once the refreshed body is read, which is
+    // after the server has counted the request: wait for the body itself.
+    let url = Url::parse(&server.url("/swr")).expect("url");
+    let headers = HeaderMap::new();
     common::wait_for(|| {
-        // The stored entry is replaced once the refreshed body is read.
-        cache.len() == 1
+        let stored = cache.lookup(
+            &CacheRequest::new("GET", &url, &headers),
+            std::time::SystemTime::now(),
+        );
+        stored.cached().is_some_and(|entry| entry.body == "swr-2")
     })
     .await;
+    assert_eq!(cache.len(), 1, "the refresh replaced the entry");
 
     let third = client.get(&server.url("/swr")).await.expect("response");
     assert!(third.from_cache);

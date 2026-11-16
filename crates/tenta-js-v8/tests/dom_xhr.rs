@@ -135,7 +135,7 @@ impl XhrDriver for Recorder {
             true => FetchOutcome::Failed("the request failed".to_owned()),
             false => ok_outcome(),
         };
-        self.table.push(handle, outcome);
+        self.table.push(handle, outcome, Origin::Tracked);
         Ok(())
     }
 
@@ -197,6 +197,7 @@ fn hand(target: u64, request: u64, outcome: FetchOutcome) -> XhrCompletion {
     XhrCompletion {
         handle: XhrHandle { target, request },
         outcome,
+        origin: Origin::Tracked,
     }
 }
 
@@ -919,7 +920,7 @@ fn the_refusing_setters_accept_only_what_this_engine_can_serve() {
                 [results.join(','), xhr.responseType, xhr.withCredentials].join('|');
                 "#
             ),
-            "NotSupportedError,ok,TypeError,NotSupportedError,ok,ok|text|false",
+            "NotSupportedError,ok,TypeError,ok,ok,ok|text|false",
             "a value the enumeration does not name is a `TypeError`, not a `NotSupportedError`"
         );
     });

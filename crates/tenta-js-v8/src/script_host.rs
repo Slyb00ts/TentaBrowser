@@ -374,6 +374,54 @@ impl ScriptHost for V8ScriptHost {
         self.host.geometry_host.borrow().clone()
     }
 
+    fn fragment_navigated(&self, old_url: &str, new_url: &str, replace: bool) {
+        self.with_context(|scope| {
+            crate::host::history::fragment_navigated(scope, old_url, new_url, replace);
+        });
+    }
+
+    fn compile_event_handler(&self, element: u64, name: &str, body: &str) -> Option<u64> {
+        self.with_context(|scope| {
+            let element = handle_to_v8::<EventTarget>(scope, Handle::from_bits(element)).ok()?;
+            let element = v8::Local::<v8::Object>::try_from(element).ok()?;
+            // The handler's scope chain, outermost first: the element's
+            // document, its form owner when it has one, the element itself.
+            let mut scopes: Vec<v8::Local<v8::Object>> = Vec::with_capacity(3);
+            for owner in ["ownerDocument", "form"] {
+                let key = v8::String::new(scope, owner)?;
+                if let Some(value) = element.get(scope, key.into())
+                    && let Ok(object) = v8::Local::<v8::Object>::try_from(value)
+                {
+                    scopes.push(object);
+                }
+            }
+            scopes.push(element);
+
+            v8::tc_scope!(let tc, scope);
+            let code = v8::String::new(tc, body)?;
+            let parameter = v8::String::new(tc, "event")?;
+            let mut source = v8::script_compiler::Source::new(code, None);
+            let compiled = v8::script_compiler::compile_function(
+                tc,
+                &mut source,
+                &[parameter],
+                &scopes,
+                v8::script_compiler::CompileOptions::NoCompileOptions,
+                v8::script_compiler::NoCacheReason::NoReason,
+            );
+            let Some(function) = compiled else {
+                // A body that does not parse is reported like any uncaught
+                // error, and the handler stays null.
+                crate::inspector::report_caught(tc, &self.host);
+                return None;
+            };
+            if let Some(name) = v8::String::new(tc, name) {
+                function.set_name(name);
+            }
+            tenta_js::bindings::value_from_v8(tc, function.into()).ok()
+        })
+    }
+
     fn release_value(&self, bits: u64) {
         self.state.borrow_mut().release_value(bits);
     }
@@ -467,6 +515,16 @@ impl ScriptHost for V8ScriptHost {
             return false;
         };
         driver.abort(handle)
+    }
+
+    fn abort_fetch(&self, resolver: u64) {
+        if let Some(driver) = self.host.fetch_driver() {
+            driver.abort(resolver);
+        }
+    }
+
+    fn reject_promise_with_stored(&self, resolver: u64, bits: u64) -> bool {
+        promise::reject_with_stored(self, resolver, bits)
     }
 
     /// Arms the timer on the engine's own loop, as page activity, with the

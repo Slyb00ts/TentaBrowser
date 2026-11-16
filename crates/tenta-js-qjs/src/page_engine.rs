@@ -37,7 +37,7 @@ impl PageEngine for Engine {
         let scheduler = self.event_loop.scheduler();
         scheduler.with_origin(Origin::Tracked, || {
             self.entry(self.script_timeout, |ctx| {
-                ctx.eval::<rquickjs::Value, _>(source).map(|_| ())
+                crate::eval_classic::<rquickjs::Value>(ctx, source).map(|_| ())
             })
         })
     }
@@ -142,6 +142,15 @@ impl PageEngine for Engine {
                             completion.resolver,
                             PromiseOutcome::Reject(HostValue::TypeError { message: &message }),
                         );
+                    }
+                    FetchOutcome::Opaque => {
+                        let key =
+                            tenta_js::bindings::host::insert_opaque_response(&state.world.host);
+                        let value = handle_to_quickjs::<Response>(
+                            ctx,
+                            Handle::from_bits(encode_host(state.world.host.slot, key)),
+                        )?;
+                        state.settle(ctx, completion.resolver, value, false);
                     }
                 }
             }

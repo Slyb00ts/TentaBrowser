@@ -80,6 +80,8 @@ pub struct XhrRequest {
     /// has none. It is what a driver sends as the `Referer` and what a
     /// same-origin test is made against.
     pub initiator: Url,
+    /// `withCredentials`: whether cookies travel to another origin too.
+    pub with_credentials: bool,
 }
 
 impl XhrRequest {
@@ -103,6 +105,14 @@ impl XhrRequest {
             body: self.body,
             initiator: self.initiator,
             origin,
+            credentials: if self.with_credentials {
+                crate::fetch::Credentials::Include
+            } else {
+                crate::fetch::Credentials::SameOrigin
+            },
+            mode: crate::fetch::Mode::Cors,
+            redirect: crate::fetch::Redirect::Follow,
+            bypass_cache: false,
         }
     }
 }
@@ -154,6 +164,10 @@ pub struct XhrCompletion {
     /// a driver never has to know that a failure is an `error` event and a
     /// response is a `load`.
     pub outcome: FetchOutcome,
+    /// The provenance of the request this answers, which the events it is
+    /// delivered through inherit; see
+    /// [`FetchCompletion::origin`](crate::fetch::FetchCompletion::origin).
+    pub origin: Origin,
 }
 
 /// The completions a driver is waiting for the page to pick up.
@@ -180,10 +194,12 @@ impl XhrCompletions {
     /// completes off the page thread must hand the completion back to it first.
     ///
     /// See [`XhrDriver::start`] for what the caller owes in addition to this.
-    pub fn push(&self, handle: XhrHandle, outcome: FetchOutcome) {
-        self.queue
-            .borrow_mut()
-            .push_back(XhrCompletion { handle, outcome });
+    pub fn push(&self, handle: XhrHandle, outcome: FetchOutcome, origin: Origin) {
+        self.queue.borrow_mut().push_back(XhrCompletion {
+            handle,
+            outcome,
+            origin,
+        });
     }
 
     /// Takes every completion recorded so far, in the order they were pushed,
@@ -290,6 +306,7 @@ mod tests {
         XhrCompletion {
             handle: XhrHandle { target, request },
             outcome: FetchOutcome::Failed(message.to_owned()),
+            origin: Origin::Tracked,
         }
     }
 
@@ -301,9 +318,21 @@ mod tests {
     #[test]
     fn take_all_hands_the_completions_back_in_push_order() {
         let table = XhrCompletions::new();
-        table.push(handle(7, 1), FetchOutcome::Failed("first".to_owned()));
-        table.push(handle(1, 2), FetchOutcome::Failed("second".to_owned()));
-        table.push(handle(4, 3), FetchOutcome::Failed("third".to_owned()));
+        table.push(
+            handle(7, 1),
+            FetchOutcome::Failed("first".to_owned()),
+            Origin::Tracked,
+        );
+        table.push(
+            handle(1, 2),
+            FetchOutcome::Failed("second".to_owned()),
+            Origin::Tracked,
+        );
+        table.push(
+            handle(4, 3),
+            FetchOutcome::Failed("third".to_owned()),
+            Origin::Tracked,
+        );
         assert_eq!(
             table.take_all(),
             vec![
@@ -317,7 +346,11 @@ mod tests {
     #[test]
     fn take_all_empties_the_table() {
         let table = XhrCompletions::new();
-        table.push(handle(1, 1), FetchOutcome::Failed("only".to_owned()));
+        table.push(
+            handle(1, 1),
+            FetchOutcome::Failed("only".to_owned()),
+            Origin::Tracked,
+        );
         assert_eq!(table.take_all().len(), 1);
         assert!(
             table.take_all().is_empty(),
@@ -333,9 +366,17 @@ mod tests {
     #[test]
     fn a_completion_pushed_after_a_drain_is_delivered_by_the_next_one() {
         let table = XhrCompletions::new();
-        table.push(handle(1, 1), FetchOutcome::Failed("before".to_owned()));
+        table.push(
+            handle(1, 1),
+            FetchOutcome::Failed("before".to_owned()),
+            Origin::Tracked,
+        );
         assert_eq!(table.take_all(), vec![hand("before", 1, 1)]);
-        table.push(handle(2, 2), FetchOutcome::Failed("after".to_owned()));
+        table.push(
+            handle(2, 2),
+            FetchOutcome::Failed("after".to_owned()),
+            Origin::Tracked,
+        );
         assert_eq!(
             table.take_all(),
             vec![hand("after", 2, 2)],
@@ -352,6 +393,7 @@ mod tests {
         table.push(
             handle(0x0A_00_00_07, 9),
             FetchOutcome::Failed("x".to_owned()),
+            Origin::Tracked,
         );
         let delivered = table.take_all().pop().expect("one completion");
         assert_eq!(delivered.handle.target, 0x0A_00_00_07);
@@ -370,6 +412,7 @@ mod tests {
             headers: vec![(b"x-token".to_vec(), b"abc".to_vec())],
             body: Some(b"a=1&b=2".to_vec()),
             initiator: url("http://fixture.test/dir/page.html"),
+            with_credentials: false,
         };
 
         let converted = request.into_fetch_request(Origin::Background);
@@ -408,6 +451,7 @@ mod tests {
             headers: Vec::new(),
             body: None,
             initiator: url("http://fixture.test/data"),
+            with_credentials: false,
         };
 
         let converted = request.into_fetch_request(Origin::Tracked);
@@ -431,6 +475,7 @@ mod tests {
             headers: vec![(b"x-raw".to_vec(), vec![0xE9, b'a'])],
             body: None,
             initiator: url("http://fixture.test/x"),
+            with_credentials: false,
         };
 
         let converted = request.into_fetch_request(Origin::Tracked);

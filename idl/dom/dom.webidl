@@ -48,6 +48,22 @@ interface Node : EventTarget {
   boolean hasChildNodes();
   boolean contains(Node? other);
 
+  // Comparison and the rest of the tree surface. `getRootNode` ignores its
+  // options: there are no shadow trees to cross. `baseURI` is the document's
+  // base URL.
+  const unsigned short DOCUMENT_POSITION_DISCONNECTED = 1;
+  const unsigned short DOCUMENT_POSITION_PRECEDING = 2;
+  const unsigned short DOCUMENT_POSITION_FOLLOWING = 4;
+  const unsigned short DOCUMENT_POSITION_CONTAINS = 8;
+  const unsigned short DOCUMENT_POSITION_CONTAINED_BY = 16;
+  const unsigned short DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC = 32;
+  readonly attribute USVString baseURI;
+  [Throws] boolean isEqualNode(Node? otherNode);
+  boolean isSameNode(Node? otherNode);
+  [Throws] unsigned short compareDocumentPosition(Node other);
+  [Throws] Node getRootNode(optional GetRootNodeOptions options = {});
+  [Throws] undefined normalize();
+
   // Phase 2a: mutation operations
   Node appendChild(Node node);
   Node insertBefore(Node node, Node? child);
@@ -153,6 +169,18 @@ interface Element : Node {
   // and insertAdjacentHTML.
   [Throws] attribute DOMString outerHTML;
   [Throws] undefined insertAdjacentHTML(DOMString position, DOMString text);
+  [Throws] Element? insertAdjacentElement(DOMString where, Element element);
+  [Throws] undefined insertAdjacentText(DOMString where, DOMString data);
+  [Throws] boolean webkitMatchesSelector(DOMString selectors);
+
+  // Nothing scrolls, so these change nothing; they exist because pages call
+  // them unconditionally (`element.scrollIntoView()` after a route change).
+  // The arguments are declared as the primitives every value converts to,
+  // an options object included, since none of them is read.
+  undefined scrollIntoView(optional boolean arg);
+  undefined scrollTo(optional unrestricted double x, optional unrestricted double y);
+  undefined scroll(optional unrestricted double x, optional unrestricted double y);
+  undefined scrollBy(optional unrestricted double x, optional unrestricted double y);
 
   // CSS1: CSSOM View geometry, answered by the page's layout (a page below the
   // render tier answers as an element with no box). Nothing scrolls, so the
@@ -171,6 +199,27 @@ interface Element : Node {
 
 [Exposed=Window]
 interface Document : Node {
+  // A page is always the visible, foreground document of its browser.
+  readonly attribute DOMString visibilityState;
+  readonly attribute boolean hidden;
+  // Snapshots of the document's forms, images, links (`a` and `area` with
+  // `href`), scripts, embeds and named anchors, in tree order; not the
+  // standard's live collections.
+  [NewObject] readonly attribute HTMLCollection forms;
+  [NewObject] readonly attribute HTMLCollection images;
+  [NewObject] readonly attribute HTMLCollection links;
+  [NewObject] readonly attribute HTMLCollection scripts;
+  [NewObject] readonly attribute HTMLCollection embeds;
+  [NewObject] readonly attribute HTMLCollection anchors;
+  [NewObject] NodeList getElementsByName(DOMString elementName);
+  // A node of this document is cloned (`importNode`) or detached
+  // (`adoptNode`); a node of another document cannot be moved between
+  // documents yet and is refused with NotSupportedError.
+  [Throws] Node importNode(Node node, optional boolean deep = false);
+  [Throws] Node adoptNode(Node node);
+  // The `<script>` element whose classic script is running, null in a
+  // callback the script queued and in an evaluation the host makes.
+  readonly attribute Element? currentScript;
   // The DOM Standard's own constructor: "create a new Document with its
   // content type set to `application/xml`, URL `about:blank`, and no
   // browsing context" (<https://dom.spec.whatwg.org/#dom-document-document>).
@@ -552,6 +601,23 @@ interface Range : AbstractRange {
 interface HTMLElement : Element {
   [Throws] undefined click();
 
+  // Reflected metadata attributes. `hidden` is the boolean of the classic
+  // attribute (the `until-found` state reads as true); `dir` is limited to its
+  // three keywords.
+  attribute DOMString title;
+  attribute DOMString lang;
+  attribute DOMString dir;
+  attribute boolean hidden;
+  attribute boolean inert;
+  attribute DOMString accessKey;
+
+  // `innerText` reads the element's text as it is laid out in blocks, with
+  // hidden content left out (the text extractor of `tenta-dom`, which judges
+  // hiddenness from attributes and inline style, not from the layout); for an
+  // element that is not in the document it is `textContent`. Assigning
+  // replaces the children with the text, a `<br>` for each line break.
+  [Throws] attribute [LegacyNullToEmptyString] DOMString innerText;
+
   // CSS1: CSSOM View offset geometry.
   readonly attribute Element? offsetParent;
   readonly attribute long offsetTop;
@@ -573,7 +639,17 @@ interface SVGElement : Element {};
 // Phase 4b-3: DocumentFragment — a lightweight parentless container. Appending
 // a fragment moves its children into the target and empties the fragment.
 [Exposed=Window]
-interface DocumentFragment : Node {};
+interface DocumentFragment : Node {
+  // The query half of ParentNode and NonElementParentNode, which a fragment
+  // has like an element and a document.
+  readonly attribute Element? firstElementChild;
+  readonly attribute Element? lastElementChild;
+  readonly attribute unsigned long childElementCount;
+  [SameObject] readonly attribute HTMLCollection children;
+  Element? getElementById(DOMString elementId);
+  Element? querySelector(DOMString selectors);
+  [NewObject] NodeList querySelectorAll(DOMString selectors);
+};
 
 // Phase 4b-3: <template> keeps its parsed children inert inside a separate
 // DocumentFragment reachable only through `.content`; Vue's compiler and other
@@ -607,6 +683,83 @@ interface HTMLSpanElement : HTMLElement {};
 [Exposed=Window]
 interface HTMLParagraphElement : HTMLElement {};
 
+// IF1: media, canvas and the SVG interfaces pages test with `instanceof`.
+//
+// There is no media pipeline (P5), so a media element has no playback state:
+// it is always paused with nothing loaded, `play()` rejects with
+// `NotSupportedError` as it does for an element with no supported source, and
+// `canPlayType()` answers "". `volume`, `currentTime` and `playbackRate` take
+// a value and keep the default, because a setter that threw would stop a
+// strict-mode script that only meant to configure the element; `muted`
+// follows the content attribute.
+[Exposed=Window]
+interface HTMLMediaElement : HTMLElement {
+  attribute USVString src;
+  readonly attribute USVString currentSrc;
+  attribute DOMString preload;
+  attribute boolean autoplay;
+  attribute boolean loop;
+  attribute boolean controls;
+  attribute boolean muted;
+  attribute boolean defaultMuted;
+  attribute double volume;
+  attribute double currentTime;
+  attribute double playbackRate;
+  readonly attribute unrestricted double duration;
+  readonly attribute boolean paused;
+  readonly attribute boolean ended;
+  readonly attribute boolean seeking;
+  readonly attribute unsigned short readyState;
+  readonly attribute unsigned short networkState;
+  const unsigned short NETWORK_EMPTY = 0;
+  const unsigned short NETWORK_IDLE = 1;
+  const unsigned short NETWORK_LOADING = 2;
+  const unsigned short NETWORK_NO_SOURCE = 3;
+  const unsigned short HAVE_NOTHING = 0;
+  const unsigned short HAVE_METADATA = 1;
+  const unsigned short HAVE_CURRENT_DATA = 2;
+  const unsigned short HAVE_FUTURE_DATA = 3;
+  const unsigned short HAVE_ENOUGH_DATA = 4;
+  [NewObject] Promise<any> play();
+  undefined pause();
+  undefined load();
+  DOMString canPlayType(DOMString type);
+};
+
+[Exposed=Window]
+interface HTMLVideoElement : HTMLMediaElement {
+  attribute unsigned long width;
+  attribute unsigned long height;
+  readonly attribute unsigned long videoWidth;
+  readonly attribute unsigned long videoHeight;
+  attribute USVString poster;
+  attribute boolean playsInline;
+};
+
+[Exposed=Window]
+interface HTMLAudioElement : HTMLMediaElement {};
+
+// A canvas has its dimensions and nothing to draw with: `getContext()`
+// answers null for every context id, which is what a browser answers for one
+// it does not support. The declared return type stands in for the rendering
+// context union, none of whose members is built.
+[Exposed=Window]
+interface HTMLCanvasElement : HTMLElement {
+  attribute unsigned long width;
+  attribute unsigned long height;
+  Element? getContext(DOMString contextId);
+  DOMString toDataURL();
+};
+
+[Exposed=Window]
+interface SVGGraphicsElement : SVGElement {};
+
+[Exposed=Window]
+interface SVGSVGElement : SVGGraphicsElement {};
+
+[Exposed=Window]
+interface SVGAElement : SVGGraphicsElement {};
+
 [Exposed=Window]
 interface HTMLAnchorElement : HTMLElement {
   attribute USVString href;
@@ -637,8 +790,6 @@ interface HTMLImageElement : HTMLElement {
   readonly attribute boolean complete;
   readonly attribute USVString currentSrc;
   [NewObject] Promise<undefined> decode();
-  attribute EventHandler onload;
-  attribute EventHandler onerror;
 };
 
 [Exposed=Window]
@@ -650,6 +801,23 @@ interface HTMLLabelElement : HTMLElement {
 interface HTMLFormElement : HTMLElement {
   attribute DOMString name;
   attribute USVString action;
+  attribute DOMString method;
+  attribute DOMString enctype;
+  attribute DOMString encoding;
+  attribute DOMString target;
+  attribute boolean noValidate;
+  // A snapshot of the form's controls, not the standard's live
+  // HTMLFormControlsCollection; `namedItem` and named access find a control
+  // by `id` or `name`.
+  [NewObject] readonly attribute HTMLCollection elements;
+  readonly attribute unsigned long length;
+  // `submit()` navigates without firing `submit`; `requestSubmit()` fires it
+  // first and submits unless a listener cancels it. Neither validates: there
+  // is no constraint validation yet. The navigation itself is a request the
+  // page takes once the running script returns (`tenta_dom::navigation`).
+  [Throws] undefined submit();
+  [Throws] undefined requestSubmit(optional HTMLElement? submitter = null);
+  undefined reset();
 };
 
 [Exposed=Window]
@@ -663,18 +831,63 @@ interface HTMLInputElement : HTMLElement {
   // `checked` content attribute.
   attribute DOMString value;
   attribute boolean checked;
+  // `type` reads the attribute's state: a known keyword in lower case, `text`
+  // otherwise. `defaultValue` and `defaultChecked` reflect the content
+  // attributes the dirty state starts from.
+  attribute DOMString type;
+  attribute DOMString defaultValue;
+  attribute boolean defaultChecked;
+  attribute boolean required;
+  attribute boolean readOnly;
+  attribute boolean multiple;
+  attribute boolean autofocus;
+  attribute DOMString min;
+  attribute DOMString max;
+  attribute DOMString step;
+  attribute DOMString pattern;
+  attribute DOMString autocomplete;
+  attribute DOMString accept;
+  attribute DOMString alt;
+  attribute long maxLength;
+  attribute long minLength;
+  readonly attribute HTMLFormElement? form;
+  // The text selection of a text control, in UTF-16 code units. The getters
+  // are null and the setters throw InvalidStateError for a type the selection
+  // does not apply to (anything but text, search, url, tel and password). No
+  // `select` event is fired.
+  [Throws] attribute unsigned long? selectionStart;
+  [Throws] attribute unsigned long? selectionEnd;
+  [Throws] attribute DOMString? selectionDirection;
+  [Throws] undefined setSelectionRange(unsigned long start, unsigned long end, optional DOMString direction);
+  undefined select();
 };
 
 [Exposed=Window]
 interface HTMLButtonElement : HTMLElement {
   attribute DOMString name;
   attribute boolean disabled;
+  attribute DOMString type;
+  attribute DOMString value;
+  readonly attribute HTMLFormElement? form;
 };
 
 [Exposed=Window]
 interface HTMLSelectElement : HTMLElement {
   attribute DOMString name;
   attribute boolean disabled;
+  // Which options are selected follows HTML's selectedness rules over the
+  // `selected` attributes and what script set (`tenta_dom::forms`). `options`
+  // and `selectedOptions` are snapshots, not live collections.
+  readonly attribute DOMString type;
+  attribute boolean multiple;
+  attribute boolean required;
+  attribute unsigned long size;
+  readonly attribute HTMLFormElement? form;
+  [NewObject] readonly attribute HTMLCollection options;
+  [NewObject] readonly attribute HTMLCollection selectedOptions;
+  readonly attribute unsigned long length;
+  attribute long selectedIndex;
+  attribute DOMString value;
 };
 
 [Exposed=Window]
@@ -685,11 +898,32 @@ interface HTMLTextAreaElement : HTMLElement {
   // A textarea's raw value is its child text, so `value` falls back to the
   // text content rather than to an attribute until the dirty flag is raised.
   attribute DOMString value;
+  readonly attribute DOMString type;
+  attribute DOMString defaultValue;
+  attribute boolean required;
+  attribute boolean readOnly;
+  attribute unsigned long rows;
+  attribute unsigned long cols;
+  attribute long maxLength;
+  readonly attribute unsigned long textLength;
+  readonly attribute HTMLFormElement? form;
+  [Throws] attribute unsigned long? selectionStart;
+  [Throws] attribute unsigned long? selectionEnd;
+  [Throws] attribute DOMString? selectionDirection;
+  [Throws] undefined setSelectionRange(unsigned long start, unsigned long end, optional DOMString direction);
+  undefined select();
 };
 
 [Exposed=Window]
 interface HTMLOptionElement : HTMLElement {
   attribute boolean disabled;
+  attribute boolean selected;
+  attribute boolean defaultSelected;
+  attribute DOMString value;
+  attribute DOMString text;
+  attribute DOMString label;
+  readonly attribute long index;
+  readonly attribute HTMLFormElement? form;
 };
 
 // d-2c: the `<script>` element interface, the generated planning manifest's
@@ -725,8 +959,6 @@ interface HTMLLinkElement : HTMLElement {
   attribute DOMString crossOrigin;
   attribute DOMString hreflang;
   attribute boolean disabled;
-  attribute EventHandler onload;
-  attribute EventHandler onerror;
   readonly attribute CSSStyleSheet? sheet;
 };
 
@@ -735,8 +967,6 @@ interface HTMLStyleElement : HTMLElement {
   attribute DOMString media;
   attribute DOMString type;
   attribute boolean disabled;
-  attribute EventHandler onload;
-  attribute EventHandler onerror;
   readonly attribute CSSStyleSheet? sheet;
 };
 
@@ -744,6 +974,18 @@ interface HTMLStyleElement : HTMLElement {
 // call `node.remove()` to detach a node from its parent; it is shared by Element
 // and CharacterData (Text/Comment), and by DocumentType. `before`, `after` and
 // `replaceWith` take the same `(Node or DOMString)...` list as `ParentNode.append`.
+dictionary GetRootNodeOptions {
+  boolean composed = false;
+};
+
+// DOM's NonDocumentTypeChildNode mixin.
+interface mixin NonDocumentTypeChildNode {
+  readonly attribute Element? previousElementSibling;
+  readonly attribute Element? nextElementSibling;
+};
+Element includes NonDocumentTypeChildNode;
+CharacterData includes NonDocumentTypeChildNode;
+
 interface mixin ChildNode {
   undefined before((Node or DOMString)... nodes);
   undefined after((Node or DOMString)... nodes);
@@ -815,9 +1057,21 @@ SVGElement includes ElementCSSInlineStyle;
 // `:focus-visible`; `preventScroll` is accepted and ignored because nothing
 // scrolls.
 interface mixin HTMLOrSVGElement {
+  // The element's `data-*` attributes as a map with camel-cased names.
+  [SameObject] readonly attribute DOMStringMap dataset;
   [Throws] undefined focus(optional FocusOptions options = {});
   [Throws] undefined blur();
   attribute long tabIndex;
+};
+
+// HTML's DOMStringMap, which only `dataset` produces: named properties over
+// the element's `data-*` attributes. `fooBar` is `data-foo-bar`; a name with a
+// hyphen before a lower-case letter cannot be set (SyntaxError).
+[Exposed=Window, LegacyOverrideBuiltIns]
+interface DOMStringMap {
+  getter DOMString (DOMString name);
+  [Throws] setter undefined (DOMString name, DOMString value);
+  deleter undefined (DOMString name);
 };
 
 dictionary FocusOptions {
@@ -827,3 +1081,112 @@ dictionary FocusOptions {
 
 HTMLElement includes HTMLOrSVGElement;
 SVGElement includes HTMLOrSVGElement;
+
+// HTML's GlobalEventHandlers mixin: the event handler IDL attributes every
+// HTML and SVG element and the document carry (`element.onclick = fn`). The
+// list is the HTML Standard's, with the handlers CSS Animations, CSS
+// Transitions and Pointer Events add to the mixin; the touch handlers are left
+// out because their presence is how pages detect a touch screen. `onerror` is
+// declared as a plain `EventHandler`: the `OnErrorEventHandler` signature only
+// differs on `Window`, which does not use this mixin yet. `onload` and
+// `onerror` of images, stylesheet links and style elements are these members.
+interface mixin GlobalEventHandlers {
+  attribute EventHandler onabort;
+  attribute EventHandler onauxclick;
+  attribute EventHandler onbeforeinput;
+  attribute EventHandler onbeforematch;
+  attribute EventHandler onbeforetoggle;
+  attribute EventHandler onblur;
+  attribute EventHandler oncancel;
+  attribute EventHandler oncanplay;
+  attribute EventHandler oncanplaythrough;
+  attribute EventHandler onchange;
+  attribute EventHandler onclick;
+  attribute EventHandler onclose;
+  attribute EventHandler oncommand;
+  attribute EventHandler oncontextlost;
+  attribute EventHandler oncontextmenu;
+  attribute EventHandler oncontextrestored;
+  attribute EventHandler oncopy;
+  attribute EventHandler oncuechange;
+  attribute EventHandler oncut;
+  attribute EventHandler ondblclick;
+  attribute EventHandler ondrag;
+  attribute EventHandler ondragend;
+  attribute EventHandler ondragenter;
+  attribute EventHandler ondragleave;
+  attribute EventHandler ondragover;
+  attribute EventHandler ondragstart;
+  attribute EventHandler ondrop;
+  attribute EventHandler ondurationchange;
+  attribute EventHandler onemptied;
+  attribute EventHandler onended;
+  attribute EventHandler onerror;
+  attribute EventHandler onfocus;
+  attribute EventHandler onformdata;
+  attribute EventHandler oninput;
+  attribute EventHandler oninvalid;
+  attribute EventHandler onkeydown;
+  attribute EventHandler onkeypress;
+  attribute EventHandler onkeyup;
+  attribute EventHandler onload;
+  attribute EventHandler onloadeddata;
+  attribute EventHandler onloadedmetadata;
+  attribute EventHandler onloadstart;
+  attribute EventHandler onmousedown;
+  attribute EventHandler onmouseenter;
+  attribute EventHandler onmouseleave;
+  attribute EventHandler onmousemove;
+  attribute EventHandler onmouseout;
+  attribute EventHandler onmouseover;
+  attribute EventHandler onmouseup;
+  attribute EventHandler onpaste;
+  attribute EventHandler onpause;
+  attribute EventHandler onplay;
+  attribute EventHandler onplaying;
+  attribute EventHandler onprogress;
+  attribute EventHandler onratechange;
+  attribute EventHandler onreset;
+  attribute EventHandler onresize;
+  attribute EventHandler onscroll;
+  attribute EventHandler onscrollend;
+  attribute EventHandler onsecuritypolicyviolation;
+  attribute EventHandler onseeked;
+  attribute EventHandler onseeking;
+  attribute EventHandler onselect;
+  attribute EventHandler onslotchange;
+  attribute EventHandler onstalled;
+  attribute EventHandler onsubmit;
+  attribute EventHandler onsuspend;
+  attribute EventHandler ontimeupdate;
+  attribute EventHandler ontoggle;
+  attribute EventHandler onvolumechange;
+  attribute EventHandler onwaiting;
+  attribute EventHandler onwebkitanimationend;
+  attribute EventHandler onwebkitanimationiteration;
+  attribute EventHandler onwebkitanimationstart;
+  attribute EventHandler onwebkittransitionend;
+  attribute EventHandler onwheel;
+  attribute EventHandler onanimationstart;
+  attribute EventHandler onanimationiteration;
+  attribute EventHandler onanimationend;
+  attribute EventHandler onanimationcancel;
+  attribute EventHandler ontransitionrun;
+  attribute EventHandler ontransitionstart;
+  attribute EventHandler ontransitionend;
+  attribute EventHandler ontransitioncancel;
+  attribute EventHandler ongotpointercapture;
+  attribute EventHandler onlostpointercapture;
+  attribute EventHandler onpointerdown;
+  attribute EventHandler onpointermove;
+  attribute EventHandler onpointerup;
+  attribute EventHandler onpointercancel;
+  attribute EventHandler onpointerover;
+  attribute EventHandler onpointerout;
+  attribute EventHandler onpointerenter;
+  attribute EventHandler onpointerleave;
+};
+
+HTMLElement includes GlobalEventHandlers;
+SVGElement includes GlobalEventHandlers;
+Document includes GlobalEventHandlers;

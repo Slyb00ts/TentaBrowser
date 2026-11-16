@@ -809,10 +809,15 @@ impl<'a> Lowerer<'a> {
                     };
                     let special = operation.special.map(lower_special);
                     let name = operation.identifier.map(|i| i.0).unwrap_or_default();
+                    let arguments = self.lower_arguments(&operation.args.body.list)?;
                     let lowered = Operation {
                         name: name.to_string(),
-                        rust_name: naming::snake_case(name),
-                        arguments: self.lower_arguments(&operation.args.body.list)?,
+                        rust_name: if name.is_empty() {
+                            anonymous_special_name(special, &arguments).to_string()
+                        } else {
+                            naming::snake_case(name)
+                        },
+                        arguments,
                         return_type: self.lower_return_type(&operation.return_type)?,
                         attrs: self.lower_ext_attrs(operation.attributes.as_ref()),
                         special,
@@ -1767,6 +1772,27 @@ fn exposure_of(attrs: &ExtendedAttributes) -> Exposure {
         };
     }
     Exposure::Globals(vec!["Window".to_string()])
+}
+
+/// The host method an anonymous special operation becomes. WebIDL lets
+/// `getter`, `setter` and `deleter` go unnamed (`getter DOMString (DOMString
+/// name);`, as `DOMStringMap` declares them), so there is no identifier to
+/// derive a Rust name from: the name says what the operation is instead, and
+/// whether it is keyed by index or by name, which its first argument decides.
+fn anonymous_special_name(special: Option<Special>, arguments: &[Argument]) -> &'static str {
+    let indexed = arguments
+        .first()
+        .is_some_and(|argument| argument.ty.unwrap_nullable().is_integer());
+    match (special, indexed) {
+        (Some(Special::Getter), true) => "indexed_getter",
+        (Some(Special::Getter), false) => "named_getter",
+        (Some(Special::Setter), true) => "indexed_setter",
+        (Some(Special::Setter), false) => "named_setter",
+        (Some(Special::Deleter), true) => "indexed_deleter",
+        (Some(Special::Deleter), false) => "named_deleter",
+        (Some(Special::LegacyCaller), _) => "legacy_caller",
+        (None, _) => "anonymous_operation",
+    }
 }
 
 fn lower_special(special: WSpecial) -> Special {
