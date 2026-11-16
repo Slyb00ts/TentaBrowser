@@ -136,7 +136,10 @@ fn refused_standalone_constructors_leave_exactly_the_published_records() {
         "a refused EventTarget constructor left a native record"
     );
 
-    engine.evaluate("retainedTargets=[]").unwrap();
+    // Emptied in place rather than replaced: a concurrent optimizing job for
+    // the hot getter above can hold the array itself across a low-memory GC
+    // (see `nested_event_constructors_refuse_before_publishing_native_records`).
+    engine.evaluate("retainedTargets.length=0").unwrap();
     engine.low_memory_gc();
     engine.reclaim_dead_hosts();
     assert_eq!(engine.host_record_count(), records_before);
