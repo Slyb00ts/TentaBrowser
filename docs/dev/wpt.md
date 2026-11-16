@@ -90,6 +90,13 @@ python3 wpt/run.py run --product tentabrowser --dir dom/nodes
 python3 wpt/run.py run --product tentabrowser --dir dom/nodes --driver target/debug/tenta-wpt-driver
 ```
 
+Add the `render` feature (`--features v8,render`) to let the driver's pages reach
+the render tier: without it the page ceiling is `Tier::Js` and the layout-backed
+APIs (`getComputedStyle`, `getBoundingClientRect`, `offsetWidth`,
+`elementFromPoint`) answer as a page with no layout does, which is how
+`css/cssom` and `css/cssom-view` are measured since CSS1. A render-tier page also
+fetches the stylesheets of its document while it loads.
+
 Build with `--features v8,quickjs` to measure both engines using the same
 driver. Product `tentabrowser` explicitly selects V8; `tentabrowser-qjs`
 selects QuickJS. A missing backend fails instead of falling back. Results and

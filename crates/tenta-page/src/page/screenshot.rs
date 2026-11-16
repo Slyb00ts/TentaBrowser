@@ -197,6 +197,16 @@ pub(super) async fn rendered_with<R>(
     // fetched again: the capture waits for them first, and only then takes the
     // ledger the loader holds while it works. Waiting after taking it would
     // wait for a loader that is waiting for us.
+    // The same goes for the stylesheets that began loading with the document.
+    let waited = until_replaced(
+        &inner,
+        generation,
+        tokio::time::timeout(STYLESHEET_WAIT, handles.sheet_loader.wait_idle()),
+    )
+    .await;
+    if waited.is_none() {
+        return Err(replaced(&inner));
+    }
     if region.is_some() {
         let waited = until_replaced(
             &inner,
@@ -228,7 +238,7 @@ pub(super) async fn rendered_with<R>(
         let Some(plan) = plan else {
             break (base_url, Vec::new());
         };
-        let pending = plan.unfetched(&sheets.state);
+        let pending = plan.unfetched(&sheets.state.borrow());
         if pending.is_empty() || rounds == MAX_FETCH_ROUNDS {
             break (base_url, pending);
         }
@@ -237,10 +247,11 @@ pub(super) async fn rendered_with<R>(
         let fetched = until_replaced(
             &inner,
             generation,
-            fetch_planned(plan, &base_url, &ctx, &mut sheets.state),
+            fetch_planned(plan, &base_url, &ctx, &sheets.state),
         )
         .await;
-        for failure in sheets.state.take_failures() {
+        let failures = sheets.state.borrow_mut().take_failures();
+        for failure in failures {
             inner.emit(PageEvent::StylesheetFailed {
                 url: failure.url,
                 reason: failure.reason,
@@ -357,6 +368,7 @@ fn style_context<'a>(
         document_url,
         deadline,
         fetch_policy: FetchPolicy::for_tier(Tier::Render),
+        cors: false,
     }
 }
 

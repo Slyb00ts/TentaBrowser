@@ -157,6 +157,7 @@ fn build_paint(
             style::values::computed::ImageRendering::Auto => ImageRendering::Auto,
             _ => ImageRendering::Pixelated,
         },
+        generated: false,
     }
 }
 

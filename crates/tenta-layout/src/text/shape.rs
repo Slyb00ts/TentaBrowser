@@ -511,11 +511,11 @@ pub(crate) fn shape_chunk(fonts: &mut FontSystem, paragraph: &Paragraph<'_>) -> 
     let prefix = direction_mark(paragraph.direction).len();
     chunk::cached(paragraph, fonts.cache_scope(), || {
         let mut layout = shape(fonts, paragraph, true);
-        extract_chunk(&mut layout, prefix)
+        extract_chunk(&mut layout, paragraph.text, prefix)
     })
 }
 
-fn extract_chunk(layout: &mut Layout<Brush>, prefix: usize) -> ShapedChunk {
+fn extract_chunk(layout: &mut Layout<Brush>, text: &str, prefix: usize) -> ShapedChunk {
     let mut chunk = ShapedChunk::default();
     layout.set_text_indent(0.0, IndentOptions::default());
     layout.break_all_lines(None);
@@ -587,8 +587,16 @@ fn extract_chunk(layout: &mut Layout<Brush>, prefix: usize) -> ShapedChunk {
         if index + 1 == lines {
             break;
         }
+        let end = line.text_range().end.saturating_sub(prefix);
+        // With no room at all parley ends a line after any space it can hang,
+        // a no-break space included, which is no opportunity.
+        let after_nbsp = matches!(line.break_reason(), BreakReason::Regular)
+            && text.get(..end).is_some_and(|t| t.ends_with('\u{a0}'));
+        if after_nbsp {
+            continue;
+        }
         chunk.breaks.push(Break {
-            end: line.text_range().end.saturating_sub(prefix) as u32,
+            end: end as u32,
             inside_word: matches!(line.break_reason(), BreakReason::Emergency),
         });
     }

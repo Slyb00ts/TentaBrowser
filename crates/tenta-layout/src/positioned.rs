@@ -27,7 +27,7 @@ use crate::box_tree::{BoxId, BoxKind, BoxTree, LayoutCx};
 use crate::constraint::{self, own_direction};
 use crate::fragment::{FragFlags, FragId, FragmentBuilder, FragmentKind};
 use crate::space::{AvailableSize, ConstraintSpace};
-use crate::types::{Direction, PositionKind, Rect};
+use crate::types::{Direction, PositionKind, Rect, TableKind};
 use crate::{block_sizes, relative};
 
 /// Where a box sits along one axis of its static-position rectangle.
@@ -797,7 +797,12 @@ impl Pass<'_, '_, '_> {
             });
         let content_width = match inputs.width.or(ratio_width) {
             Some(w) => w,
-            None if horizontal.start.is_some() && horizontal.end.is_some() => {
+            // Like a replaced box, a table with automatic width shrinks to fit
+            // even between two insets.
+            None if horizontal.start.is_some()
+                && horizontal.end.is_some()
+                && tree.get(id).kind != BoxKind::Table(TableKind::Table) =>
+            {
                 (horizontal.available() - edges).max(0.0)
             }
             None => {

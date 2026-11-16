@@ -90,6 +90,9 @@ pub struct RenderSession {
     /// Incremented by every layout, to tie the display list to its fragments.
     epoch: u64,
     display: Option<RetainedList>,
+    /// Style changes a style-only flush ([`Self::flush_styles`]) found and the
+    /// next layout has not consumed yet.
+    pending_diff: StyleDiff,
     pub(crate) images: ImageTable,
     work: WorkCounters,
     #[cfg(test)]
@@ -116,6 +119,7 @@ impl RenderSession {
             laid_out: None,
             epoch: 0,
             display: None,
+            pending_diff: StyleDiff::None,
             images: ImageTable::new(),
             work: WorkCounters::default(),
             #[cfg(test)]
@@ -271,6 +275,21 @@ impl RenderSession {
         }
     }
 
+    /// Brings the computed styles up to date without laying anything out: what
+    /// `getComputedStyle` of a property that does not depend on layout needs.
+    /// The change it found is kept for the next layout, which must still see it.
+    pub fn flush_styles(&mut self, doc: &Document) {
+        let env = style_env(&self.config, self.styles.env().quirks);
+        if *self.styles.env() != env {
+            self.styles.set_env(env);
+        }
+        let diff = self.styles.flush(doc);
+        self.pending_diff = merge_diff(
+            std::mem::replace(&mut self.pending_diff, StyleDiff::None),
+            diff,
+        );
+    }
+
     /// Flushes style and lays the document out, without painting. Does no
     /// work while the document generation and the viewport are unchanged.
     pub fn layout(&mut self, doc: &Document) -> &FragmentTree {
@@ -382,7 +401,10 @@ impl RenderSession {
         if std::mem::take(&mut self.fail_next_flush) {
             panic!("injected flush failure");
         }
-        let diff = self.styles.flush(doc);
+        let diff = merge_diff(
+            std::mem::replace(&mut self.pending_diff, StyleDiff::None),
+            self.styles.flush(doc),
+        );
         let stamp = LayoutStamp {
             generation: doc.mutation_generation(),
             viewport,
@@ -493,10 +515,9 @@ impl RenderSession {
     /// The union of the document-space border boxes of `node`'s fragments.
     fn border_box_union(&self, node: NodeId) -> Option<Rect> {
         let frags = self.frags.as_ref()?;
-        frags
-            .fragments_of(node)
-            .iter()
-            .map(|&id| frags.absolute_border_box(id))
+        crate::geometry::own_fragments(frags, node)
+            .into_iter()
+            .map(|id| frags.absolute_border_box(id))
             .reduce(|a, b| a.union(&b))
     }
 
@@ -574,6 +595,18 @@ fn same_sources(a: &[StyleSource], b: &[StyleSource]) -> bool {
                     .zip(&y.imports)
                     .all(|(p, q)| p.url == q.url && p.final_url == q.final_url && p.text == q.text)
         })
+}
+
+/// Two flush results in order: anything but `None` survives, `Full` dominates.
+fn merge_diff(earlier: StyleDiff, later: StyleDiff) -> StyleDiff {
+    match (earlier, later) {
+        (StyleDiff::None, other) | (other, StyleDiff::None) => other,
+        (StyleDiff::Partial(mut a), StyleDiff::Partial(b)) => {
+            a.extend(b);
+            StyleDiff::Partial(a)
+        }
+        _ => StyleDiff::Full,
+    }
 }
 
 #[cfg(test)]

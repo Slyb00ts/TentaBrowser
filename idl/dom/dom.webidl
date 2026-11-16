@@ -153,6 +153,20 @@ interface Element : Node {
   // and insertAdjacentHTML.
   [Throws] attribute DOMString outerHTML;
   [Throws] undefined insertAdjacentHTML(DOMString position, DOMString text);
+
+  // CSS1: CSSOM View geometry, answered by the page's layout (a page below the
+  // render tier answers as an element with no box). Nothing scrolls, so the
+  // scroll offsets are 0 and writing them is ignored.
+  DOMRect getBoundingClientRect();
+  [NewObject] DOMRectList getClientRects();
+  readonly attribute long clientTop;
+  readonly attribute long clientLeft;
+  readonly attribute long clientWidth;
+  readonly attribute long clientHeight;
+  attribute unrestricted double scrollTop;
+  attribute unrestricted double scrollLeft;
+  readonly attribute long scrollWidth;
+  readonly attribute long scrollHeight;
 };
 
 [Exposed=Window]
@@ -263,6 +277,16 @@ interface Document : Node {
 
   // Phase 3a: event factory (createEvent + initEvent path, no constructors yet).
   [Throws, NewObject] Event createEvent(DOMString interface);
+
+  // CSS1: hit testing against the page's layout, and the element the document
+  // scrolls. A page below the render tier answers `null` and an empty list.
+  Element? elementFromPoint(double x, double y);
+  sequence<Element> elementsFromPoint(double x, double y);
+  readonly attribute Element? scrollingElement;
+
+  // CSS1: the document's style sheets, one per `<style>` and per loaded
+  // `<link rel=stylesheet>`, in tree order.
+  [SameObject] readonly attribute StyleSheetList styleSheets;
 };
 
 // Phase 4d-3: `iterable<>` makes the collection usable with `for...of` and
@@ -527,6 +551,13 @@ interface Range : AbstractRange {
 [Exposed=Window]
 interface HTMLElement : Element {
   [Throws] undefined click();
+
+  // CSS1: CSSOM View offset geometry.
+  readonly attribute Element? offsetParent;
+  readonly attribute long offsetTop;
+  readonly attribute long offsetLeft;
+  readonly attribute long offsetWidth;
+  readonly attribute long offsetHeight;
 };
 
 // Phase 4a-2: interface shells so `instanceof` and the global constructor exist.
@@ -677,6 +708,36 @@ interface HTMLScriptElement : HTMLElement {
   attribute boolean async;
   attribute boolean defer;
   attribute boolean noModule;
+};
+
+// CSS1: the stylesheet-bearing elements. They reflect the content attributes the
+// stylesheet loader (`crates/tenta-page/src/page/sheet_loader.rs`) reads, and
+// fire `load` / `error` at a `<link>` when its sheet has loaded or failed.
+// `sheet` is the CSSOM view of the loaded text; `relList` and `blocking` are not
+// declared.
+[Exposed=Window]
+interface HTMLLinkElement : HTMLElement {
+  attribute USVString href;
+  attribute DOMString rel;
+  attribute DOMString as;
+  attribute DOMString media;
+  attribute DOMString type;
+  attribute DOMString crossOrigin;
+  attribute DOMString hreflang;
+  attribute boolean disabled;
+  attribute EventHandler onload;
+  attribute EventHandler onerror;
+  readonly attribute CSSStyleSheet? sheet;
+};
+
+[Exposed=Window]
+interface HTMLStyleElement : HTMLElement {
+  attribute DOMString media;
+  attribute DOMString type;
+  attribute boolean disabled;
+  attribute EventHandler onload;
+  attribute EventHandler onerror;
+  readonly attribute CSSStyleSheet? sheet;
 };
 
 // Phase 4b-2: the ChildNode mixin (the first `includes` in idl/dom). Frameworks

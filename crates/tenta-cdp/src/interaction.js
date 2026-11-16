@@ -14,7 +14,7 @@
 // domain: a page can read it, replace its globals or call `__tentaCdp`. It
 // captures the intrinsics it relies on when it is installed, before any page
 // script runs, so a casual page cannot subvert it, and that is all the
-// protection it has. Its additions (`IntersectionObserver`, geometry members,
+// protection it has. Its additions (`IntersectionObserver`,
 // `__tentaCdp`) are visible to a page that looks, so it is fingerprintable. It is an automation aid and not a stealth layer.
 (function (global) {
   'use strict';
@@ -24,7 +24,6 @@
   const defineProperty = Object.defineProperty;
   const assign = Object.assign;
   const apply = Reflect.apply;
-  const SafeMap = Map;
   const SafeWeakMap = WeakMap;
   const indexOf = Array.prototype.indexOf;
   const setTimeoutOf = global.setTimeout;
@@ -105,12 +104,60 @@
     }
   }
 
-  // ---- IntersectionObserver (geometry stub) ------------------------------
+  // ---- IntersectionObserver (reads the native rectangles once) -----------
 
+  // There is no native observer: each target is reported once, asynchronously,
+  // with the rectangles layout gives it at that moment and the viewport as the
+  // root. Later scrolling and resizing are not observed.
   if (typeof global.IntersectionObserver !== 'function') {
-    const zeroRect = () => ({
-      x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0,
+    const rectInit = (rect) => ({
+      x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+      top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left,
     });
+    const entryFor = (target, root) => {
+      const box = target.getBoundingClientRect();
+      // No box (`display: none`, detached): never intersecting.
+      if (target.getClientRects().length === 0) {
+        return {
+          target,
+          isIntersecting: false,
+          intersectionRatio: 0,
+          boundingClientRect: rectInit(box),
+          intersectionRect: rectInit({
+            x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0,
+          }),
+          rootBounds: null,
+          time: global.performance ? global.performance.now() : 0,
+        };
+      }
+      const bounds = root
+        ? root.getBoundingClientRect()
+        : { left: 0, top: 0, right: global.innerWidth, bottom: global.innerHeight };
+      const left = Math.max(box.left, bounds.left);
+      const top = Math.max(box.top, bounds.top);
+      const right = Math.min(box.right, bounds.right);
+      const bottom = Math.min(box.bottom, bounds.bottom);
+      const width = Math.max(0, right - left);
+      const height = Math.max(0, bottom - top);
+      const area = box.width * box.height;
+      const ratio = area > 0 ? (width * height) / area : (target.isConnected && width >= 0 && right >= left && bottom >= top ? 1 : 0);
+      const intersecting = target.isConnected && right >= left && bottom >= top && (area > 0 ? width * height > 0 : true);
+      return {
+        target,
+        isIntersecting: intersecting,
+        intersectionRatio: intersecting ? Math.min(1, ratio) : 0,
+        boundingClientRect: rectInit(box),
+        intersectionRect: rectInit({
+          x: left, y: top, width, height, top, right: left + width, bottom: top + height, left,
+        }),
+        rootBounds: rectInit({
+          x: bounds.left, y: bounds.top, width: bounds.right - bounds.left,
+          height: bounds.bottom - bounds.top, top: bounds.top, right: bounds.right,
+          bottom: bounds.bottom, left: bounds.left,
+        }),
+        time: global.performance ? global.performance.now() : 0,
+      };
+    };
     class IntersectionObserver {
       constructor(callback, options) {
         if (typeof callback !== 'function') {
@@ -127,24 +174,9 @@
       observe(target) {
         if (this._targets.has(target)) return;
         this._targets.add(target);
-        // A laid-out element counts as fully visible; layout does not reach
-        // script yet, so a connected element is the best answer available.
         setTimeoutOf(() => {
           if (!this._targets.has(target)) return;
-          const visible = target.isConnected;
-          this._callback.call(
-            this,
-            [{
-              target,
-              isIntersecting: visible,
-              intersectionRatio: visible ? 1 : 0,
-              boundingClientRect: zeroRect(),
-              intersectionRect: zeroRect(),
-              rootBounds: null,
-              time: 0,
-            }],
-            this,
-          );
+          this._callback.call(this, [entryFor(target, this.root)], this);
         }, 0);
       }
       unobserve(target) {
@@ -711,88 +743,6 @@
     return true;
   }
 
-  // ---- geometry from the host's layout snapshot ----------------------------
-
-  // The host pushes the layout (see domains/snapshot.rs) before it runs a
-  // client's function that reads geometry. Until native geometry exists these
-  // members answer from the last push and as a box-less element before one.
-  let layout = null;
-
-  function rectOf(x, y, width, height) {
-    return {
-      x, y, width, height,
-      top: y, right: x + width, bottom: y + height, left: x,
-      toJSON() {
-        return { x, y, width, height, top: y, right: x + width, bottom: y + height, left: x };
-      },
-    };
-  }
-
-  // Element -> index in `querySelectorAll('*')` order, built when the host
-  // pushes a layout: the boxes describe that moment's tree, and so does this.
-  let indexes = new SafeMap();
-
-  function boxesOf(el) {
-    if (!layout || !el.isConnected) return null;
-    const index = indexes.get(el);
-    return index === undefined ? null : layout.boxes[index] || null;
-  }
-
-  function defineGeometry(proto, name, descriptor) {
-    if (proto && !Object.prototype.hasOwnProperty.call(proto, name)) {
-      defineProperty(proto, name, assign({ configurable: true }, descriptor));
-    }
-  }
-
-  defineGeometry(baseProto, 'getClientRects', {
-    value: function getClientRects() {
-      const boxes = boxesOf(this);
-      return boxes ? boxes.r.map((r) => rectOf(r[0], r[1], r[2], r[3])) : [];
-    },
-    writable: true,
-  });
-  defineGeometry(baseProto, 'getBoundingClientRect', {
-    value: function getBoundingClientRect() {
-      const boxes = boxesOf(this);
-      if (!boxes || boxes.r.length === 0) return rectOf(0, 0, 0, 0);
-      let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
-      for (const r of boxes.r) {
-        left = Math.min(left, r[0]);
-        top = Math.min(top, r[1]);
-        right = Math.max(right, r[0] + r[2]);
-        bottom = Math.max(bottom, r[1] + r[3]);
-      }
-      return rectOf(left, top, right - left, bottom - top);
-    },
-    writable: true,
-  });
-  defineGeometry(baseProto, 'clientWidth', {
-    get: function clientWidth() {
-      if (this === doc.documentElement && layout) return layout.viewport[0];
-      const boxes = boxesOf(this);
-      return boxes ? Math.round(boxes.c[0]) : 0;
-    },
-  });
-  defineGeometry(baseProto, 'clientHeight', {
-    get: function clientHeight() {
-      if (this === doc.documentElement && layout) return layout.viewport[1];
-      const boxes = boxesOf(this);
-      return boxes ? Math.round(boxes.c[1]) : 0;
-    },
-  });
-  defineGeometry(elementProto, 'offsetWidth', {
-    get: function offsetWidth() {
-      const boxes = boxesOf(this);
-      return boxes && boxes.r.length ? Math.round(boxes.r[0][2]) : 0;
-    },
-  });
-  defineGeometry(elementProto, 'offsetHeight', {
-    get: function offsetHeight() {
-      const boxes = boxesOf(this);
-      return boxes && boxes.r.length ? Math.round(boxes.r[0][3]) : 0;
-    },
-  });
-
   // ---- addressing nodes ---------------------------------------------------
 
   // A node is named to the host by its child indexes from the document.
@@ -835,13 +785,6 @@
       insertText: reporting(insertText),
       pathOf,
       nodeAt,
-      setLayout(next) {
-          const all = apply(querySelectorAllOf, doc, ['*']);
-        const fresh = new SafeMap();
-        for (let i = 0; i < all.length; i += 1) fresh.set(all[i], i);
-        indexes = fresh;
-        layout = next;
-      },
     }),
   });
 })(globalThis);

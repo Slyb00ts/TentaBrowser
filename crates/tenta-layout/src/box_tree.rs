@@ -14,6 +14,7 @@ use tenta_css::cascade::{Style, StyleEngine};
 use tenta_dom::Document;
 
 use crate::font::FontSystem;
+use crate::table::grid::TableGrid;
 use crate::types::{IntrinsicSize, MarkerKind, PaintStyle, ReplacedKind, TableKind};
 
 /// Index of a [`LayoutBox`] in its [`BoxTree`].
@@ -89,7 +90,7 @@ pub enum BoxKind {
     Flex,
     /// A grid container, laid out as a block until grid layout exists.
     Grid,
-    /// A table part, laid out as a block until table layout exists.
+    /// A table or one of its parts.
     Table(TableKind),
 }
 
@@ -189,6 +190,8 @@ pub struct LayoutBox {
     /// Memoised `(min-content, max-content)` inline sizes. The tree is rebuilt
     /// when styles change, so the cache never outlives its inputs.
     pub intrinsic_inline: Cell<Option<(f32, f32)>>,
+    /// The grid of a table box, built with the box.
+    pub(crate) table: Option<Box<TableGrid>>,
 }
 
 impl LayoutBox {
@@ -210,6 +213,7 @@ impl LayoutBox {
             children: SmallVec::new(),
             ifc: None,
             intrinsic_inline: Cell::new(None),
+            table: None,
         }
     }
 }

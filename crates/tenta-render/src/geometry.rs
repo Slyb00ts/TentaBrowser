@@ -56,12 +56,22 @@ pub struct BoxQuads {
     pub margin: Quad,
 }
 
+/// The fragments of `node`'s own boxes: those its generated content
+/// (`::before`, `::after`, `::marker`) also carries `node` for are left out.
+pub(crate) fn own_fragments(tree: &FragmentTree, node: NodeId) -> Vec<FragId> {
+    tree.fragments_of(node)
+        .iter()
+        .copied()
+        .filter(|&id| !tree.get(id).paint.generated)
+        .collect()
+}
+
 /// The boxes of every fragment `node` produced, in document order. Empty for
 /// a node with no box (`display: none`, `display: contents`, not an element).
 pub fn node_boxes(tree: &FragmentTree, node: NodeId) -> Vec<BoxQuads> {
-    tree.fragments_of(node)
-        .iter()
-        .map(|&id| fragment_boxes(tree, id))
+    own_fragments(tree, node)
+        .into_iter()
+        .map(|id| fragment_boxes(tree, id))
         .collect()
 }
 
@@ -73,6 +83,11 @@ pub struct ElementGeometry {
     pub border: Vec<[f64; 4]>,
     /// Width and height of the padding box of the first fragment.
     pub client: [f64; 2],
+    /// The computed `visibility` is `hidden` or `collapse` (inherited, so it
+    /// is the value the element itself shows).
+    pub visibility_hidden: bool,
+    /// The computed `opacity` of the element, not multiplied by its ancestors'.
+    pub opacity: f32,
 }
 
 /// The geometry of every element of the document, in document order: the
@@ -82,7 +97,7 @@ pub fn element_geometry(tree: &FragmentTree, doc: &Document) -> Vec<Option<Eleme
     doc.descendants(doc.document_node())
         .filter(|node| doc.is_element(*node))
         .map(|node| {
-            let fragments = tree.fragments_of(node);
+            let fragments = own_fragments(tree, node);
             let first = fragments.first()?;
             let border = fragments
                 .iter()
@@ -92,9 +107,12 @@ pub fn element_geometry(tree: &FragmentTree, doc: &Document) -> Vec<Option<Eleme
                 })
                 .collect();
             let (_, _, width, height) = fragment_boxes(tree, *first).padding.bounds();
+            let paint = &tree.get(*first).paint;
             Some(ElementGeometry {
                 border,
                 client: [width, height],
+                visibility_hidden: paint.visibility_hidden,
+                opacity: paint.opacity,
             })
         })
         .collect()

@@ -80,6 +80,27 @@ async fn the_snapshot_leaves_out_what_the_stylesheet_hides() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_computed_visibility_and_opacity_of_a_linked_sheet_are_seen() {
+    let (harness, client) = rendered().await;
+    client.navigate(&harness.url("/sheetvis.html")).await;
+    let text = client.tool("browser_snapshot", json!({})).await.text();
+    assert!(text.contains("Visible text"), "{text}");
+    assert!(
+        text.contains("Shown child by sheet"),
+        "a child may turn visibility back on: {text}"
+    );
+    assert!(
+        !text.contains("Invisible by sheet") && !text.contains("Hidden sibling by sheet"),
+        "{text}"
+    );
+    let ghost = text
+        .lines()
+        .find(|line| line.contains("Ghost by sheet"))
+        .unwrap_or_else(|| panic!("opacity 0 stays in the tree: {text}"));
+    assert!(ghost.contains("opacity-0"), "{ghost}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn boxes_are_reported_when_asked_for() {
     let (harness, client) = rendered().await;
     client.navigate(&harness.url("/cover.html")).await;

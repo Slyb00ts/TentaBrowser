@@ -51,7 +51,11 @@ mod retained;
 #[cfg(feature = "render")]
 mod screenshot;
 #[cfg(feature = "render")]
+mod sheet_loader;
+#[cfg(feature = "render")]
 pub(crate) use image_loader::{ImageLoader, PageImageHost};
+#[cfg(feature = "render")]
+pub(crate) use sheet_loader::SheetLoader;
 
 pub use evaluate::{EvalOptions, Evaluation, FromRemote, World};
 #[cfg(feature = "render")]
@@ -519,6 +523,14 @@ impl PageInner {
 /// §11). This is called from the page thread, inside the engine entry, so the
 /// crash lands while the navigation driving that entry is parked.
 impl ScriptBudget for PageInner {
+    #[cfg(feature = "render")]
+    fn render_settings(&self) -> Option<crate::render::RenderSettings> {
+        (self.config.max_tier >= Tier::Render).then(|| crate::render::RenderSettings {
+            viewport: *self.viewport.lock(),
+            system_fonts: self.config.system_fonts,
+        })
+    }
+
     fn charge(&self, elapsed: Duration) {
         if !self.script_cpu.charge(elapsed) {
             return;
@@ -1379,7 +1391,7 @@ async fn navigate(
     // inside the parse: an `async` script may still be in flight after the
     // parse has handed the document over, and a queue that died with
     // `parse_body` would abort it.
-    let mut jobs = ScriptJobs::new(Rc::clone(&tracker));
+    let mut jobs = ScriptJobs::new(Rc::clone(&tracker), generation);
     let parsed = parse_body(
         &inner,
         response,
@@ -1433,6 +1445,7 @@ async fn navigate(
             &inner.config,
             Rc::clone(&tracker),
             Arc::clone(&inner) as Arc<dyn ScriptBudget>,
+            generation,
         )
         .map_err(Error::unsupported)?;
         runtime::note_parse_finished(inner.config.id, document);
@@ -1770,12 +1783,14 @@ fn evaluate_in_navigation(
     let document = deferred
         .shared()
         .ok_or_else(|| Error::invalid("the page has no document to evaluate"))?;
+    let navigation = inner.state.lock().navigation_generation;
     runtime::ensure_runtime(
         inner.config.id,
         document.clone(),
         &inner.config,
         Rc::clone(tracker),
         Arc::clone(inner) as Arc<dyn ScriptBudget>,
+        navigation,
     )
     .map_err(Error::unsupported)?;
     runtime::note_parse_finished(inner.config.id, document);
@@ -1890,8 +1905,14 @@ enum ParseStep {
 /// the queue, so it never runs even though the page keeps its engine. Closing
 /// this means handing the in-flight fetches to the kept engine's driver.
 struct ScriptJobs {
+    /// The document generation the last chunk-by-chunk stylesheet sweep saw.
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
+    swept: Option<u64>,
     /// The settle call of the navigation that owns this queue.
     tracker: Rc<RefCell<SettleTracker>>,
+    /// The navigation's generation, which keys its render session.
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
+    generation: u64,
     /// `defer` scripts awaiting the end of the parse, in document order.
     deferred: Vec<DeferredEntry>,
     /// Every parallel fetch still running. Aborted when the navigation ends, so
@@ -1900,9 +1921,11 @@ struct ScriptJobs {
 }
 
 impl ScriptJobs {
-    fn new(tracker: Rc<RefCell<SettleTracker>>) -> ScriptJobs {
+    fn new(tracker: Rc<RefCell<SettleTracker>>, generation: u64) -> ScriptJobs {
         ScriptJobs {
+            swept: None,
             tracker,
+            generation,
             deferred: Vec::new(),
             inflight: Vec::new(),
         }
@@ -1974,6 +1997,9 @@ fn start_deferred_script(
                         fetch_deferred_script(&inner, &tracker, &meta, &url, encoding).await;
                     if let Some(source) = source {
                         run_fetched_script(page, &document, &url, &source);
+                        // What it inserted is script's, never the parser's.
+                        #[cfg(feature = "render")]
+                        sweep_script_sheets(&inner, &tracker, &document, meta.navigation);
                     }
                 })
                 .await;
@@ -2118,6 +2144,8 @@ async fn drain_deferred(
     // reach: each entry holds a count on the settle, and a count released by no
     // one is a settle that can never end.
     let entries = std::mem::take(&mut jobs.deferred);
+    #[cfg(feature = "render")]
+    let tracker = Rc::clone(&jobs.tracker);
     for entry in entries {
         let DeferredEntry {
             url,
@@ -2153,7 +2181,11 @@ async fn drain_deferred(
             }
         };
         match received {
-            Ok(Some(source)) => run_fetched_script(page, &document, &url, &source),
+            Ok(Some(source)) => {
+                run_fetched_script(page, &document, &url, &source);
+                #[cfg(feature = "render")]
+                sweep_script_sheets(inner, &tracker, &document, generation);
+            }
             // The fetch already logged why there is nothing to run.
             Ok(None) => {}
             Err(_) => tracing::debug!(
@@ -2192,6 +2224,9 @@ async fn drive_parse(
     deadline: Instant,
 ) -> Result<ParseStep> {
     let config = &inner.config;
+    // The stylesheet loader (render builds) is keyed by the navigation.
+    #[cfg(feature = "render")]
+    let generation = jobs.generation;
     document.borrow().check_observer_health()?;
     let mut status = status;
     while status == ParseStatus::Script {
@@ -2209,8 +2244,22 @@ async fn drive_parse(
             base,
             document_url: final_url.clone(),
             deadline,
+            navigation: jobs.generation,
         };
-        let deferred = runtime::run_pending_script(
+        // The stylesheets the parser has inserted so far start loading now, so
+        // an external script's own fetch below overlaps with them; the script
+        // then waits for the ones that block scripts (HTML's "a style sheet
+        // that is blocking scripts") and sees their rules when it reads styles.
+        #[cfg(feature = "render")]
+        sheet_loader::sweep_parsed(
+            inner,
+            &jobs.tracker,
+            document,
+            generation,
+            true,
+            parser.encoding(),
+        );
+        let pending_script = runtime::run_pending_script(
             parser,
             document,
             config,
@@ -2219,13 +2268,41 @@ async fn drive_parse(
             Arc::clone(inner) as Arc<dyn ScriptBudget>,
         )
         .await?;
-        // A script that ran inside `run_pending_script` may have burned the
-        // page's script budget, which crashes the page from inside that entry.
-        // The parse must not carry on with a page that is gone. Returning here
-        // drops `deferred` and `pending` on the way out, and that is complete:
-        // `deferred` holds only the URL of a script whose fetch has not been
-        // started, and `PendingScripts` releases its hold in its own `Drop`, so
-        // nothing is left in flight.
+        let deferred = match pending_script {
+            runtime::PendingScript::Ready(source) => {
+                #[cfg(feature = "render")]
+                sheet_loader::wait_for_blocking_sheets(
+                    inner,
+                    &jobs.tracker,
+                    document,
+                    generation,
+                    deadline,
+                )
+                .await;
+                runtime::run_script_source(config.id, document, &source);
+                // What the script inserted is its own, not the parser's: it
+                // does not block the scripts after it.
+                #[cfg(feature = "render")]
+                sheet_loader::sweep_parsed(
+                    inner,
+                    &jobs.tracker,
+                    document,
+                    generation,
+                    false,
+                    parser.encoding(),
+                );
+                None
+            }
+            runtime::PendingScript::Deferred(timing) => Some(timing),
+            runtime::PendingScript::Done => None,
+        };
+        // A script that ran above may have burned the page's script budget,
+        // which crashes the page from inside that entry. The parse must not
+        // carry on with a page that is gone. Returning here drops `deferred`
+        // and `pending` on the way out, and that is complete: `deferred` holds
+        // only the URL of a script whose fetch has not been started, and
+        // `PendingScripts` releases its hold in its own `Drop`, so nothing is
+        // left in flight.
         if let Some(reason) = inner.crash_reason() {
             return Err(Error::Crashed { reason });
         }
@@ -2490,9 +2567,17 @@ async fn parse_body(
         )
         .await?
         {
-            ParseStep::Fed => {}
+            ParseStep::Fed => {
+                // The stylesheets of the markup so far start loading without
+                // waiting for a script or for the end of the body.
+                #[cfg(feature = "render")]
+                sweep_sheets_so_far(jobs, inner, &document, parser.encoding());
+            }
             ParseStep::Stopped => break,
             ParseStep::Restart(encoding) => {
+                // What the old tree started is thrown away with it.
+                #[cfg(feature = "render")]
+                restart_sheets(jobs, inner);
                 let Some(buffer) = restart_buffer.take() else {
                     tracing::warn!(
                         url = %final_url,
@@ -2605,7 +2690,23 @@ async fn parse_body(
     // The `defer` scripts run here: the document is parsed and its tree is
     // finished, and the caller reports `DOMContentLoaded` only after this
     // returns. The `async` ones are not waited for — theirs started at their
-    // own pauses and run whenever their fetch arrives.
+    // own pauses and run whenever their fetch arrives. The stylesheets the rest
+    // of the document linked start loading now, and a deferred script waits for
+    // the ones that block scripts like any other.
+    #[cfg(feature = "render")]
+    {
+        sheet_loader::sweep_parsed(inner, &jobs.tracker, &document, generation, true, chosen);
+        if !jobs.deferred.is_empty() {
+            sheet_loader::wait_for_blocking_sheets(
+                inner,
+                &jobs.tracker,
+                &document,
+                generation,
+                deadline,
+            )
+            .await;
+        }
+    }
     drain_deferred(jobs, inner, &document, deadline, generation).await;
     // The parse handed the tree over: the navigation owns it, and the engine
     // behind it, from here.
@@ -2621,6 +2722,60 @@ async fn parse_body(
         redirects,
         mid_body_timeout: false,
     })
+}
+
+/// Starts the stylesheets of the markup parsed so far, at most once per
+/// document generation, once the parser has settled on an encoding.
+#[cfg(feature = "render")]
+fn sweep_sheets_so_far(
+    jobs: &mut ScriptJobs,
+    inner: &Arc<PageInner>,
+    document: &SharedDocument,
+    encoding: Option<&'static Encoding>,
+) {
+    if encoding.is_none() {
+        return;
+    }
+    let Ok(doc) = document.try_borrow() else {
+        return;
+    };
+    let generation = doc.mutation_generation();
+    drop(doc);
+    if jobs.swept == Some(generation) {
+        return;
+    }
+    jobs.swept = Some(generation);
+    sheet_loader::sweep_parsed(
+        inner,
+        &jobs.tracker,
+        document,
+        jobs.generation,
+        true,
+        encoding,
+    );
+}
+
+/// Starts the stylesheets a script that ran outside the parse's pauses (an
+/// `async` or `defer` script) inserted: they are not parser-inserted, so they
+/// never hold a later script back.
+#[cfg(feature = "render")]
+fn sweep_script_sheets(
+    inner: &Arc<PageInner>,
+    tracker: &Rc<RefCell<SettleTracker>>,
+    document: &Weak<RefCell<DomDocument>>,
+    navigation: u64,
+) {
+    if let Some(document) = document.upgrade() {
+        sheet_loader::sweep_parsed(inner, tracker, &document, navigation, false, None);
+    }
+}
+
+/// A `<meta charset>` restarts the parse into a fresh tree: the render session
+/// the old tree's stylesheets were fetched for goes with it.
+#[cfg(feature = "render")]
+fn restart_sheets(jobs: &mut ScriptJobs, inner: &Arc<PageInner>) {
+    jobs.swept = None;
+    crate::render::release(inner.config.id);
 }
 
 /// How many due timer callbacks one turn of the settle loop runs before the

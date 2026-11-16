@@ -108,9 +108,11 @@ before the first render.
 - `Emulation`: viewport, scale factor and the user agent header; the other
   commands are refused by name.
 - `crates/tenta-cdp/src/interaction.js` gives every CDP-created page a stub
-  `IntersectionObserver`, geometry members and the pointer and keyboard
-  default actions until the native ones exist. Focus and `MutationObserver`
-  are native; the script only drives them. It lives in the page's trust
+  `IntersectionObserver` (it reads the native rectangles once per target) and the
+  pointer and keyboard default actions until the native ones exist. Focus,
+  `MutationObserver` and the geometry members (`getBoundingClientRect`,
+  `offsetWidth`, `getComputedStyle`, `elementFromPoint`, ...) are native; the
+  script only drives them. It lives in the page's trust
   domain, is visible to a page that looks for it, and is not a stealth layer.
 
 ## Smoke test

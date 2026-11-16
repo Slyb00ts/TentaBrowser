@@ -200,6 +200,13 @@ pub(crate) trait ScriptBudget: Send + Sync {
     fn init_scripts(&self) -> Vec<String> {
         Vec::new()
     }
+    /// What the page's render session is created with, or `None` for a page
+    /// whose ceiling is below the render tier: then script geometry has no
+    /// layout to ask.
+    #[cfg(feature = "render")]
+    fn render_settings(&self) -> Option<crate::render::RenderSettings> {
+        None
+    }
 }
 
 /// The task that runs a retained runtime's turns while no settle call does.
@@ -322,7 +329,11 @@ impl PageRuntime {
         config: &PageConfig,
         tracker: Rc<RefCell<SettleTracker>>,
         script_budget: Arc<dyn ScriptBudget>,
+        navigation: u64,
     ) -> Result<PageRuntime, String> {
+        // Only the render-tier hosts below are keyed by the navigation.
+        #[cfg(not(feature = "render"))]
+        let _ = navigation;
         let factory = config
             .engine
             .as_ref()
@@ -388,6 +399,27 @@ impl PageRuntime {
         ));
         #[cfg(feature = "render")]
         engine.set_image_host(Rc::clone(&images) as Rc<dyn tenta_js::image::ImageHost>);
+        // The geometry members the generator cannot declare (`DOMRect.fromRect`,
+        // `toJSON`); a page below the render tier has the interfaces too.
+        engine.install_preludes();
+        // The sheets `link.sheet` and `document.styleSheets` read.
+        #[cfg(feature = "render")]
+        engine.set_style_host(Rc::new(crate::script_geometry::PageStyleHost::new(
+            page,
+            navigation,
+            Rc::downgrade(&document),
+        )));
+        // Layout-backed answers for `getBoundingClientRect`, `getComputedStyle`
+        // and friends, for a page that can reach the render tier.
+        #[cfg(feature = "render")]
+        if script_budget.render_settings().is_some() {
+            engine.set_geometry_host(Rc::new(crate::script_geometry::PageGeometry::new(
+                page,
+                navigation,
+                Rc::downgrade(&document),
+                Arc::clone(&script_budget),
+            )));
+        }
         // Before any script runs, so the document's first script already finds
         // `console` and the bindings the host registered.
         let awaits = Rc::new(AwaitTable::default());
@@ -834,8 +866,7 @@ impl PageRuntime {
             tracing::debug!(page = ?self.page, "an empty script element runs nothing");
             return Ok(ScriptStep::Done);
         }
-        self.run_source(&source);
-        Ok(ScriptStep::Done)
+        Ok(ScriptStep::Ready(source))
     }
 
     /// Runs `source` as a classic script against the tree.
@@ -964,9 +995,12 @@ struct ScriptTiming {
 
 /// What running the script the parse is paused on needs next.
 enum ScriptStep {
-    /// Nothing to fetch: the script ran, or a rule skipped it. The parse may
-    /// resume.
+    /// Nothing to fetch and nothing to run: a rule skipped the script. The
+    /// parse may resume.
     Done,
+    /// An inline classic script: its text, to be run once the page has let
+    /// stylesheets that block scripts finish loading.
+    Ready(String),
     /// The script is classic and external with no `async` or `defer`: it is
     /// fetched now, and the parse resumes only once it has run.
     Fetch(Url),
@@ -1009,6 +1043,8 @@ pub(crate) struct ScriptMeta {
     /// The navigation's deadline. A script may not outlive it: the deadline is
     /// the whole navigation's, and the parse is part of the navigation.
     pub deadline: Instant,
+    /// The navigation's generation, which keys the page's render session.
+    pub navigation: u64,
 }
 
 /// The engine configuration a page derives from its own
@@ -1133,6 +1169,7 @@ pub(crate) fn ensure_runtime(
     config: &PageConfig,
     tracker: Rc<RefCell<SettleTracker>>,
     script_budget: Arc<dyn ScriptBudget>,
+    navigation: u64,
 ) -> std::result::Result<(), String> {
     let existing = RUNTIMES.with(|cell| {
         cell.borrow()
@@ -1154,7 +1191,7 @@ pub(crate) fn ensure_runtime(
         }
         None => {}
     }
-    match PageRuntime::create(page, document, config, tracker, script_budget) {
+    match PageRuntime::create(page, document, config, tracker, script_budget, navigation) {
         Ok(runtime) => {
             RUNTIMES.with(|cell| {
                 cell.borrow_mut().insert(page, runtime);
@@ -1186,11 +1223,17 @@ pub(crate) fn ensure_runtime(
 /// side of the fetch and only if the same engine is still bound to the same
 /// tree.
 ///
-/// `Some` means the script is not this call's to run at all: it carries `async`
-/// or `defer`, so its fetch runs in parallel with the parse and the caller
-/// starts it (`crate::page`). This is a classification rather than a spawn
-/// because starting one needs the page's `PageInner`, which belongs to that
-/// module.
+/// [`PendingScript::Deferred`] means the script is not this call's to run at
+/// all: it carries `async` or `defer`, so its fetch runs in parallel with the
+/// parse and the caller starts it (`crate::page`). This is a classification
+/// rather than a spawn because starting one needs the page's `PageInner`, which
+/// belongs to that module.
+///
+/// [`PendingScript::Ready`] is the text of a parser-blocking script (inline, or
+/// fetched here) that has **not** run yet. The caller runs it with
+/// [`run_script_source`] once nothing that blocks scripts is still loading:
+/// HTML makes a script wait for "a style sheet that is blocking scripts", and
+/// the wait is an await the page makes, not the runtime.
 pub(crate) async fn run_pending_script(
     parser: &mut Parser<'_, SharedSink>,
     document: &SharedDocument,
@@ -1198,7 +1241,7 @@ pub(crate) async fn run_pending_script(
     tracker: &Rc<RefCell<SettleTracker>>,
     meta: &ScriptMeta,
     script_budget: Arc<dyn ScriptBudget>,
-) -> Result<Option<DeferredTiming>, Error> {
+) -> Result<PendingScript, Error> {
     let page = config.id;
     ensure_runtime(
         page,
@@ -1206,6 +1249,7 @@ pub(crate) async fn run_pending_script(
         config,
         Rc::clone(tracker),
         Arc::clone(&script_budget),
+        meta.navigation,
     )
     .map_err(Error::unsupported)?;
     let step = with_runtime_for(page, document, |runtime| {
@@ -1213,14 +1257,15 @@ pub(crate) async fn run_pending_script(
     })
     .ok_or_else(|| Error::unsupported("the JavaScript runtime was unavailable"))?;
     let url = match step? {
-        ScriptStep::Done => return Ok(None),
-        ScriptStep::Deferred(timing) => return Ok(Some(timing)),
+        ScriptStep::Done => return Ok(PendingScript::Done),
+        ScriptStep::Ready(source) => return Ok(PendingScript::Ready(source)),
+        ScriptStep::Deferred(timing) => return Ok(PendingScript::Deferred(timing)),
         ScriptStep::Fetch(url) => url,
     };
     let Some(body) = fetch_script(config, meta, &url, tracker).await else {
         // A script that could not be fetched is a page-level fact, not a failed
         // navigation: the parse goes on without it, exactly as a browser's does.
-        return Ok(None);
+        return Ok(PendingScript::Done);
     };
     let Some(source) = decode_script(&body, parser.encoding()) else {
         tracing::warn!(
@@ -1228,17 +1273,31 @@ pub(crate) async fn run_pending_script(
             url = %url,
             "an external script is skipped: the parse has no document encoding to decode it with"
         );
-        return Ok(None);
+        return Ok(PendingScript::Done);
     };
-    let ran = with_runtime_for(page, document, |runtime| runtime.run_source(&source));
+    Ok(PendingScript::Ready(source))
+}
+
+/// What the page does with the script its parse is paused on.
+pub(crate) enum PendingScript {
+    /// Nothing: the script was skipped or could not be fetched.
+    Done,
+    /// The script's text, still to run.
+    Ready(String),
+    /// A parallel script to start.
+    Deferred(DeferredTiming),
+}
+
+/// Runs a script [`run_pending_script`] handed out, if the same engine is still
+/// bound to the same tree.
+pub(crate) fn run_script_source(page: PageId, document: &SharedDocument, source: &str) {
+    let ran = with_runtime_for(page, document, |runtime| runtime.run_source(source));
     if ran.is_none() {
         tracing::debug!(
             ?page,
-            url = %url,
             "a fetched script did not run: its engine is no longer bound to this tree"
         );
     }
-    Ok(None)
 }
 
 /// Issues the fetch of one external classic script and reads its body.
@@ -1450,6 +1509,7 @@ pub(crate) fn adopt_loaded_document(
     document: SharedDocument,
     config: &PageConfig,
     script_budget: Arc<dyn ScriptBudget>,
+    navigation: u64,
 ) -> std::result::Result<(), String> {
     let mut tracker = SettleTracker::new(config.settle, Settle::Load, Arc::clone(&config.clock));
     tracker.note_domcontentloaded();
@@ -1460,6 +1520,7 @@ pub(crate) fn adopt_loaded_document(
         config,
         Rc::new(RefCell::new(tracker)),
         script_budget,
+        navigation,
     )?;
     note_parse_finished(page, &document);
     Ok(())

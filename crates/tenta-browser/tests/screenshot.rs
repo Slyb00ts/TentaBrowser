@@ -44,8 +44,11 @@ const LONG: &str = "<!doctype html><html><head><style>html,body{margin:0}\
     .top{height:1500px;background:#00ff00}.bottom{height:1500px;background:#0000ff}\
     </style></head><body><div class=\"top\"></div><div class=\"bottom\"></div></body></html>";
 
+// The script sits before the link: a script after a parser-inserted sheet would
+// wait for it, and these pages are for screenshots that wait for the sheet.
 const SLOW_SHEET: &str = "<!doctype html><html><head><style>html,body{margin:0}</style>\
-    <link rel=\"stylesheet\" href=\"slow.css\"></head><body><p>x</p><script>window.ready = 1;</script></body></html>";
+    <script>window.ready = 1;</script>\
+    <link rel=\"stylesheet\" href=\"slow.css\"></head><body><p>x</p></body></html>";
 
 const EDITABLE: &str = "<!doctype html><html><head><style id=\"s\">\
     html,body{margin:0}#b{width:50px;height:50px;background:#ff0000}\
@@ -82,8 +85,9 @@ const LAZY: &str = "<!doctype html><html><head><style>html,body{margin:0}\
     </script></body></html>";
 
 const GATED: &str = "<!doctype html><html><head><style>html,body{margin:0}</style>\
+    <script>window.ready = 1;</script>\
     <link rel=\"stylesheet\" href=\"gate.css\"></head>\
-    <body><div class=\"late\"></div><script>window.ready = 1;</script></body></html>";
+    <body><div class=\"late\"></div></body></html>";
 
 const LATE_CSS: &str = ".late{width:70px;height:70px;background:#ff0000}";
 
@@ -154,16 +158,62 @@ impl Rig {
 
     /// A page that has loaded `path`, with scripts off.
     async fn tier1(&self, path: &str, viewport: Viewport) -> Page {
-        self.loaded(path, false, viewport).await
+        self.loaded(path, false, viewport, Settle::Load).await
+    }
+
+    /// A page with scripts off that has parsed `path`; its stylesheets may
+    /// still be loading.
+    async fn parsed(&self, path: &str, viewport: Viewport) -> Page {
+        self.loaded(path, false, viewport, Settle::DomContent).await
+    }
+
+    /// Like [`Rig::tier1`], with the page's events subscribed before the
+    /// navigation: stylesheets are fetched while the document loads, so what
+    /// they report arrives during it.
+    async fn tier1_events(
+        &self,
+        path: &str,
+        viewport: Viewport,
+    ) -> (Page, tenta_browser::PageEvents) {
+        let page = self
+            .context
+            .new_page(PageOptions {
+                javascript: false,
+                viewport,
+                ..PageOptions::default()
+            })
+            .await
+            .expect("page");
+        let events = page.events();
+        page.goto(
+            &self.server.url(path),
+            Goto::default().wait_until(Settle::Load).timeout(PATIENCE),
+        )
+        .await
+        .expect("navigation");
+        (page, events)
     }
 
     /// A page that has loaded `path`, with scripts on.
     #[cfg(feature = "v8")]
     async fn scripted(&self, path: &str, viewport: Viewport) -> Page {
-        self.loaded(path, true, viewport).await
+        self.loaded(path, true, viewport, Settle::Load).await
     }
 
-    async fn loaded(&self, path: &str, javascript: bool, viewport: Viewport) -> Page {
+    /// A page with scripts on that has parsed `path`; its stylesheets may still
+    /// be loading.
+    #[cfg(feature = "v8")]
+    async fn scripted_parsed(&self, path: &str, viewport: Viewport) -> Page {
+        self.loaded(path, true, viewport, Settle::DomContent).await
+    }
+
+    async fn loaded(
+        &self,
+        path: &str,
+        javascript: bool,
+        viewport: Viewport,
+        settle: Settle,
+    ) -> Page {
         let page = self
             .context
             .new_page(PageOptions {
@@ -175,7 +225,7 @@ impl Rig {
             .expect("page");
         page.goto(
             &self.server.url(path),
-            Goto::default().wait_until(Settle::Load).timeout(PATIENCE),
+            Goto::default().wait_until(settle).timeout(PATIENCE),
         )
         .await
         .expect("navigation");
@@ -323,11 +373,13 @@ async fn a_linked_stylesheet_is_fetched_and_applied() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stylesheet_that_fails_is_reported_and_the_page_still_renders() {
     let rig = Rig::new().await;
-    let page = rig.tier1("/missing.html", viewport(200, 120, 1.0)).await;
-    let mut events = page.events();
+    let (page, mut events) = rig
+        .tier1_events("/missing.html", viewport(200, 120, 1.0))
+        .await;
 
     let first = decode(&capture(&page, Capture::Viewport).await);
     assert_eq!(first.pixel(20, 20), RED);
+    // The sheet was fetched, and reported, while the document loaded.
     assert_eq!(stylesheet_failures(&mut events), ["/nope.css"]);
     // A 404 is remembered, so it is neither refetched nor reported again.
     capture(&page, Capture::Viewport).await;
@@ -367,8 +419,9 @@ async fn a_jpeg_decodes_to_the_page_it_was_taken_of() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_http_page_cannot_load_a_local_stylesheet_even_from_an_allowed_root() {
     let rig = Rig::new().await;
-    let page = rig.tier1("/filelink.html", viewport(200, 120, 1.0)).await;
-    let mut events = page.events();
+    let (page, mut events) = rig
+        .tier1_events("/filelink.html", viewport(200, 120, 1.0))
+        .await;
 
     let image = decode(&capture(&page, Capture::Viewport).await);
     assert_eq!(
@@ -388,7 +441,14 @@ async fn an_http_page_cannot_load_a_local_stylesheet_even_from_an_allowed_root()
 async fn a_second_screenshot_of_an_unchanged_page_does_no_work() {
     let rig = Rig::new().await;
     let page = rig.tier1("/linked.html", viewport(200, 120, 1.0)).await;
-    assert_eq!(page.render_counters().await.expect("counters"), None);
+    // The sheet was fetched while the document loaded, so a session exists, but
+    // nothing has been laid out or painted yet.
+    let before = page.render_counters().await.expect("counters");
+    assert!(
+        before.is_none_or(|counters| counters.layouts == 0 && counters.display_lists == 0),
+        "{before:?}"
+    );
+    let loaded_requests = rig.server.requests_served();
 
     let first = capture(&page, Capture::Viewport).await;
     let after_first = page
@@ -398,6 +458,7 @@ async fn a_second_screenshot_of_an_unchanged_page_does_no_work() {
         .expect("a session");
     assert!(after_first.layouts >= 1 && after_first.display_lists >= 1);
     let served = rig.server.requests_served();
+    assert_eq!(served, loaded_requests, "the screenshot fetched nothing");
 
     let second = capture(&page, Capture::Viewport).await;
     let after_second = page
@@ -570,8 +631,8 @@ async fn a_page_that_has_not_navigated_renders_its_blank_document() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn closing_the_page_ends_a_screenshot_waiting_for_a_stylesheet() {
     let rig = Rig::new().await;
-    let page = rig.tier1("/slow.html", viewport(200, 120, 1.0)).await;
-    let before = rig.server.requests_served();
+    let page = rig.parsed("/slow.html", viewport(200, 120, 1.0)).await;
+    let before = 1; // the document; the sheet is the next request
 
     let pending = tokio::spawn({
         let page = page.clone();
@@ -592,8 +653,8 @@ async fn closing_the_page_ends_a_screenshot_waiting_for_a_stylesheet() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dropping_a_screenshot_waiting_for_a_stylesheet_leaves_the_page_usable() {
     let rig = Rig::new().await;
-    let page = rig.tier1("/slow.html", viewport(200, 120, 1.0)).await;
-    let before = rig.server.requests_served();
+    let page = rig.parsed("/slow.html", viewport(200, 120, 1.0)).await;
+    let before = 1; // the document; the sheet is the next request
 
     {
         let waiting = page.screenshot(ScreenshotOptions::default());
@@ -740,8 +801,10 @@ mod scripted {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn closing_a_script_page_ends_a_screenshot_waiting_for_a_stylesheet() {
         let rig = Rig::new().await;
-        let page = rig.scripted("/slow.html", viewport(200, 120, 1.0)).await;
-        let before = rig.server.requests_served();
+        let page = rig
+            .scripted_parsed("/slow.html", viewport(200, 120, 1.0))
+            .await;
+        let before = 1; // the document; the sheet is the next request
 
         let pending = tokio::spawn({
             let page = page.clone();
@@ -762,8 +825,10 @@ mod scripted {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_stylesheet_added_while_another_is_being_fetched_is_waited_for() {
         let rig = Rig::new().await;
-        let page = rig.scripted("/gated.html", viewport(200, 120, 1.0)).await;
-        let before = rig.server.requests_served();
+        let page = rig
+            .scripted_parsed("/gated.html", viewport(200, 120, 1.0))
+            .await;
+        let before = 1; // the document; the sheet is the next request
 
         let pending = tokio::spawn({
             let page = page.clone();

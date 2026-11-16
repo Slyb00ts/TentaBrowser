@@ -1253,6 +1253,8 @@ fn node_interface(ctx: &SharedContext, node: tenta_core::NodeId) -> &'static str
                 Some(tag) if tag == atoms::TEXTAREA => "HTMLTextAreaElement",
                 Some(tag) if tag == atoms::OPTION => "HTMLOptionElement",
                 Some(tag) if tag == atoms::SCRIPT => "HTMLScriptElement",
+                Some(tag) if tag == atoms::LINK => "HTMLLinkElement",
+                Some(tag) if tag == atoms::STYLE => "HTMLStyleElement",
                 _ => "HTMLElement",
             },
             Some(ns) if ns == atoms::NS_SVG => "SVGElement",

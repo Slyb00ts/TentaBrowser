@@ -894,6 +894,8 @@ impl WrapperWorld for V8World {
                                 Some(tag) if tag == atoms::TEXTAREA => "HTMLTextAreaElement",
                                 Some(tag) if tag == atoms::OPTION => "HTMLOptionElement",
                                 Some(tag) if tag == atoms::SCRIPT => "HTMLScriptElement",
+                                Some(tag) if tag == atoms::LINK => "HTMLLinkElement",
+                                Some(tag) if tag == atoms::STYLE => "HTMLStyleElement",
                                 _ => "HTMLElement",
                             },
                             Some(ns) if ns == atoms::NS_SVG => "SVGElement",

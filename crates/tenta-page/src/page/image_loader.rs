@@ -878,9 +878,9 @@ pub(super) fn pump(
         })
         .unwrap_or_default();
 
-    // A page whose document has no image element never creates a render
-    // session for this, and a quiet one is not rescanned: the probe looks again
-    // only when the document changed.
+    // A page whose document has no image element and no stylesheet never
+    // creates a render session for this, and a quiet one is not rescanned: the
+    // probe looks again only when the document changed.
     let known = render::loader_exists(page, navigation);
     if !known && dirty.is_empty() {
         let changed = shared
@@ -893,12 +893,19 @@ pub(super) fn pump(
         if !changed {
             return;
         }
+        // One lock: the guard of a second `lock()` in the same expression would
+        // wait for the first.
+        let sizes = {
+            let viewport = inner.viewport.lock();
+            (viewport.width as f32, viewport.height as f32)
+        };
         let any = with_document(inner, tree, |doc| {
-            ["img", "video", "input"].iter().any(|tag| {
+            let images = ["img", "video", "input"].iter().any(|tag| {
                 doc.get_elements_by_tag_name(tag)
                     .into_iter()
                     .any(|node| tenta_render::is_image_element(doc, node))
-            })
+            });
+            images || has_stylesheets(doc, sizes)
         })
         .unwrap_or(false);
         if !any {
@@ -919,30 +926,82 @@ pub(super) fn pump(
                 clock: Arc::clone(&inner.config.clock),
             },
         );
+        handles.sheet_loader.sweep(
+            inner,
+            super::sheet_loader::SheetSweep {
+                doc,
+                tracker,
+                parser_inserted: false,
+                encoding: None,
+                viewport: (viewport.width as f32, viewport.height as f32),
+            },
+        );
     });
-    // A flood of loads is delivered over several turns, so timers and the rest
-    // of the page keep running between batches.
-    let events = handles.loader.take_events(EVENTS_PER_TURN);
-    if events.is_empty() {
-        return;
-    }
     let Some(document) = shared else {
         return;
     };
-    let keys: Vec<Option<ImageKey>> = events.iter().map(|(_, key)| key.clone()).collect();
-    let events: Vec<ImageEvent> = events.into_iter().map(|(event, _)| event).collect();
-    let loader = &handles.loader;
+    deliver_events(
+        page,
+        tracker,
+        &document,
+        &handles.loader,
+        &handles.sheet_loader,
+    );
+}
+
+/// Delivers the `load` and `error` events of the image and stylesheet loads
+/// that ended to the engine bound to `document`.
+///
+/// A flood of loads is delivered over several turns, so timers and the rest of
+/// the page keep running between batches. Sheet events go first: a
+/// stylesheet's `load` belongs to the document's loading before any image's
+/// does, and a parser-blocking sheet's must come before the script it held
+/// back.
+pub(super) fn deliver_events(
+    page: PageId,
+    tracker: &Rc<RefCell<SettleTracker>>,
+    document: &Rc<RefCell<DomDocument>>,
+    images: &ImageLoader,
+    sheets: &super::sheet_loader::SheetLoader,
+) {
+    let image_events = images.take_events(EVENTS_PER_TURN);
+    let sheet_events = sheets.take_events(EVENTS_PER_TURN);
+    if image_events.is_empty() && sheet_events.is_empty() {
+        return;
+    }
+    enum Currency {
+        Image(Option<ImageKey>),
+        Sheet(u64),
+    }
+    let mut events: Vec<ImageEvent> = Vec::new();
+    let mut currencies: Vec<Currency> = Vec::new();
+    for (event, serial) in sheet_events {
+        events.push(event);
+        currencies.push(Currency::Sheet(serial));
+    }
+    for (event, key) in image_events {
+        events.push(event);
+        currencies.push(Currency::Image(key));
+    }
     let mut current = |index: usize, event: &ImageEvent| {
-        document.try_borrow().map_or(true, |doc| {
-            loader.event_is_current(&doc, event, &keys[index])
-        })
+        document
+            .try_borrow()
+            .map_or(true, |doc| match &currencies[index] {
+                Currency::Image(key) => images.event_is_current(&doc, event, key),
+                Currency::Sheet(serial) => sheets.event_is_current(&doc, event, *serial),
+            })
     };
-    runtime::with_runtime_for(page, &document, |runtime| {
+    runtime::with_runtime_for(page, document, |runtime| {
         runtime.dispatch_image_events(events, &mut current);
     });
-    if loader.has_events() {
+    if images.has_events() || sheets.has_events() {
         tracker.borrow().notify_handle().notify_one();
     }
+}
+
+/// Whether `doc` has a `<link>` or `<style>` the stylesheet loader would act on.
+fn has_stylesheets(doc: &DomDocument, viewport: (f32, f32)) -> bool {
+    super::sheet_loader::has_sheet_elements(doc, viewport)
 }
 
 #[cfg(test)]

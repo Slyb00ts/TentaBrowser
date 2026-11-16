@@ -127,6 +127,17 @@ floor is affected.
   expectations), 0.05 px (others) and 1 px position / 2 px or 3% size for
   elements that hold inline text. They are reported, not graded.
 
+## Tables: Chrome geometry
+
+`crates/tenta-layout/tests/tables.rs` replays `tests/tables/chrome_cases.rs`: 249
+`getBoundingClientRect` records from Chrome 154 for tables (structure, anonymous boxes,
+column widths, table width, fixed layout, row heights and alignment, collapsed borders,
+captions, tables among floats/flex/grid, shapes taken from real pages). The cases are
+written in `render-fixtures/tools/table_cases.py` and recorded with
+`python3 record_geometry.py table_cases.py ALL ../../crates/tenta-layout/tests/tables/chrome_cases.rs`
+(about four seconds a case). Chrome is a reference only; the text uses the bundled
+Liberation Sans through `@font-face`, as for the float cases.
+
 ## Replaced elements and images: Chrome geometry and pixel references
 
 Two recorded references cover images, both recorded from Chrome 154 on macOS

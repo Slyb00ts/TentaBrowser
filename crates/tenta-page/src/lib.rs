@@ -28,6 +28,8 @@ mod render;
 // Private: the page's cumulative script budget is page-thread state the page
 // owns, not an API (`crates/tenta-page/src/script_cpu.rs`).
 mod script_cpu;
+#[cfg(feature = "render")]
+mod script_geometry;
 pub mod settle;
 // Private: stylesheet collection feeds the render session and is not an API
 // (`crates/tenta-page/src/styles.rs`).

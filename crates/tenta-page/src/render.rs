@@ -24,8 +24,8 @@ pub use tenta_render::{ImageFormat, RasterStats, Screenshot, StageTimes, WorkCou
 use url::Url;
 
 use crate::images::{ImageLedger, Loaded};
-use crate::page::{ImageLoader, Viewport};
-use crate::styles::{StyleSignature, StyleState};
+use crate::page::{ImageLoader, SheetLoader, Viewport};
+use crate::styles::StyleState;
 
 /// A rectangle of the document in CSS pixels, from its top-left corner.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -125,11 +125,12 @@ pub struct ContentSize {
 /// session has been given.
 #[derive(Default)]
 pub(crate) struct Sheets {
-    pub state: StyleState,
+    /// The fetched stylesheets of the navigation. Shared with the load-time
+    /// [`SheetLoader`] and the geometry host, which never wait on the mutex
+    /// around this struct, so it is only ever borrowed between awaits.
+    pub state: Rc<RefCell<StyleState>>,
     /// What this navigation's images have cost so far.
     pub images: ImageLedger,
-    /// The signature the session's sources were collected for.
-    applied: Option<StyleSignature>,
 }
 
 struct PageRender {
@@ -140,6 +141,8 @@ struct PageRender {
     /// Loads the document's images as they enter it; it shares the session's
     /// store and the sheets' image ledger.
     loader: Rc<ImageLoader>,
+    /// Fetches the document's stylesheets as they enter it.
+    sheet_loader: Rc<SheetLoader>,
 }
 
 /// What a screenshot works with.
@@ -147,6 +150,7 @@ pub(crate) struct Handles {
     pub session: Rc<RefCell<RenderSession>>,
     pub sheets: Rc<tokio::sync::Mutex<Sheets>>,
     pub loader: Rc<ImageLoader>,
+    pub sheet_loader: Rc<SheetLoader>,
 }
 
 thread_local! {
@@ -180,13 +184,16 @@ pub(crate) fn handles(
             });
             let session = Rc::new(RefCell::new(session));
             let loader = ImageLoader::new(Rc::downgrade(&session));
+            let sheets = Sheets::default();
+            let sheet_loader = SheetLoader::new(Rc::clone(&sheets.state));
             renders.insert(
                 page,
                 PageRender {
                     navigation,
                     session,
-                    sheets: Rc::new(tokio::sync::Mutex::new(Sheets::default())),
+                    sheets: Rc::new(tokio::sync::Mutex::new(sheets)),
                     loader,
+                    sheet_loader,
                 },
             );
         }
@@ -195,6 +202,7 @@ pub(crate) fn handles(
             session: Rc::clone(&render.session),
             sheets: Rc::clone(&render.sheets),
             loader: Rc::clone(&render.loader),
+            sheet_loader: Rc::clone(&render.sheet_loader),
         }
     })
 }
@@ -205,6 +213,17 @@ pub(crate) fn loader_of(page: PageId) -> Option<Rc<ImageLoader>> {
         cell.borrow()
             .get(&page)
             .map(|render| Rc::clone(&render.loader))
+    })
+}
+
+/// The stylesheet loader of `page`'s render session for the document of
+/// `navigation`, if it has one.
+pub(crate) fn sheet_loader_of(page: PageId, navigation: u64) -> Option<Rc<SheetLoader>> {
+    RENDERS.with(|cell| {
+        cell.borrow()
+            .get(&page)
+            .filter(|render| render.navigation == navigation)
+            .map(|render| Rc::clone(&render.sheet_loader))
     })
 }
 
@@ -401,12 +420,82 @@ fn prepare(
     base_url: &Url,
     viewport: Viewport,
 ) {
+    prepare_shared(session, &sheets.state, doc, base_url, viewport);
+}
+
+/// Gives `session` the viewport and, when their signature moved, the sheets
+/// `style` holds for `doc`. The state is only borrowed for the length of the
+/// call, so the load-time loader's tasks never wait on it.
+pub(crate) fn prepare_shared(
+    session: &mut RenderSession,
+    style: &RefCell<StyleState>,
+    doc: &Document,
+    base_url: &Url,
+    viewport: Viewport,
+) {
     session.set_viewport(render_viewport(viewport));
-    let signature = sheets.state.signature(doc);
-    if sheets.applied != Some(signature) {
-        session.set_style_sources(sheets.state.cached_sources(doc, base_url));
-        sheets.applied = Some(signature);
+    let mut state = style.borrow_mut();
+    let signature = state.signature(doc);
+    if state.applied != Some(signature) {
+        session.set_style_sources(state.cached_sources(doc, base_url));
+        state.applied = Some(signature);
     }
+}
+
+/// What a render session of a page is created with.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RenderSettings {
+    pub viewport: Viewport,
+    pub system_fonts: bool,
+}
+
+/// What script geometry works with.
+pub(crate) struct ScriptRender {
+    pub session: Rc<RefCell<RenderSession>>,
+    pub style: Rc<RefCell<StyleState>>,
+}
+
+/// The fetched sheets of `page`'s render session, when it is the session of the
+/// navigation `navigation`'s document `document_id`. Creates nothing.
+pub(crate) fn style_of(
+    page: PageId,
+    navigation: u64,
+    document_id: u64,
+) -> Option<Rc<RefCell<StyleState>>> {
+    let loader = sheet_loader_of(page, navigation)?;
+    loader.claim(document_id).then(|| loader.style())
+}
+
+/// The render session of `page` for script geometry, created on first use.
+///
+/// `navigation` is the generation of the navigation the asking engine belongs
+/// to, which is also what keys the session. A session of an older navigation is
+/// replaced (its document is on its way out and the asking one is the newer);
+/// a session of a newer navigation is not the asker's to read, and `None` says
+/// the asker has no layout. A session that serves another tree of the same
+/// navigation (a restarted parse) is refused for the same reason.
+pub(crate) fn for_script(
+    page: PageId,
+    settings: RenderSettings,
+    navigation: u64,
+    document_id: u64,
+) -> Option<ScriptRender> {
+    let newer = RENDERS.with(|cell| {
+        cell.borrow()
+            .get(&page)
+            .is_some_and(|render| render.navigation > navigation)
+    });
+    if newer {
+        return None;
+    }
+    let handles = handles(page, navigation, settings.viewport, settings.system_fonts);
+    if !handles.sheet_loader.claim(document_id) {
+        return None;
+    }
+    Some(ScriptRender {
+        session: handles.session,
+        style: handles.sheet_loader.style(),
+    })
 }
 
 fn error_of(error: RenderError) -> Error {

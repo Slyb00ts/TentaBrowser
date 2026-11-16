@@ -200,6 +200,17 @@ fn quickjs_buffer_host_error(ctx: &Ctx<'_>, error: rquickjs::Error) -> JsError {
 }
 
 impl ScriptHost for State {
+    fn geometry_host(&self) -> Option<Rc<dyn GeometryHost>> {
+        self.geometry_host.borrow().clone()
+    }
+
+    fn computed_style_value(&self, node: tenta_core::NodeId, property: &str) -> Option<String> {
+        self.geometry_host
+            .borrow()
+            .clone()?
+            .computed_value(node, None, property)
+    }
+
     fn array_buffer_view_info(&self, view: ArrayBufferViewRef) -> Result<BufferMetadata, JsError> {
         self.context(|ctx| {
             quickjs_array_buffer_view_info(ctx, view)
@@ -785,6 +796,11 @@ fn install_bindings<'js>(ctx: &Ctx<'js>, global: &Object<'js>) -> rquickjs::Resu
     install_html_text_area_element::<HostObject>(ctx, global, registry)?;
     install_html_option_element::<HostObject>(ctx, global, registry)?;
     install_html_script_element::<HostObject>(ctx, global, registry)?;
+    install_html_link_element::<HostObject>(ctx, global, registry)?;
+    install_html_style_element::<HostObject>(ctx, global, registry)?;
+    install_dom_rect_read_only::<HostObject>(ctx, global, registry)?;
+    install_dom_rect::<HostObject>(ctx, global, registry)?;
+    install_dom_rect_list::<HostObject>(ctx, global, registry)?;
     install_document_fragment::<HostObject>(ctx, global, registry)?;
     install_document::<HostObject>(ctx, global, registry)?;
     install_document_type::<HostObject>(ctx, global, registry)?;
@@ -806,6 +822,7 @@ fn install_bindings<'js>(ctx: &Ctx<'js>, global: &Object<'js>) -> rquickjs::Resu
     install_css_grouping_rule::<HostObject>(ctx, global, registry)?;
     install_css_style_rule::<HostObject>(ctx, global, registry)?;
     install_css_rule_list::<HostObject>(ctx, global, registry)?;
+    install_style_sheet_list::<HostObject>(ctx, global, registry)?;
     install_css_style_declaration::<HostObject>(ctx, global, registry)?;
     install_css_style_properties::<HostObject>(ctx, global, registry)?;
     install_css::<HostObject>(ctx, global, registry)?;

@@ -105,6 +105,11 @@ fn is_rendered(ctx: &SharedContext, id: NodeId) -> bool {
     };
     let chain: Vec<NodeId> = {
         let doc = ctx.doc.borrow();
+        // An `<area>` is `display: none` and still focusable: its image map
+        // draws it.
+        if doc.tag(id) == Some(atoms::AREA) {
+            return true;
+        }
         std::iter::once(id)
             .chain(doc.ancestors(id))
             .filter(|node| doc.is_element(*node))

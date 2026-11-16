@@ -746,6 +746,10 @@ pub struct PaintStyle {
     pub object_position: (LengthPercent, LengthPercent),
     /// `image-rendering`.
     pub image_rendering: ImageRendering,
+    /// The box is generated content (`::before`, `::after`, `::marker`): its
+    /// fragments carry the originating element's node, but are not the
+    /// element's own boxes.
+    pub generated: bool,
 }
 
 impl Default for PaintStyle {
@@ -775,6 +779,7 @@ impl Default for PaintStyle {
             object_fit: ObjectFit::Fill,
             object_position: center,
             image_rendering: ImageRendering::Auto,
+            generated: false,
         }
     }
 }

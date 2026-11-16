@@ -29,6 +29,7 @@ mod quirks;
 mod relative;
 mod space;
 mod style_taffy;
+mod table;
 mod taffy_tree;
 mod text;
 pub mod types;

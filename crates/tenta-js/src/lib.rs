@@ -14,4 +14,5 @@ pub mod image;
 pub mod inspect;
 pub mod storage;
 pub mod structured_clone;
+pub mod stylesheets;
 pub mod xhr;

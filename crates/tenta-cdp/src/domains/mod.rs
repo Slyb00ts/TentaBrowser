@@ -20,7 +20,6 @@ mod page;
 mod performance;
 mod runtime;
 mod security;
-mod snapshot;
 mod storage;
 mod target;
 

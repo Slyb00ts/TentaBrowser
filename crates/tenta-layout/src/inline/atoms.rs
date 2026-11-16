@@ -524,7 +524,9 @@ fn push_chunk(
                     mixed,
                     level,
                     hang_left,
-                    splittable: style.overflow_wrap == OverflowWrap::BreakWord && !shaped.any_rtl,
+                    splittable: style.overflow_wrap == OverflowWrap::BreakWord
+                        && style.white_space.wraps()
+                        && !shaped.any_rtl,
                     range: part.clone(),
                     hyphen,
                     clusters: clusters.clone(),

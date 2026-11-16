@@ -26,7 +26,7 @@ use crate::constraint::resolve_box;
 use crate::fragment::{FragFlags, FragId, FragmentBuilder};
 use crate::inline::atomic::layout_atomic;
 use crate::space::{AvailableSize, Band, ConstraintSpace, FloatContext};
-use crate::types::{ClearSide, Direction, Edges, FloatSide, Rect};
+use crate::types::{ClearSide, Direction, Edges, FloatSide, Rect, TableKind};
 
 /// Slack for comparing offsets that were summed in different orders; Blink
 /// lays out in 1/64 px units.
@@ -528,6 +528,21 @@ fn required_width(cx: &mut LayoutCx, tree: &BoxTree, id: BoxId, space: &Constrai
             | Size::FitContent
             | Size::FitContentFunction(_)
     );
+    if b.kind == BoxKind::Table(TableKind::Table) {
+        // A table cannot shrink below its min-content width.
+        let (min, _) = crate::table::border_box_sizes(cx, tree, id);
+        let sized_width = if sized {
+            let roomy = ConstraintSpace {
+                inline_size: AvailableSize::Definite(1.0e6),
+                percentage_base: (basis, space.percentage_base.1),
+                ..*space
+            };
+            resolve_box(cx, tree, id, &roomy).border_box_width()
+        } else {
+            0.0
+        };
+        return min.max(sized_width) + margin.left + margin.right;
+    }
     if !sized && !matches!(b.kind, BoxKind::Replaced(_)) {
         return 0.0;
     }

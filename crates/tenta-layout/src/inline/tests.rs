@@ -735,6 +735,32 @@ fn a_soft_hyphen_shows_a_hyphen_only_where_the_line_breaks() {
 }
 
 #[test]
+fn min_content_counts_the_hyphen_shown_at_a_soft_hyphen() {
+    // The piece before the soft hyphen ends with the hyphen when it is taken,
+    // also when the soft hyphen sits in a span of its own.
+    for body in ["Lawren&shy;cium", "Lawren<span>&shy;</span>cium"] {
+        let mut laid = lay(&div("", body), 300.0);
+        let (min, _) = laid.intrinsic();
+        let first = lay(&div("", "Lawren"), 300.0).result.inline_extent;
+        assert_close!(min, first + 5.328125);
+    }
+}
+
+#[test]
+fn nowrap_text_is_not_split_by_overflow_wrap() {
+    let laid = lay(
+        &div(
+            "overflow-wrap:break-word;white-space:nowrap;width:10px",
+            "Hello",
+        ),
+        10.0,
+    );
+    assert_eq!(laid.result.lines.len(), 1);
+    let wrapping = lay(&div("overflow-wrap:break-word", "Hello"), 10.0);
+    assert!(wrapping.result.lines.len() > 1);
+}
+
+#[test]
 fn a_closing_edge_after_a_trailing_space_does_not_move_the_span() {
     let laid = lay(
         &div(

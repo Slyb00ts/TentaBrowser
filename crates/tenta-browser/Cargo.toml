@@ -61,7 +61,7 @@ jpeg-encoder = { workspace = true }
 image-webp = { workspace = true }
 gif = { workspace = true }
 tenta-testutil = { workspace = true }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "net", "io-util"] }
 
 [[test]]
 name = "screenshot"
@@ -74,6 +74,26 @@ required-features = ["render"]
 [[test]]
 name = "image_events"
 required-features = ["render", "v8"]
+
+[[test]]
+name = "script_api_chrome"
+required-features = ["render", "v8"]
+
+[[test]]
+name = "geometry_js"
+required-features = ["render", "v8"]
+
+[[test]]
+name = "css_loading"
+required-features = ["render", "v8"]
+
+[[example]]
+name = "css_load_bench"
+required-features = ["v8", "render"]
+
+[[example]]
+name = "thrash_bench"
+required-features = ["v8", "render"]
 
 [[example]]
 name = "js_xhr"

@@ -840,6 +840,37 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the HTMLScriptElement interface");
+            tenta_js::bindings::install_html_link_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLLinkElement interface");
+            tenta_js::bindings::install_html_style_element::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the HTMLStyleElement interface");
+            // `DOMRect` extends `DOMRectReadOnly`, so the base installs first.
+            tenta_js::bindings::install_dom_rect_read_only::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the DOMRectReadOnly interface");
+            tenta_js::bindings::install_dom_rect::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the DOMRect interface");
+            tenta_js::bindings::install_dom_rect_list::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the DOMRectList interface");
             tenta_js::bindings::install_document_fragment::<HostObject>(
                 scope,
                 global_template,
@@ -987,6 +1018,12 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the CSSRuleList interface");
+            tenta_js::bindings::install_style_sheet_list::<HostObject>(
+                scope,
+                global_template,
+                &mut registry,
+            )
+            .expect("install the StyleSheetList interface");
             tenta_js::bindings::install_css_style_declaration::<HostObject>(
                 scope,
                 global_template,
@@ -1965,6 +2002,23 @@ impl Engine {
         }
         drop(_native);
         self.graph_checkpoint();
+    }
+
+    /// Installs the page's linked stylesheets for the document this engine is
+    /// bound to (`link.sheet`, `document.styleSheets`).
+    pub fn set_style_host(&mut self, host: Rc<dyn tenta_js::stylesheets::StyleHost>) {
+        if let Some(dom) = &self.dom {
+            dom.ctx.set_style_host(host);
+        }
+    }
+
+    /// Runs the scripts that define what WebIDL cannot declare:
+    /// `DOMRect.fromRect()`, `toJSON()` and the iterator of `DOMRectList`. A
+    /// failure is not an error of the host; the members are then absent.
+    pub fn install_preludes(&mut self) {
+        if self.native_failure().is_none() {
+            let _ = self.run_inner(tenta_js::geometry::GEOMETRY_PRELUDE_SOURCE, None);
+        }
     }
 
     /// Installs the page's image state for the document this engine is bound

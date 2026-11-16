@@ -16,10 +16,15 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::SystemTime;
 
+#[cfg(any(feature = "v8", feature = "quickjs"))]
+pub mod computed_style;
 mod crypto;
 #[cfg(any(feature = "v8", feature = "quickjs"))]
 pub mod cssom;
+#[cfg(any(feature = "v8", feature = "quickjs"))]
+pub mod doc_sheets;
 mod focus;
+mod geometry;
 mod mutation_observer;
 pub mod storage;
 
@@ -68,21 +73,21 @@ use super::{
     HTMLAnchorElementOps, HTMLButtonElementOps, HTMLCollection, HTMLCollectionOps,
     HTMLDivElementOps, HTMLElement, HTMLElementOps, HTMLFormElement, HTMLFormElementOps,
     HTMLIFrameElementOps, HTMLImageElementOps, HTMLInputElementOps, HTMLLabelElementOps,
-    HTMLOptionElementOps, HTMLParagraphElementOps, HTMLScriptElementOps, HTMLSelectElementOps,
-    HTMLSpanElementOps, HTMLTemplateElementOps, HTMLTextAreaElementOps, Handle, Headers,
-    HeadersConstructor, HeadersInit, HeadersOps, IterableEntries, JsError,
-    KeyboardEventConstructor, KeyboardEventInit, KeyboardEventOps, MouseEventConstructor,
-    MouseEventInit, MouseEventOps, NamedNodeMap, NamedNodeMapOps, Node, NodeList, NodeListOps,
-    NodeOps, NodeOrDomString, ProcessingInstruction, ProcessingInstructionOps,
-    ProgressEventConstructor, ProgressEventInit, ProgressEventOps, Promise, Range,
-    RangeConstructor, RangeOps, Realm, RequestInit, ResponseConstructor, ResponseInit, ResponseOps,
-    ResponseType, SVGElementOps, StaticRangeConstructor, StaticRangeInit, StaticRangeOps, Text,
-    TextDecodeOptions, TextDecoderConstructor, TextDecoderOps, TextDecoderOptions,
-    TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
-    URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
-    WheelEventConstructor, WheelEventInit, WheelEventOps, Window, WindowProxy,
-    XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps, XMLHttpRequestOps,
-    XMLHttpRequestResponseType, XMLSerializerConstructor, XMLSerializerOps,
+    HTMLLinkElementOps, HTMLOptionElementOps, HTMLParagraphElementOps, HTMLScriptElementOps,
+    HTMLSelectElementOps, HTMLSpanElementOps, HTMLStyleElementOps, HTMLTemplateElementOps,
+    HTMLTextAreaElementOps, Handle, Headers, HeadersConstructor, HeadersInit, HeadersOps,
+    IterableEntries, JsError, KeyboardEventConstructor, KeyboardEventInit, KeyboardEventOps,
+    MouseEventConstructor, MouseEventInit, MouseEventOps, NamedNodeMap, NamedNodeMapOps, Node,
+    NodeList, NodeListOps, NodeOps, NodeOrDomString, ProcessingInstruction,
+    ProcessingInstructionOps, ProgressEventConstructor, ProgressEventInit, ProgressEventOps,
+    Promise, Range, RangeConstructor, RangeOps, Realm, RequestInit, ResponseConstructor,
+    ResponseInit, ResponseOps, ResponseType, SVGElementOps, StaticRangeConstructor,
+    StaticRangeInit, StaticRangeOps, Text, TextDecodeOptions, TextDecoderConstructor,
+    TextDecoderOps, TextDecoderOptions, TextEncoderConstructor, TextEncoderOps, TextOps,
+    UIEventConstructor, UIEventInit, UIEventOps, URLConstructor, URLOps, URLSearchParams,
+    URLSearchParamsConstructor, URLSearchParamsOps, WheelEventConstructor, WheelEventInit,
+    WheelEventOps, Window, WindowProxy, XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps,
+    XMLHttpRequestOps, XMLHttpRequestResponseType, XMLSerializerConstructor, XMLSerializerOps,
 };
 #[cfg(any(feature = "v8", feature = "quickjs"))]
 use super::{CSSOps, CSSStyleDeclarationOps};
@@ -336,6 +341,15 @@ pub enum HostRecord {
     /// The live declaration block of a concrete CSSStyleRule.
     #[cfg(any(feature = "v8", feature = "quickjs"))]
     CssRuleStyle(cssom::CssRuleRecord),
+    /// The result of `getComputedStyle()`: a live, read-only declaration.
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    ComputedStyle(computed_style::ComputedStyleRecord),
+    /// `document.styleSheets`: a live list with no state of its own.
+    StyleSheetList,
+    /// A `DOMRect` or `DOMRectReadOnly`.
+    DomRect(geometry::DomRectRecord),
+    /// A `DOMRectList`.
+    DomRectList(geometry::DomRectListRecord),
     /// One Window's live local or session storage view.
     Storage(storage::StorageRecord),
     /// The per-Window Web Crypto object; it has no native graph edges.
@@ -461,6 +475,12 @@ impl HostRecord {
             HostRecord::CssStyleRule(_) => "CSSStyleRule",
             #[cfg(any(feature = "v8", feature = "quickjs"))]
             HostRecord::CssRuleStyle(_) => "CSSStyleProperties",
+            #[cfg(any(feature = "v8", feature = "quickjs"))]
+            HostRecord::ComputedStyle(_) => "CSSStyleProperties",
+            HostRecord::StyleSheetList => "StyleSheetList",
+            HostRecord::DomRect(record) if record.read_only => "DOMRectReadOnly",
+            HostRecord::DomRect(_) => "DOMRect",
+            HostRecord::DomRectList(_) => "DOMRectList",
             HostRecord::Storage(_) => "Storage",
             HostRecord::Crypto => "Crypto",
             HostRecord::MutationObserver(_) => "MutationObserver",
@@ -1746,6 +1766,15 @@ pub struct HostContext {
     /// the page for the document that is current. `None` for a document the
     /// page does not load images for.
     pub image_host: RefCell<Option<Rc<dyn ImageHost>>>,
+    /// The page's linked stylesheets (`link.sheet`, `document.styleSheets`).
+    /// `None` when the page loads none.
+    pub style_host: RefCell<Option<Rc<dyn crate::stylesheets::StyleHost>>>,
+    /// The CSSOM sheet of each `<style>` and loaded `<link>` script has asked
+    /// for, so `link.sheet === document.styleSheets[0]` holds.
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    pub doc_sheets: RefCell<doc_sheets::DocSheets>,
+    /// The `document.styleSheets` object, made on the first read.
+    pub style_sheet_list_key: RefCell<Option<HostKey>>,
     /// The `decode()` promises still waiting for their element's load to end,
     /// as resolver bits, by element.
     image_decodes: RefCell<HashMap<NodeRef, Vec<u64>>>,
@@ -1879,6 +1908,10 @@ impl HostContext {
             crypto_key: RefCell::new(None),
             implementation: RefCell::new(None),
             image_host: RefCell::new(None),
+            style_host: RefCell::new(None),
+            #[cfg(any(feature = "v8", feature = "quickjs"))]
+            doc_sheets: RefCell::new(doc_sheets::DocSheets::default()),
+            style_sheet_list_key: RefCell::new(None),
             image_decodes: RefCell::new(HashMap::new()),
             image_pins: RefCell::new(HashMap::new()),
         })
@@ -1940,6 +1973,10 @@ impl HostContext {
             crypto_key: RefCell::new(None),
             implementation: RefCell::new(None),
             image_host: RefCell::new(None),
+            style_host: RefCell::new(None),
+            #[cfg(any(feature = "v8", feature = "quickjs"))]
+            doc_sheets: RefCell::new(doc_sheets::DocSheets::default()),
+            style_sheet_list_key: RefCell::new(None),
             image_decodes: RefCell::new(HashMap::new()),
             image_pins: RefCell::new(HashMap::new()),
         });
@@ -2073,6 +2110,11 @@ impl HostContext {
     /// Installs the page's image state for this document.
     pub fn set_image_host(&self, host: Rc<dyn ImageHost>) {
         *self.image_host.borrow_mut() = Some(host);
+    }
+
+    /// Installs the page's linked stylesheets for this document.
+    pub fn set_style_host(&self, host: Rc<dyn crate::stylesheets::StyleHost>) {
+        *self.style_host.borrow_mut() = Some(host);
     }
 
     /// Removes an element attribute, detaching any exposed Attr with its last
@@ -3951,6 +3993,39 @@ impl NodeOps for HostObject {
 }
 
 impl ElementOps for HostObject {
+    fn get_bounding_client_rect(&self) -> Result<Handle<crate::bindings::DOMRect>, JsError> {
+        self.geo_bounding_client_rect()
+    }
+    fn get_client_rects(&self) -> Result<Handle<crate::bindings::DOMRectList>, JsError> {
+        self.geo_client_rects()
+    }
+    fn client_top(&self) -> i32 {
+        self.geo_client().top as i32
+    }
+    fn client_left(&self) -> i32 {
+        self.geo_client().left as i32
+    }
+    fn client_width(&self) -> i32 {
+        self.geo_client().width as i32
+    }
+    fn client_height(&self) -> i32 {
+        self.geo_client().height as i32
+    }
+    fn scroll_top(&self) -> f64 {
+        self.geo_scroll().top
+    }
+    fn set_scroll_top(&self, _value: f64) {}
+    fn scroll_left(&self) -> f64 {
+        self.geo_scroll().left
+    }
+    fn set_scroll_left(&self, _value: f64) {}
+    fn scroll_width(&self) -> i32 {
+        self.geo_scroll().width as i32
+    }
+    fn scroll_height(&self) -> i32 {
+        self.geo_scroll().height as i32
+    }
+
     fn remove(&self) {
         self.remove_from_parent();
     }
@@ -4532,6 +4607,19 @@ impl ElementOps for HostObject {
 }
 
 impl DocumentOps for HostObject {
+    fn element_from_point(&self, x: f64, y: f64) -> Result<Option<Handle<Element>>, JsError> {
+        Ok(self.geo_element_from_point(x, y))
+    }
+    fn elements_from_point(&self, x: f64, y: f64) -> Result<Vec<Handle<Element>>, JsError> {
+        Ok(self.geo_element_from_point(x, y).into_iter().collect())
+    }
+    fn scrolling_element(&self) -> Result<Option<Handle<Element>>, JsError> {
+        Ok(self.geo_scrolling_element())
+    }
+    fn style_sheets(&self) -> Result<Handle<crate::bindings::StyleSheetList>, JsError> {
+        self.document_style_sheets()
+    }
+
     fn child_element_count(&self) -> u32 {
         let (doc, id) = self.anchor();
         doc.borrow().element_children(id).count() as u32
@@ -7124,6 +7212,22 @@ impl ProgressEventOps for HostObject {
 }
 
 impl HTMLElementOps for HostObject {
+    fn offset_parent(&self) -> Result<Option<Handle<Element>>, JsError> {
+        Ok(self.geo_offset_parent())
+    }
+    fn offset_top(&self) -> i32 {
+        self.geo_offset().map_or(0, |offset| offset.top as i32)
+    }
+    fn offset_left(&self) -> i32 {
+        self.geo_offset().map_or(0, |offset| offset.left as i32)
+    }
+    fn offset_width(&self) -> i32 {
+        self.geo_offset().map_or(0, |offset| offset.width as i32)
+    }
+    fn offset_height(&self) -> i32 {
+        self.geo_offset().map_or(0, |offset| offset.height as i32)
+    }
+
     fn click(&self) -> Result<(), JsError> {
         let (doc, id) = self.anchor();
         // The DOM "click in progress" flag: a nested `click()` on the same
@@ -7523,6 +7627,122 @@ impl HTMLScriptElementOps for HostObject {
     }
     fn set_no_module(&self, value: bool) {
         self.set_reflect_bool("nomodule", value);
+    }
+}
+
+#[cfg(not(any(feature = "v8", feature = "quickjs")))]
+impl HostObject {
+    fn element_sheet(&self) -> Option<Handle<crate::bindings::CSSStyleSheet>> {
+        None
+    }
+
+    fn document_style_sheets(&self) -> Result<Handle<crate::bindings::StyleSheetList>, JsError> {
+        Err(JsError::type_error("this build has no CSSOM"))
+    }
+}
+
+// CSS1: `<link>` and `<style>` reflect the attributes the page's stylesheet
+// loader reads. The loader fires `load` and `error` at a `<link>`; the handler
+// properties are the same `EventHandler` attributes an image has.
+impl HTMLLinkElementOps for HostObject {
+    fn href(&self) -> Result<String, JsError> {
+        Ok(self.reflect_url("href"))
+    }
+    fn set_href(&self, value: &str) {
+        self.reflect_attribute("href", value);
+    }
+    fn rel(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("rel"))
+    }
+    fn set_rel(&self, value: &str) {
+        self.reflect_attribute("rel", value);
+    }
+    fn r#as(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("as"))
+    }
+    fn set_as(&self, value: &str) {
+        self.reflect_attribute("as", value);
+    }
+    fn media(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("media"))
+    }
+    fn set_media(&self, value: &str) {
+        self.reflect_attribute("media", value);
+    }
+    fn r#type(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("type"))
+    }
+    fn set_type(&self, value: &str) {
+        self.reflect_attribute("type", value);
+    }
+    fn cross_origin(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("crossorigin"))
+    }
+    fn set_cross_origin(&self, value: &str) {
+        self.reflect_attribute("crossorigin", value);
+    }
+    fn hreflang(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("hreflang"))
+    }
+    fn set_hreflang(&self, value: &str) {
+        self.reflect_attribute("hreflang", value);
+    }
+    fn disabled(&self) -> bool {
+        self.reflect_bool("disabled")
+    }
+    fn set_disabled(&self, value: bool) {
+        self.set_reflect_bool("disabled", value);
+    }
+    fn onload(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
+        self.event_handler(EventHandlerName::new("onload"))
+    }
+    fn set_onload(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
+        self.set_event_handler(EventHandlerName::new("onload"), value)
+    }
+    fn onerror(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
+        self.event_handler(EventHandlerName::new("onerror"))
+    }
+    fn set_onerror(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
+        self.set_event_handler(EventHandlerName::new("onerror"), value)
+    }
+    fn sheet(&self) -> Result<Option<Handle<crate::bindings::CSSStyleSheet>>, JsError> {
+        Ok(self.element_sheet())
+    }
+}
+
+impl HTMLStyleElementOps for HostObject {
+    fn media(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("media"))
+    }
+    fn set_media(&self, value: &str) {
+        self.reflect_attribute("media", value);
+    }
+    fn r#type(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("type"))
+    }
+    fn set_type(&self, value: &str) {
+        self.reflect_attribute("type", value);
+    }
+    fn disabled(&self) -> bool {
+        self.reflect_bool("disabled")
+    }
+    fn set_disabled(&self, value: bool) {
+        self.set_reflect_bool("disabled", value);
+    }
+    fn onload(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
+        self.event_handler(EventHandlerName::new("onload"))
+    }
+    fn set_onload(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
+        self.set_event_handler(EventHandlerName::new("onload"), value)
+    }
+    fn onerror(&self) -> Result<Option<EventHandlerNonNull>, JsError> {
+        self.event_handler(EventHandlerName::new("onerror"))
+    }
+    fn set_onerror(&self, value: Option<EventHandlerNonNull>) -> Result<(), JsError> {
+        self.set_event_handler(EventHandlerName::new("onerror"), value)
+    }
+    fn sheet(&self) -> Result<Option<Handle<crate::bindings::CSSStyleSheet>>, JsError> {
+        Ok(self.element_sheet())
     }
 }
 
@@ -9060,6 +9280,9 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
         | HostRecord::Attr(_)
         | HostRecord::FormData(_)
         | HostRecord::Storage(_)
+        | HostRecord::StyleSheetList
+        | HostRecord::DomRect(_)
+        | HostRecord::DomRectList(_)
         | HostRecord::Crypto
         | HostRecord::MutationObserver(_)
         | HostRecord::MutationRecord(_) => return None,
@@ -9069,7 +9292,8 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
         HostRecord::CssSheet(_)
         | HostRecord::CssRuleList(_)
         | HostRecord::CssStyleRule(_)
-        | HostRecord::CssRuleStyle(_) => return None,
+        | HostRecord::CssRuleStyle(_)
+        | HostRecord::ComputedStyle(_) => return None,
     };
     match params.url {
         Some(owner) => match slab.get(owner)? {
@@ -9093,6 +9317,9 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
             | HostRecord::StaticRange(_)
             | HostRecord::Implementation
             | HostRecord::Storage(_)
+            | HostRecord::StyleSheetList
+            | HostRecord::DomRect(_)
+            | HostRecord::DomRectList(_)
             | HostRecord::Crypto
             | HostRecord::MutationObserver(_)
             | HostRecord::MutationRecord(_) => None,
@@ -9100,7 +9327,8 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
             HostRecord::CssSheet(_)
             | HostRecord::CssRuleList(_)
             | HostRecord::CssStyleRule(_)
-            | HostRecord::CssRuleStyle(_) => None,
+            | HostRecord::CssRuleStyle(_)
+            | HostRecord::ComputedStyle(_) => None,
         },
         None => Some(params.list.clone()),
     }
@@ -9221,6 +9449,10 @@ enum HostLink {
     StaticRange,
     /// A Storage view links to no host record; the page's native lease owns it.
     Storage,
+    /// A rectangle, a rectangle list and the style sheet list are plain data.
+    DomRect,
+    DomRectList,
+    StyleSheetList,
     /// The Window Crypto object has no native graph edge.
     Crypto,
     /// A `MutationObserver` links to no other host record.
@@ -9236,6 +9468,9 @@ enum HostLink {
     CssStyleRule,
     #[cfg(any(feature = "v8", feature = "quickjs"))]
     CssRuleStyle,
+    /// A computed-style declaration names a node by generational reference.
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    ComputedStyle,
 }
 
 /// What freeing host records took out of the world: the record slots that left
@@ -9361,6 +9596,9 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         Some(HostRecord::Range(_)) => HostLink::Range,
         Some(HostRecord::StaticRange(_)) => HostLink::StaticRange,
         Some(HostRecord::Storage(_)) => HostLink::Storage,
+        Some(HostRecord::StyleSheetList) => HostLink::StyleSheetList,
+        Some(HostRecord::DomRect(_)) => HostLink::DomRect,
+        Some(HostRecord::DomRectList(_)) => HostLink::DomRectList,
         Some(HostRecord::Crypto) => HostLink::Crypto,
         Some(HostRecord::MutationObserver(_)) => HostLink::MutationObserver,
         Some(HostRecord::MutationRecord(_)) => HostLink::MutationRecord,
@@ -9372,6 +9610,8 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         Some(HostRecord::CssStyleRule(_)) => HostLink::CssStyleRule,
         #[cfg(any(feature = "v8", feature = "quickjs"))]
         Some(HostRecord::CssRuleStyle(_)) => HostLink::CssRuleStyle,
+        #[cfg(any(feature = "v8", feature = "quickjs"))]
+        Some(HostRecord::ComputedStyle(_)) => HostLink::ComputedStyle,
         None => return freed,
     };
     match link {
@@ -9399,6 +9639,9 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
             free_record(slab, key, &mut freed);
         }
         HostLink::Storage
+        | HostLink::DomRect
+        | HostLink::DomRectList
+        | HostLink::StyleSheetList
         | HostLink::Crypto
         | HostLink::MutationObserver
         | HostLink::MutationRecord => {
@@ -9408,7 +9651,8 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         HostLink::CssSheet
         | HostLink::CssRuleList
         | HostLink::CssStyleRule
-        | HostLink::CssRuleStyle => {
+        | HostLink::CssRuleStyle
+        | HostLink::ComputedStyle => {
             free_record(slab, key, &mut freed);
         }
         // A file record is the shape a `FormData` entry list makes two-way: its

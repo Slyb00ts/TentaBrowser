@@ -1688,10 +1688,9 @@ bookkeeping. Design and file list: `docs/dev/p3-plan.md` ("As built (JS1)") and
   the window's own focus events.
   `inert` (on the element or an ancestor) and `hidden` refuse focus. Elements
   with `display: none` (self or ancestor) or `visibility: hidden` are refused
-  through `ScriptHost::computed_style_value`, which asks the geometry host;
-  no page has a production geometry host yet (G1b), so today that check only
-  runs under a host that supplies one (tested with a fake) and a real page
-  relies on `hidden`/`inert`. Removing the focused element fires `blur` and
+  through `ScriptHost::computed_style_value`, which asks the geometry host
+  (a page at the render tier has the production host since CSS1 below; `<area>`
+  is exempt from the refusal; below it a page relies on `hidden`/`inert`). Removing the focused element fires `blur` and
   `focusout` with a null `relatedTarget` once the removing binding call returns.
 
 - **Also changed.** `outerHTML` now queues one replace record instead of an insert
@@ -1731,6 +1730,29 @@ Delivery was measured before records were exempted from the wrapper bound,
 when wrapper-pressure collections dominated it; it has not been re-measured.
 `bench/` has no
 in-process scenario for this; the figures come from the test above.
+
+## CSS1: stylesheets in the page runtime, `getComputedStyle` and script geometry (P3 package)
+
+Details, files and numbers are in `docs/dev/p3-plan.md` ("As built (CSS1)").
+
+- **Stylesheets load with the document** (render-tier ceiling, feature `render`): `<link
+  rel=stylesheet>` and `@import` chains are fetched when they enter the document, in parallel, through
+  `tenta-net` with the page's request site, so the D4b hub reports `Stylesheet` requests during the
+  load. A parser-inserted sheet holds back the scripts after it; any non-alternate sheet delays
+  `load` and `networkIdle`; `<link>` gets `load`/`error`; the fetched sheets are the cache the
+  screenshot and the geometry host use (a capture of a loaded page sends no request).
+- **`window.getComputedStyle(el, pseudo)`** (V8): a live read-only `CSSStyleProperties` of Stylo's
+  computed values with Chromium's used-value fixups; **element geometry** (`getBoundingClientRect`,
+  `getClientRects`, `offset*`, `client*`, `scroll*`, `elementFromPoint`, `DOMRect*`) from the page's
+  layout, lazily and invalidated by the document generation. 44 recorded Chrome pages (943 values)
+  agree except two listed divergences. **`document.styleSheets`, `link.sheet`, `style.sheet`** reflect
+  what loaded (read side only).
+- **Measured** (release, `bench/css_load.py`, 20 ms RTT): 10 sheets, load + screenshot 294 -> 93 ms
+  p50; `load` itself 36 -> 88 ms. WPT `css/cssom` 63.5% -> 73.9% (0 regressions), `css/cssom-view`
+  28.7% (first run).
+- **Gaps:** edits to a document sheet (`insertRule`, `deleteRule`) are not applied to layout (S1);
+  QuickJS has neither `getComputedStyle` nor an executed arm; no scrolling model; `IntersectionObserver`
+  is still the CDP shim's one-shot stub; no early fetch from the preload scanner.
 
 ## Implementation queue and dependencies
 

@@ -1017,6 +1017,149 @@ fn window_metrics_are_replaceable_accessors() {
     );
 }
 
+/// A layout with one known box for the `#target` div (node 3) and a computed
+/// value that spells the property it was asked for.
+struct LayoutFake;
+
+const TARGET: NodeId = NodeId(3);
+
+impl GeometryHost for LayoutFake {
+    fn viewport(&self) -> ViewportMetrics {
+        ViewportMetrics::default()
+    }
+    fn bounding_rect(&self, node: NodeId) -> Option<RectF64> {
+        (node == TARGET).then_some(RectF64 {
+            x: 10.0,
+            y: 20.0,
+            width: 30.5,
+            height: 40.0,
+        })
+    }
+    fn client_rects(&self, node: NodeId) -> Vec<RectF64> {
+        self.bounding_rect(node).into_iter().collect()
+    }
+    fn offset_metrics(&self, node: NodeId) -> Option<OffsetMetrics> {
+        (node == TARGET).then_some(OffsetMetrics {
+            top: 20.0,
+            left: 10.0,
+            width: 31.0,
+            height: 40.0,
+            parent: None,
+        })
+    }
+    fn client_metrics(&self, node: NodeId) -> Option<ClientMetrics> {
+        (node == TARGET).then_some(ClientMetrics {
+            top: 1.0,
+            left: 2.0,
+            width: 28.0,
+            height: 38.0,
+        })
+    }
+    fn scroll_metrics(&self, node: NodeId) -> Option<ScrollMetrics> {
+        (node == TARGET).then_some(ScrollMetrics {
+            top: 0.0,
+            left: 0.0,
+            width: 60.0,
+            height: 80.0,
+        })
+    }
+    fn computed_value(&self, _: NodeId, pseudo: Option<&str>, property: &str) -> Option<String> {
+        Some(format!("{}{property}", pseudo.unwrap_or("")))
+    }
+    fn computed_property_names(&self) -> &'static [&'static str] {
+        &["color", "display", "width"]
+    }
+    fn element_from_point(&self, x: f64, _: f64) -> Option<NodeId> {
+        (x < 100.0).then_some(TARGET)
+    }
+}
+
+#[test]
+fn element_geometry_reads_the_host_and_is_neutral_without_one() {
+    let mut engine = viewport_engine();
+    const READ: &str = "var t = document.getElementById('target'); var r = t.getBoundingClientRect(); \
+        [r.x, r.y, r.width, r.height, r.right, r.bottom, t.getClientRects().length, \
+         t.offsetTop, t.offsetLeft, t.offsetWidth, t.offsetHeight, t.offsetParent, \
+         t.clientTop, t.clientLeft, t.clientWidth, t.clientHeight, t.scrollWidth, t.scrollHeight, \
+         t.scrollTop, r instanceof DOMRect].join(',')";
+    assert_eq!(
+        engine.evaluate(READ, Duration::from_secs(5)).unwrap(),
+        "0,0,0,0,0,0,0,0,0,0,0,,0,0,0,0,0,0,0,true",
+        "an element of a page with no layout has no box"
+    );
+    engine.set_geometry_host(Rc::new(LayoutFake));
+    assert_eq!(
+        engine.evaluate(READ, Duration::from_secs(5)).unwrap(),
+        "10,20,30.5,40,40.5,60,1,20,10,31,40,,1,2,28,38,60,80,0,true"
+    );
+    assert_eq!(
+        engine
+            .evaluate(
+                "var e = document.elementFromPoint(5, 5); \
+                 [e && e.id, document.elementFromPoint(500, 5), \
+                  document.elementsFromPoint(5, 5).length, document.scrollingElement.localName].join(',')",
+                Duration::from_secs(5),
+            )
+            .unwrap(),
+        "target,,1,html"
+    );
+}
+
+#[test]
+fn get_computed_style_is_a_live_read_only_view_of_the_host() {
+    let mut engine = viewport_engine();
+    const READ: &str = "var t = document.getElementById('target'); var cs = getComputedStyle(t); \
+        [cs.color, cs.getPropertyValue('Display'), cs['width'], cs.length, cs.item(1), cs.item(9), \
+         cs.cssText === '', cs.getPropertyPriority('color') === '', cs.parentRule, \
+         getComputedStyle(t, '::before').color, cs instanceof CSSStyleDeclaration].join('|')";
+    assert_eq!(
+        engine.evaluate(READ, Duration::from_secs(5)).unwrap(),
+        "|||0|||true|true|||true",
+        "without a layout every property reads as empty"
+    );
+    engine.set_geometry_host(Rc::new(LayoutFake));
+    assert_eq!(
+        engine.evaluate(READ, Duration::from_secs(5)).unwrap(),
+        "color|display|width|3|display||true|true||::beforecolor|true"
+    );
+    // Writes are refused, and a non-element is a TypeError.
+    assert_eq!(
+        engine
+            .evaluate(
+                "var cs = getComputedStyle(document.getElementById('target')); var out = []; \
+                 try { cs.color = 'red'; out.push('silent'); } catch (e) { out.push(e.name); } \
+                 try { cs.setProperty('color', 'red'); } catch (e) { out.push(e.name); } \
+                 try { cs.removeProperty('color'); } catch (e) { out.push(e.name); } \
+                 try { getComputedStyle(null); } catch (e) { out.push(e.name); } \
+                 try { getComputedStyle(document); } catch (e) { out.push(e.name); } \
+                 try { getComputedStyle(); } catch (e) { out.push(e.name); } \
+                 out.join(',')",
+                Duration::from_secs(5),
+            )
+            .unwrap(),
+        "NoModificationAllowedError,NoModificationAllowedError,NoModificationAllowedError,TypeError,TypeError,TypeError"
+    );
+}
+
+#[test]
+fn dom_rects_have_value_semantics_and_the_prelude_members() {
+    let mut engine = viewport_engine();
+    engine.install_preludes();
+    assert_eq!(
+        engine
+            .evaluate(
+                "var r = new DOMRect(1, 2, -30, 40); var ro = new DOMRectReadOnly(5, 6, 7, 8); \
+                 var f = DOMRect.fromRect({ x: 3, width: 9 }); ro.x = 99; r.width = 10; \
+                 [r.x, r.y, r.width, r.height, r.top, r.right, r.bottom, r.left, ro.x, \
+                  f.x, f.y, f.width, f.height, JSON.stringify(f), \
+                  r instanceof DOMRectReadOnly, ro instanceof DOMRect].join(',')",
+                Duration::from_secs(5),
+            )
+            .unwrap(),
+        "1,2,10,40,2,11,42,1,5,3,0,9,0,{\"x\":3,\"y\":0,\"width\":9,\"height\":0,\"top\":0,\"right\":12,\"bottom\":0,\"left\":3},true,false"
+    );
+}
+
 /// An image host that loads nothing itself and asks the engine to pin every
 /// element script touches.
 #[derive(Default)]

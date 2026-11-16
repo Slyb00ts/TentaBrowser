@@ -18,28 +18,16 @@ pub(super) struct Boxes {
     pub height: f64,
 }
 
-/// The layout as script geometry needs it: the viewport and, for every
-/// element in `querySelectorAll('*')` order, its border boxes and client size.
-pub(super) struct Snapshot {
-    pub viewport: (f64, f64),
-    pub elements: Vec<Option<ElementBoxes>>,
-}
-
-pub(super) struct ElementBoxes {
-    pub rects: Vec<[f64; 4]>,
-    pub client: [f64; 2],
-}
-
 #[cfg(feature = "render")]
-pub(super) use built::{element_at, node_boxes, snapshot};
+pub(super) use built::{element_at, node_boxes};
 #[cfg(not(feature = "render"))]
-pub(super) use missing::{element_at, node_boxes, snapshot};
+pub(super) use missing::{element_at, node_boxes};
 
 #[cfg(feature = "render")]
 mod built {
     use tenta_browser::{BoxQuads, Quad};
 
-    use super::{Boxes, CdpError, ElementBoxes, NodeId, Snapshot, Target};
+    use super::{Boxes, CdpError, NodeId, Target};
     use crate::domains::nodes::page_error;
 
     fn flat(quad: &Quad) -> [f64; 8] {
@@ -75,27 +63,11 @@ mod built {
     ) -> Result<Option<NodeId>, CdpError> {
         target.page().hit_test(x, y).await.map_err(page_error)
     }
-
-    pub(in crate::domains) async fn snapshot(target: &Target) -> Result<Snapshot, CdpError> {
-        let (viewport, elements) = target.page().element_geometry().await.map_err(page_error)?;
-        Ok(Snapshot {
-            viewport: (f64::from(viewport.width), f64::from(viewport.height)),
-            elements: elements
-                .into_iter()
-                .map(|element| {
-                    element.map(|element| ElementBoxes {
-                        rects: element.border,
-                        client: element.client,
-                    })
-                })
-                .collect(),
-        })
-    }
 }
 
 #[cfg(not(feature = "render"))]
 mod missing {
-    use super::{Boxes, CdpError, NodeId, Snapshot, Target};
+    use super::{Boxes, CdpError, NodeId, Target};
 
     fn unavailable() -> CdpError {
         CdpError::server("This build has no renderer; enable the render feature")
@@ -113,10 +85,6 @@ mod missing {
         _x: f64,
         _y: f64,
     ) -> Result<Option<NodeId>, CdpError> {
-        Err(unavailable())
-    }
-
-    pub(in crate::domains) async fn snapshot(_target: &Target) -> Result<Snapshot, CdpError> {
         Err(unavailable())
     }
 }

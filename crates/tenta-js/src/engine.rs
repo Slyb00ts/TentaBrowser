@@ -299,6 +299,12 @@ pub trait PageEngine {
     /// the host, so a backend that has no geometry members yet needs no code.
     fn set_geometry_host(&mut self, _host: Rc<dyn GeometryHost>) {}
 
+    /// Defines the members of the engine's built-in interfaces that cannot be
+    /// declared in WebIDL (the static `DOMRect.fromRect`, `toJSON`): scripts the
+    /// engine runs itself, once, before page script. Called once when a page
+    /// builds an engine. The default does nothing, for a backend without them.
+    fn install_preludes(&mut self) {}
+
     /// Gives the engine the page's image state, replacing any host installed
     /// before. `complete`, `naturalWidth`, `naturalHeight`, `currentSrc` and
     /// `decode()` read it. An engine that never receives one reports every
@@ -306,6 +312,12 @@ pub trait PageEngine {
     /// images shows. The default ignores the host, so a backend without these
     /// members needs no code.
     fn set_image_host(&mut self, _host: Rc<dyn ImageHost>) {}
+
+    /// Gives the engine the page's linked stylesheets, replacing any host
+    /// installed before: `link.sheet` and `document.styleSheets` read them. An
+    /// engine that never receives one has no sheet for any `<link>`. The default
+    /// ignores the host.
+    fn set_style_host(&mut self, _host: Rc<dyn crate::stylesheets::StyleHost>) {}
 
     /// Reports the loads that ended: each event is fired at its element as a
     /// trusted `load` or `error` (neither bubbles nor is cancelable), and the

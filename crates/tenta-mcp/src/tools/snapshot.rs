@@ -109,11 +109,16 @@ pub(super) async fn layout_of(page: &Page) -> Option<Layout> {
             .into_iter()
             .map(|element| {
                 element.and_then(|element| {
-                    element
+                    let rect = element
                         .border
                         .first()
                         .copied()
-                        .filter(|rect| rect[2] > 0.0 || rect[3] > 0.0)
+                        .filter(|rect| rect[2] > 0.0 || rect[3] > 0.0)?;
+                    Some(crate::snapshot::Look {
+                        rect,
+                        visibility_hidden: element.visibility_hidden,
+                        transparent: element.opacity <= 0.0,
+                    })
                 })
             })
             .collect(),

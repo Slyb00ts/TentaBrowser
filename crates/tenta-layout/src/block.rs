@@ -15,8 +15,8 @@ use crate::float::{self, FloatView};
 use crate::fragment::{FragFlags, FragId, Fragment, FragmentBuilder, FragmentKind};
 use crate::inline::layout_inline;
 use crate::space::{AvailableSize, BlockResult, ConstraintSpace, MarginStrut};
-use crate::types::{ClearSide, Direction, Edges, OverflowKind, PositionKind, Rect};
-use crate::{block_sizes, container, list, positioned, quirks, relative};
+use crate::types::{ClearSide, Direction, Edges, OverflowKind, PositionKind, Rect, TableKind};
+use crate::{block_sizes, container, list, positioned, quirks, relative, table};
 
 /// Lays out the block box `id` within `space`, pushing its fragment (and its
 /// descendants') into `out`.
@@ -63,6 +63,9 @@ fn layout_block_in(
     );
     if matches!(b.kind, BoxKind::Flex | BoxKind::Grid) {
         return container::layout_container(cx, tree, id, space, out);
+    }
+    if b.kind == BoxKind::Table(TableKind::Table) {
+        return table::layout_table(cx, tree, id, space, out);
     }
     let m = constraint::resolve_box(cx, tree, id, space);
     let direction = constraint::own_direction(&b.style);

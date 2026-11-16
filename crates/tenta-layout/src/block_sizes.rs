@@ -14,7 +14,7 @@ use crate::box_tree::{BoxFlags, BoxId, BoxKind, BoxTree, LayoutCx};
 use crate::inline::intrinsic_inline_content_sizes;
 use crate::quirks;
 use crate::space::ConstraintSpace;
-use crate::types::{ClearSide, Edges, FloatSide, IntrinsicSize, ReplacedKind};
+use crate::types::{ClearSide, Edges, FloatSide, IntrinsicSize, ReplacedKind, TableKind};
 
 /// A length-percentage in CSS pixels. A percentage needs `basis`; without one
 /// the value is unresolvable and `None` is returned.
@@ -107,6 +107,7 @@ pub fn intrinsic_inline_sizes_of_block(cx: &mut LayoutCx, tree: &BoxTree, id: Bo
         (BoxKind::Flex | BoxKind::Grid, _) => {
             crate::taffy_tree::intrinsic_inline_sizes(cx, tree, id)
         }
+        (BoxKind::Table(TableKind::Table), _) => crate::table::intrinsic_inline_sizes(cx, tree, id),
         (BoxKind::Replaced(kind), _) => {
             let (w, _) = replaced_content_size(
                 cx,
@@ -181,6 +182,9 @@ pub(crate) fn intrinsic_inline_contribution(
     id: BoxId,
 ) -> (f32, f32) {
     let b = tree.get(id);
+    if b.kind == BoxKind::Table(TableKind::Table) {
+        return crate::table::contribution(cx, tree, id);
+    }
     let style = &*b.style;
     let pos = style.get_position();
     let frame = frame_of(tree, id, 0.0);

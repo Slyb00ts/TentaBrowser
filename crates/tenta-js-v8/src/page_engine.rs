@@ -250,6 +250,14 @@ impl PageEngine for Engine {
         Engine::set_image_host(self, host);
     }
 
+    fn set_style_host(&mut self, host: Rc<dyn tenta_js::stylesheets::StyleHost>) {
+        Engine::set_style_host(self, host);
+    }
+
+    fn install_preludes(&mut self) {
+        Engine::install_preludes(self);
+    }
+
     /// Entered under [`Origin::Tracked`], like the lifecycle events: a `load`
     /// handler of an image is part of loading the document, so a timer it
     /// schedules is a deferral of that load.

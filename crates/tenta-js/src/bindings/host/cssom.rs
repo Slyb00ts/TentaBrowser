@@ -23,6 +23,35 @@ use crate::bindings::{
 pub struct CssSheetState {
     sheet: RefCell<CssStyleSheet>,
     keys: RefCell<CssKeys>,
+    /// The element a document sheet belongs to; `None` for a constructed sheet.
+    owner: Option<SheetOwner>,
+}
+
+/// What `StyleSheet.ownerNode`, `href` and `title` report for a sheet an element
+/// owns.
+pub struct SheetOwner {
+    /// The `<style>` or `<link>`.
+    pub node: NodeRef,
+    /// The sheet's URL: a link's resolved `href`; `None` for `<style>`.
+    pub href: Option<String>,
+    /// The element's `title` attribute.
+    pub title: Option<String>,
+    /// The sheet came from another origin without a passing CORS check: its
+    /// rules are not readable or writable by script.
+    pub opaque: bool,
+}
+
+impl CssSheetState {
+    /// `SecurityError` when script may not touch this sheet's rules.
+    fn check_readable(&self) -> Result<(), JsError> {
+        if self.owner.as_ref().is_some_and(|owner| owner.opaque) {
+            return Err(JsError::dom_exception(
+                "SecurityError",
+                "Cannot access rules of a cross-origin stylesheet",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -39,6 +68,16 @@ impl CssSheetState {
         Rc::new(Self {
             sheet: RefCell::new(sheet),
             keys: RefCell::new(CssKeys::default()),
+            owner: None,
+        })
+    }
+
+    /// The sheet of a `<style>` or `<link>` element.
+    pub(super) fn owned(sheet: CssStyleSheet, owner: SheetOwner) -> Rc<Self> {
+        Rc::new(Self {
+            sheet: RefCell::new(sheet),
+            keys: RefCell::new(CssKeys::default()),
+            owner: Some(owner),
         })
     }
 
@@ -55,7 +94,7 @@ impl CssSheetState {
         keys.styles.retain(|(_, existing)| *existing != key);
     }
 
-    fn sheet_key(self: &Rc<Self>, ctx: &SharedContext) -> HostKey {
+    pub(super) fn sheet_key(self: &Rc<Self>, ctx: &SharedContext) -> HostKey {
         if let Some(key) = self.keys.borrow().sheet
             && ctx.host_records.borrow().get(key).is_some()
         {
@@ -235,16 +274,28 @@ impl StyleSheetOps for HostObject {
         Ok("text/css".to_owned())
     }
     fn href(&self) -> Result<Option<String>, JsError> {
-        Ok(None)
+        Ok(sheet_record(self)?
+            .owner
+            .as_ref()
+            .and_then(|owner| owner.href.clone()))
     }
     fn owner_node(&self) -> Result<Option<Handle<Element>>, JsError> {
-        Ok(None)
+        let sheet = sheet_record(self)?;
+        let Some(owner) = &sheet.owner else {
+            return Ok(None);
+        };
+        // The element may have been reclaimed since the sheet was made.
+        let live = self.context().doc.borrow().resolve(owner.node).is_ok();
+        Ok(live.then(|| Handle::from_bits(encode_node(self.slot(), owner.node))))
     }
     fn parent_style_sheet(&self) -> Result<Option<Handle<CSSStyleSheet>>, JsError> {
         Ok(None)
     }
     fn title(&self) -> Result<Option<String>, JsError> {
-        Ok(None)
+        Ok(sheet_record(self)?
+            .owner
+            .as_ref()
+            .and_then(|owner| owner.title.clone()))
     }
     fn disabled(&self) -> bool {
         sheet_record(self).is_ok_and(|sheet| sheet.sheet.borrow().disabled())
@@ -278,6 +329,7 @@ impl CSSStyleSheetOps for HostObject {
     }
     fn css_rules(&self) -> Result<Handle<CSSRuleList>, JsError> {
         let sheet = sheet_record(self)?;
+        sheet.check_readable()?;
         Ok(Handle::from_bits(encode_host(
             self.slot(),
             sheet.list_key(self.context(), None),
@@ -285,6 +337,7 @@ impl CSSStyleSheetOps for HostObject {
     }
     fn insert_rule(&self, rule: &str, index: Option<u32>) -> Result<u32, JsError> {
         let sheet = sheet_record(self)?;
+        sheet.check_readable()?;
         let index = index.unwrap_or(0);
         sheet
             .sheet
@@ -295,6 +348,7 @@ impl CSSStyleSheetOps for HostObject {
     }
     fn delete_rule(&self, index: u32) -> Result<(), JsError> {
         let sheet = sheet_record(self)?;
+        sheet.check_readable()?;
         // All sheet-visible rules passed the style-only preflight. The native
         // API still handles the index and hierarchy checks.
         sheet
@@ -306,6 +360,7 @@ impl CSSStyleSheetOps for HostObject {
     }
     fn replace_sync(&self, text: &str) -> Result<(), JsError> {
         let sheet = sheet_record(self)?;
+        sheet.check_readable()?;
         sheet
             .sheet
             .borrow_mut()
@@ -434,7 +489,9 @@ impl CSSStyleRuleOps for HostObject {
 #[cfg(feature = "v8")]
 impl crate::bindings::style_properties::StyleDeclarationHost for HostObject {
     fn is_style_declaration(&self) -> bool {
-        matches!(self, HostObject::Style { .. }) || style_record(self).is_some()
+        matches!(self, HostObject::Style { .. })
+            || style_record(self).is_some()
+            || super::computed_style::computed_record(self).is_some()
     }
 }
 
@@ -449,6 +506,10 @@ impl CSSStylePropertiesOps for HostObject {
 
 impl CSSStyleDeclarationOps for HostObject {
     fn css_text(&self) -> Result<String, JsError> {
+        // CSSOM: the text of a computed declaration is empty.
+        if super::computed_style::computed_record(self).is_some() {
+            return Ok(String::new());
+        }
         if let Some(rule) = style_record(self) {
             return Ok(rule
                 .rule
@@ -459,6 +520,9 @@ impl CSSStyleDeclarationOps for HostObject {
         Ok(self.style_declarations().snapshot().css_text)
     }
     fn set_css_text(&self, value: &str) {
+        if super::computed_style::computed_record(self).is_some() {
+            return;
+        }
         if let Some(rule) = style_record(self) {
             let _ = rule
                 .sheet
@@ -478,6 +542,9 @@ impl CSSStyleDeclarationOps for HostObject {
         self.set_style_declarations(&CssDeclarationBlock::parse(value, &base));
     }
     fn length(&self) -> u32 {
+        if let Some(record) = super::computed_style::computed_record(self) {
+            return self.computed_length(&record);
+        }
         if let Some(rule) = style_record(self) {
             return rule
                 .rule
@@ -487,6 +554,9 @@ impl CSSStyleDeclarationOps for HostObject {
         self.style_declarations().len() as u32
     }
     fn item(&self, index: u32) -> Result<String, JsError> {
+        if let Some(record) = super::computed_style::computed_record(self) {
+            return Ok(self.computed_item(&record, index));
+        }
         if let Some(rule) = style_record(self) {
             return Ok(rule
                 .rule
@@ -505,12 +575,18 @@ impl CSSStyleDeclarationOps for HostObject {
         Ok(index < <HostObject as CSSStyleDeclarationOps>::length(self))
     }
     fn get_property_value(&self, property: &str) -> Result<String, JsError> {
+        if let Some(record) = super::computed_style::computed_record(self) {
+            return Ok(self.computed_value_of(&record, property));
+        }
         if let Some(rule) = style_record(self) {
             return Ok(rule.rule.style_property_value(property).unwrap_or_default());
         }
         Ok(self.style_declarations().property_value(property))
     }
     fn get_property_priority(&self, property: &str) -> Result<String, JsError> {
+        if super::computed_style::computed_record(self).is_some() {
+            return Ok(String::new());
+        }
         let important = if let Some(rule) = style_record(self) {
             rule.rule
                 .style_property_is_important(property)
@@ -526,6 +602,9 @@ impl CSSStyleDeclarationOps for HostObject {
         value: &str,
         priority: Option<&str>,
     ) -> Result<(), JsError> {
+        if let Some(record) = super::computed_style::computed_record(self) {
+            return Err(self.computed_read_only_for(&record));
+        }
         if let Some(rule) = style_record(self) {
             rule.sheet
                 .sheet
@@ -541,6 +620,9 @@ impl CSSStyleDeclarationOps for HostObject {
         Ok(())
     }
     fn remove_property(&self, property: &str) -> Result<String, JsError> {
+        if let Some(record) = super::computed_style::computed_record(self) {
+            return Err(self.computed_read_only_for(&record));
+        }
         if let Some(rule) = style_record(self) {
             let (value, _) = rule
                 .sheet

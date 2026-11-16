@@ -228,3 +228,36 @@ pub trait GeometryHost {
     /// The topmost element at a viewport point.
     fn element_from_point(&self, x: f64, y: f64) -> Option<NodeId>;
 }
+
+/// The members of the geometry interfaces the generator cannot declare:
+/// `DOMRectReadOnly.fromRect()`, `DOMRect.fromRect()` (static operations),
+/// `toJSON()` (it returns an `object`), and the iterator of `DOMRectList`.
+///
+/// A script rather than a binding, run once when a page's engine is built. It
+/// takes what it uses before page script runs, and defines the members the way
+/// WebIDL does: non-enumerable, writable and configurable, with the names and
+/// lengths of the standard's functions.
+pub const GEOMETRY_PRELUDE_SOURCE: &str = "(function () {
+  'use strict';
+  var ReadOnly = globalThis.DOMRectReadOnly, Rect = globalThis.DOMRect, List = globalThis.DOMRectList;
+  if (typeof ReadOnly !== 'function' || typeof Rect !== 'function') return;
+  var define = Object.defineProperty;
+  function method(target, name, fn) {
+    define(target, name, { value: fn, writable: true, enumerable: false, configurable: true });
+  }
+  function fromRect(Constructor) {
+    return function fromRect(other) {
+      if (other === undefined || other === null) other = {};
+      return new Constructor(other.x, other.y, other.width, other.height);
+    };
+  }
+  method(ReadOnly, 'fromRect', fromRect(ReadOnly));
+  method(Rect, 'fromRect', fromRect(Rect));
+  method(ReadOnly.prototype, 'toJSON', function toJSON() {
+    return { x: this.x, y: this.y, width: this.width, height: this.height,
+             top: this.top, right: this.right, bottom: this.bottom, left: this.left };
+  });
+  if (typeof List === 'function' && !(Symbol.iterator in List.prototype)) {
+    method(List.prototype, Symbol.iterator, Array.prototype[Symbol.iterator]);
+  }
+})();";

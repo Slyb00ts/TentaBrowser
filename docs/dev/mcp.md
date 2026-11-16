@@ -138,9 +138,10 @@ messages are not wrapped.
 and inline `visibility: hidden` (a child with inline `visibility: visible` stays),
 with or without layout; with the render tier an element with no layout box
 (`display: none` from any stylesheet, inherited) is omitted as well. An inline
-`opacity: 0` element is kept and marked `[opacity-0]`. The engine offers hosts no
-computed style, so `visibility: hidden` and `opacity: 0` coming from a stylesheet
-are not detected.
+`opacity: 0` element is kept and marked `[opacity-0]`. With the render tier the
+layout's computed `visibility` (inherited, so a child may turn it back on) and
+`opacity` replace the inline reading, so a stylesheet's `visibility: hidden` and
+`opacity: 0` are seen too; without it only the inline `style` is read.
 
 **Settling.** Acting tools wait for the page to settle after the action, with the
 MCP tunables (`busy_cap` 500 ms, `foreground_request_max` 2 s), and follow a
@@ -158,7 +159,8 @@ sockets or workers has rendered: use `browser_wait_for`. `settle: false` skips i
   `crates/tenta-mcp/src/interaction.rs`). Typing into `contenteditable` is refused;
   there is no scrolling, so coordinates are page coordinates.
 - With the render tier a `display: contents` wrapper hides its own text children.
-  Stylesheet-driven `visibility: hidden` and `opacity: 0` are not seen (see above).
+  Stylesheet-driven `visibility: hidden` and `opacity: 0` are seen through the layout's
+  computed values (without a layout only the inline `style` is read).
   `browser_navigate` computes the first layout so the snapshot after it reuses it.
 - Form control values are not painted in screenshots yet; read them from the
   snapshot (`value="..."`; passwords are masked).

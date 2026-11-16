@@ -102,6 +102,12 @@ include!(concat!(env!("OUT_DIR"), "/html_select_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_text_area_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_option_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_script_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_link_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_style_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/dom_rect_read_only_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/dom_rect_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/dom_rect_list_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/style_sheet_list_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/url_ops.rs"));
@@ -189,6 +195,12 @@ include!(concat!(
 ));
 include!(concat!(env!("OUT_DIR"), "/html_option_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_script_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_link_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_style_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/dom_rect_read_only_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/dom_rect_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/dom_rect_list_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/style_sheet_list_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/node_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/cdata_section_register.rs"));
@@ -323,6 +335,18 @@ include!(concat!(env!("OUT_DIR"), "/html_text_area_element_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_option_element_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/html_script_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_link_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_style_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/dom_rect_read_only_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/dom_rect_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/dom_rect_list_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/style_sheet_list_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/node_v8.rs"));
 #[cfg(feature = "v8")]
@@ -479,6 +503,18 @@ pub mod quickjs {
     include!(concat!(env!("OUT_DIR"), "/html_option_element_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/html_script_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_link_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_style_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/dom_rect_read_only_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/dom_rect_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/dom_rect_list_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/style_sheet_list_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/node_qjs.rs"));
     #[cfg(feature = "quickjs")]

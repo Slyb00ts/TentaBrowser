@@ -399,11 +399,13 @@ fn ensure_engine(inner: &Arc<PageInner>) -> Result<()> {
             .ok_or_else(|| Error::invalid("the page has no document yet"))?
     };
     let shared = Rc::new(RefCell::new(document));
+    let navigation = inner.state.lock().document_navigation_id;
     let adopted = runtime::adopt_loaded_document(
         page,
         Rc::clone(&shared),
         &inner.config,
         Arc::clone(inner) as Arc<dyn ScriptBudget>,
+        navigation,
     );
     if let Err(reason) = adopted {
         // The factory refused, so nothing else should hold the tree; if

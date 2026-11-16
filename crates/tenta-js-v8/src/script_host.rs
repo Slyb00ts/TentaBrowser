@@ -370,6 +370,10 @@ impl ScriptHost for V8ScriptHost {
         host.computed_value(node, None, property)
     }
 
+    fn geometry_host(&self) -> Option<std::rc::Rc<dyn tenta_js::geometry::GeometryHost>> {
+        self.host.geometry_host.borrow().clone()
+    }
+
     fn release_value(&self, bits: u64) {
         self.state.borrow_mut().release_value(bits);
     }

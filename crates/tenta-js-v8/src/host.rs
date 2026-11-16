@@ -29,10 +29,10 @@ use tenta_js::bindings::host::{
     EventHandlerNonNull, HostObject, realm_context, refused_request_init_member, request_from_init,
 };
 use tenta_js::bindings::{
-    AddEventListenerOptionsOrBoolean, Crypto, Event, EventListener, EventListenerOptionsOrBoolean,
-    EventTargetOps, JsError, RequestInit, Storage, handle_to_v8, native_callback_failure,
-    string_from_v8, throw_js_error, throw_type_error, v8_begin_stored_value_lease,
-    v8_end_stored_value_lease, v8_registered_slow_callback_boundary,
+    AddEventListenerOptionsOrBoolean, CSSStyleProperties, Crypto, Element, Event, EventListener,
+    EventListenerOptionsOrBoolean, EventTargetOps, JsError, RequestInit, Storage, handle_to_v8,
+    native_callback_failure, string_from_v8, throw_js_error, throw_type_error,
+    v8_begin_stored_value_lease, v8_end_stored_value_lease, v8_registered_slow_callback_boundary,
     v8_transfer_stored_value_lease, value_from_v8, value_to_v8, world_realm,
 };
 use tenta_js::dom::events::{EventHandlerName, HostValue, PromiseOutcome, PromiseRef, ScriptHost};
@@ -96,6 +96,7 @@ guarded_callback!(guarded_set_interval => set_interval);
 guarded_callback!(guarded_clear_interval => clear_interval);
 guarded_callback!(guarded_queue_microtask => queue_microtask);
 guarded_callback!(guarded_fetch => fetch);
+guarded_callback!(guarded_get_computed_style => get_computed_style);
 guarded_callback!(guarded_request_animation_frame => request_animation_frame);
 guarded_callback!(guarded_cancel_animation_frame => cancel_animation_frame);
 
@@ -351,6 +352,14 @@ pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>, time_o
     // present from the moment script can run, and a call made before a driver is
     // installed rejects rather than throwing a `ReferenceError`.
     define(scope, global, "fetch", guarded_fetch);
+    // `getComputedStyle` answers from the page's layout through the geometry
+    // host; without one every property reads as empty.
+    define(
+        scope,
+        global,
+        "getComputedStyle",
+        guarded_get_computed_style,
+    );
     define(
         scope,
         global,
@@ -894,6 +903,60 @@ fn window_remove_event_listener<'s>(
     }
     v8_transfer_stored_value_lease(scope);
     retval.set_undefined();
+}
+
+/// `window.getComputedStyle(element, pseudoElt)`: a live, read-only
+/// `CSSStyleProperties` whose values come from the page's layout.
+fn get_computed_style(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    if args.length() < 1 {
+        throw_type_error(
+            scope,
+            "Failed to execute 'getComputedStyle' on 'Window': 1 argument required, but only 0 present.",
+        );
+        return;
+    }
+    let host = match window_host(scope) {
+        Ok(host) => host,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let element = match tenta_js::bindings::handle_from_v8::<Element>(scope, args.get(0)) {
+        Ok(element) => element,
+        Err(_) => {
+            throw_type_error(
+                scope,
+                "Failed to execute 'getComputedStyle' on 'Window': parameter 1 is not of type 'Element'.",
+            );
+            return;
+        }
+    };
+    let pseudo = {
+        let raw = args.get(1);
+        if raw.is_null_or_undefined() {
+            None
+        } else {
+            match string_from_v8(scope, raw) {
+                Ok(text) => Some(text),
+                Err(error) => {
+                    throw_js_error(scope, &error);
+                    return;
+                }
+            }
+        }
+    };
+    match host
+        .get_computed_style(element, pseudo)
+        .and_then(|style| handle_to_v8::<CSSStyleProperties>(scope, style))
+    {
+        Ok(value) => retval.set(value),
+        Err(error) => throw_js_error(scope, &error),
+    }
 }
 
 /// `window.dispatchEvent(event)`, which dispatches *at* the window: its path is

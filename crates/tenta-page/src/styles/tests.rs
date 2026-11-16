@@ -148,6 +148,7 @@ impl Env {
             document_url: &self.document_url,
             deadline: Instant::now() + Duration::from_secs(60),
             fetch_policy: FetchPolicy::for_tier(self.tier),
+            cors: false,
         }
     }
 
@@ -179,7 +180,10 @@ fn texts(sources: &[StyleSource]) -> Vec<&str> {
 }
 
 async fn collect(doc: &Document, env: &Env, state: &mut StyleState) -> Vec<StyleSource> {
-    collect_style_sources(doc, &base(doc), &env.ctx(), state).await
+    let cell = RefCell::new(std::mem::take(state));
+    let sources = collect_style_sources(doc, &base(doc), &env.ctx(), &cell).await;
+    *state = cell.into_inner();
+    sources
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -794,4 +798,103 @@ async fn an_oversize_file_is_refused_not_truncated() {
     assert!(collect(&doc, &env, &mut state).await.is_empty());
     assert!(state.take_failures()[0].reason.contains("size limit"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn media_that_can_match_the_screen_are_told_from_the_ones_that_cannot() {
+    for media in [
+        None,
+        Some("all"),
+        Some("screen"),
+        Some("only screen"),
+        Some("(min-width: 600px)"),
+        Some("screen and (min-width: 600px)"),
+        Some("print, screen"),
+        Some("not print"),
+        Some("SCREEN"),
+        Some("(min-width: 1280px) and (max-height: 800px)"),
+        Some("(width >= 1000px)"),
+        Some("(1000px <= width)"),
+        Some("(orientation: landscape)"),
+        Some("(prefers-color-scheme: light)"),
+        Some("(max-width: 600px), (min-width: 1200px)"),
+    ] {
+        assert!(
+            media_matches_viewport(media, (1280.0, 800.0)),
+            "{media:?} matches"
+        );
+    }
+    for media in [
+        Some("print"),
+        Some("speech"),
+        Some("not all"),
+        Some("not screen"),
+        Some("print and (min-width: 1px)"),
+        Some("print, speech"),
+        Some("(max-width: 600px)"),
+        Some("(min-width: 2000px)"),
+        Some("screen and (max-width: 40em)"),
+        Some("(width < 1000px)"),
+        Some("(orientation: portrait)"),
+        Some("(prefers-color-scheme: dark)"),
+        Some("(some-unknown-feature)"),
+    ] {
+        assert!(
+            !media_matches_viewport(media, (1280.0, 800.0)),
+            "{media:?} does not match"
+        );
+    }
+}
+
+#[test]
+fn the_loader_lists_fetchable_sheets_and_leaves_the_rest() {
+    let doc = parse(
+        "<link rel=stylesheet href=a.css>\
+         <link rel='alternate stylesheet' href=b.css>\
+         <link rel=stylesheet href=c.css disabled>\
+         <link rel=stylesheet href=d.css type='text/less'>\
+         <link rel=stylesheet>\
+         <link rel=icon href=e.png>\
+         <style>p{}</style>\
+         <style>@import url(f.css); p{}</style>\
+         <link rel=stylesheet media=print href=g.css>",
+        DOC_URL,
+    );
+    let elements = sheet_elements(&doc, &base(&doc), (1280.0, 800.0));
+    let found: Vec<(String, bool, bool)> = elements
+        .iter()
+        .map(|element| {
+            let name = match &element.source {
+                SheetSource::Link(url, _) => url.path().rsplit('/').next().unwrap().to_owned(),
+                SheetSource::Style(_) => format!("style:{}", element.imports.len()),
+            };
+            (name, element.alternate, element.media_matches)
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("a.css".to_owned(), false, true),
+            ("b.css".to_owned(), true, true),
+            ("style:1".to_owned(), false, true),
+            ("g.css".to_owned(), false, false),
+        ]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn two_callers_share_one_fetch_of_a_sheet() {
+    let env = Env::new(&[("http://fixture.test/dir/one.css", "text/css", "one{}")]);
+    let doc = parse("<link rel=stylesheet href=one.css>", DOC_URL);
+    let state = RefCell::new(StyleState::default());
+    let ctx = env.ctx();
+    let plan = || plan_fetches(&doc, &base(&doc), &ctx).expect("a plan");
+    let (first, second) = (plan(), plan());
+    let base = base(&doc);
+    tokio::join!(
+        fetch_planned(first, &base, &ctx, &state),
+        fetch_planned(second, &base, &ctx, &state),
+    );
+    assert_eq!(env.requested().len(), 1, "{:?}", env.requested());
+    assert_eq!(state.borrow().completed_fetches(), 1);
 }

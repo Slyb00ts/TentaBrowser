@@ -1680,6 +1680,8 @@ pub(super) fn intrinsic_sizes(
     let mut min = 0.0_f32;
     let mut piece = 0.0_f32;
     let mut piece_hang = 0.0_f32;
+    // The hyphen that shows when the piece ends at the soft hyphen closing it.
+    let mut piece_hyphen = 0.0_f32;
     for atom in atoms {
         if matches!(atom.kind, AtomKind::Forced) {
             max = max.max(line - hang + floats_left + floats_right);
@@ -1717,9 +1719,17 @@ pub(super) fn intrinsic_sizes(
         }
         let breaks = matches!(atom.opp, Opp::Soft | Opp::Anywhere);
         if breaks {
-            min = min.max(piece - piece_hang);
+            min = min.max(piece - piece_hang + piece_hyphen);
             piece = 0.0;
             piece_hang = 0.0;
+        }
+        // Box edges between the hyphen and the break do not undo it.
+        match &atom.kind {
+            AtomKind::Text(text) => {
+                piece_hyphen = text.hyphen.as_ref().map_or(0.0, |h| h.width);
+            }
+            AtomKind::Atomic(_) | AtomKind::Tab { .. } => piece_hyphen = 0.0,
+            _ => {}
         }
         let minimal = match &atom.kind {
             AtomKind::Atomic(atomic) => atomic.min_width,

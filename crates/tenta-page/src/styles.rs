@@ -24,6 +24,7 @@
 //! sheet applies. `crossorigin` is not sent (the script path does not either),
 //! so it is not part of the signature.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::Read;
@@ -35,6 +36,7 @@ use tenta_css::cascade::{ImportedSheet, StyleSource, import_urls};
 use tenta_dom::Document;
 use tenta_html::{Encoding, QuirksMode};
 use tenta_net::policy::cookies::Site;
+use tenta_net::request::{RequestMode, origin_of, same_origin};
 use tenta_net::{Client, NetError, Request, ResourceType};
 use url::Url;
 
@@ -46,6 +48,10 @@ use crate::fetch_policy::{FetchPolicy, HintDisposition, PreloadKind};
 const MAX_IMPORT_DEPTH: u8 = 4;
 /// How many distinct sheets one `<style>`/`<link>` may import, transitively.
 const MAX_IMPORTS_PER_SOURCE: usize = 64;
+/// The largest stylesheet body accepted.
+const MAX_SHEET_BYTES: u64 = 8 * 1024 * 1024;
+/// The most stylesheet bytes one navigation may fetch.
+const MAX_NAVIGATION_SHEET_BYTES: u64 = 64 * 1024 * 1024;
 
 /// What fetching a stylesheet needs from the page.
 pub(crate) struct StyleContext<'a> {
@@ -66,6 +72,10 @@ pub(crate) struct StyleContext<'a> {
     /// A fetch that cannot finish before this is not issued.
     pub deadline: Instant,
     pub fetch_policy: FetchPolicy,
+    /// The request is CORS-flagged (`<link crossorigin>`): it sends `Origin`,
+    /// and a cross-origin answer without a matching `Access-Control-Allow-Origin`
+    /// fails the sheet. The imports of such a sheet are CORS requests too.
+    pub cors: bool,
 }
 
 /// A stylesheet that could not be fetched, or a limit that cut a tree short.
@@ -75,6 +85,10 @@ pub(crate) struct StyleFailure {
     pub url: Url,
     pub reason: String,
 }
+
+/// What a memoised signature was computed for: the document, its mutation
+/// generation, the completed fetches, and a hash of the URLs, encoding and mode.
+type SignatureKey = (u64, u64, u64, u64);
 
 /// A hash of everything that can change the list of sheets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -236,8 +250,209 @@ fn candidates(doc: &Document, base_url: &Url) -> Vec<Candidate> {
     found
 }
 
+/// A stylesheet-bearing element as the load-time loader sees it
+/// (`page/sheet_loader.rs`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum SheetSource {
+    /// A `<link rel=stylesheet>` with a usable `href`, as a cache key, and
+    /// whether the element asks for CORS (`crossorigin`).
+    Link(Url, bool),
+    /// A `<style>` whose text imports other sheets; the hash is of its text.
+    Style(u64),
+}
+
+/// One element the loader has to act on.
+#[derive(Clone, Debug)]
+pub(crate) struct SheetElement {
+    pub node: NodeId,
+    pub source: SheetSource,
+    /// `rel` has `alternate`: fetched for `link.sheet` and its events, but never
+    /// applied, and it neither blocks scripts nor delays `load`.
+    pub alternate: bool,
+    /// The `media` attribute names an environment this one is in, so the sheet
+    /// can hold script back while it loads.
+    pub media_matches: bool,
+    /// The `@import` targets of a `<style>`; empty for a link.
+    pub imports: Vec<Url>,
+}
+
+/// The connected `<link rel=stylesheet>` and `<style>` elements the loader
+/// fetches for, in tree order. A `disabled` link, a `type` other than CSS, a
+/// link without a resolvable `href` and a `<style>` without `@import` have
+/// nothing to fetch and are left out.
+pub(crate) fn sheet_elements(
+    doc: &Document,
+    base_url: &Url,
+    viewport: (f32, f32),
+) -> Vec<SheetElement> {
+    let mut found = Vec::new();
+    for tag in ["link", "style"] {
+        for node in doc.get_elements_by_tag_name(tag) {
+            let Some(kind) = element_kind(doc, node) else {
+                continue;
+            };
+            if !type_is_css(doc, node) {
+                continue;
+            }
+            let media_matches = media_matches_viewport(media_of(doc, node).as_deref(), viewport);
+            match kind {
+                ElementKind::Link => {
+                    if doc.has_attribute(node, atoms::DISABLED) {
+                        continue;
+                    }
+                    let Some(href) = doc
+                        .attribute(node, atoms::HREF)
+                        .map(str::trim)
+                        .filter(|href| !href.is_empty())
+                    else {
+                        continue;
+                    };
+                    let Ok(url) = base_url.join(href) else {
+                        continue;
+                    };
+                    found.push(SheetElement {
+                        node,
+                        source: SheetSource::Link(
+                            key_of(&url),
+                            doc.has_attribute(node, atoms::CROSSORIGIN),
+                        ),
+                        alternate: rel_tokens(doc, node).any(|token| token == "alternate"),
+                        media_matches,
+                        imports: Vec::new(),
+                    });
+                }
+                ElementKind::Style => {
+                    let text = style_text(doc, node);
+                    let imports = direct_imports(&text, base_url);
+                    if imports.is_empty() {
+                        continue;
+                    }
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    text.hash(&mut hasher);
+                    found.push(SheetElement {
+                        node,
+                        source: SheetSource::Style(hasher.finish()),
+                        alternate: false,
+                        media_matches,
+                        imports,
+                    });
+                }
+            }
+        }
+    }
+    found.sort_by_key(|element| element.node);
+    found
+}
+
+/// Whether a `media` attribute matches a screen of `viewport` CSS pixels.
+///
+/// This decides only whether a loading sheet holds scripts back; the render
+/// session applies the real media rules to the sheet. Media types `all` and
+/// `screen`, `not`/`only`, `and`, `(min|max-)width`, `(min|max-)height`,
+/// `orientation`, the range form (`width >= 600px`) and the user-preference
+/// features of a default light, no-motion screen are evaluated; any other
+/// feature is false, as an unknown feature is in CSS.
+pub(crate) fn media_matches_viewport(media: Option<&str>, viewport: (f32, f32)) -> bool {
+    let Some(media) = media else {
+        return true;
+    };
+    media.split(',').any(|query| {
+        let query = query.trim().to_ascii_lowercase();
+        let (negated, rest) = match query.strip_prefix("not ") {
+            Some(rest) => (true, rest.trim()),
+            None => (false, query.strip_prefix("only ").unwrap_or(&query).trim()),
+        };
+        let mut parts = rest.split(" and ").map(str::trim);
+        let first = parts.next().unwrap_or("");
+        let mut ok = true;
+        let mut features: Vec<&str> = Vec::new();
+        if first.starts_with('(') || first.is_empty() {
+            if !first.is_empty() {
+                features.push(first);
+            }
+        } else {
+            ok = matches!(first, "all" | "screen");
+        }
+        features.extend(parts);
+        ok = ok
+            && features
+                .iter()
+                .all(|feature| feature_matches(feature, viewport));
+        ok != negated
+    })
+}
+
+fn css_length(text: &str) -> Option<f32> {
+    let text = text.trim();
+    if let Some(number) = text.strip_suffix("px") {
+        number.trim().parse().ok()
+    } else if let Some(number) = text.strip_suffix("rem").or_else(|| text.strip_suffix("em")) {
+        number.trim().parse::<f32>().ok().map(|n| n * 16.0)
+    } else if text == "0" {
+        Some(0.0)
+    } else {
+        None
+    }
+}
+
+fn feature_matches(feature: &str, (width, height): (f32, f32)) -> bool {
+    let Some(inner) = feature.strip_prefix('(').and_then(|f| f.strip_suffix(')')) else {
+        return false;
+    };
+    let inner = inner.trim();
+    // The range form: `width >= 600px`, `400px <= width`, `height < 500px`.
+    for op in [">=", "<=", ">", "<", "="] {
+        if let Some((left, right)) = inner.split_once(op) {
+            let (left, right) = (left.trim(), right.trim());
+            let (name, value, flipped) = if left == "width" || left == "height" {
+                (left, right, false)
+            } else {
+                (right, left, true)
+            };
+            let actual = match name {
+                "width" => width,
+                "height" => height,
+                _ => return false,
+            };
+            let Some(value) = css_length(value) else {
+                return false;
+            };
+            // `actual OP value`, mirrored when the name was on the right.
+            return match (op, flipped) {
+                (">=", false) | ("<=", true) => actual >= value,
+                ("<=", false) | (">=", true) => actual <= value,
+                (">", false) | ("<", true) => actual > value,
+                ("<", false) | (">", true) => actual < value,
+                _ => (actual - value).abs() < f32::EPSILON,
+            };
+        }
+    }
+    let (name, value) = match inner.split_once(':') {
+        Some((name, value)) => (name.trim(), Some(value.trim())),
+        None => (inner, None),
+    };
+    match (name, value) {
+        ("width", Some(v)) => css_length(v).is_some_and(|v| (width - v).abs() < f32::EPSILON),
+        ("min-width", Some(v)) => css_length(v).is_some_and(|v| width >= v),
+        ("max-width", Some(v)) => css_length(v).is_some_and(|v| width <= v),
+        ("height", Some(v)) => css_length(v).is_some_and(|v| (height - v).abs() < f32::EPSILON),
+        ("min-height", Some(v)) => css_length(v).is_some_and(|v| height >= v),
+        ("max-height", Some(v)) => css_length(v).is_some_and(|v| height <= v),
+        ("orientation", Some("landscape")) => width >= height,
+        ("orientation", Some("portrait")) => width < height,
+        ("prefers-color-scheme", Some("light"))
+        | ("prefers-reduced-motion", Some("no-preference"))
+        | ("hover", Some("hover"))
+        | ("pointer", Some("fine"))
+        | ("display-mode", Some("browser"))
+        | ("scripting", Some("enabled")) => true,
+        ("color" | "width" | "height" | "hover" | "pointer", None) => true,
+        _ => false,
+    }
+}
+
 /// The direct `@import` targets of `text`, as cache keys.
-fn direct_imports(text: &str, sheet_url: &Url) -> Vec<Url> {
+pub(crate) fn direct_imports(text: &str, sheet_url: &Url) -> Vec<Url> {
     import_urls(text, sheet_url).iter().map(key_of).collect()
 }
 
@@ -245,11 +460,16 @@ fn direct_imports(text: &str, sheet_url: &Url) -> Vec<Url> {
 struct Sheet {
     /// The URL the body came from after redirects: the base for its `url()`s.
     url: Url,
-    text: String,
+    text: std::rc::Rc<str>,
+    /// Fetched with CORS and passed the check: readable by script whatever its
+    /// origin.
+    cors: bool,
     /// The encoding the body was decoded with, which its own imports inherit.
     encoding: &'static Encoding,
     /// Its direct `@import` targets.
     imports: Vec<Url>,
+    /// The size of the body on the wire, charged against the byte budget.
+    bytes: u64,
 }
 
 /// Per-navigation stylesheet state: fetched bodies by URL (without fragment),
@@ -267,10 +487,22 @@ pub(crate) struct StyleState {
     failures: Vec<StyleFailure>,
     /// Failures already reported, so a repeated collect does not repeat them.
     reported: HashSet<String>,
+    /// URLs whose fetch is running right now, so two callers (the load-time
+    /// loader and a screenshot) never fetch one sheet twice: the second waits
+    /// for the first.
+    in_flight: HashSet<Url>,
+    /// Woken whenever a fetch in `in_flight` ends.
+    arrived: std::rc::Rc<tokio::sync::Notify>,
+    /// The signature the render session's sources were last collected for.
+    pub(crate) applied: Option<StyleSignature>,
+    /// The last signature computed and what it was computed for (document,
+    /// mutation generation, completed fetches), so a script reading geometry in
+    /// a loop does not walk the tree each time.
+    memo: std::cell::Cell<Option<(SignatureKey, StyleSignature)>>,
 }
 
 /// What a collect decides once per document rather than once per fetch.
-struct Env {
+pub(crate) struct Env {
     fallback: &'static Encoding,
     quirks: bool,
 }
@@ -290,7 +522,51 @@ impl StyleState {
     }
 
     pub(crate) fn signature(&self, doc: &Document) -> StyleSignature {
-        StyleSignature::of(doc, self.completed_fetches())
+        // What `StyleSignature::of` reads besides the elements: the URLs, the
+        // encoding and the mode can change without a mutation.
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        doc.url().map(Url::as_str).hash(&mut hasher);
+        doc.base_url().map(Url::as_str).hash(&mut hasher);
+        doc.encoding().hash(&mut hasher);
+        (doc.quirks_mode() as u8).hash(&mut hasher);
+        let key = (
+            doc.document_id(),
+            doc.mutation_generation(),
+            self.completed_fetches(),
+            hasher.finish(),
+        );
+        if let Some((memo_key, signature)) = self.memo.get()
+            && memo_key == key
+        {
+            return signature;
+        }
+        let signature = StyleSignature::of(doc, self.completed_fetches());
+        self.memo.set(Some((key, signature)));
+        signature
+    }
+
+    /// The decoded text of the sheet at `url` and the URL it came from, when it
+    /// loaded.
+    pub(crate) fn loaded_sheet(&self, url: &Url) -> Option<(Url, std::rc::Rc<str>, bool)> {
+        match self.sheets.get(url) {
+            Some(Some(sheet)) => Some((sheet.url.clone(), sheet.text.clone(), sheet.cors)),
+            _ => None,
+        }
+    }
+
+    /// Forgets that `url` failed, so the next link to it fetches it again.
+    pub(crate) fn forget_failed(&mut self, url: &Url) {
+        if matches!(self.sheets.get(url), Some(None)) {
+            self.sheets.remove(url);
+            self.reported
+                .retain(|entry| !entry.starts_with(url.as_str()));
+        }
+    }
+
+    /// Whether the sheet at `url` loaded (`Some(true)`), failed for good
+    /// (`Some(false)`), or has not been fetched.
+    pub(crate) fn sheet_state(&self, url: &Url) -> Option<bool> {
+        self.sheets.get(url).map(Option::is_some)
     }
 
     /// Failures since the last call, for the page to report as events.
@@ -335,7 +611,7 @@ impl StyleState {
                         sources.push(StyleSource {
                             owner: Some(owner),
                             url: sheet.url.clone(),
-                            text: sheet.text.clone(),
+                            text: sheet.text.to_string(),
                             media,
                             disabled: false,
                             imports: self.gather(&sheet.imports),
@@ -366,7 +642,7 @@ impl StyleState {
             gathered.push(ImportedSheet {
                 url,
                 final_url: sheet.url.clone(),
-                text: sheet.text.clone(),
+                text: sheet.text.to_string(),
             });
             if depth < MAX_IMPORT_DEPTH {
                 queue.extend(sheet.imports.iter().cloned().map(|url| (url, depth + 1)));
@@ -374,91 +650,133 @@ impl StyleState {
         }
         gathered
     }
+}
 
-    /// Fetches every import reachable from `direct` that the cache lacks,
-    /// within the limits [`StyleState::gather`] applies. `root` names the
-    /// source in failure reports.
-    async fn load_imports(
-        &mut self,
-        ctx: &StyleContext<'_>,
-        env: &Env,
-        root: &Url,
-        direct: Vec<Url>,
-        inherited: &'static Encoding,
-    ) {
-        let mut seen = HashSet::new();
-        let mut queue: VecDeque<(Url, u8, &'static Encoding)> =
-            direct.into_iter().map(|url| (url, 1, inherited)).collect();
-        while let Some((url, depth, encoding)) = queue.pop_front() {
-            if !seen.insert(url.clone()) {
-                continue;
-            }
-            if seen.len() > MAX_IMPORTS_PER_SOURCE {
-                self.report_once(
-                    root,
-                    format!(
-                        "more than {MAX_IMPORTS_PER_SOURCE} imported sheets; the rest are ignored"
-                    ),
-                );
-                break;
-            }
-            self.ensure(ctx, env, &url, encoding).await;
-            let Some(Some(sheet)) = self.sheets.get(&url) else {
+/// Releases the claim on a URL's fetch when the fetch ends or is dropped, and
+/// wakes whoever waited for it.
+struct FetchClaim<'a> {
+    state: &'a RefCell<StyleState>,
+    url: &'a Url,
+}
+
+impl Drop for FetchClaim<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.state.try_borrow_mut() {
+            state.in_flight.remove(self.url);
+            state.arrived.notify_waiters();
+        }
+    }
+}
+
+/// Fetches every import reachable from `direct` that the cache lacks, within
+/// the limits [`StyleState::gather`] applies. `root` names the source in
+/// failure reports. The state is only borrowed between awaits.
+pub(crate) async fn load_imports(
+    state: &RefCell<StyleState>,
+    ctx: &StyleContext<'_>,
+    env: &Env,
+    root: &Url,
+    direct: Vec<Url>,
+    inherited: &'static Encoding,
+) {
+    let mut seen = HashSet::new();
+    let mut queue: VecDeque<(Url, u8, &'static Encoding)> =
+        direct.into_iter().map(|url| (url, 1, inherited)).collect();
+    while let Some((url, depth, encoding)) = queue.pop_front() {
+        if !seen.insert(url.clone()) {
+            continue;
+        }
+        if seen.len() > MAX_IMPORTS_PER_SOURCE {
+            state.borrow_mut().report_once(
+                root,
+                format!("more than {MAX_IMPORTS_PER_SOURCE} imported sheets; the rest are ignored"),
+            );
+            break;
+        }
+        ensure(state, ctx, env, &url, encoding).await;
+        let next = {
+            let state = state.borrow();
+            let Some(Some(sheet)) = state.sheets.get(&url) else {
                 continue;
             };
-            if sheet.imports.is_empty() {
-                continue;
-            }
-            if depth < MAX_IMPORT_DEPTH {
-                let encoding = sheet.encoding;
-                queue.extend(
-                    sheet
-                        .imports
-                        .iter()
-                        .cloned()
-                        .map(|url| (url, depth + 1, encoding)),
-                );
-            } else {
-                self.report_once(
-                    root,
-                    format!("imports nest deeper than {MAX_IMPORT_DEPTH}; the deepest are ignored"),
-                );
-            }
+            (!sheet.imports.is_empty()).then(|| (sheet.imports.clone(), sheet.encoding))
+        };
+        let Some((imports, encoding)) = next else {
+            continue;
+        };
+        if depth < MAX_IMPORT_DEPTH {
+            queue.extend(imports.into_iter().map(|url| (url, depth + 1, encoding)));
+        } else {
+            state.borrow_mut().report_once(
+                root,
+                format!("imports nest deeper than {MAX_IMPORT_DEPTH}; the deepest are ignored"),
+            );
         }
     }
+}
 
-    /// Fetches `url` into the cache unless it is already there.
-    async fn ensure(
-        &mut self,
-        ctx: &StyleContext<'_>,
-        env: &Env,
-        url: &Url,
-        fallback: &'static Encoding,
-    ) {
-        if self.sheets.contains_key(url) {
-            return;
+/// Fetches `url` into the cache unless it is already there. A fetch another
+/// caller has running is waited for, not repeated.
+async fn ensure(
+    state: &RefCell<StyleState>,
+    ctx: &StyleContext<'_>,
+    env: &Env,
+    url: &Url,
+    fallback: &'static Encoding,
+) {
+    loop {
+        let arrived = {
+            let mut guard = state.borrow_mut();
+            // A sheet fetched without CORS does not satisfy a CORS request: it
+            // was sent without `Origin` and was not checked.
+            let cached = match guard.sheets.get(url) {
+                Some(Some(sheet)) => !ctx.cors || sheet.cors,
+                Some(None) => true,
+                None => false,
+            };
+            if cached {
+                return;
+            }
+            if guard.in_flight.insert(url.clone()) {
+                break;
+            }
+            std::rc::Rc::clone(&guard.arrived)
+        };
+        let notified = arrived.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        // The fetch may have ended between the borrow above and the
+        // registration.
+        if !state.borrow().in_flight.contains(url) {
+            continue;
         }
-        match self.fetch(ctx, env, url, fallback).await {
-            Fetch::Done(outcome) => {
-                self.completed += 1;
-                match outcome {
-                    Ok(sheet) => {
-                        self.sheets.insert(url.clone(), Some(sheet));
-                    }
-                    Err(reason) => {
-                        tracing::warn!(url = %url, %reason, "a stylesheet could not be loaded");
-                        self.failures.push(StyleFailure {
-                            url: url.clone(),
-                            reason,
-                        });
-                        self.sheets.insert(url.clone(), None);
-                    }
+        notified.await;
+    }
+    let _claim = FetchClaim { state, url };
+    match fetch(state, ctx, env, url, fallback).await {
+        Fetch::Done(outcome) => {
+            let mut state = state.borrow_mut();
+            state.completed += 1;
+            match outcome {
+                Ok(sheet) => {
+                    state.bytes += sheet.bytes;
+                    state.sheets.insert(url.clone(), Some(sheet));
+                }
+                Err(reason) => {
+                    tracing::warn!(url = %url, %reason, "a stylesheet could not be loaded");
+                    state.failures.push(StyleFailure {
+                        url: url.clone(),
+                        reason,
+                    });
+                    state.sheets.insert(url.clone(), None);
                 }
             }
-            Fetch::Retry(reason) => self.report_once(url, reason),
         }
+        Fetch::Retry(reason) => state.borrow_mut().report_once(url, reason),
     }
+}
 
+impl StyleState {
     fn report_once(&mut self, url: &Url, reason: String) {
         if self.reported.insert(format!("{url} {reason}")) {
             tracing::warn!(url = %url, %reason, "a stylesheet was not loaded");
@@ -469,47 +787,60 @@ impl StyleState {
         }
     }
 
-    async fn fetch(
-        &mut self,
-        ctx: &StyleContext<'_>,
-        env: &Env,
-        url: &Url,
-        fallback: &'static Encoding,
-    ) -> Fetch {
+    /// Charges one request against the budgets, or says why none may be made.
+    fn reserve(&mut self, ctx: &StyleContext<'_>) -> Result<(Duration, u64), String> {
         let remaining = ctx.deadline.saturating_duration_since(ctx.clock.now());
         if remaining.is_zero() {
-            return Fetch::Retry("the navigation deadline has passed".to_owned());
+            return Err("the navigation deadline has passed".to_owned());
         }
         if self.requests >= ctx.budgets.network_requests {
-            return Fetch::Retry("the page's request budget is spent".to_owned());
+            return Err("the page's request budget is spent".to_owned());
         }
-        let byte_limit = ctx.budgets.network_bytes.saturating_sub(self.bytes);
+        let byte_limit = ctx
+            .budgets
+            .network_bytes
+            .saturating_sub(self.bytes)
+            .min(MAX_NAVIGATION_SHEET_BYTES.saturating_sub(self.bytes))
+            .min(MAX_SHEET_BYTES);
         if byte_limit == 0 {
-            return Fetch::Retry("the page's network byte budget is spent".to_owned());
+            return Err("the page's network byte budget is spent".to_owned());
         }
         self.requests += 1;
-        let loaded = match url.scheme() {
-            "http" | "https" => read_remote(ctx, env, url, remaining, byte_limit).await,
-            "file" => read_local(ctx, url, byte_limit).map(|body| (body, None, url.clone())),
-            "data" => {
-                read_data(url, byte_limit).map(|(body, charset)| (body, charset, url.clone()))
-            }
-            scheme => Err(format!(
-                "the {scheme}: scheme is not loaded as a stylesheet"
-            )),
-        };
-        Fetch::Done(loaded.map(|(body, charset, final_url)| {
-            self.bytes += body.len() as u64;
-            let (text, encoding) = decode_stylesheet(&body, charset.as_deref(), fallback);
-            let imports = direct_imports(&text, &final_url);
-            Sheet {
-                url: final_url,
-                text,
-                encoding,
-                imports,
-            }
-        }))
+        Ok((remaining, byte_limit))
     }
+}
+
+async fn fetch(
+    state: &RefCell<StyleState>,
+    ctx: &StyleContext<'_>,
+    env: &Env,
+    url: &Url,
+    fallback: &'static Encoding,
+) -> Fetch {
+    let (remaining, byte_limit) = match state.borrow_mut().reserve(ctx) {
+        Ok(reserved) => reserved,
+        Err(reason) => return Fetch::Retry(reason),
+    };
+    let loaded = match url.scheme() {
+        "http" | "https" => read_remote(ctx, env, url, remaining, byte_limit).await,
+        "file" => read_local(ctx, url, byte_limit).map(|body| (body, None, url.clone())),
+        "data" => read_data(url, byte_limit).map(|(body, charset)| (body, charset, url.clone())),
+        scheme => Err(format!(
+            "the {scheme}: scheme is not loaded as a stylesheet"
+        )),
+    };
+    Fetch::Done(loaded.map(|(body, charset, final_url)| {
+        let (text, encoding) = decode_stylesheet(&body, charset.as_deref(), fallback);
+        let imports = direct_imports(&text, &final_url);
+        Sheet {
+            url: final_url,
+            text: text.into(),
+            cors: ctx.cors,
+            encoding,
+            imports,
+            bytes: body.len() as u64,
+        }
+    }))
 }
 
 /// What fetching the sheets of a document needs from the document, copied out
@@ -517,6 +848,26 @@ impl StyleState {
 pub(crate) struct FetchPlan {
     env: Env,
     candidates: Vec<Candidate>,
+}
+
+impl Env {
+    /// The encoding a sheet's own imports inherit.
+    pub(crate) fn fallback(&self) -> &'static Encoding {
+        self.fallback
+    }
+
+    /// What fetching for `doc` decides once: the encoding its sheets inherit and
+    /// whether MIME tolerance applies.
+    /// `encoding` is the parser's choice while the parse is still running (the
+    /// document only records it at the end).
+    pub(crate) fn of(doc: &Document, encoding: Option<&'static Encoding>) -> Env {
+        Env {
+            fallback: encoding
+                .or_else(|| Encoding::for_label(doc.encoding().as_bytes()))
+                .unwrap_or_else(utf8),
+            quirks: doc.quirks_mode() == QuirksMode::Quirks,
+        }
+    }
 }
 
 /// Lists what a fetch for `doc` would load. `None` when the tier only records
@@ -530,10 +881,7 @@ pub(crate) fn plan_fetches(
         return None;
     }
     Some(FetchPlan {
-        env: Env {
-            fallback: Encoding::for_label(doc.encoding().as_bytes()).unwrap_or_else(utf8),
-            quirks: doc.quirks_mode() == QuirksMode::Quirks,
-        },
+        env: Env::of(doc, None),
         candidates: candidates(doc, base_url),
     })
 }
@@ -560,35 +908,47 @@ impl FetchPlan {
 ///
 /// A fetch failure is recorded in `state` (see [`StyleState::take_failures`])
 /// and leaves that sheet out; it never fails the fetch. Sheets are fetched one
-/// at a time in document order.
+/// at a time in document order. `state` is only borrowed between awaits, so the
+/// load-time loader and the geometry host share it.
 pub(crate) async fn fetch_planned(
     plan: FetchPlan,
     base_url: &Url,
     ctx: &StyleContext<'_>,
-    state: &mut StyleState,
+    state: &RefCell<StyleState>,
 ) {
     let FetchPlan { env, candidates } = plan;
     for candidate in candidates {
         match candidate {
             Candidate::Inline { text, .. } => {
                 let direct = direct_imports(&text, base_url);
-                state
-                    .load_imports(ctx, &env, base_url, direct, env.fallback)
-                    .await;
+                load_imports(state, ctx, &env, base_url, direct, env.fallback).await;
             }
             Candidate::Link {
                 url,
                 disabled: false,
                 ..
             } => {
-                state.ensure(ctx, &env, &url, env.fallback).await;
-                if let Some(Some(sheet)) = state.sheets.get(&url) {
-                    let (direct, encoding) = (sheet.imports.clone(), sheet.encoding);
-                    state.load_imports(ctx, &env, &url, direct, encoding).await;
-                }
+                fetch_root(state, ctx, &env, &url).await;
             }
             Candidate::Link { .. } => {}
         }
+    }
+}
+
+/// Fetches the linked sheet at `url` and every import below it.
+pub(crate) async fn fetch_root(
+    state: &RefCell<StyleState>,
+    ctx: &StyleContext<'_>,
+    env: &Env,
+    url: &Url,
+) {
+    ensure(state, ctx, env, url, env.fallback).await;
+    let next = match state.borrow().sheets.get(url) {
+        Some(Some(sheet)) => Some((sheet.imports.clone(), sheet.encoding)),
+        _ => None,
+    };
+    if let Some((direct, encoding)) = next {
+        load_imports(state, ctx, env, url, direct, encoding).await;
     }
 }
 
@@ -601,12 +961,12 @@ pub(crate) async fn collect_style_sources(
     doc: &Document,
     base_url: &Url,
     ctx: &StyleContext<'_>,
-    state: &mut StyleState,
+    state: &RefCell<StyleState>,
 ) -> Vec<StyleSource> {
     if let Some(plan) = plan_fetches(doc, base_url, ctx) {
         fetch_planned(plan, base_url, ctx, state).await;
     }
-    state.cached_sources(doc, base_url)
+    state.borrow().cached_sources(doc, base_url)
 }
 
 fn utf8() -> &'static Encoding {
@@ -688,6 +1048,20 @@ async fn read_remote(
         finish_unread(&mut tracked, response).await;
         return Err(format!("the origin answered {status}"));
     }
+    if ctx.cors && !same_origin(&response.url, ctx.document_url) {
+        let allowed = response
+            .header("access-control-allow-origin")
+            .map(str::trim)
+            .is_some_and(|value| {
+                value == "*" || origin_of(ctx.document_url).is_some_and(|origin| origin == value)
+            });
+        if !allowed {
+            finish_unread(&mut tracked, response).await;
+            return Err(
+                "the CORS check failed: no matching Access-Control-Allow-Origin".to_owned(),
+            );
+        }
+    }
     let content_type = response.header("content-type");
     let nosniff = response
         .header("x-content-type-options")
@@ -699,9 +1073,11 @@ async fn read_remote(
             .next()
             .is_some_and(|essence| essence.trim().eq_ignore_ascii_case("text/css"))
     });
-    // Standards mode wants `text/css`; only quirks mode tolerates another type,
-    // and nosniff forbids the tolerance.
-    if !is_css && (nosniff || (content_type.is_some() && !env.quirks)) {
+    // Standards mode wants `text/css` when a type is given (Chrome 154 accepts
+    // a missing one); only quirks mode tolerates another type, and only for a
+    // sheet of the document's own origin; nosniff forbids the tolerance.
+    let tolerated = env.quirks && !nosniff && same_origin(&response.url, ctx.document_url);
+    if !is_css && (nosniff || (content_type.is_some() && !tolerated)) {
         finish_unread(&mut tracked, response).await;
         return Err("the response is not served as text/css".to_owned());
     }
@@ -751,6 +1127,9 @@ fn style_request(
         .timeout(remaining)
         .max_body_bytes(byte_limit);
     request.first_party = Site::from_url(ctx.document_url);
+    if ctx.cors {
+        request.mode = RequestMode::Cors;
+    }
     for (name, value) in ctx.extra_headers {
         request = request.header(name, value)?;
     }

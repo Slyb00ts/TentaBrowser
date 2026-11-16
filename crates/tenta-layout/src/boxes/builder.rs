@@ -26,6 +26,8 @@ use crate::box_tree::{
 };
 use crate::types::{DecorationPaint, MarkerKind, TableKind};
 
+mod table;
+
 /// How a finished box joins its parent's child list.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(super) enum Level {
@@ -546,7 +548,8 @@ impl<'a, 'cx> Builder<'a, 'cx> {
         } else {
             DecorationPaint::default()
         };
-        let (paint, paint_flags) = paint_style(&style, &ancestor);
+        let (mut paint, paint_flags) = paint_style(&style, &ancestor);
+        paint.generated = is_generated;
         let paint = Arc::new(paint);
         let decoration = paint.text_decoration;
         let enclosing = self
@@ -754,7 +757,24 @@ impl<'a, 'cx> Builder<'a, 'cx> {
     /// context, block children, or anonymous wrappers around inline runs.
     fn finish(&mut self, frame: Frame) -> BoxId {
         let container = frame.box_id;
-        let has_block = frame.entries.iter().any(|e| matches!(e, Entry::Block(_)));
+        if let BoxKind::Table(
+            kind @ (TableKind::Table
+            | TableKind::RowGroup
+            | TableKind::Row
+            | TableKind::Column
+            | TableKind::ColumnGroup),
+        ) = self.tree.get(container).kind
+        {
+            return self.finish_table_part(frame, kind);
+        }
+        // `float` does not apply to the children of a flex or grid container:
+        // they are items, so a float there is a block-level child even when
+        // nothing else is.
+        let items_float = self.is_flex_or_grid(container);
+        let has_block = frame.entries.iter().any(|e| {
+            matches!(e, Entry::Block(_))
+                || (items_float && matches!(e, Entry::OutOfFlow(_, Level::Float)))
+        });
         if !has_block {
             let items: Vec<InlineItem> = frame
                 .entries
@@ -786,6 +806,17 @@ impl<'a, 'cx> Builder<'a, 'cx> {
         for entry in frame.entries {
             match entry {
                 Entry::Inline(item) => run.push(item),
+                Entry::OutOfFlow(box_id, Level::Float) if items_float => {
+                    self.flush_run(
+                        &mut run,
+                        &mut children,
+                        &frame.style,
+                        &frame.decoration,
+                        container,
+                    );
+                    self.tree.get_mut(box_id).parent = container;
+                    children.push(box_id);
+                }
                 Entry::OutOfFlow(box_id, Level::Float) => run.push(InlineItem::Float { box_id }),
                 Entry::OutOfFlow(box_id, _) => run.push(InlineItem::AbsPos { box_id }),
                 Entry::Block(id) => {
@@ -807,6 +838,7 @@ impl<'a, 'cx> Builder<'a, 'cx> {
             &frame.decoration,
             container,
         );
+        self.wrap_stray_parts(&mut children, container, &frame.style, &frame.decoration);
         self.tree.get_mut(container).children = children;
         container
     }

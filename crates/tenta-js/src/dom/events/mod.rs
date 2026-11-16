@@ -143,6 +143,13 @@ pub trait ScriptHost {
         None
     }
 
+    /// The layout-backed geometry host of this world, when the page installed
+    /// one: what `getComputedStyle` and the element geometry members ask. A page
+    /// below the render tier has none.
+    fn geometry_host(&self) -> Option<std::rc::Rc<dyn crate::geometry::GeometryHost>> {
+        None
+    }
+
     /// Reads a callback-scoped, exact native typed-array view.
     fn array_buffer_view_info(
         &self,

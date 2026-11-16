@@ -7,10 +7,12 @@
 //! gets a ref that stays the same for one document.
 //!
 //! Hidden-ness has two sources. With a layout (the render tier), an element
-//! without a box is hidden: `display: none` itself or inherited. Without one,
-//! the `hidden` and `aria-hidden` attributes (applied by the extractor) and
-//! an inline `style` that sets `display: none` or `visibility: hidden` are
-//! all there is; stylesheets are not consulted.
+//! without a box is hidden (`display: none` itself or inherited), and the
+//! computed `visibility` and `opacity` of the layout apply, whatever sheet or
+//! attribute they come from. Without one, the `hidden` and `aria-hidden`
+//! attributes (applied by the extractor) and an inline `style` that sets
+//! `display: none` or `visibility: hidden` are all there is; stylesheets are
+//! not consulted.
 
 use std::collections::HashMap;
 
@@ -22,9 +24,21 @@ use tenta_dom::extract::SnapshotNode;
 
 use crate::session::RefTable;
 
-/// Border box of an element, `[x, y, width, height]`, indexed like
-/// `querySelectorAll('*')`.
-pub type Layout = Vec<Option<[f64; 4]>>;
+/// What layout says about showing one element that has a box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Look {
+    /// Border box, `[x, y, width, height]`.
+    pub rect: [f64; 4],
+    /// The computed `visibility` is `hidden` or `collapse`. It is inherited, so
+    /// it already accounts for the ancestors and for a child turning it back on.
+    pub visibility_hidden: bool,
+    /// The computed `opacity` is 0.
+    pub transparent: bool,
+}
+
+/// The look of every element, indexed like `querySelectorAll('*')`; `None` for
+/// an element without a box.
+pub type Layout = Vec<Option<Look>>;
 
 pub struct Options {
     /// Elements and text lines emitted before the output is cut.
@@ -121,10 +135,10 @@ fn quote(text: &str, limit: usize) -> String {
     out
 }
 
-/// What an element's `style` attribute says about showing it. Stylesheets
-/// are not consulted: this engine has no computed-style API for hosts, so a
-/// rule such as `.x { visibility: hidden }` is invisible here, while
-/// `display: none` from any source is seen through the missing layout box.
+/// What an element's `style` attribute says about showing it. It is the whole
+/// answer only without a layout; with one, the computed `visibility` and
+/// `opacity` of [`Look`] replace it, and `display: none` from any source is seen
+/// through the missing layout box.
 #[derive(Clone, Copy, Default)]
 struct Inline {
     display_none: bool,
@@ -225,23 +239,24 @@ pub fn build(
             built.hidden += 1;
             continue;
         }
-        let (visible, geometry) = if is_text {
+        let (visible, look) = if is_text {
             (parent_visible, None)
         } else {
             match layout {
                 Some((layout, indexes)) => {
-                    let geometry = indexes.get(&node.node).and_then(|index| layout[*index]);
-                    (geometry.is_some(), geometry)
+                    let look = indexes.get(&node.node).and_then(|index| layout[*index]);
+                    (look.is_some(), look)
                 }
                 None => (true, None),
             }
         };
+        let geometry = look.map(|look| look.rect);
         // `visibility: hidden` hides the element's own content, and a child
-        // may turn it back on.
-        let invisible = if inline.visibility_visible {
-            false
-        } else {
-            inline.visibility_hidden || parent_invisible
+        // may turn it back on. A layout knows the computed value.
+        let invisible = match look {
+            Some(look) => look.visibility_hidden,
+            None if inline.visibility_visible => false,
+            None => inline.visibility_hidden || parent_invisible,
         };
         let mut role = node.role.clone();
         if role == "generic"
@@ -282,7 +297,7 @@ pub fn build(
                 node,
                 &role,
                 geometry,
-                inline.opacity_zero,
+                look.map_or(inline.opacity_zero, |look| look.transparent),
                 options,
                 &mut built,
             );

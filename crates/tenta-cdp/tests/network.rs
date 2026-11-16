@@ -368,19 +368,17 @@ async fn a_navigation_reports_its_redirect_chain_and_every_subresource() {
 }
 
 #[tokio::test]
-async fn stylesheets_are_requested_when_the_page_is_rendered() {
+async fn stylesheets_are_requested_while_the_document_loads() {
     let (fx, site, mut page) = start(standard_site()).await;
     let loader = page.navigate(&site.url("/doc")).await;
     let events = network_events(&mut page, &loader).await;
-    assert!(
-        of_kind(&events, "requestWillBeSent")
-            .iter()
-            .all(|event| event["type"] != "Stylesheet"),
-        "the engine fetches sheets when it lays the page out"
-    );
-    page.screenshot(json!({})).await;
-    let sent = page.event("Network.requestWillBeSent").await;
-    assert_eq!(sent["type"], "Stylesheet");
+    let requests = of_kind(&events, "requestWillBeSent");
+    let sheets: Vec<&Value> = requests
+        .into_iter()
+        .filter(|event| event["type"] == "Stylesheet")
+        .collect();
+    assert_eq!(sheets.len(), 1, "the sheet is fetched with the document");
+    let sent = sheets[0];
     assert_eq!(sent["request"]["url"], site.url("/s.css"));
     assert_eq!(sent["initiator"]["type"], "parser");
     assert_eq!(sent["loaderId"], loader.as_str());
@@ -389,6 +387,10 @@ async fn stylesheets_are_requested_when_the_page_is_rendered() {
         .result("Network.getResponseBody", json!({ "requestId": id }))
         .await;
     assert_eq!(body["body"], "body{margin:0}");
+    // The capture lays out with the sheet the load fetched.
+    assert_eq!(site.count("/s.css"), 1);
+    page.screenshot(json!({})).await;
+    assert_eq!(site.count("/s.css"), 1, "the capture fetched nothing");
     fx.stop().await;
 }
 

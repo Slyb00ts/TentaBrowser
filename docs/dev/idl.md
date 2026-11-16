@@ -1464,6 +1464,43 @@ touching them (`crates/tenta-js/src/bindings/host/mutation_observer.rs`):
   `Engine::checkpoint`. `ScriptHost::invoke_mutation_callback` has a refusing default so a
   backend without the microtask (QuickJS today) compiles and never delivers.
 
+### Geometry, computed style and document sheets (P3 `CSS1`)
+
+Four more host records answer from the page rather than from the arena
+(`crates/tenta-js/src/bindings/host/{geometry,computed_style,doc_sheets}.rs`):
+
+- `DOMRectReadOnly`/`DOMRect`/`DOMRectList` (`idl/dom/DOMRect.webidl`;
+  `HostRecord::{DomRect, DomRectList}`). The generator emits an inherited member's
+  accessor in both the base and the derived `Ops` trait, which makes every call
+  of it ambiguous, so `x`, `y`, `width`, `height` are declared once on
+  `DOMRectReadOnly` with setters and the record's `read_only` flag drops a write.
+  `DOMRect` is an empty derived interface. Static operations and `toJSON` cannot
+  be declared (no static installer; `object` return), so
+  `tenta_js::geometry::GEOMETRY_PRELUDE_SOURCE` defines `fromRect`, `toJSON` and
+  the `DOMRectList` iterator; a backend runs it from
+  `PageEngine::install_preludes` (V8 only).
+- `getComputedStyle` returns a `CSSStyleProperties` whose record is
+  `HostRecord::ComputedStyle` (a `NodeRef` and the pseudo string). The
+  declaration ops in `cssom.rs` branch on it first; every read asks the world's
+  `GeometryHost` through `ScriptHost::geometry_host()`, so a page below the render
+  tier, which installs none, reads `""` everywhere. The function itself is
+  hand-installed on the V8 global (`host.rs` `get_computed_style`), like `fetch`;
+  there is no `partial interface Window` in the model.
+- The element members (`getBoundingClientRect`, `client*`, `scroll*`, `offset*`,
+  `elementFromPoint`, ...) are ordinary generated members on `Element`,
+  `HTMLElement` and `Document` whose bodies call `HostObject::geo_*`, which read
+  the same `GeometryHost` and answer as a box-less element when there is none.
+- `StyleSheetList` is a stateless record: `length` and `item()` recompute the
+  owners (`<style>` and loaded `<link>`) from the document on every call, and
+  the `CSSStyleSheet` of an owner is cached in `SharedContext::doc_sheets` under
+  a fingerprint of its text. A link's text comes from
+  `tenta_js::stylesheets::StyleHost`, installed per navigation next to the
+  image and geometry hosts (`PageEngine::set_style_host`).
+
+`HTMLLinkElement` and `HTMLStyleElement` (`idl/dom/dom.webidl`) reflect their
+content attributes and carry `onload`/`onerror` handler attributes; the loader
+fires the events through the image-event entry (`settle_images`).
+
 ## Extended attributes
 
 | Attribute | Effect |

@@ -532,6 +532,16 @@ impl Interceptor for WptInterceptor {
     }
 }
 
+/// The tier ceiling of the driver's pages. A build with the render pipeline lets
+/// pages reach it, because layout-backed APIs (`getComputedStyle`,
+/// `getBoundingClientRect`, `offsetWidth`, `elementFromPoint`) answer from it and
+/// the tests of CSSOM and CSSOM View read them; a build without it stops at
+/// script, where those answer as a page with no layout does.
+#[cfg(feature = "render")]
+const WPT_TIER: Tier = Tier::Render;
+#[cfg(not(feature = "render"))]
+const WPT_TIER: Tier = Tier::Js;
+
 /// How many workers a plan asks for: one per job, and never fewer than one,
 /// because `run.py` can be handed `--jobs 0`.
 fn worker_count(plan: &Plan) -> usize {
@@ -548,7 +558,7 @@ pub async fn run(plan: Plan) -> Result<Results, Error> {
         .js(plan.backend.engine())
         .io_threads(workers)
         .page_threads(workers)
-        .max_tier(Tier::Js)
+        .max_tier(WPT_TIER)
         .build()?;
 
     let plan = Arc::new(plan);

@@ -180,7 +180,8 @@ impl Builder<'_, '_> {
             None => (kind == MarkerKind::Text).then(|| self.marker_text(item_style)),
         };
         let style = marker_style.unwrap_or_else(|| self.anon.derive(item_style, false));
-        let (paint, paint_flags) = paint_style(&style, &DecorationPaint::default());
+        let (mut paint, paint_flags) = paint_style(&style, &DecorationPaint::default());
+        paint.generated = true;
         let mut flags = BoxFlags::GENERATED | paint_flags;
         if inside {
             flags |= BoxFlags::INLINE_LEVEL;

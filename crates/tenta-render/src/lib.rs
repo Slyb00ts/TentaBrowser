@@ -8,6 +8,7 @@
 mod geometry;
 mod images;
 mod screenshot;
+mod script_geometry;
 mod session;
 mod viewport;
 
@@ -19,6 +20,7 @@ pub use images::{
 pub use screenshot::{
     Capture, ImageFormat, RenderError, Screenshot, ScreenshotOptions, StageTimes,
 };
+pub use script_geometry::{ElementMetrics, PseudoArgument, css_number, parse_pseudo};
 pub use session::{RenderSession, WorkCounters};
 pub use tenta_layout::ImageKey;
 pub use tenta_paint::{DecodeControl, DecodeError, RasterStats};

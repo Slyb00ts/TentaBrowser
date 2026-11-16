@@ -1315,3 +1315,21 @@ fn lang_picks_the_regional_han_face_with_system_fonts() {
         "ja and zh-Hans must not share a face"
     );
 }
+
+#[test]
+fn a_no_break_space_is_never_a_break_opportunity() {
+    let mut fonts = FontSystem::new_embedded();
+    let sans = style(SANS, 16.0);
+    let ends = |fonts: &mut FontSystem, text: &str| -> Vec<u32> {
+        chunk_of(fonts, text, &sans)
+            .breaks
+            .iter()
+            .map(|b| b.end)
+            .collect()
+    };
+    assert!(ends(&mut fonts, "aa\u{a0}bb").is_empty());
+    assert!(ends(&mut fonts, "aa\u{a0}\u{a0}bb").is_empty());
+    // The break after a space sequence stays, even in front of one.
+    assert_eq!(ends(&mut fonts, "aa \u{a0}bb"), vec![3]);
+    assert_eq!(ends(&mut fonts, "aa\u{a0}bb cc"), vec![7]);
+}
