@@ -81,10 +81,18 @@ xtask/             repository tooling
 
 ## Build and test
 
-V8-enabled commands require a reviewed local native bundle. Follow
+On a new workstation run `./setup.sh` first (`--check` only reports): it
+installs the system build dependencies, the pinned Rust toolchain and the cargo
+tools, and builds the native V8 bundle when the cache has none.
+
+V8-enabled commands require a pinned local native bundle. Follow
 [`docs/dev/v8-artifacts.md`](docs/dev/v8-artifacts.md), install the verified bundle
-in a durable cache, and prefix the Cargo commands below with
-`TENTA_V8_ARTIFACT_DIR="$artifact_cache"` when they build V8. The local binding
+in a durable cache, and run
+`eval "$(python3 crates/tenta-v8/native/install_bundle.py env)"` in the shell
+before the Cargo commands below when they build V8: it sets
+`TENTA_V8_ARTIFACT_DIR` and, for a bundle built on this machine,
+`TENTA_V8_LOCAL_PIN`. `crates/tenta-v8/artifact_pins.rs` holds reviewed bundles
+only; do not add a workstation build to it. The local binding
 refuses missing/mismatched artifacts and unsupported configurations; do not use
 an upstream prebuilt archive as a substitute. Run the documented Temporal lock
 validator after resolving dependencies.

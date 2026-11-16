@@ -6,6 +6,29 @@ why; this directory says how on a workstation.
 The [implementation ledger](implementation-status.md) tracks completed work,
 remaining roadmap packages and the evidence still needed for phase exit.
 
+## Workstation setup
+
+```bash
+./setup.sh            # system packages, Rust, cargo tools, V8 bundle
+./setup.sh --check    # report what is missing and what would run; change nothing
+```
+
+`setup.sh` covers macOS (Homebrew), Fedora, Debian/Ubuntu and Arch/CachyOS and
+their derivatives; elsewhere it lists the system packages to install by hand
+and goes on with the Rust part. It installs the C/C++ toolchain, cmake, clang
+with libclang, the fontconfig headers and a few fonts; `rustup` with the
+toolchain of `rust-toolchain.toml`; `cargo-nextest` and `cargo-deny`; and the
+native V8 bundle, which it builds from source when the cache has none
+([`v8-artifacts.md`](v8-artifacts.md)). `--all` adds Node.js and `cargo-about`,
+`--no-system` skips the packages that need root, `--no-v8` skips V8. It is safe
+to run again: each step checks first, and an interrupted V8 build continues.
+
+A shell that builds V8 selects the bundle first:
+
+```bash
+eval "$(python3 crates/tenta-v8/native/install_bundle.py env)"
+```
+
 ## Build and check
 
 ```bash
@@ -78,7 +101,7 @@ the engine's spans. Both go to stderr, so stdout stays exactly the output.
 | `size-report` | Builds `tentabrowser-cli` in release and prints binary sizes. |
 | `link-test` | Builds every rung of the `tests/linktest` feature ladder unstripped and fails if the binary contains more than one libcrypto (`docs/dev/size-baseline.md`). |
 | `hello-sizes` | Measures stripped size and idle RSS of every rung and writes `bench/baselines/hello-sizes.json`. |
-| `notices` | Regenerates `THIRD_PARTY_NOTICES.md` with `cargo about` from `about.toml` and `about.hbs` (needs `cargo install cargo-about`). |
+| `notices` | Regenerates `THIRD_PARTY_NOTICES.md` with `cargo about` from `about.toml` and `about.hbs` (needs `./setup.sh --all`, or `cargo install --locked cargo-about --features cli`). |
 | `idl-manifest` | Checks that `idl/MANIFEST.toml` matches the golden-site inventories and `idl/phase-rules.toml` (`python3 idl/gen_manifest.py --check`); regenerate with `python3 idl/gen_manifest.py`. |
 
 ## Benchmarks

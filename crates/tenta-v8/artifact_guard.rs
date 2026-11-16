@@ -1,5 +1,5 @@
 // Copyright 2026 TentaBrowser contributors. Apache-2.0.
-// This guard selects and verifies the reviewed native artifact for this build.
+// This guard selects and verifies the pinned native artifact for this build.
 use std::env;
 use std::fs;
 use std::io;
@@ -14,7 +14,9 @@ pub(crate) struct Configuration {
   pub crt_static: bool,
 }
 
-/// Reviewed, source-built output identities. An empty table intentionally fails.
+/// Source-built output identities. The tracked table holds the reviewed ones
+/// and an empty table intentionally fails; `local_pin` reads the one a
+/// workstation recorded for its own build.
 pub(crate) struct ArtifactPin {
   pub target: &'static str,
   pub features: &'static [&'static str],
@@ -26,6 +28,10 @@ pub(crate) struct ArtifactPin {
 }
 
 include!("artifact_pins.rs");
+
+/// The tracked manifest of the native source a workstation build comes from.
+/// A local pin carries its SHA-256, so it stops matching when the recipe moves.
+const SOURCE_MANIFEST: &str = "native/recipe/native30-delta.json";
 
 const FEATURES: &[(&str, &str)] = &[
   ("CARGO_FEATURE_SIMDUTF", "simdutf"),
@@ -59,7 +65,7 @@ fn configuration() -> Result<Configuration, String> {
     println!("cargo:rerun-if-env-changed={name}");
     if env::var_os(name).is_some() {
       return Err(format!(
-        "{name} is not accepted by tenta-v8; select a reviewed bundle with TENTA_V8_ARTIFACT_DIR"
+        "{name} is not accepted by tenta-v8; select a pinned bundle with TENTA_V8_ARTIFACT_DIR"
       ));
     }
   }
@@ -109,13 +115,128 @@ fn select_pin<'a>(
   match matches.as_slice() {
     [pin] => Ok(pin),
     [] => Err(format!(
-      "no reviewed source-built V8 bundle matches {configuration:?}; upstream archive fallback is disabled"
+      "no pinned source-built V8 bundle matches {configuration:?}; upstream archive fallback is disabled"
     )),
     _ => Err(
       "duplicate native artifact configuration in the reviewed pin table"
         .into(),
     ),
   }
+}
+
+fn quoted<'a>(key: &str, value: &'a str) -> Result<&'a str, String> {
+  value
+    .strip_prefix('"')
+    .and_then(|value| value.strip_suffix('"'))
+    .filter(|value| !value.contains(['"', '\\']))
+    .ok_or_else(|| format!("{key} is not a plain quoted string"))
+}
+
+fn boolean(key: &str, value: &str) -> Result<bool, String> {
+  match value {
+    "true" => Ok(true),
+    "false" => Ok(false),
+    _ => Err(format!("{key} is neither true nor false")),
+  }
+}
+
+/// Read the `key = value` lines `native/install_bundle.py` writes. Every
+/// field is required and nothing else is accepted, so a damaged or foreign
+/// file cannot select an artifact.
+fn parse_local_pin(
+  text: &str,
+  source_sha256: &str,
+) -> Result<ArtifactPin, String> {
+  let mut fields: Vec<(&str, &str)> = Vec::new();
+  for line in text.lines().map(str::trim) {
+    if line.is_empty() || line.starts_with('#') {
+      continue;
+    }
+    let (key, value) = line
+      .split_once(" = ")
+      .ok_or_else(|| format!("unreadable line: {line}"))?;
+    if fields.iter().any(|(seen, _)| *seen == key) {
+      return Err(format!("{key} is given twice"));
+    }
+    fields.push((key, value));
+  }
+  let mut take = |key: &'static str| {
+    let at = fields
+      .iter()
+      .position(|(seen, _)| *seen == key)
+      .ok_or_else(|| format!("{key} is missing"))?;
+    Ok::<_, String>((key, fields.swap_remove(at).1))
+  };
+  let (_, schema) = take("schema")?;
+  let (key, target) = take("target")?;
+  let target = quoted(key, target)?;
+  let (key, features) = take("features")?;
+  let features = quoted(key, features)?;
+  let (key, native_debug) = take("native_debug")?;
+  let native_debug = boolean(key, native_debug)?;
+  let (key, crt_static) = take("crt_static")?;
+  let crt_static = boolean(key, crt_static)?;
+  let (key, source) = take("source_sha256")?;
+  let source = quoted(key, source)?;
+  let (key, archive) = take("archive_sha256")?;
+  let archive = quoted(key, archive)?;
+  let (key, binding) = take("binding_sha256")?;
+  let binding = quoted(key, binding)?;
+  let (key, provenance) = take("provenance_sha256")?;
+  let provenance = quoted(key, provenance)?;
+  if let Some((key, _)) = fields.first() {
+    return Err(format!("unknown field {key}"));
+  }
+  if schema != "1" {
+    return Err(format!("unknown schema {schema}"));
+  }
+  if !source.eq_ignore_ascii_case(source_sha256) {
+    return Err(format!(
+      "it was written for another native source than {SOURCE_MANIFEST}; rebuild the bundle with ./setup.sh"
+    ));
+  }
+  // The pin lives until this build script exits, like the tracked table.
+  let keep = |value: &str| -> &'static str { value.to_string().leak() };
+  let features: Vec<&'static str> = features
+    .split(',')
+    .filter(|feature| !feature.is_empty())
+    .map(keep)
+    .collect();
+  Ok(ArtifactPin {
+    target: keep(target),
+    features: features.leak(),
+    native_debug,
+    crt_static,
+    archive_sha256: keep(archive),
+    binding_sha256: keep(binding),
+    provenance_sha256: keep(provenance),
+  })
+}
+
+/// The pin of a bundle built on this machine. It is read only when the build
+/// names it, so a build that does not set `TENTA_V8_LOCAL_PIN` accepts the
+/// reviewed table alone.
+fn local_pin() -> Result<Option<ArtifactPin>, String> {
+  println!("cargo:rerun-if-env-changed=TENTA_V8_LOCAL_PIN");
+  let Some(path) =
+    env::var_os("TENTA_V8_LOCAL_PIN").filter(|path| !path.is_empty())
+  else {
+    return Ok(None);
+  };
+  let path = PathBuf::from(path);
+  println!("cargo:rerun-if-changed={}", path.display());
+  let text = fs::read_to_string(&path).map_err(|e| {
+    format!("could not read the local pin {}: {e}", path.display())
+  })?;
+  let manifest = PathBuf::from(
+    env::var_os("CARGO_MANIFEST_DIR").ok_or("CARGO_MANIFEST_DIR is missing")?,
+  )
+  .join(SOURCE_MANIFEST);
+  println!("cargo:rerun-if-changed={}", manifest.display());
+  let source = super::sha256_hex_of_file(&manifest)?;
+  parse_local_pin(&text, &source)
+    .map(Some)
+    .map_err(|e| format!("local pin {}: {e}", path.display()))
 }
 
 fn checked_copy(
@@ -237,11 +358,17 @@ pub(crate) fn prepare() -> Result<PreparedArtifact, String> {
     println!("cargo:rerun-if-env-changed={name}");
   }
   let configuration = configuration()?;
-  let pin = select_pin(&configuration, ARTIFACT_PINS)?;
-  let directory = PathBuf::from(
-        env::var_os("TENTA_V8_ARTIFACT_DIR")
-            .ok_or("set TENTA_V8_ARTIFACT_DIR to the prepared, reviewed native artifact bundle")?,
-    );
+  let local = local_pin()?;
+  let pin = match &local {
+    Some(pin) => select_pin(&configuration, std::slice::from_ref(pin))
+      .map_err(|_| {
+        format!("the local pin does not describe this build: {configuration:?}")
+      })?,
+    None => select_pin(&configuration, ARTIFACT_PINS)?,
+  };
+  let directory = PathBuf::from(env::var_os("TENTA_V8_ARTIFACT_DIR").ok_or(
+    "set TENTA_V8_ARTIFACT_DIR to the prepared, pinned native artifact bundle",
+  )?);
   let out = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is missing")?);
   let archive_name = if configuration.target.contains("windows") {
     "rusty_v8.lib"
@@ -316,6 +443,62 @@ mod tests {
     ] {
       assert!(select_pin(&mismatched, &pins).is_err(), "{mismatched:?}");
     }
+  }
+
+  const LOCAL_PIN: &str = "\
+# Written by native/install_bundle.py.
+schema = 1
+target = \"aarch64-apple-darwin\"
+features = \"use_custom_libcxx\"
+native_debug = false
+crt_static = false
+source_sha256 = \"5555\"
+archive_sha256 = \"1111\"
+binding_sha256 = \"2222\"
+provenance_sha256 = \"3333\"
+";
+
+  #[test]
+  fn a_local_pin_selects_only_the_configuration_it_records() {
+    let pin = parse_local_pin(LOCAL_PIN, "5555").unwrap();
+    assert_eq!(pin.archive_sha256, "1111");
+    assert_eq!(pin.binding_sha256, "2222");
+    assert_eq!(pin.provenance_sha256, "3333");
+    let wanted = configuration();
+    let pins = [pin];
+    assert!(select_pin(&wanted, &pins).is_ok());
+    let mut other_target = wanted.clone();
+    other_target.target = "x86_64-unknown-linux-gnu".into();
+    let mut debug = wanted;
+    debug.native_debug = true;
+    for mismatched in [other_target, debug] {
+      assert!(select_pin(&mismatched, &pins).is_err(), "{mismatched:?}");
+    }
+    let bare = LOCAL_PIN.replace("\"use_custom_libcxx\"", "\"\"");
+    assert!(parse_local_pin(&bare, "5555").unwrap().features.is_empty());
+  }
+
+  #[test]
+  fn a_local_pin_for_another_source_or_with_other_fields_is_rejected() {
+    assert!(parse_local_pin(LOCAL_PIN, "6666").is_err());
+    for (from, to) in [
+      ("schema = 1", "schema = 2"),
+      ("crt_static = false\n", ""),
+      ("crt_static = false", "crt_static = no"),
+      (
+        "crt_static = false",
+        "crt_static = false\ncrt_static = false",
+      ),
+      ("crt_static = false", "crt_static = false\nreviewed = true"),
+      ("archive_sha256 = \"1111\"", "archive_sha256 = 1111"),
+      ("archive_sha256 = \"1111\"", "archive_sha256=\"1111\""),
+      ("# Written", "Written"),
+    ] {
+      let changed = LOCAL_PIN.replace(from, to);
+      assert_ne!(changed, LOCAL_PIN);
+      assert!(parse_local_pin(&changed, "5555").is_err(), "{to}");
+    }
+    assert!(parse_local_pin("", "5555").is_err());
   }
 
   #[test]

@@ -42,10 +42,100 @@ CI preflight; an exact direct temporal_capi pin alone does not constrain all
 implementation/runtime dependencies.
 
 Only `aarch64-apple-darwin` with default `use_custom_libcxx`, native release mode,
-no pointer compression, no sandbox and no V8 checks is pinned. Other targets,
-feature combinations, native debug and sanitizer settings deliberately fail.
-The snapshot and generated binding are tied to this configuration. The host
-result does not establish Linux, Windows, Android or iOS support.
+no pointer compression, no sandbox and no V8 checks has a reviewed pin in
+`artifact_pins.rs`. A workstation can build the same configuration for its own
+target and record it in a local pin (next section), which a build accepts only
+when `TENTA_V8_LOCAL_PIN` names it. `x86_64-unknown-linux-gnu` was built that
+way: on Fedora 43 (2026-11-16) its source build passed the same 30 native tests
+and the binding-package route passed 58/58 (30 native and 28 build/guard
+controls). It has no reviewed toolchain provenance. A target with neither pin,
+other feature combinations, native debug and sanitizer settings deliberately
+fail. The snapshot and generated binding are tied to the configuration. Neither
+result establishes Windows, Android or iOS support.
+
+## Build a bundle on a workstation
+
+`./setup.sh` (repository root) does this when the cache has no bundle for the
+host target; `--no-v8` skips it. The steps, which can also be run by hand:
+
+```sh
+build="${XDG_CACHE_HOME:-$HOME/.cache}/tentabrowser/v8/build"
+python3 crates/tenta-v8/native/recipe/bootstrap_source.py --downloads "$build/downloads" --destination "$build/source/v8-152.2.0-native30"
+cd "$build/source/v8-152.2.0-native30"
+python3 tools/clang/scripts/update.py --output-dir "$build/target/release/clang" && python3 tools/rust_toolchain.py
+env V8_FROM_SOURCE=1 LIBCLANG_PATH="$PWD/third_party/rust-toolchain/lib" RUSTY_V8_BINDGEN_RESOURCE_DIR="$("$build/target/release/clang/bin/clang" -print-resource-dir)" SOURCE_DATE_EPOCH=1790121600 GN_ARGS="symbol_level=0 treat_warnings_as_errors=false use_glib=false" CARGO_TARGET_DIR="$build/target" cargo +1.98.0 nextest run --release --locked --test web_idl_legacy --test web_idl_order --test ordinary_object_brand --test termination_now --no-fail-fast
+python3 "$repository/crates/tenta-v8/native/install_bundle.py" install --target "$target" --source "$build/source/v8-152.2.0-native30" --release "$build/target/release" --native-tests "passed: ..." --pin
+```
+
+`bootstrap_source.py` downloads the crate archive and the 46 supplemental
+inputs and reconstructs the native30 tree. Gitiles regenerates its tar.gz
+archives on request, so a fresh download does not have the compressed bytes
+the lock records. Each archive is therefore verified by the Git tree id in the
+lock, computed over its members, and the ICU data file by its SHA-256. The
+package checksum, both patch checksums and the before/after hash of every
+changed file are checked exactly as the offline recipe below checks them.
+
+The upstream build script then downloads the Clang, GN, Ninja, Rust and (on
+Linux) sysroot packages that the source tree's own scripts pin, compiles V8
+and generates the binding with bindgen. Bindgen parses V8's libc++ headers and
+needs libclang 21.1 or newer, which most distributions do not ship. On Linux
+`setup.sh` therefore fetches the Clang and Rust packages before Cargo starts
+and points bindgen at the libclang inside Chromium's Rust toolchain
+(`third_party/rust-toolchain/lib`, the build of the same LLVM revision as the
+compiler) with `RUSTY_V8_BINDGEN_RESOURCE_DIR` set to that Clang's resource
+directory. On macOS it uses Homebrew's `llvm`, as the accepted run did. An
+exported `LIBCLANG_PATH` overrides both; `clang` must then be in the sibling
+`bin` directory. The GN arguments are the accepted macOS ones;
+`treat_warnings_as_errors=false` is part of them, and Chromium's Clang rejects
+two enum conversions in the patched `keys.cc` without it. Linux adds
+`use_glib=false`: GN otherwise asks the host's pkg-config for glib, which V8
+as a library does not use. The command above is the Linux one; on macOS drop
+the `update.py`/`rust_toolchain.py` line, `RUSTY_V8_BINDGEN_RESOURCE_DIR` and
+`use_glib=false`, and set `LIBCLANG_PATH="$(brew --prefix llvm)/lib"`.
+
+`install_bundle.py install` copies `librusty_v8.a`, `src_binding.rs` and a
+`provenance.json` describing the build into
+`.../tentabrowser/v8/152.2.0/<target>/default/<first 16 hex of the archive hash>`
+and, with `--pin`, writes the local pin `local-pin.toml` beside that directory.
+It refuses a tree that is not the one `recipe/native30-delta.json` describes,
+never replaces an installed archive or binding with other bytes, and replaces
+the description of an archive it reproduced only with `--replace-provenance`
+(`./setup.sh --rebuild-v8`). A build that reproduces the reviewed archive
+leaves that bundle as it is and writes no local pin.
+
+A local pin is the machine's own record of what it built: the target and
+configuration, the three hashes, and the SHA-256 of `recipe/native30-delta.json`,
+so it stops matching when the source recipe changes. It is not in the
+repository, and `artifact_pins.rs` stays the table of reviewed bundles. The
+guard reads a local pin only when `TENTA_V8_LOCAL_PIN` names the file; it then
+checks the same three hashes against it, on the copy it links, as it does for a
+reviewed pin. A build without that variable accepts reviewed bundles alone,
+which is what CI and release builds get.
+
+```sh
+eval "$(python3 crates/tenta-v8/native/install_bundle.py env)"
+```
+
+sets `TENTA_V8_ARTIFACT_DIR` to the installed directory a build accepts and
+`TENTA_V8_LOCAL_PIN` to its local pin, or to nothing when the directory is a
+reviewed bundle, which goes first. `install_bundle.py find` prints the
+directory alone. Both take `--target`; the default is the host.
+
+A local pin records a workstation build. It is not the reviewed acceptance run
+of the macOS bundle: the toolchain packages are whatever the pinned source
+scripts fetch, and no provenance of them is kept beyond the Clang and rustc
+version lines.
+
+The archive is reproducible on one machine and not across machines. A second
+full build in the same directory on Fedora 43 gave the same archive, byte for
+byte. The same source built on Fedora 43, Arch and Ubuntu 24.04 (2026-11-16,
+each passing the 30 native tests) gave one binding and three archives that
+differ in size by a few kilobytes. The x86_64 build uses no sysroot, so it
+compiles against the host's C library headers, and the build directory differed
+too; which of the two accounts for the difference was not established. That is
+why each machine keeps its own pin instead of sharing one through the tracked
+table. A bundle can still be moved: copy the bundle directory and
+`local-pin.toml` to the same place in the other machine's cache.
 
 ## Reconstruct native source outside the repository
 

@@ -42,6 +42,7 @@ plan. Agents and contributors start with `AGENTS.md`.
 ## The CLI
 
 ```bash
+./setup.sh                                  # once per machine: packages, Rust, cargo tools, V8
 cargo build --release -p tentabrowser-cli   # target/release/tentabrowser
 ```
 
