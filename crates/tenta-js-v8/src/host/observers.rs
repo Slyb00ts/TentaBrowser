@@ -47,7 +47,7 @@ const PENDING: &str = "tenta:Observer#pending";
 /// Whether a delivery task is queued.
 const SCHEDULED: &str = "tenta:Observer#scheduled";
 
-fn key<'s>(scope: &mut v8::PinScope<'s, '_>, name: &str) -> v8::Local<'s, v8::String> {
+pub(super) fn key<'s>(scope: &mut v8::PinScope<'s, '_>, name: &str) -> v8::Local<'s, v8::String> {
     v8::String::new(scope, name).expect("a member name fits V8")
 }
 
@@ -56,7 +56,7 @@ fn private<'s>(scope: &mut v8::PinScope<'s, '_>, name: &str) -> v8::Local<'s, v8
     v8::Private::for_api(scope, Some(name))
 }
 
-fn get<'s>(
+pub(super) fn get<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<v8::Object>,
     name: &str,
@@ -65,7 +65,7 @@ fn get<'s>(
     object.get(scope, name.into())
 }
 
-fn set(
+pub(super) fn set(
     scope: &mut v8::PinScope,
     object: v8::Local<v8::Object>,
     name: &str,
@@ -75,7 +75,7 @@ fn set(
     object.set(scope, name.into(), value);
 }
 
-fn get_private<'s>(
+pub(super) fn get_private<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<v8::Object>,
     name: &str,
@@ -86,7 +86,7 @@ fn get_private<'s>(
         .filter(|value| !value.is_undefined())
 }
 
-fn set_private(
+pub(super) fn set_private(
     scope: &mut v8::PinScope,
     object: v8::Local<v8::Object>,
     name: &str,

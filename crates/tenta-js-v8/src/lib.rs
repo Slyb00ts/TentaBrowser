@@ -638,6 +638,7 @@ impl Engine {
             self.host.clone(),
         ));
         *dom.ctx.script.borrow_mut() = Some(script);
+        self.host.custom_elements.set_context(&dom.ctx);
         let context = Rc::downgrade(&dom.ctx);
         *self.host.mutation_notify.borrow_mut() = Some(Rc::new(move || {
             if let Some(context) = context.upgrade() {
@@ -1662,6 +1663,34 @@ impl Engine {
         }
     }
 
+    /// Whether the page document holds lifecycle records its custom element
+    /// definitions have not acted on: elements the parser created or changed
+    /// since script was last entered.
+    fn custom_elements_pending(&self) -> bool {
+        self.dom.as_ref().is_some_and(|dom| {
+            dom.ctx.documents.custom_elements_used()
+                && (self.host.custom_elements.has_pending_upgrades()
+                    || dom
+                        .ctx
+                        .doc
+                        .try_borrow()
+                        .is_ok_and(|doc| doc.has_lifecycle_records()))
+        })
+    }
+
+    /// Runs the custom element reactions owed for what the parser did since
+    /// script was last entered, at an entry that is about to run script.
+    fn flush_custom_elements(&mut self) {
+        if !self.custom_elements_pending() {
+            return;
+        }
+        v8::scope!(let handle_scope, &mut self.isolate);
+        let context = v8::Local::new(handle_scope, &self.context);
+        let mut context_scope = v8::ContextScope::new(handle_scope, context);
+        v8::scope!(let scope, &mut context_scope);
+        host::custom_elements::flush(scope);
+    }
+
     /// Runs the closed wrapper graph transaction at an outer task safe point.
     /// Its temporary handle scopes close before GC and before restored roots
     /// are published. The caller has already entered this isolate and holds no
@@ -1789,6 +1818,7 @@ impl Engine {
             (cancel_tx, join)
         });
 
+        let custom_elements_pending = self.custom_elements_pending();
         // Mark a script activation so a DOM event dispatched from within this
         // run does not run a microtask checkpoint between listeners.
         self.host.enter_script();
@@ -1800,6 +1830,12 @@ impl Engine {
             // friends see `HandleScope<Context>`.
             v8::scope!(let scope, &mut context_scope);
             v8::tc_scope!(let tc, scope);
+            // Elements the parser created since script was last entered are
+            // upgraded before this script can look at them, under the same
+            // deadline as the script.
+            if custom_elements_pending {
+                host::custom_elements::flush(tc);
+            }
             let outcome = body(tc);
             (outcome, tc.has_terminated())
         };
@@ -2299,6 +2335,7 @@ impl Engine {
         // Runs page script, so it starts with nothing pending, like every other
         // way in.
         self.discard_stray_termination();
+        self.flush_custom_elements();
         let Some(dom) = &self.dom else {
             return;
         };
@@ -2613,6 +2650,7 @@ impl Engine {
             return CallOutcome::Terminated;
         }
         self.discard_stray_termination();
+        self.flush_custom_elements();
         // A timer or animation-frame callback is a script activation too: an
         // event it dispatches must not checkpoint microtasks between listeners.
         self.host.enter_script();
@@ -2704,6 +2742,7 @@ impl Drop for Engine {
         self.host.inspector.clear();
         // The module map's records and the resolvers of imports in flight.
         self.host.modules.clear();
+        self.host.custom_elements.clear();
         clear_v8_callback_admission(&mut self.isolate);
 
         // Drain the wrapper world while the isolate is still alive: this

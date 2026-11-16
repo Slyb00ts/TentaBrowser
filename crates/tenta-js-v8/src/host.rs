@@ -106,6 +106,7 @@ guarded_callback!(guarded_atob => atob);
 guarded_callback!(guarded_java_enabled => java_enabled);
 
 // After `guarded_callback!`, which the module uses.
+pub(crate) mod custom_elements;
 pub(crate) mod history;
 mod observers;
 mod window_extras;
@@ -241,6 +242,8 @@ pub struct HostState {
     pub(crate) inspector: crate::inspector::InspectorState,
     /// The realm's module map and the dynamic imports in flight.
     pub(crate) modules: crate::modules::ModuleState,
+    /// The custom element registry's root and the upgrades in progress.
+    pub(crate) custom_elements: custom_elements::State,
 }
 
 impl HostState {
@@ -271,6 +274,7 @@ impl HostState {
             mutation_notify: RefCell::new(None),
             inspector: crate::inspector::InspectorState::new(),
             modules: crate::modules::ModuleState::default(),
+            custom_elements: custom_elements::State::new(),
         })
     }
 
@@ -435,6 +439,7 @@ pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>, time_o
     history::install(scope, global);
     window_extras::install(scope, global);
     observers::install(scope, global);
+    custom_elements::install(scope, global);
     window_misc::install(scope, global, time_origin_ms);
 }
 

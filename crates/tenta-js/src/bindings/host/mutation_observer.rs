@@ -119,6 +119,18 @@ impl DocumentSet {
     pub fn mutation_observers_used(&self) -> bool {
         self.observers_used.get()
     }
+
+    /// Whether a custom element was ever defined in this world. Until one
+    /// is, the page document records no lifecycle and the backend need not
+    /// look for records after a binding call.
+    pub fn custom_elements_used(&self) -> bool {
+        self.custom_elements_used.get()
+    }
+
+    /// Records the first custom element definition.
+    pub fn set_custom_elements_used(&self) {
+        self.custom_elements_used.set(true);
+    }
 }
 
 /// Whether the world owes a mutation-observer microtask that has not been

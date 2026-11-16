@@ -6,7 +6,7 @@
 //! dirty bits, id and class indexes, mutation generation, detached-root set
 //! and observer records can never drift apart.
 
-use tenta_core::{Atom, NodeId};
+use tenta_core::{Atom, NodeId, NodeRef};
 use tenta_html::{Attribute, QualName};
 
 /// A validated replacement source for an internal replace-all operation.
@@ -109,6 +109,32 @@ pub enum MutationRecord {
     },
     /// The data of a character-data node changed.
     CharacterData { node: NodeId, old_value: String },
+}
+
+/// What happened to an element that a custom element definition may have to
+/// react to (HTML "custom element reactions"), in the order it happened.
+///
+/// The log is off until [`crate::Document::enable_lifecycle_log`] turns it on,
+/// which a wrapper world does when its page defines the first custom element,
+/// so a document without custom elements records nothing. Records name nodes
+/// by [`NodeRef`], so a consumer can tell a node that was freed and whose slot
+/// was reused from the one the record was made for.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum LifecycleRecord {
+    /// An HTML element whose local name contains a hyphen was created.
+    Created(NodeRef),
+    /// An element became connected, and its subtree with it.
+    Connected(NodeRef),
+    /// An element stopped being connected, and its subtree with it.
+    Disconnected(NodeRef),
+    /// An attribute of an element whose local name contains a hyphen changed.
+    /// `old_value` is `None` when the attribute did not exist before.
+    Attribute {
+        element: NodeRef,
+        name: Atom,
+        namespace: Atom,
+        old_value: Option<String>,
+    },
 }
 
 /// Consumer of the mutation record log. Real `MutationObserver` semantics

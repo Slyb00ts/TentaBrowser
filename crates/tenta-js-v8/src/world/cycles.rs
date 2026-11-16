@@ -127,6 +127,18 @@ impl tenta_js::bindings::V8CallbackAdmission for Admission {
         if self.context.documents.mutation_observers_used() {
             crate::observer::queue_notification(scope, &self.context);
         }
+        if self.context.documents.custom_elements_used() {
+            crate::host::custom_elements::after_callback(scope, &self.context);
+        }
+    }
+
+    fn html_constructor<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        args: &v8::FunctionCallbackArguments<'s>,
+        rv: &mut v8::ReturnValue<v8::Value>,
+    ) -> bool {
+        crate::host::custom_elements::html_constructor(scope, args, rv)
     }
 
     fn before_constructor_host(

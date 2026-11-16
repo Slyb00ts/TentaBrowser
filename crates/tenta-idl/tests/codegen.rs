@@ -1106,3 +1106,35 @@ fn buffer_reference_annotation_refuses_unsupported_shapes() {
             .contains("TentaBufferReferences")
     );
 }
+
+/// An interface declared `[HTMLConstructor]` hands construction to the world
+/// on V8; every other interface without a constructor throws, and so does the
+/// QuickJS glue, which has no custom elements.
+#[test]
+fn an_html_constructor_interface_defers_to_the_world_on_v8() {
+    let dom = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../idl/dom");
+    let model = tenta_idl::parse_directory(&dom).expect("the DOM interfaces parse");
+
+    let element = generated_file(&model, "html_element_v8.rs").contents;
+    assert!(
+        element.contains("v8_html_constructor(scope, args, rv);"),
+        "`HTMLElement` does not call the HTML element constructor"
+    );
+    assert!(
+        !element.contains("Illegal constructor"),
+        "`HTMLElement` still throws on construction"
+    );
+
+    let div = generated_file(&model, "html_div_element_v8.rs").contents;
+    assert!(
+        div.contains("throw_type_error(scope, \"Illegal constructor\");"),
+        "an interface without the attribute no longer throws"
+    );
+    assert!(!div.contains("v8_html_constructor"));
+
+    let quickjs = generated_file(&model, "html_element_qjs.rs").contents;
+    assert!(
+        quickjs.contains("Illegal constructor"),
+        "the QuickJS `HTMLElement` no longer throws on construction"
+    );
+}

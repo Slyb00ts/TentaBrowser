@@ -19,7 +19,8 @@ use crate::error::{
 };
 use crate::interner::{DocInterner, LocalName};
 use crate::mutation::{
-    Mutation, MutationObserverSink, MutationRecord, NoopObserverSink, ReplaceAllWith,
+    LifecycleRecord, Mutation, MutationObserverSink, MutationRecord, NoopObserverSink,
+    ReplaceAllWith,
 };
 use crate::selectors::SelectorCache;
 use crate::text::{TextChunk, TextRope};
@@ -235,6 +236,9 @@ pub struct Document {
     structure_generation: u64,
     mutations_since_sweep: u64,
     observer: Box<dyn MutationObserverSink>,
+    /// The custom element lifecycle log, or `None` while no wrapper world has
+    /// asked for one; see [`LifecycleRecord`].
+    lifecycle: Option<Vec<LifecycleRecord>>,
     /// Stable native registration nodes for every independent wrapper world
     /// using this Document. Native-only Documents need no header. Once
     /// attached, it retains retired pin ledgers until mutable maintenance.
@@ -309,6 +313,7 @@ impl Document {
             structure_generation: 1,
             mutations_since_sweep: 0,
             observer: Box::new(NoopObserverSink),
+            lifecycle: None,
             observer_registry: None,
             document_id,
             live_ranges: ranges::LiveRanges::default(),
@@ -640,6 +645,54 @@ impl Document {
         sink: Box<dyn MutationObserverSink>,
     ) -> Box<dyn MutationObserverSink> {
         std::mem::replace(&mut self.observer, sink)
+    }
+
+    /// Starts recording [`LifecycleRecord`]s. Idempotent; the log stays on for
+    /// the rest of the document's life.
+    pub fn enable_lifecycle_log(&mut self) {
+        self.lifecycle.get_or_insert_with(Vec::new);
+    }
+
+    /// Whether [`Self::take_lifecycle_log`] would return any record.
+    #[inline]
+    pub fn has_lifecycle_records(&self) -> bool {
+        self.lifecycle.as_ref().is_some_and(|log| !log.is_empty())
+    }
+
+    /// Takes the lifecycle records made since the last call, oldest first.
+    pub fn take_lifecycle_log(&mut self) -> Vec<LifecycleRecord> {
+        self.lifecycle
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    /// Whether `element` is one whose attribute changes the lifecycle log
+    /// records: the log is on and the local name contains a hyphen, which
+    /// every valid custom element name does.
+    fn logs_attributes_of(&self, element: NodeId) -> bool {
+        self.lifecycle.is_some()
+            && self
+                .tag(element)
+                .is_some_and(|tag| tag.as_str().contains('-'))
+    }
+
+    fn log_attribute(
+        &mut self,
+        element: NodeId,
+        name: Atom,
+        namespace: Atom,
+        old_value: Option<String>,
+    ) {
+        let element = self.node_ref(element);
+        if let Some(log) = &mut self.lifecycle {
+            log.push(LifecycleRecord::Attribute {
+                element,
+                name,
+                namespace,
+                old_value,
+            });
+        }
     }
 
     /// Installs the parse stop predicate used by
@@ -1632,6 +1685,15 @@ impl Document {
             self.arena.nodes.flags[slot].insert(NodeFlags::MATHML_INTEGRATION_POINT);
         }
         self.mark_detached_root(element);
+        if self.lifecycle.is_some()
+            && name.ns == atoms::NS_HTML
+            && name.local.as_str().contains('-')
+        {
+            let created = self.node_ref(element);
+            if let Some(log) = &mut self.lifecycle {
+                log.push(LifecycleRecord::Created(created));
+            }
+        }
         if flags.template {
             let contents = self.arena.alloc_container(NodeKind::Fragment);
             let data = self.arena.nodes.data[slot];
@@ -1983,6 +2045,26 @@ impl Document {
             }
         }
         node
+    }
+
+    /// Whether `id` sits in the contents of a `<template>`, at any depth:
+    /// the root of its parent chain, or of a host's above it, is a template's
+    /// contents fragment.
+    pub fn in_template_contents(&self, id: NodeId) -> bool {
+        let mut node = id;
+        for _ in 0..self.slots() {
+            let top = self.root_of(node);
+            match self.hosts.get(&top) {
+                Some(&host) if host != top => {
+                    if self.flags(host).contains(NodeFlags::TEMPLATE) {
+                        return true;
+                    }
+                    node = host;
+                }
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// Native-handle presence and the total published wrapper claims in a
@@ -2879,6 +2961,12 @@ impl Document {
                 self.first_connected_base = None;
             }
             self.set_connected(child, false);
+            if self.lifecycle.is_some() && self.kind(child) == NodeKind::Element {
+                let disconnected = self.node_ref(child);
+                if let Some(log) = &mut self.lifecycle {
+                    log.push(LifecycleRecord::Disconnected(disconnected));
+                }
+            }
         }
         self.mark_detached_root(child);
         self.bump_structure();
@@ -2915,6 +3003,12 @@ impl Document {
         self.bump_structure();
         if self.is_connected(parent) {
             self.set_connected(child, true);
+            if self.lifecycle.is_some() && self.kind(child) == NodeKind::Element {
+                let connected = self.node_ref(child);
+                if let Some(log) = &mut self.lifecycle {
+                    log.push(LifecycleRecord::Connected(connected));
+                }
+            }
         } else {
             self.invalidate_keep(child);
         }
@@ -3052,6 +3146,14 @@ impl Document {
                 self.reindex_classes(element, value);
             }
         }
+        if self.logs_attributes_of(element) {
+            self.log_attribute(
+                element,
+                stored_name.local,
+                stored_name.ns,
+                old_value.clone(),
+            );
+        }
         self.observer.record(MutationRecord::Attribute {
             element,
             name: stored_name.local,
@@ -3089,6 +3191,14 @@ impl Document {
             } else if stored_name.local == atoms::CLASS {
                 self.reindex_classes(element, "");
             }
+        }
+        if self.logs_attributes_of(element) {
+            self.log_attribute(
+                element,
+                stored_name.local,
+                stored_name.ns,
+                Some(old_value.clone()),
+            );
         }
         self.observer.record(MutationRecord::Attribute {
             element,
@@ -3170,6 +3280,9 @@ impl Document {
                 } else if name.local == atoms::CLASS {
                     self.reindex_classes(element, &attr.value);
                 }
+            }
+            if self.logs_attributes_of(element) {
+                self.log_attribute(element, name.local, name.ns, None);
             }
             self.observer.record(MutationRecord::Attribute {
                 element,

@@ -972,6 +972,37 @@ pub trait V8CallbackAdmission: 'static {
     /// callback's own effects are complete, so it may enter script but must not
     /// change what the callback returns.
     fn after_callback(&self, _scope: &mut v8::PinScope<'_, '_>) {}
+    /// Runs the constructor of an interface declared `[HTMLConstructor]`
+    /// (HTML's "HTML element constructor"): what it returns depends on the
+    /// world's custom element definitions, not on the interface. Returns
+    /// whether the world handled the call, by setting the return value or by
+    /// throwing; a world without custom elements leaves the default, and the
+    /// caller throws.
+    fn html_constructor<'s>(
+        &self,
+        _scope: &mut v8::PinScope<'s, '_>,
+        _args: &v8::FunctionCallbackArguments<'s>,
+        _rv: &mut v8::ReturnValue<v8::Value>,
+    ) -> bool {
+        false
+    }
+}
+
+/// The constructor body of an interface declared `[HTMLConstructor]`.
+#[cfg(feature = "v8")]
+pub fn v8_html_constructor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let admission = scope
+        .get_slot::<V8CallbackAdmissionSlot>()
+        .map(|slot| std::rc::Rc::clone(&slot.0));
+    let handled = admission
+        .is_some_and(|admission| admission.html_constructor(scope, &args, &mut rv));
+    if !handled {
+        throw_type_error(scope, "Illegal constructor");
+    }
 }
 
 #[cfg(feature = "v8")]

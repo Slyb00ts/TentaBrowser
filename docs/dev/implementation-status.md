@@ -77,6 +77,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | Module scripts and `import()` (MOD1) | Implemented on V8; focused, page and workspace checks passed; measured; not independently reviewed | `<script type="module">`, static imports, import maps, `import()`, `import.meta.url`, `nomodule`; see the section below. QuickJS runs the `nomodule` fallback |
 | `ResizeObserver`, `IntersectionObserver` (OB1) | Implemented on V8, built lazily; focused checks passed; not independently reviewed; records a model decision | Each target is reported once; everything counts as in view because nothing scrolls; see the section below |
 | Media, canvas and SVG interfaces (IF1) | Implemented on both engines (generated); focused checks passed; not independently reviewed | `HTMLMediaElement`/`Video`/`Audio`, `HTMLCanvasElement`, `SVGGraphicsElement`/`SVGSVGElement`/`SVGAElement`; no playback and no canvas context; see the section below |
+| `customElements` (CE1) | Implemented on V8, built lazily; focused checks passed; not independently reviewed | Autonomous custom elements: `define`/`get`/`getName`/`whenDefined`/`upgrade`, the HTML element constructor, upgrade and the connected, disconnected and attribute reactions; no customized built-ins, no shadow DOM yet; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
 
 QuickJS runtime implementation alone does not complete its timezone hook,
@@ -2350,6 +2351,77 @@ function` and `play is not a function`.
   interfaces (`SVGPathElement`, ...) and `SVGAElement.href`; the remaining
   per-tag HTML interfaces. Still named by live sites: `customElements`,
   `Request`, `Worker`.
+
+## CE1: custom elements (P2 package, V8)
+
+`customElements is not defined` was the most common uncaught error left on
+the 35-site sweep (7 sites), and it ends the bundle that raises it.
+
+- **What exists** (`crates/tenta-js-v8/src/host/custom_elements.rs`):
+  `customElements` and `CustomElementRegistry`, both lazy data properties of
+  the global, with `define()`, `get()`, `getName()`, `whenDefined()` and
+  `upgrade()`; the HTML element constructor, so `class X extends HTMLElement`
+  can call `super()` and `new X()` makes an element of the defined name;
+  upgrade of elements of a defined name; `connectedCallback()`,
+  `disconnectedCallback()` and `attributeChangedCallback()` with
+  `observedAttributes`. `define()` validates in HTML's order: the name
+  (`SyntaxError`), a name or constructor already used
+  (`NotSupportedError`), the prototype and the reaction members
+  (`TypeError`).
+- **How the document tells the engine** (`tenta_dom::LifecycleRecord`,
+  `Document::enable_lifecycle_log`). `Document::mutate` is the one mutation
+  path, so the log is written there: an HTML element with a hyphen in its
+  name was created; an element became connected or stopped being connected
+  (one record for the root of the subtree); an attribute of an element with
+  a hyphen in its name changed. The log is off until the first `define()`,
+  so a page without custom elements records nothing and pays one flag read
+  per binding call (`DocumentSet::custom_elements_used`).
+- **When reactions run.** `V8CallbackAdmission::after_callback` acts on the
+  records after every binding call, which is where HTML runs the reactions
+  of a `[CEReactions]` operation: before the script that made the call sees
+  its result. `createElement()`, cloning and fragment parsing therefore give
+  an upgraded element, and elements in `<template>` contents stay inert
+  until they are cloned out. `define()` only notes the elements it finds and
+  they are upgraded when its call returns: inside the call every wrapper
+  their reactions made would count against one binding call's limit of 4096
+  (700 elements appending ten children each failed that way before the
+  change, and a test keeps it). **One ordering difference:** elements the
+  parser creates are upgraded when script is next entered (a script, a
+  timer, `DOMContentLoaded`/`load`), not while the parser creates them, so a
+  constructor can see children HTML would not have parsed yet.
+- **`[HTMLConstructor]`** (`tenta-idl`, `docs/dev/idl.md`): the attribute
+  stands on the `HTMLElement` interface and makes the generated V8
+  constructor ask the world (`V8CallbackAdmission::html_constructor`) instead
+  of throwing. Every other interface without a constructor still throws
+  `Illegal constructor`, and so does QuickJS.
+- **State.** Definitions are script objects kept by the registry's private
+  properties; an element's wrapper holds its definition and whether it was
+  told it is connected. The host keeps one root on the registry, the pending
+  `whenDefined()` promises and the construction stack.
+- **Checks:** `tenta-dom::lifecycle` 2; `tenta-idl::codegen` 31 (one new);
+  `tenta-js-v8::dom_custom_elements` 14 (validation, reading the reactions,
+  upgrade order, creation paths, connection, attributes, `whenDefined`,
+  failed constructors, `<template>`, elements added outside script, state
+  across a collection, 700 elements each building a subtree, 6000 elements
+  in one insertion, child replacement); `tenta-browser::custom_elements_js`
+  2 over loopback (a page whose elements stand before and after the
+  defining script, and a guarded page on QuickJS, which has no registry).
+- **Measured against 03babbd** (release, Fedora 43 x86_64, 25 interleaved
+  pairs per set): `bench/dom_calls.py` (`S-dom-calls`) `has` p50 27.72 and
+  27.53 ns before, 28.47 and 28.16 ns now (+2.7%, +2.3%), `get` 82.39 and
+  82.62 ns before, 82.27 and 82.56 ns now; `bench/js_xhr.py` (`S-js-xhr`)
+  navigation p50 17.68 and 17.84 ms before, 17.40 and 17.57 ms now, RSS p50
+  30.3 to 30.4 MiB both. All below the 10% floor; the `has` difference has
+  the same sign in both sets and is the size one more flag read per call
+  would have (0.7 ns).
+- **Open:** shadow DOM (`attachShadow`, `ShadowRoot`, slots), which most
+  component libraries use from the constructor, so until it lands such a
+  constructor throws and its element stays not upgraded; customized
+  built-in elements (`extends`, `is=`), which `define()` refuses with
+  `NotSupportedError`; form-associated custom elements and
+  `ElementInternals`; `adoptedCallback()`; the `:defined` pseudo-class still
+  matches every element; elements inside shadow trees are not walked;
+  QuickJS has no registry.
 
 ## Implementation queue and dependencies
 

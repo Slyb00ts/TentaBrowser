@@ -344,6 +344,17 @@ caches the template for subclasses and calls `register_<snake>`. An interface
 with no `constructor` gets a callback that throws
 `TypeError: Illegal constructor`.
 
+One exception: an interface carrying `[HTMLConstructor]` gets a callback that
+calls `v8_html_constructor`, which asks the world
+(`V8CallbackAdmission::html_constructor`) what construction returns and throws
+`Illegal constructor` if the world has no answer. HTML writes the attribute on
+a `constructor()` member; here it stands on the interface, because there is no
+host constructor operation to generate: the result depends on the page's
+custom element definitions and on `new.target`, not on the interface.
+`HTMLElement` is the one interface that carries it, so `class X extends
+HTMLElement` can call `super()`. The QuickJS glue ignores the attribute and
+throws.
+
 Every API item is verified against <https://docs.rs/v8/152.2.0/v8/> and listed
 in the doc comment of the generated `install_*` function:
 

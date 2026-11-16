@@ -597,7 +597,11 @@ interface Range : AbstractRange {
 // Phase 3d: HTMLElement — the interface HTML-namespace element wrappers get.
 // `click()` is [Throws] so it takes the fallible (non-fast-API) path and may
 // reenter JS to dispatch a synthetic, untrusted `click` MouseEvent.
-[Exposed=Window]
+// `[HTMLConstructor]` stands on the interface here rather than on a
+// `constructor()` member as HTML writes it: the generated constructor hands
+// the call to the world's custom element machinery and there is no host
+// constructor operation to declare (`docs/dev/idl.md`).
+[Exposed=Window, HTMLConstructor]
 interface HTMLElement : Element {
   [Throws] undefined click();
 

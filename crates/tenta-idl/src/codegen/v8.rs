@@ -603,6 +603,19 @@ fn constructor_callback(interface: &Interface, bound: &str, out: &mut String) {
          // SAFETY: V8 invokes this registered slow FunctionTemplate callback.\n    \
          unsafe {{ v8_registered_slow_callback_boundary(scope, \"{callback}\", (), call) }};\n}}\n"
     );
+    if interface.constructors.is_empty() && interface.attrs.has("HTMLConstructor") {
+        let _ = write!(
+            out,
+            "\n/// `{name}` is declared `[HTMLConstructor]`: the world's custom element\n\
+             /// definitions decide what constructing it returns.\n\
+             fn body_construct_{snake}<'s, T: {bound} + 'static>(\n    \
+             scope: &mut v8::PinScope<'s, '_>,\n    \
+             args: v8::FunctionCallbackArguments<'s>,\n    \
+             rv: v8::ReturnValue<v8::Value>,\n\
+             ) {{\n    v8_html_constructor(scope, args, rv);\n}}\n"
+        );
+        return;
+    }
     if interface.constructors.is_empty() {
         let _ = write!(
             out,

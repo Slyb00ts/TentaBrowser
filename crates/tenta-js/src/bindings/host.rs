@@ -1462,6 +1462,9 @@ pub struct DocumentSet {
     /// Set when the first `MutationObserver` is constructed; until then no
     /// notify demand is ever delivered.
     observers_used: Cell<bool>,
+    /// Whether the page has defined a custom element, which is when the
+    /// page document starts keeping its lifecycle log.
+    custom_elements_used: Cell<bool>,
     /// The next observer creation serial and the count of observers that hold
     /// themselves alive by observing.
     observer_serial: Cell<u64>,
@@ -1901,6 +1904,7 @@ impl HostContext {
                 observer_agent: observer.agent,
                 observer_phase: Cell::new(observer.phase),
                 observers_used: Cell::new(false),
+                custom_elements_used: Cell::new(false),
                 observer_serial: Cell::new(0),
                 observing_observers: Cell::new(0),
                 native_memory: native_memory.clone(),
