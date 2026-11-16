@@ -2179,18 +2179,32 @@ pages (amazon.com and imdb.com on the sweep; any client that passes
   origins (shared and refused responses, preflight, credentials, XHR, modes,
   `no-cors`, abort, a request after an `await`); the fixture server gained `/api/cors`.
   Workspace 4774 passed twice in a row.
-- **An intermittent failure that is not explained.** Two `tenta-js-v8`
-  native-budget tests (`nested_event_constructors_refuse_before_publishing_native_records`,
+- **An intermittent failure, explained and fixed in the tests.** Two
+  `tenta-js-v8` native-budget tests
+  (`nested_event_constructors_refuse_before_publishing_native_records`,
   `converted_custom_event_detail_is_released_when_nested_constructors_spend_budget`)
-  failed three times on 2026-11-16, always under a full parallel run: in 2 of
-  7 workspace runs and 1 of 15 runs of five crates at `-j 64`. Where the
-  message was captured, 4095 event records were still alive after
-  `low_memory_gc()` and `reclaim_dead_hosts()`. They never failed alone
-  (1280 processes, also with the CPU starved) and HEAD abe95a2 passed the
-  same five-crate run 10 times out of 10, alternated with this tree, which
-  passed 10 out of 10 as well. That sample cannot tell a rare existing flake
-  from a regression of these packages, so it is open either way; the first
-  occurrence was in the first full run after CO1.
+  failed three times on 2026-11-16, always under a full parallel run (2 of 7
+  workspace runs, 1 of 15 runs of five crates at `-j 64`), with every event
+  record (4094 or 4095) still alive after `low_memory_gc()`. It is not a
+  regression of these packages and not an engine leak. Both tests keep their
+  events in a global array filled from a getter that loops 10000 times; V8
+  starts concurrent Maglev and TurboFan OSR jobs for that getter
+  (`--trace-opt` shows one still completing as the script ends), and
+  `LowMemoryNotification` flushes the compile queues without waiting for a
+  job that is running (`FreeCachesOnMemoryPressure` →
+  `AbortConcurrentOptimization(kDontBlock)`). Releasing the array with
+  `retainedEvents=undefined` therefore did not free it while such a job was
+  in flight. Evidence: with V8's worker threads created under `SCHED_IDLE`
+  and 48 busy loops on 32 cores, the engine code of abe95a2 (built at
+  0396517, which adds only the build tooling and lock updates) fails 46 and
+  42 times out of 150 on the same assertion, and a third test of the same
+  file without a hot loop fails 0 of 150; the same build with the array
+  emptied first (`retainedEvents.length=0`) fails 0 of 150 and 0 of 150.
+  That the holder is the compile job's handle to the array is inferred from
+  the trace and the V8 source, not observed directly; a
+  `--concurrent-recompilation-delay` run does not show it, because that
+  delay sits before the job builds its graph. The tests now empty the array
+  before dropping it.
 - **Open:** preflight cache; `Response.type` `cors`;
   `Origin: null` after a tainted redirect chain; `data:` and `blob:` URLs in
   `fetch()`; QuickJS has neither `signal` nor the provenance correction.

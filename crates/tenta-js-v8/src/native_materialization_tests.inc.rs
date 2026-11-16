@@ -97,8 +97,12 @@ fn nested_event_constructors_refuse_before_publishing_native_records() {
         before + created,
         "a refused constructor left an orphan native Event record"
     );
+    // Empty the array before dropping it: the getter above is hot enough for
+    // a concurrent optimizing job, which embeds the array as a constant and
+    // keeps it alive while it runs. A low-memory GC flushes compile queues
+    // without waiting for a running job, so the array itself can outlive it.
     engine
-        .evaluate("retainedEvents=undefined")
+        .evaluate("retainedEvents.length=0;retainedEvents=undefined")
         .expect("release the retained Event wrappers");
     engine.low_memory_gc();
     engine.reclaim_dead_hosts();
@@ -137,7 +141,11 @@ fn converted_custom_event_detail_is_released_when_nested_constructors_spend_budg
         values_before,
         "a rejected CustomEvent retained its converted detail",
     );
-    engine.evaluate("retainedEvents=undefined").unwrap();
+    // Emptied first for the reason given in
+    // `nested_event_constructors_refuse_before_publishing_native_records`.
+    engine
+        .evaluate("retainedEvents.length=0;retainedEvents=undefined")
+        .unwrap();
     engine.low_memory_gc();
     engine.reclaim_dead_hosts();
     assert_eq!(event_records(&engine), records_before);
