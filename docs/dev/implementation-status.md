@@ -1,6 +1,6 @@
 # Implementation status and completion ledger
 
-Updated: 2026-09-24. This is an execution ledger, not a replacement for
+Updated: 2026-11-16. This is an execution ledger, not a replacement for
 `docs/spec/16-roadmap.md` or its exit gates.
 
 The owner has requested continuous implementation through the whole P0–P8
@@ -63,6 +63,21 @@ are authorized, with prerequisite gates still tracked explicitly.
 | Fresh event WPT diagnostics | QuickJS bootstrap fixed; directory gates still fail | Original V8 directory run: 202 files, 234/486 recorded subtests passed. Fresh QuickJS directory run: 202 files, 227/449 recorded subtests passed, 80 OK harnesses, no unstarted files. After receiver/dispatch corrections, seven pinned files pass 39/39 subtests on V8 and 37/39 on QuickJS, with all harnesses OK. The remaining two focused QuickJS failures are Event calls without new. None of these results is a P2 conformance pass |
 | Active parser node ownership | Scoped native pins implemented and Sol/root source-reviewed; native checks and paired measurement complete | Tests-only baseline passed 6/10 with all four new ownership regressions failing; the pin implementation passed 31/31 SharedSink, lifetime and parse integration tests. Published parser handles survive unrelated detached-node sweeps, normal finish/drop releases pins, and unwind preserves the original failure. The measured 12.3–18.2% parse overhead is recorded below. Paused-parser pressure controls passed on both engines; scoped QJS/IDL/DOM and V8/IDL all-targets Clippy passed; aggregate checks remain separate |
 | Dependency alias enforcement | Implemented, Sol/root reviewed and focused checks passed | Five behavioral tests, xtask Clippy and actual 26-crate lint passed; explicit/inherited aliases and target tables are checked; native fork consumers and optional shared glue are restricted; deny advisories/bans/licenses/sources and IDL manifest checks passed on the renamed dependency graph |
+| Workstation setup and Linux x86_64 V8 bundle | Implemented; executed in containers on 2026-11-16, macOS route not executed | `setup.sh` installs system packages, the pinned toolchain, cargo-nextest/cargo-deny and the V8 bundle. From bare images it finished with exit 0 on Ubuntu 24.04 and Arch including the V8 source build (30/30 native tests each), on Fedora 43 with `--all --no-v8`, and on Debian 12 before the V8 stage existed (its Python 3.11 is below the recipe's 3.12, so V8 is refused there); the default CLI built and fetched a page on Ubuntu, Debian and Arch. The Fedora V8 build ran in a container whose packages were installed by hand first; a later run of `./setup.sh` from a bare Fedora 43 image against that build tree passed 30/30 and wrote the local pin. `bootstrap_source.py` verifies the 46 supplemental inputs by Git tree id because Gitiles archives are not byte-stable (8 unit tests); `install_bundle.py` installs the bundle and writes a local pin in the cache (9 unit tests); `artifact_pins.rs` keeps reviewed bundles only, and the guard reads a local pin when `TENTA_V8_LOCAL_PIN` names it (2 guard tests; a build without the variable, and pins with another archive hash, another source recipe, an extra field or no file, were each refused). With the Fedora local pin the `tenta-v8` binding-package route passed 60/60, its Clippy passed, and `tentabrowser-cli --features full` built and ran `fetch --eval`; with the earlier tracked workstation pin of the same bundle, `tentabrowser-cli --features full` built, `fetch --eval` and `screenshot` ran, and `cargo nextest run --locked --workspace` ran 4654 tests: 4625 passed, 27 failed, 2 timed out, 70 skipped, while two other V8 builds shared the machine. 26 failures are `tenta-cdp::interaction`, which has no `required-features` and needs `v8,render` (`-p tenta-cdp --features v8,render`: 174/174); the two timeouts passed alone in 108 s and 223 s; `tenta-net::http a_stale_while_revalidate_entry_answers_at_once_and_refreshes_behind_it` fails alone as well (`swr-1` where `swr-2` is expected) and is open. The bundle is a workstation build without reviewed toolchain provenance; archives are not reproducible across machines, so each machine pins its own; workspace Clippy, deny and benchmarks were not run on Linux |
+| Linux x86_64 host gates | Executed on Fedora 43 on 2026-11-16 with the local V8 bundle; all pass | First run: 4629 of 4656 tests passed. 26 failures were `tenta-cdp::interaction` built without its features, now gated by `required-features = ["v8", "render"]` like `page` and `network`; one was `tenta-net::http a_stale_while_revalidate_entry_answers_at_once_and_refreshes_behind_it`, whose wait (`cache.len() == 1`) was already true before the refresh stored its body, so the third request raced the store; it now waits for the stored body (30/30 under `--stress-count 30`). `cargo deny check` failed on six advisories (tokio RUSTSEC-2026-0386, webpki-root-certs RUSTSEC-2026-0383, zstd/zstd-safe/zstd-sys RUSTSEC-2026-0391/0398/0403/0410); the lockfile moves those five packages only (tokio 1.53.3, webpki-root-certs 1.0.12, zstd 0.14.4, zstd-safe 8.3.0, zstd-sys 2.1.3) and the Temporal lock validator still verifies 7 packages. After the changes: `cargo nextest run --locked --workspace` 4654/4654 (70 skipped), the feature-gated run of `tenta-browser`, `tentabrowser-cli`, `tenta-idl` and `tenta-cdp` with V8, QuickJS and render 550/550, workspace and feature Clippy, fmt, `lint-deps`, `idl-manifest` and `deny` pass. `tests/linktest/Cargo.lock` still has tokio 1.53.1; benchmarks and WPT directories were not run on Linux |
+| `window.location` read side, `atob`, `btoa` | Implemented on both engines; focused, page and workspace checks passed; not independently reviewed | See the section below. Navigation through `location`, `document.location` and `History` remain open |
+| MCP reading, history, log and search tools (MC3a) | Implemented; focused checks passed; not independently reviewed; built without `docs/spec/10-mcp.md` at hand | `browser_extract`, `browser_back`/`forward`/`reload`, `browser_console_messages`, `browser_network_requests`, `browser_web_search`; see the section below |
+| `window.history` (HS1) | Implemented on V8 only; focused checks passed; not independently reviewed | Same-document session history; see the section below. QuickJS has no `history` |
+| Event handler attributes (EH1) | IDL attributes on both engines, content attributes and window handlers on V8; focused checks passed; not independently reviewed | `element.onclick = fn`, `<button onclick="...">`, `window.on*`, `<body onload>`; see the section below |
+| Navigation started by the page (NAV1) | Implemented on V8; focused, page and host checks passed; not independently reviewed | `location` write side, POST navigations, form submission, link activation, fragment navigation; see the section below |
+| Form control interfaces (FM1) | Implemented on both engines (generated); focused checks passed; not independently reviewed | `<select>`/`<option>`, text selection, `form.submit()`/`requestSubmit()`/`reset()`, reflected attributes, `innerText`, `hidden`; see the section below |
+| Interface objects installed after context creation (RC1) | Implemented on V8; measured; not independently reviewed | Removes the realm-creation cost the packages above added; see the section below |
+| Window and tree members pages expect (WIN1) | `matchMedia`, window members and `history` on V8; the tree and form members on both engines (generated); focused checks passed; not independently reviewed | `matchMedia`, `dataset`, `currentScript`, element siblings, node comparison, document collections, dialogs, `screen`, `Window`, user timing; see the section below |
+| Cross-origin requests, request modes and provenance of continuations (CO1) | CORS in the page driver for `fetch()` and XHR on both engines; `signal` and the provenance fix on V8; focused, page and workspace checks passed; measured; not independently reviewed; changes a documented refusal, see the section below | CORS check, preflight, credentials modes, `mode`/`redirect`/`cache`/`signal`, `withCredentials`; a request made after an `await` now holds the settle |
+| Module scripts and `import()` (MOD1) | Implemented on V8; focused, page and workspace checks passed; measured; not independently reviewed | `<script type="module">`, static imports, import maps, `import()`, `import.meta.url`, `nomodule`; see the section below. QuickJS runs the `nomodule` fallback |
+| `ResizeObserver`, `IntersectionObserver` (OB1) | Implemented on V8, built lazily; focused checks passed; not independently reviewed; records a model decision | Each target is reported once; everything counts as in view because nothing scrolls; see the section below |
+| Media, canvas and SVG interfaces (IF1) | Implemented on both engines (generated); focused checks passed; not independently reviewed | `HTMLMediaElement`/`Video`/`Audio`, `HTMLCanvasElement`, `SVGGraphicsElement`/`SVGSVGElement`/`SVGAElement`; no playback and no canvas context; see the section below |
+| QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
 
 QuickJS runtime implementation alone does not complete its timezone hook,
 Intl, engine-independent Wasm, SAB/workers or cross-platform gates. Other
@@ -1754,6 +1769,574 @@ Details, files and numbers are in `docs/dev/p3-plan.md` ("As built (CSS1)").
   QuickJS has neither `getComputedStyle` nor an executed arm; no scrolling model; `IntersectionObserver`
   is still the CDP shim's one-shot stub; no early fetch from the preload scanner.
 
+## LOC1: `window.location` read side, `atob` and `btoa` (P2 package)
+
+Chosen from a run of the release CLI against eight live sites on 2026-11-16
+(`screenshot` and `fetch --eval`): screenshots were written, but page scripts
+failed first on `location` (`location is not defined`, reads of `search`,
+`pathname`, `href`, `host` on undefined) and on `btoa`. After this package the
+same evaluation completes on the seven sites that answered 200; the remaining
+script failures name `window.matchMedia`, `history`, and on one site
+`document.currentScript`. That run is a diagnostic, not a conformance or
+golden-site result.
+
+A `typeof` probe of a V8 page after this package still reports `undefined`
+for, among others: `document.links`/`images`/`forms`/`scripts`,
+`document.currentScript`, `document.visibilityState`/`hidden`,
+`element.innerText`, `element.dataset`, `element.hidden`; and on the window
+`history`, `matchMedia`, `screen`, `requestIdleCallback`, `scrollTo`,
+`postMessage`, `MessageChannel`, `customElements`, `getSelection`,
+`IntersectionObserver`, `ResizeObserver`, `ReadableStream`, `FileReader`,
+`WebSocket`, `Worker`, `indexedDB`, `isSecureContext`, `origin`, and the
+`Window`, `Navigator`, `History`, `Screen` and `Performance` interface objects.
+
+- **Location.** `tenta_js::location::LocationPart` holds the URL Standard's
+  nine component getters; the `URL` interface reads through the same function.
+  `HostObject::location_part` answers from the document's current URL, or
+  `about:blank` for a document without one, on every read. V8 installs a
+  `Location` interface object (illegal constructor, `Symbol.toStringTag`) and
+  one instance whose attributes and `toString` are own, non-configurable
+  properties with V8 signature checks; `window.location` is a non-configurable
+  accessor on the global. QuickJS installs one plain object with the same own
+  properties as a non-writable, non-configurable data property, without the
+  interface object or receiver checks.
+- **Not built, and absent instead of inert:** the attribute setters, `assign`,
+  `replace`, `reload`, `ancestorOrigins`, `document.location`, and everything
+  of `History`. A sloppy assignment to `location` or `location.href` is
+  ignored and a strict one throws `TypeError`; neither navigates. Their
+  semantics belong to the session-history design the manifest points at
+  (`idl/MANIFEST.toml`, `History`).
+- **`atob`/`btoa`.** `tenta_js::base64`: forgiving-base64 decode and Latin-1
+  encode; a refusal is `InvalidCharacterError` on both engines.
+- **Checks:** 7 unit tests (`tenta-js`), 11 V8 engine tests
+  (`tenta-js-v8::dom_location`), 5 QuickJS engine tests
+  (`tenta-js-qjs::location`), and a page test per engine through the fixture
+  server in which an inline script reads `location` during the parse
+  (`tenta-browser::location_js`).
+- **Measured** (release, `bench/js_xhr.py`, `S-js-xhr`, 25 interleaved runs,
+  Fedora 43 x86_64, both executables on the same filesystem; the baseline is
+  HEAD abe95a2 with the updated lockfile and the local-pin guard): navigation
+  p50/p95 16.09/16.84 ms before and 16.58/17.60 ms after, whole-process peak
+  RSS p50 29.1 and 29.4 MiB. Both differences are inside the 10% noise floor.
+  A first comparison with the candidate on disk and the baseline on tmpfs
+  showed 2.2 MiB more RSS; one executable with the new members switched off by
+  an environment variable showed none, so that figure measured the filesystem.
+
+## MC3a: MCP reading, history, log and search tools (P4 package)
+
+Driving `tentabrowser mcp` over stdio against live sites on 2026-11-16 showed
+the MC2 tool set working (navigate, snapshot, click, fill, key, screenshot on
+Hacker News, Wikipedia, DuckDuckGo, GitHub, MDN, BBC) and an agent missing the
+means to read a page as text, to go back, to see why a page is empty, and to
+search. `docs/spec/10-mcp.md` is not on this workstation, so the names and
+arguments below follow the limitations list of `docs/dev/mcp.md` and have to be
+reconciled with spec 10 §2; `SCHEMA_VERSION` is 1.2.0.
+
+- **`browser_extract`** (`tools/extract.rs`): `text`, `markdown`, `links`,
+  `html`, `metadata`, `forms` from the extractors of `tenta-dom`; `main_content`,
+  `ref`/`selector`, `max_chars` with a continuation token over the stored text;
+  fenced as untrusted page text.
+- **`browser_back`, `browser_forward`, `browser_reload`** (`tools/history.rs`):
+  a host-side list of the URLs the session's page has shown (`session::History`),
+  fed by `browser_navigate` and by the navigations actions cause. Entries are
+  loaded again from their URL; the list moves only when the load succeeds.
+- **`browser_console_messages`, `browser_network_requests`** (`tools/log.rs`):
+  a task per page moves `PageEvent`s into a bounded `session::PageLog` (500
+  lines, 1000 requests) that starts over at each main-frame navigation.
+- **`browser_web_search`** (`tools/search.rs`): `tenta-mcp` defines `WebSearch`;
+  `tentabrowser mcp` implements it over `EngineSearch` on a worker thread (a
+  search future is not `Send`). `mcp --search-endpoint PLAN=URL` (hidden) replays
+  a recorded SERP.
+- **Checks:** `tenta-mcp` 91 tests with `v8,render` (new: `tests/reading.rs`,
+  a console test in `tests/tools.rs`, unit tests of chunking and filtering);
+  `tentabrowser-cli` 90 tests with `full` (new: search over stdio against the
+  recorded DuckDuckGo SERP). The tool list golden was regenerated.
+- **Found on the way, not fixed:** only the document request reaches
+  `PageEvent::Request` on the sites tried (subresource requests are missing
+  from the list); the engines compile page scripts without a resource name, so
+  an exception has no `url:line`; `extract::main_content` picks the reference
+  list instead of the article on a Wikipedia article.
+
+## HS1: `window.history` (P2 package, V8)
+
+A React application (TodoMVC) rendered nothing: its router read
+`history.state` of an undefined `history`. `docs/spec/` is not on this
+workstation, so the package follows the HTML Standard for what one document can
+do alone and leaves cross-document traversal out.
+
+- **Built:** the `History` interface object and `window.history` with
+  `length`, `state`, `scrollRestoration`, `pushState`, `replaceState`, `go`,
+  `back`, `forward` (`crates/tenta-js-v8/src/host/history.rs`). `pushState` and
+  `replaceState` clone the data with the realm's `structuredClone`, resolve the
+  URL against the base URL, refuse one the document cannot be rewritten to with
+  `SecurityError` (`tenta_js::history`), and rewrite the document's URL, which
+  `location` and `document.URL` report. `go`, `back` and `forward` queue a task
+  that moves among the document's own entries, restores the URL and fires
+  `popstate`.
+- **Deviations:** `popstate` is a plain `Event` with an own `state` property
+  (no `PopStateEvent`); `hashchange` is not fired; an entry keeps the clone
+  made when it was pushed; a step that would leave the document and `go(0)` do
+  nothing; a new document starts a new history.
+- **Checks:** 3 unit tests (`tenta-js::history`), 11 engine tests
+  (`tenta-js-v8::dom_history`), stable under `--stress-count 20`.
+- **Open:** QuickJS; navigation through `history` and `location`; the host's
+  page URL (`Navigation::final_url`, which the MCP tools print) does not follow
+  `pushState`.
+
+## EH1: event handler attributes (P2 package)
+
+No element had an event handler IDL attribute (`element.onclick` was an
+expando that never ran) and no handler content attribute was compiled, so
+`<button onclick="...">` did nothing and React's event-support probe
+(`setAttribute('oninput', 'return;')`, then `typeof element.oninput`) sent it
+down a legacy path that threw.
+
+- **IDL attributes (both engines, generated):** a `GlobalEventHandlers` mixin
+  in `idl/dom/dom.webidl` (the HTML Standard's list plus the CSS animation,
+  transition and pointer handlers; no touch handlers), included by
+  `HTMLElement`, `SVGElement` and `Document`. The implementations are two lines
+  each over the existing `HostObject::event_handler`/`set_event_handler`
+  (`event_handler_attributes!`). `onload`/`onerror` of images, links and style
+  elements are now these members.
+- **Content attributes (V8):** `dom::events::sync_attribute_handler` compiles
+  an element's `on<type>` attribute when a dispatch is about to walk a path
+  that holds the element, and when script reads the IDL attribute; a changed
+  attribute replaces the handler, a removed one takes its handler away, and an
+  assignment from script stands until the attribute changes. The function is
+  compiled by `ScriptHost::compile_event_handler` (V8:
+  `ScriptCompiler::CompileFunction` with the document, the form owner and the
+  element as context extensions; QuickJS: not implemented, the handler stays
+  null). A body that does not parse is reported and leaves the handler null.
+- **Window (V8):** every global handler and the `WindowEventHandlers` set are
+  accessors on the global (`window.onpopstate`, `onresize`, ...), and the
+  attributes of the Window-reflecting set on `<body>` (`onload`, `onresize`,
+  `onhashchange`, ...) set the window's handler.
+- **Deviations:** writing an attribute's current value again does not displace
+  a handler assigned after the first write; `onerror` has the plain
+  `EventHandler` signature everywhere; `body.onload` (the IDL attribute on the
+  element) does not forward to the window; `<frameset>` is not handled.
+- **Checks:** 23 engine tests (`tenta-js-v8::dom_event_handlers`); the three
+  JS crates pass 1654 tests.
+- **Measured:** see "RC1" below, which measures this package together with
+  HS1, NAV1 and FM1. The dispatch path gained a table lookup per dispatch and
+  an attribute lookup per element on the path for event types that have a
+  handler; no event-dispatch scenario exists to time that path alone.
+
+## NAV1: navigation started by the page (P2 package)
+
+A page could not navigate itself: `location` had no write side, a POST form
+did nothing (`interaction.js` could only report a GET URL to its host), and
+`form.submit()` and `a.click()` did not exist as navigations. An agent could
+not log in anywhere.
+
+- **The request.** Script cannot replace its own document, so it leaves a
+  `tenta_dom::NavigationRequest` (URL, optional `PostData`, `replace`) on the
+  document, the one object the script world and the page both hold
+  (`Document::request_navigation`); only the page's own document (slot 0) may
+  ask. `PageRuntime` takes it after each engine entry
+  (`forward_navigation_request`) and hands it to the page through
+  `ScriptBudget::request_navigation`; `PageInner` (which now holds a weak
+  reference to itself) starts an ordinary navigation nobody awaits
+  (`start_requested_navigation`), counted as in flight from that moment so a
+  host that asks right after the script entry sees it. Only `http`/`https`
+  targets are followed. The navigation supersedes one still loading, so a
+  `goto` to a page that redirects in script ends with an aborted error and
+  the page shows the redirect's target.
+- **POST.** `Goto::post(content_type, body)` and `Goto::initiator(url)`;
+  `build_request` sends the body and lets `tenta-net` derive `Origin` and
+  `Referer` from the initiator. `PageEvent::Request` reports the method.
+- **`location` (V8).** Setters for every component but `origin`, `assign`,
+  `replace`, `reload`, and `window.location = url`. `LocationPart::write`
+  applies the URL Standard's setters (`url::quirks`).
+- **Fragment navigation.** A target that differs from the document's URL in
+  its fragment at most stays in the document: `HostObject::navigate_to`
+  rewrites the URL and `ScriptHost::fragment_navigated` (V8) adds the history
+  entry and queues `hashchange` (a plain `Event` with `oldURL`/`newURL`).
+- **Forms.** `tenta_dom::forms::submission` builds the request: the entry list
+  (successful controls in tree order, live values, selectedness, the
+  submitter, `form=` association, disabled fieldsets), encoded as
+  `application/x-www-form-urlencoded`, `multipart/form-data` or `text/plain`;
+  GET replaces the action's query. `form.submit()`, `form.requestSubmit()`
+  (fires `submit`, cancellable) and the activation behaviour of
+  `element.click()` (submit and reset buttons, links) use it.
+- **Hosts.** `interaction.js` submits POST forms through `requestSubmit`,
+  moves to a fragment through `location.assign` and keeps the caret in the
+  engine's text selection. The MCP tools follow a navigation the page started
+  (`tools/dom.rs::page_navigation`); see `docs/dev/mcp.md`.
+- **Checks:** `tenta-dom::forms` 6 tests; `tenta-js-v8::dom_location` 16,
+  `dom_forms` 10, `dom_history` 11; `tenta-browser::navigation_js` 5 (through
+  the page loop and the fixture server, POST echo included); `tenta-mcp` 93;
+  `tenta-cdp::interaction` (POST form test rewritten). A live run submitted
+  `https://httpbin.org/forms/post` and read back the fields with `Origin`,
+  `Referer` and `Sec-Fetch-Site: same-origin`.
+- **Deviations and gaps:** no `beforeunload`/`unload`/`pagehide`; no
+  `SubmitEvent` (`submit` is a plain `Event`); no constraint validation; no
+  file upload (a file control submits the empty file); `target=_blank` and
+  `download` links are not followed; activation behaviour runs for
+  `element.click()` and the host's interaction script, not for a `click` event
+  script dispatches itself; `<meta http-equiv=refresh>` is not followed;
+  QuickJS has neither `location` writes nor `history`.
+
+## FM1: form control interfaces, `innerText`, `hidden` (P2 package)
+
+`HTMLSelectElement` and `HTMLOptionElement` had no members (`select.value`
+was undefined), inputs had no `type`, `form` or text selection (React's
+controlled inputs threw in `getSelection`), and `element.hidden`/`innerText`
+were expandos.
+
+- **State (`tenta_dom::forms`).** Option selectedness (`dirty_selectedness`
+  plus the `selected` attributes; a single select has at most one selected
+  option, a list box none by default), text selection per control (UTF-16
+  offsets, clamped; the caret is at the end after `value` is set), control
+  values and checkedness, form owner, disabledness. `extract::forms` reads
+  the same state (a password field reports its attribute only, so a typed
+  secret is never extracted).
+- **IDL (`idl/dom/dom.webidl`, both engines).** `HTMLFormElement`: `method`,
+  `enctype`, `encoding`, `target`, `noValidate`, `elements`, `length`,
+  `submit`, `requestSubmit`, `reset`. `HTMLInputElement`: `type`,
+  `defaultValue`, `defaultChecked`, `required`, `readOnly`, `multiple`,
+  `autofocus`, `min`, `max`, `step`, `pattern`, `autocomplete`, `accept`, `alt`,
+  `maxLength`, `minLength`, `form`, `selectionStart`, `selectionEnd`,
+  `selectionDirection`, `setSelectionRange`, `select`. `HTMLTextAreaElement`:
+  the same selection members, `type`, `defaultValue`, `required`, `readOnly`,
+  `rows`, `cols`, `maxLength`, `textLength`, `form`. `HTMLSelectElement`:
+  `type`, `multiple`, `required`, `size`, `form`, `options`, `selectedOptions`,
+  `length`, `selectedIndex`, `value`. `HTMLOptionElement`: `selected`,
+  `defaultSelected`, `value`, `text`, `label`, `index`, `form`.
+  `HTMLButtonElement`: `type`, `value`, `form`. `HTMLElement`: `title`,
+  `lang`, `dir`, `hidden`, `inert`, `accessKey`, `innerText`.
+- **Deviations:** `elements`, `options` and `selectedOptions` are snapshots,
+  not live collections, and are plain `HTMLCollection`s; no `select` event;
+  `innerText` reads the block text extractor of `tenta-dom` (hiddenness from
+  attributes and inline style, not from the layout).
+- **Checks:** see NAV1; the three JS crates and `tenta-dom`, `tenta-page` pass
+  together.
+
+## RC1: interface objects are defined after the context exists (performance)
+
+The packages of 2026-11-16 (LOC1, HS1, EH1, NAV1, FM1) added about 720
+attributes and a few interfaces. The first `S-js-xhr` comparison against HEAD
+abe95a2 (with the updated lockfile and the local-pin guard) read navigation
+p50/p95 16.98/17.59 ms before and 18.45/19.29 ms after: inside the 10% noise
+floor, but in the same direction in both percentiles, so it was taken apart.
+
+- **Where the time went.** An in-process probe of `Engine::with_document`
+  (60 engines per process, median) read 2.25 ms before and 3.5 ms after.
+  Timing its stages put all of it in one call: `v8::Context::new` with the
+  global object template, 0.92 ms before and 2.40 ms after. Callgrind
+  (`valgrind` 3.27 in a container) showed the instructions under
+  `Genesis::ConfigureGlobalObject`: V8 instantiates every function template
+  on the global template while it bootstraps the context, and there a
+  prototype stays in fast mode, so each member added copies the prototype's
+  descriptor array (`Map::CopyAddDescriptor`, `TransitionToDataProperty`).
+  Three single-factor builds ruled out the suspects first assumed: without
+  the `GlobalEventHandlers` mixin, without the window's handler accessors, and
+  without `history` and the `location` write side, the engine was built no
+  faster.
+- **The change.** `Engine::install_dom` hands the generated installers a
+  template that is never instantiated, and
+  `SkeletonRegistry::install_constructors` defines each interface object on
+  the global (non-enumerable data property, registration order) once the
+  context exists. The `CSS` namespace object stays on the global template.
+- **Result** (release, Fedora 43 x86_64, both executables on tmpfs):
+  `Engine::with_document` 2.0 to 2.4 ms over three runs of the probe against
+  1.9 to 2.3 ms for HEAD, with `v8::Context::new` at 0.49 ms.
+  `bench/js_xhr.py` (`S-js-xhr`, three sets of 25 interleaved pairs):
+  navigation p50 16.68/16.66/16.75 ms before and 17.08/16.81/17.20 ms after
+  (+2.4%, +0.9%, +2.7%); p95 17.39/17.42/17.60 and 19.74/17.78/18.61 ms;
+  whole-process peak RSS p50 29.0 to 29.1 MiB before and 29.8 to 30.0 MiB
+  after. `bench/dom_calls.py` (`S-dom-calls`, 25 pairs): `has` 28.01 and
+  27.98 ns per call, `get` 82.95 and 83.68 ns, wall 123.42 and 124.65 ms, RSS
+  33.2 and 34.1 MiB. All of it is inside the noise floor; the RSS growth of
+  about 0.8 MiB is consistent across runs. Stripped, the `dom_calls` example
+  grew from 58.8 to 61.2 MB and is 61.2 MB with this change.
+- **Checks:** `tenta-js-v8`, `tenta-js`, `tenta-browser`, `tenta-mcp` and
+  `tenta-cdp` with their V8 and render features: 1834 passed.
+- **Open:** the interface objects are still all instantiated when the engine
+  is built; a lazy data property per interface would take that off the
+  navigation path. QuickJS was not measured.
+
+## WIN1: window and tree members pages expect (P2 package)
+
+A sweep of 35 live sites through the MCP server on 2026-11-16 (navigate,
+console errors, snapshot) named what page scripts failed on most:
+`matchMedia` on seven sites, `document.currentScript` on about nine (webpack's
+"chunk path", `currentScript.parentElement`), `isEqualNode` (Next.js: its
+client rendered nothing without it), then `dataset`, `performance.mark` and
+`timing`, `scroll`, `Window`. After this package the same sweep reads, for
+example, bbc.com 12 errors to 0, tailwindcss.com 12 to 1, nextjs.org 12 to 1,
+wp.pl 12 to 2, and duckduckgo.com and npmjs.com render (0 to 98 and 0 to 186
+snapshot elements). The sweep is a diagnostic, not a conformance result.
+
+- **`matchMedia` (V8).** `tenta_css::cascade::match_media` parses and
+  evaluates the query with Stylo against the page's viewport (a light screen
+  with a fine pointer, as the render tier's device is); `MediaQueryList` is a
+  real `EventTarget` with `media`, `matches` (evaluated on every read),
+  `onchange`, `addListener`, `removeListener`. No `change` event is fired.
+- **`dataset` (both engines).** `DOMStringMap` is generated from IDL with
+  anonymous named getter, setter and deleter; `tenta-idl` now names anonymous
+  special operations (`named_getter`, ...), which it emitted with an empty
+  Rust name before. A new handle tag anchors the map to its element.
+- **`document.currentScript` (both engines).** The page threads the script
+  element to wherever its classic script runs (inline, parser-blocking,
+  `defer`, `async`) and names it on the document for the length of the run.
+- **Tree (both engines).** `Node`: `isEqualNode`, `isSameNode`,
+  `compareDocumentPosition` and its constants, `getRootNode`, `normalize`,
+  `baseURI` (`tenta_dom::compare`). `Element` and `CharacterData`:
+  `previousElementSibling`, `nextElementSibling`. `Element`:
+  `insertAdjacentElement`, `insertAdjacentText`, `webkitMatchesSelector`, and
+  `scrollIntoView`/`scrollTo`/`scroll`/`scrollBy`, which do nothing because
+  nothing scrolls. `Document`: `visibilityState`, `hidden`, `forms`,
+  `images`, `links`, `scripts`, `embeds`, `anchors` (snapshots),
+  `getElementsByName`, `importNode`, `adoptNode` (same document only).
+- **Window (V8).** `Window` interface object with `Window.prototype` in the
+  global's chain; `alert`/`confirm`/`prompt` dismissed at once and logged to
+  the console; `print`, `stop`, `focus`, `blur` (nothing to do); `screen`
+  (the viewport, 24-bit); `origin`, `isSecureContext`, `name`, `closed`,
+  `length`, `opener`, `frameElement`, `crossOriginIsolated`; `scrollTo`,
+  `scroll`, `scrollBy`; `requestIdleCallback`/`cancelIdleCallback` (a timer
+  task); `document.location`; `performance.mark`, `measure`, `getEntries*`,
+  `clearMarks`, `clearMeasures` over plain entry objects, and the legacy
+  `performance.timing` and `navigation` objects with every milestone at the
+  time origin.
+- **Checks:** `tenta-css` media 3; `tenta-js` dataset names 1;
+  `tenta-js-v8`: `dom_dataset` 4, `dom_window_extras` 5, `dom_tree_extras` 9,
+  `dom_window_misc` 6; `tenta-browser::current_script_js` 1 (through the page
+  loader, all four script kinds).
+- **Added after the first draft of this section:** `querySelector`,
+  `querySelectorAll`, `getElementById` and the element-children members on
+  `DocumentFragment`; `innerHTML` on a `<template>` now fills its contents
+  fragment (it replaced the element's own children before);
+  `navigator.javaEnabled()`; `performance.measure` accepts the navigation
+  timing milestone names.
+- **Still missing on the sweep** (module scripts and `import()` are MOD1
+  below): `customElements`; `ReadableStream`; `HTMLVideoElement` and the
+  other per-tag interfaces; `getSelection`; `IntersectionObserver`,
+  `ResizeObserver`, `MessageChannel`. QuickJS has none of the window members.
+
+## CO1: cross-origin requests, request modes, provenance of continuations (P2 package)
+
+Until 2026-11-16 a page could only fetch its own origin: a cross-origin
+`fetch()` or XHR was refused before it was sent, and `RequestInit` served
+three members and refused the other twelve by presence. Both stopped real
+pages (amazon.com and imdb.com on the sweep; any client that passes
+`credentials`, `mode` or an `AbortSignal`).
+
+- **CORS (both engines; the driver is engine-independent).** The page's
+  `tenta-net` driver runs the protocol for `fetch()` and `XMLHttpRequest`:
+  the CORS check on the final response over the whole redirect chain, a
+  preflight for a method or header that is not CORS-safelisted, and
+  `Access-Control-Expose-Headers` filtering. The decisions are pure functions
+  in `crates/tenta-page/src/cors.rs`. `docs/dev/idl.md` describes the steps
+  and what is not built (no preflight cache; `Response.type` is `opaque` for
+  `no-cors` and otherwise still `basic`).
+- **Credentials.** `tenta_net::CredentialsMode` (`Include`, `SameOrigin`,
+  `Omit`) decides per hop whether a request sends a `Cookie` header and
+  stores `Set-Cookie`. Navigations and document subresources keep `Include`.
+  `Request::same_origin_redirects` fails a redirect that leaves the origin,
+  for a request that would need a preflight there. `Origin` is now written
+  on a request that owes one even without a profile placing it.
+- **`RequestInit`.** `credentials`, `mode` (`cors`, `same-origin`, and
+  `no-cors`, whose cross-origin answer is an opaque `Response`: the sweep
+  showed pages firing uncaught `no-cors` beacons on 7 of 35 sites),
+  `redirect` (`follow`, `error`), `cache` (`default`; `no-store`, `reload`,
+  `no-cache` bypass the cache) are served; `keepalive`, `priority`, `duplex`
+  and written-out defaults are accepted. **This changes a documented
+  choice**: the refusal was by presence on purpose
+  (`refused_request_init_member`), and is now by value. It needs a decision
+  entry in `docs/spec/18-decisions.md`, which was not at hand.
+- **`signal` (V8).** `fetch(url, {signal})`: an aborted signal rejects with
+  its reason and makes no request; aborting later rejects with the same
+  reason value, in the order the calls were made, and ends the transport
+  (`FetchDriver::abort`). QuickJS refuses a non-null `signal`.
+  `AbortSignal.timeout` and `AbortSignal.any` are not built.
+- **`XMLHttpRequest.withCredentials = true`** is stored and honoured (it
+  threw `NotSupportedError`).
+- **Provenance of continuations (V8), a correction.** `tenta_core::provenance`
+  says the completion of a tracked request is tracked. It was not: fetch and
+  XHR completions were delivered under the default `Background`, and the
+  microtask checkpoint a script owed ran outside the scope the script ran
+  in. A `fetch()` made after any `await` — after a promise, a short timer,
+  or the answer to an earlier request — therefore did not hold the settle,
+  and a navigation could return with the page's data still in flight.
+  Completions now carry the provenance of their request
+  (`FetchCompletion::origin`, `XhrCompletion::origin`) and the owed
+  checkpoint runs under the provenance of the entries that owed it
+  (`HostState::microtask_origin`). Chains are still bounded by
+  `SettleConfig::max_reentries`. QuickJS is unchanged.
+- **Measured** (release, Fedora 43 x86_64, against the tree before this
+  package): `bench/js_xhr.py` (`S-js-xhr`, three sets of 25 interleaved
+  pairs) navigation p50 16.68/16.98/17.07 ms before and 17.15/17.13/17.38 ms
+  after (+2.8%, +0.9%, +1.8%), p95 17.84/17.97/18.28 and 17.84/18.06/18.45
+  ms, RSS p50 29.9 to 30.0 MiB before and 29.9 to 30.2 MiB after.
+  `bench/dom_calls.py` (`S-dom-calls`, 25 pairs): `has` 27.63 and 28.02 ns
+  per call, `get` 84.10 and 83.31 ns, wall 123.57 and 124.06 ms, RSS 33.9
+  and 34.3 MiB. All inside the noise floor; no claim either way.
+- **Checks:** `tenta-page::cors` 7 and the driver's unit tests;
+  `tenta-net::http` 3 (credentials modes, redirect guard, `Origin`);
+  `tenta-js` `request_init` and `tenta-js-v8::dom_fetch` (served members,
+  refused values, signal); `tenta-browser::cors_js` 9 over two loopback
+  origins (shared and refused responses, preflight, credentials, XHR, modes,
+  `no-cors`, abort, a request after an `await`); the fixture server gained `/api/cors`.
+  Workspace 4774 passed twice in a row.
+- **An intermittent failure that is not explained.** Two `tenta-js-v8`
+  native-budget tests (`nested_event_constructors_refuse_before_publishing_native_records`,
+  `converted_custom_event_detail_is_released_when_nested_constructors_spend_budget`)
+  failed three times on 2026-11-16, always under a full parallel run: in 2 of
+  7 workspace runs and 1 of 15 runs of five crates at `-j 64`. Where the
+  message was captured, 4095 event records were still alive after
+  `low_memory_gc()` and `reclaim_dead_hosts()`. They never failed alone
+  (1280 processes, also with the CPU starved) and HEAD abe95a2 passed the
+  same five-crate run 10 times out of 10, alternated with this tree, which
+  passed 10 out of 10 as well. That sample cannot tell a rare existing flake
+  from a regression of these packages, so it is open either way; the first
+  occurrence was in the first full run after CO1.
+- **Open:** preflight cache; `Response.type` `cors`;
+  `Origin: null` after a tainted redirect chain; `data:` and `blob:` URLs in
+  `fetch()`; QuickJS has neither `signal` nor the provenance correction.
+
+## MOD1: module scripts and `import()` (P2 package)
+
+The sweep's most common remaining failure after WIN1 was `Uncaught (in
+promise) Error: Not supported` (svelte.dev, crates.io): V8's answer to an
+`import()` with no host behind it. Sites built with Vite, SvelteKit or Astro
+ship their whole program as modules and rendered nothing.
+
+- **Engine (V8).** `crates/tenta-js-v8/src/modules.rs` keeps the realm's
+  module map: a module is compiled under a key (its URL, or a name of the
+  page's own for an inline script) and the engine names the URLs it imports;
+  nothing links until the root runs, by which time every dependency is in the
+  map. `import()` hands script a promise and leaves a request for the page;
+  the promise settles with the namespace once the module and its top-level
+  `await`s have run. `import.meta.url` is the module's URL. Modules are
+  compiled with a resource name, so their errors carry `url:line`.
+- **Shared.** `tenta_js::modules`: specifier resolution
+  (`./`, `../`, `/`, absolute URLs; a bare specifier only through the import
+  map), the import map's `imports` with exact and prefix keys, the JavaScript
+  MIME test. `PageEngine` gained `supports_modules`, `add_import_map`,
+  `compile_module`, `run_module`, `take_dynamic_imports`,
+  `finish_dynamic_import`, all defaulting to "not supported".
+- **Page.** `crates/tenta-page/src/page/modules.rs` loads a graph level by
+  level over `tenta-net`; one load per URL is shared by every graph that
+  needs it. A module's fetch is a CORS request (`cors` mode, so it carries
+  `Origin`) with `same-origin` credentials (a cross-origin module must be
+  shared with the document), its response
+  must have a JavaScript MIME type, and its text is UTF-8.
+  `<script type="module">` (inline or `src`) is deferred and runs in document
+  order with the `defer` scripts before `DOMContentLoaded`; with `async` it
+  runs when its graph has loaded. `<script type="importmap">` is applied when
+  the parser reaches it. A `nomodule` script is not run on an engine that has
+  modules. An `import()` holds the settle while its graph loads and has 30 s
+  to do so once the navigation is over.
+- **QuickJS** has no modules: it leaves `type="module"` unrun and runs the
+  `nomodule` fallback, as before.
+- **Measured** (release, Fedora 43 x86_64, against CO1): `bench/js_xhr.py`
+  (`S-js-xhr`, three sets of 25 interleaved pairs) navigation p50
+  16.97/17.34/17.01 ms before and 17.12/17.47/17.53 ms after (+0.9%, +0.7%,
+  +3.1%), RSS p50 29.9 to 30.1 MiB before and 30.2 to 30.5 MiB after.
+  `bench/dom_calls.py`: `has` 27.91 and 28.21 ns per call, `get` 83.27 and
+  84.18 ns. Inside the noise floor. Across today's packages the same
+  scenario has drifted from 16.7 to 17.0 ms at HEAD to 17.1 to 17.5 ms, each
+  step below the floor and all in one direction; that sum has not been taken
+  apart.
+- **Checks:** `tenta-js` modules 6; `tenta-js-v8::dom_modules` 6 (graph order
+  and single evaluation, inline modules, import map, link and evaluation
+  failures, `import()`, top-level `await`); `tenta-browser::modules_js` 5
+  over loopback (document order with `defer` and `DOMContentLoaded`, shared
+  module fetched once, QuickJS `nomodule` fallback, import map with
+  `import()` and top-level `await`, load failures, a module another origin
+  shares). Workspace 4786 and the
+  feature set 669 passed.
+- **On live sites** svelte.dev, crates.io, vite.dev and astro.build now load
+  and run their module graphs; what stops them next is named in their
+  consoles: `customElements`, `ResizeObserver`, `Request`, `Worker`,
+  `HTMLMediaElement`, `SVGAElement`.
+- **Open:** import map `scopes` and `integrity`; JSON and CSS modules (import
+  attributes are refused); `import.meta.resolve`; `<link rel="modulepreload">`
+  is ignored; a module script that fails to load fires no `error` event and
+  leaves no console message; module workers; the classic-script order
+  guarantee across a module with top-level `await` (the next deferred script
+  does not wait for it).
+
+## OB1 and IF1: observers, and the media, canvas and SVG interfaces (P2 packages)
+
+What the module-built sites named next in their consoles once MOD1 let them
+run: `ResizeObserver` (astro.build), `HTMLMediaElement` (crates.io),
+`SVGAElement` (svelte.dev), and on the earlier sweep `getContext is not a
+function` and `play is not a function`.
+
+- **`ResizeObserver` and `IntersectionObserver` (OB1, V8).**
+  `crates/tenta-js-v8/src/host/observers.rs`. Each is a lazy data property of
+  the global, so the interface is built the first time a page names it and a
+  realm that never does pays for neither. **A model decision to record:**
+  nothing scrolls and there is no viewport to leave, so the whole document
+  counts as in view. An `IntersectionObserver` tells its callback once, in a
+  task after `observe()`, that each target is intersecting
+  (`isIntersecting` true, ratio 1), which is the notification a page that
+  loads content "when it scrolls into view" waits for; `root`, `rootMargin`
+  and `threshold` are kept and reported back and change nothing. A
+  `ResizeObserver` reports each target once with the box
+  `getBoundingClientRect()` gives and, as the standard has it, only when that
+  box is not empty. Neither observes later changes. Entries are plain objects
+  with the standard's members; `ResizeObserverEntry` and
+  `IntersectionObserverEntry` are not defined. QuickJS has neither.
+- **Media, canvas, SVG (IF1, both engines, generated).**
+  `HTMLMediaElement`, `HTMLVideoElement`, `HTMLAudioElement`,
+  `HTMLCanvasElement`, `SVGGraphicsElement`, `SVGSVGElement`, `SVGAElement`
+  (`idl/dom/dom.webidl`, `tenta_js::bindings::host::media`). `<video>`,
+  `<audio>`, `<canvas>`, SVG `<svg>` and SVG `<a>` get their interface in the
+  prototype chain. A media element is one that has loaded nothing: paused,
+  `readyState` 0, `duration` NaN, `canPlayType()` "", and `play()` rejects
+  with `NotSupportedError` ("The element has no supported sources."), as a
+  browser does for an element it has no source for. `volume`, `currentTime`
+  and `playbackRate` accept a value and keep the default (a throwing setter
+  would stop a strict-mode script that only configures the element); `muted`
+  follows the content attribute. A canvas has `width`/`height` (300 by 150 by
+  default), `getContext()` is null for every id and `toDataURL()` is
+  `data:,`.
+- **Checks:** `tenta-js-v8::dom_observers` 3, `dom_media` 4;
+  `tenta-js-qjs::runtime` 1 (the IF1 interfaces). Workspace 4794 passed.
+- **Measured, all of 2026-11-16's packages against HEAD abe95a2** (release,
+  Fedora 43 x86_64): `bench/js_xhr.py` (`S-js-xhr`, three sets of 25
+  interleaved pairs) navigation p50 16.68/16.53/16.68 ms at HEAD and
+  17.65/17.71/17.66 ms now (+5.8%, +7.1%, +5.9%), p95 17.10/17.47/17.59 and
+  18.47/18.31/19.42 ms, RSS p50 29.1 to 29.2 MiB and 30.3 to 30.4 MiB.
+  Below the 10% floor in each set, but the same sign and size in all three,
+  so it is a real cost of about 1 ms and 1.2 MiB per cold navigation.
+  `Engine::with_document` (60 engines per process, three runs) read 1.92 to
+  2.33 ms at HEAD and 2.07 to 2.49 ms now, so engine construction is about a
+  fifth of it; the rest has not been located. Steady state is unchanged:
+  `bench/dom_calls.py` `has` 28.00 and 27.78 ns per call, `get` 83.30 and
+  82.74 ns. Against MOD1 alone, OB1 and IF1 read 16.92 and 17.09 ms.
+- **What a probe of 340 commonly used members still finds missing** (V8,
+  after these packages; a diagnostic, not an inventory of the platform):
+  `customElements`, `attachShadow`/`ShadowRoot`, `window.postMessage`,
+  `MessageChannel`, `Request`, `ReadableStream` and the other streams,
+  `navigator.sendBeacon`, `document.write`, `crypto.randomUUID` and
+  `crypto.subtle`, `URL.createObjectURL`, `getSelection`,
+  `PerformanceObserver`, `AbortSignal.timeout`/`any`, `CSS.escape`,
+  `reportError`, `window.event`, the event interfaces (`ErrorEvent`,
+  `PromiseRejectionEvent`, `MessageEvent`, `PointerEvent`, `InputEvent`,
+  `PopStateEvent`, ...), `WebSocket`, `EventSource`, `Worker`, `indexedDB`,
+  `navigator.userAgentData`, and most per-tag HTML interfaces
+  (`HTMLBodyElement`, `HTMLDialogElement`, ...).
+- **A regression to know about.** Running module scripts means running
+  hydration code that used to fail at its first `import()`. nytimes.com kept
+  its server-rendered text before MOD1 and now empties `#app` and stops on
+  an uncaught `TypeError` (`reading 'apply'`); its snapshot went from 18
+  elements to none. On the 35-site sweep, sites with no snapshot elements
+  still went from 7 to 5 (crates.io, onet.pl and search.brave.com gained
+  content), and uncaught errors went from 22 to 47 because more code runs. Eleven of
+  the 47 are `Failed to fetch` for analytics hosts that the DNS of the
+  machine the sweep ran on answers with `::`, which the private-network
+  policy refuses; they say nothing about the engine.
+- **Open:** observation of later changes (resize, real intersection);
+  `MutationObserver`-style entry interfaces; a 2D canvas context; media
+  events (`loadedmetadata`, `error`) and `<source>` selection; the other SVG
+  interfaces (`SVGPathElement`, ...) and `SVGAElement.href`; the remaining
+  per-tag HTML interfaces. Still named by live sites: `customElements`,
+  `Request`, `Worker`.
+
 ## Implementation queue and dependencies
 
 - P2 CSSOM uses Stylo per D-003. Inline declarations and constructed
@@ -1783,9 +2366,12 @@ Details, files and numbers are in `docs/dev/p3-plan.md` ("As built (CSS1)").
   hard-link creation races. Moving fallible validation before truncation
   does not establish race-free file access.
 - Fetch/XHR currently buffer response bodies. Streams, WebSocket,
-  EventSource, sendBeacon and CORS remain separate implementation work.
-- History/location, workers, Web Crypto, CSP/frame origin rules,
-  remote objects and Google Full search remain open P2 packages.
+  EventSource and sendBeacon remain separate implementation work; CORS is
+  CO1 above.
+- `window.location` has its read side (below). Navigation through
+  `location`, `document.location`, History and session history, workers,
+  Web Crypto, CSP/frame origin rules, remote objects and Google Full search
+  remain open P2 packages.
 - The in-process `S-js-xhr` navigation time now has a first baseline.
   Last-mutation-to-settle gap, page RSS delta and reference comparison
   remain unmeasured; they are distinct from the correctness assertions.
