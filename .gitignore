@@ -16,3 +16,7 @@ golden/tracer/out/
 
 # html5lib/WPT parser conformance corpus (crates/tenta-html/tests/fetch-html5lib-tests.sh)
 crates/tenta-html/tests/html5lib-tests/
+
+# Internal agent plans and review evidence; kept locally, never pushed.
+docs/dev/p3-plan.md
+docs/dev/evidence/
