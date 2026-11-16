@@ -276,6 +276,10 @@ interface Document : Node {
   readonly attribute DOMString characterSet;
   readonly attribute DOMString compatMode;
   readonly attribute USVString referrer;
+  // The host of the document's URL. The setter is the legacy way to relax
+  // the same-origin policy, which nothing here honours: assigning the value
+  // the getter returns does nothing and any other value is a SecurityError.
+  [Throws] attribute USVString domain;
 
   // d-4b: `document.cookie` — the last framework-visible IDL gap. The
   // getter and setter are the HTML Standard's cookie getter/setter
@@ -1005,6 +1009,35 @@ interface HTMLLinkElement : HTMLElement {
   attribute DOMString hreflang;
   attribute boolean disabled;
   readonly attribute CSSStyleSheet? sheet;
+};
+
+// Per-tag interfaces live sites name (`instanceof`, feature tests). Reflected
+// attributes only, except the dialog: `show()`, `showModal()` and `close()`
+// set and remove `open`; there is no top layer, no `returnValue` and no
+// `close` event.
+[Exposed=Window]
+interface HTMLMetaElement : HTMLElement {
+  attribute DOMString name;
+  attribute DOMString httpEquiv;
+  attribute DOMString content;
+  attribute DOMString media;
+};
+
+[Exposed=Window]
+interface HTMLSourceElement : HTMLElement {
+  attribute USVString src;
+  attribute DOMString type;
+  attribute USVString srcset;
+  attribute DOMString sizes;
+  attribute DOMString media;
+};
+
+[Exposed=Window]
+interface HTMLDialogElement : HTMLElement {
+  attribute boolean open;
+  undefined show();
+  undefined showModal();
+  undefined close();
 };
 
 [Exposed=Window]

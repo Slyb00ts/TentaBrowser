@@ -119,6 +119,36 @@ impl CryptoOps for HostObject {
             getrandom::fill(bytes).map_err(|_| ())
         })
     }
+
+    fn random_uuid(&self) -> Result<String, JsError> {
+        let mut bytes = [0u8; 16];
+        getrandom::fill(&mut bytes).map_err(|_| {
+            JsError::dom_exception("OperationError", "the random source is unavailable")
+        })?;
+        Ok(format_uuid_v4(bytes))
+    }
+}
+
+/// `bytes` as a version 4, variant 1 UUID in its canonical lowercase form
+/// (RFC 9562 §5.4): the version and variant bits replace six of the random
+/// ones.
+fn format_uuid_v4(mut bytes: [u8; 16]) -> String {
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex = |range: std::ops::Range<usize>| {
+        bytes[range]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    format!(
+        "{}-{}-{}-{}-{}",
+        hex(0..4),
+        hex(4..6),
+        hex(6..8),
+        hex(8..10),
+        hex(10..16)
+    )
 }
 
 #[cfg(test)]

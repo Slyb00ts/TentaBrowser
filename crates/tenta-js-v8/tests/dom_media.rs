@@ -116,3 +116,50 @@ fn a_canvas_has_dimensions_and_no_context() {
         "300x150|10|20|10||true|data:,"
     );
 }
+
+/// `<meta>`, `<source>` and `<dialog>` have interfaces of their own, with the
+/// reflected attributes pages read; a dialog is shown and closed through its
+/// `open` attribute.
+#[test]
+fn meta_source_and_dialog_elements_have_their_interfaces() {
+    let mut engine = engine();
+    assert_eq!(
+        eval(
+            &mut engine,
+            "var meta = document.createElement('meta'), source = document.createElement('source');
+             var dialog = document.createElement('dialog');
+             meta.setAttribute('http-equiv', 'refresh'); meta.name = 'viewport'; meta.content = 'width=1';
+             source.src = 'clip.webm'; source.type = 'video/webm';
+             var out = [meta instanceof HTMLMetaElement, meta instanceof HTMLElement,
+                        meta.httpEquiv, meta.getAttribute('name'), meta.content,
+                        source instanceof HTMLSourceElement, source.src, source.getAttribute('src'),
+                        source.type, dialog instanceof HTMLDialogElement, dialog.open];
+             dialog.showModal(); out.push(dialog.open, dialog.hasAttribute('open'));
+             dialog.close(); out.push(dialog.open);
+             dialog.open = true; dialog.show(); out.push(dialog.getAttribute('open'));
+             out.join('|')",
+        ),
+        "true|true|refresh|viewport|width=1|true|https://example.com/dir/clip.webm|clip.webm|\
+         video/webm|true|false|true|true|false|"
+    );
+}
+
+/// `document.domain` is the host of the document's URL; assigning it back is
+/// allowed and any other value is refused. `crypto.randomUUID()` gives a
+/// version 4 UUID, a different one each time.
+#[test]
+fn document_domain_and_random_uuids() {
+    let mut engine = engine();
+    assert_eq!(
+        eval(
+            &mut engine,
+            "var attempt = f => { try { return String(f()); } catch (e) { return e.name; } };
+             var a = crypto.randomUUID(), b = crypto.randomUUID();
+             [document.domain, attempt(() => { document.domain = 'example.com'; return 'kept'; }),
+              attempt(() => { document.domain = 'other.test'; }), document.domain,
+              /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(a),
+              a !== b, typeof crypto.randomUUID, crypto.randomUUID.length].join('|')",
+        ),
+        "example.com|kept|SecurityError|example.com|true|true|function|0"
+    );
+}

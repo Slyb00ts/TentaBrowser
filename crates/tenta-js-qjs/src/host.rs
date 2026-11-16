@@ -900,6 +900,9 @@ fn install_bindings<'js>(ctx: &Ctx<'js>, global: &Object<'js>) -> rquickjs::Resu
     install_html_audio_element::<HostObject>(ctx, global, registry)?;
     install_html_canvas_element::<HostObject>(ctx, global, registry)?;
     install_html_slot_element::<HostObject>(ctx, global, registry)?;
+    install_html_meta_element::<HostObject>(ctx, global, registry)?;
+    install_html_source_element::<HostObject>(ctx, global, registry)?;
+    install_html_dialog_element::<HostObject>(ctx, global, registry)?;
     install_svg_graphics_element::<HostObject>(ctx, global, registry)?;
     install_svgsvg_element::<HostObject>(ctx, global, registry)?;
     install_svga_element::<HostObject>(ctx, global, registry)?;

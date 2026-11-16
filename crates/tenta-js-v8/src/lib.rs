@@ -891,6 +891,24 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the HTMLSlotElement interface");
+            tenta_js::bindings::install_html_meta_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLMetaElement interface");
+            tenta_js::bindings::install_html_source_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLSourceElement interface");
+            tenta_js::bindings::install_html_dialog_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLDialogElement interface");
             tenta_js::bindings::install_svg_graphics_element::<HostObject>(
                 scope,
                 interface_sink,

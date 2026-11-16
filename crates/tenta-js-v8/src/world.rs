@@ -902,6 +902,9 @@ impl WrapperWorld for V8World {
                                 Some(tag) if tag == atoms::AUDIO => "HTMLAudioElement",
                                 Some(tag) if tag == atoms::CANVAS => "HTMLCanvasElement",
                                 Some(tag) if tag == atoms::SLOT => "HTMLSlotElement",
+                                Some(tag) if tag == atoms::META => "HTMLMetaElement",
+                                Some(tag) if tag == atoms::SOURCE => "HTMLSourceElement",
+                                Some(tag) if tag == atoms::DIALOG => "HTMLDialogElement",
                                 _ => "HTMLElement",
                             },
                             Some(ns) if ns == atoms::NS_SVG => match doc.tag(node_id) {

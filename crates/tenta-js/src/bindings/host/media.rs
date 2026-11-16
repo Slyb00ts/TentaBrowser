@@ -203,3 +203,83 @@ impl HTMLCanvasElementOps for HostObject {
 impl SVGGraphicsElementOps for HostObject {}
 impl SVGSVGElementOps for HostObject {}
 impl SVGAElementOps for HostObject {}
+
+impl crate::bindings::HTMLMetaElementOps for HostObject {
+    fn name(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("name"))
+    }
+    fn set_name(&self, value: &str) {
+        self.reflect_attribute("name", value);
+    }
+    fn http_equiv(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("http-equiv"))
+    }
+    fn set_http_equiv(&self, value: &str) {
+        self.reflect_attribute("http-equiv", value);
+    }
+    fn content(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("content"))
+    }
+    fn set_content(&self, value: &str) {
+        self.reflect_attribute("content", value);
+    }
+    fn media(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("media"))
+    }
+    fn set_media(&self, value: &str) {
+        self.reflect_attribute("media", value);
+    }
+}
+
+impl crate::bindings::HTMLSourceElementOps for HostObject {
+    fn src(&self) -> Result<String, JsError> {
+        Ok(self.reflect_url("src"))
+    }
+    fn set_src(&self, value: &str) {
+        self.reflect_attribute("src", value);
+    }
+    fn r#type(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("type"))
+    }
+    fn set_type(&self, value: &str) {
+        self.reflect_attribute("type", value);
+    }
+    fn srcset(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("srcset"))
+    }
+    fn set_srcset(&self, value: &str) {
+        self.reflect_attribute("srcset", value);
+    }
+    fn sizes(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("sizes"))
+    }
+    fn set_sizes(&self, value: &str) {
+        self.reflect_attribute("sizes", value);
+    }
+    fn media(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("media"))
+    }
+    fn set_media(&self, value: &str) {
+        self.reflect_attribute("media", value);
+    }
+}
+
+/// A dialog is shown by its `open` attribute and nothing else: there is no
+/// top layer to put a modal one in, and closing fires no event.
+impl crate::bindings::HTMLDialogElementOps for HostObject {
+    fn open(&self) -> bool {
+        self.reflect_bool("open")
+    }
+    fn set_open(&self, value: bool) {
+        self.set_reflect_bool("open", value);
+    }
+    fn show(&self) {
+        self.set_reflect_bool("open", true);
+    }
+    fn show_modal(&self) {
+        self.set_reflect_bool("open", true);
+    }
+    fn close(&self) {
+        self.set_reflect_bool("open", false);
+    }
+}

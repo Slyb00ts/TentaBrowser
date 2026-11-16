@@ -60,6 +60,21 @@ fn media_canvas_and_svg_elements_have_their_interfaces() {
     );
 }
 
+#[test]
+fn meta_source_and_dialog_interfaces_and_random_uuids() {
+    let mut engine = page();
+    assert_js(
+        &mut engine,
+        "var dialog = document.createElement('dialog'); dialog.showModal(); \
+         [document.createElement('meta') instanceof HTMLMetaElement, \
+          document.createElement('source') instanceof HTMLSourceElement, \
+          dialog instanceof HTMLDialogElement, dialog.open, \
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(crypto.randomUUID()), \
+          typeof document.domain].join('|')",
+        "true|true|true|true|true|string",
+    );
+}
+
 /// Shadow trees are in the shared bindings, so QuickJS has them too: the
 /// root, its separate tree, slots, and an event leaving through the host.
 #[test]

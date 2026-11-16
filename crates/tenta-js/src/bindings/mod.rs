@@ -97,6 +97,9 @@ include!(concat!(env!("OUT_DIR"), "/html_media_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_video_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_audio_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_canvas_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_meta_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_source_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_dialog_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_slot_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/shadow_root_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/svg_graphics_element_ops.rs"));
@@ -197,6 +200,9 @@ include!(concat!(env!("OUT_DIR"), "/html_media_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_video_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_audio_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_canvas_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_meta_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_source_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_dialog_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_slot_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/shadow_root_register.rs"));
 include!(concat!(
@@ -348,6 +354,12 @@ include!(concat!(env!("OUT_DIR"), "/html_video_element_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_audio_element_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/html_canvas_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_meta_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_source_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_dialog_element_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/html_slot_element_v8.rs"));
 #[cfg(feature = "v8")]
@@ -536,6 +548,12 @@ pub mod quickjs {
     include!(concat!(env!("OUT_DIR"), "/html_audio_element_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/html_canvas_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_meta_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_source_element_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/html_dialog_element_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/html_slot_element_qjs.rs"));
     #[cfg(feature = "quickjs")]

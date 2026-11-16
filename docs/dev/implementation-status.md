@@ -79,6 +79,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | Media, canvas and SVG interfaces (IF1) | Implemented on both engines (generated); focused checks passed; not independently reviewed | `HTMLMediaElement`/`Video`/`Audio`, `HTMLCanvasElement`, `SVGGraphicsElement`/`SVGSVGElement`/`SVGAElement`; no playback and no canvas context; see the section below |
 | `customElements` (CE1) | Implemented on V8, built lazily; focused checks passed; not independently reviewed | Autonomous custom elements: `define`/`get`/`getName`/`whenDefined`/`upgrade`, the HTML element constructor, upgrade and the connected, disconnected and attribute reactions; no customized built-ins, no shadow DOM yet; see the section below |
 | Shadow trees (SD1) | Script, events and extraction implemented on both engines; focused checks passed; not independently reviewed; **not styled, laid out or painted** | `attachShadow`, `ShadowRoot`, `shadowRoot`, slots, composed event paths with retargeting, flat-tree text and snapshot; a screenshot does not show shadow content; see the section below |
+| `document.domain`, `crypto.randomUUID()`, `<meta>`/`<source>`/`<dialog>` interfaces (WIN2) | Implemented on both engines (generated); focused checks passed; not independently reviewed | What the sweep after CE1 and SD1 named most; a dialog has no top layer, `returnValue` or `close` event; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
 
 QuickJS runtime implementation alone does not complete its timezone hook,
@@ -2531,6 +2532,34 @@ elements without it upgraded nothing that such a library defines.
   images inside a shadow tree load has not been checked; the CDP DOM domain
   does not report shadow roots; a ref inside a closed shadow tree cannot be
   acted on.
+
+## WIN2: members the sweep named after CE1 and SD1 (P2 package)
+
+- **`document.domain`**: the host of the document's URL. Assigning the
+  value it already has does nothing; any other value is a `SecurityError`,
+  because nothing here relaxes the same-origin policy. github.com's bundle
+  threw `Unable to get document domain` seven times without it.
+- **`crypto.randomUUID()`** (`idl/webcrypto/Crypto.webidl`): a version 4
+  UUID from the source `getRandomValues()` uses. Not limited to secure
+  contexts, which are not modelled.
+- **`HTMLMetaElement`, `HTMLSourceElement`, `HTMLDialogElement`**: the
+  reflected attributes. A dialog's `show()`, `showModal()` and `close()` set
+  and remove `open`; there is no top layer, no `returnValue` and no `close`
+  event.
+- **Checks:** `tenta-js-v8::dom_media` 6 (two new), `tenta-js-qjs::runtime`
+  1 new. Workspace 4825 passed; the feature set 593 passed twice after one
+  run in which `tenta-cdp::page
+  a_refused_connection_is_an_error_text_and_an_error_document` failed. That
+  test navigates to a port it bound and released, alone it passed 6 times
+  out of 6, and its failure output was not kept; another test's server
+  taking the released port would explain it and has not been shown.
+- **Measured against SD1** (release, two sets of 25 interleaved pairs):
+  `bench/js_xhr.py` (`S-js-xhr`) navigation p50 17.51 to 17.58 ms and 17.51
+  to 17.55 ms, RSS p50 30.4 to 30.6 MiB both; below the 10% floor.
+- **Still named by the sweep:** `ReadableStream` (3), `Worker`,
+  `MessageChannel`, `Request`, `getSelection`, `DOMMatrix`,
+  `SVGAnimatedString`, `createNodeIterator`, an unsupported CSS rule type in
+  `insertRule`.
 
 ## Implementation queue and dependencies
 

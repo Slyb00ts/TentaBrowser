@@ -5604,6 +5604,28 @@ impl DocumentOps for HostObject {
         Ok(doc.url().map(ToString::to_string).unwrap_or_default())
     }
 
+    fn domain(&self) -> Result<String, JsError> {
+        // https://html.spec.whatwg.org/#dom-document-domain: the host of the
+        // document's origin, serialized, or the empty string when the origin
+        // is opaque, which is what a document without a URL has here.
+        let (doc, _) = self.anchor();
+        let doc = doc.borrow();
+        Ok(doc
+            .url()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .unwrap_or_default())
+    }
+
+    fn set_domain(&self, value: &str) -> Result<(), JsError> {
+        if value == DocumentOps::domain(self)? && !value.is_empty() {
+            return Ok(());
+        }
+        Err(JsError::dom_exception(
+            "SecurityError",
+            "Failed to set the 'domain' property on 'Document': relaxing the same-origin policy is not supported.",
+        ))
+    }
+
     fn document_uri(&self) -> Result<String, JsError> {
         // The same getter as `URL`
         // (https://dom.spec.whatwg.org/#dom-document-documenturi).
