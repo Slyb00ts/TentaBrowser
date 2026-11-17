@@ -582,7 +582,7 @@ fn callback_interface_union_arms_follow_callable_iterable_and_platform_tests() {
             "{engine} must select the function arm first"
         );
         assert!(
-            callback.contains("the value matches no arm of the union"),
+            callback.contains("the value is not of type '("),
             "{engine} must reject unrelated primitives"
         );
 

@@ -1700,8 +1700,12 @@ pub fn handle_from_v8<T: InterfaceMarker>(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<v8::Value>,
 ) -> Result<Handle<T>, JsError> {
-    interface_handle_from_v8::<T>(scope, value)?
-        .ok_or_else(|| JsError::type_error("expected an interface instance"))
+    interface_handle_from_v8::<T>(scope, value)?.ok_or_else(|| {
+        JsError::type_error(format!(
+            "the value is not of type '{}'",
+            T::INTERFACE_NAME
+        ))
+    })
 }
 
 /// Returns `T`'s handle when `value` is an actual wrapper carrying its brand.
@@ -3450,16 +3454,17 @@ pub fn handle_from_quickjs<'js, T: InterfaceMarker>(
     value: rquickjs::Value<'js>,
 ) -> rquickjs::Result<Handle<T>> {
     let interface = T::INTERFACE_NAME;
-    let object = value
-        .as_object()
-        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "expected an interface instance"))?;
+    let not_an_instance = || {
+        rquickjs::Exception::throw_type(ctx, &format!("the value is not of type '{interface}'"))
+    };
+    let object = value.as_object().ok_or_else(not_an_instance)?;
     let world = ctx
         .userdata::<QuickJsWorldSlot>()
         .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "no wrapper world for this context"))?;
     let handle = world
         .0
         .handle(interface, object)
-        .ok_or_else(|| rquickjs::Exception::throw_type(ctx, "expected an interface instance"))?;
+        .ok_or_else(not_an_instance)?;
     // A later dictionary getter or iterator step can reenter JavaScript after
     // this temporary Value is consumed. Keep the original wrapper, not only
     // its native bits, until the enclosing host call has produced its result.

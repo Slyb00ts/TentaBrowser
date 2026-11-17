@@ -39,7 +39,7 @@ impl ListenerOrCallbackUnionProbe {
         if value.is_object() {
             return (if value.is_object() { value_from_v8(scope, value).map(Listener::from_bits) } else { Err::<Listener, JsError>(JsError::type_error("the value is not an object, so it is not an `Listener`")) }).map(ListenerOrCallbackUnionProbe::Listener);
         }
-        Err(JsError::type_error("the value matches no arm of the union"))
+        Err(JsError::type_error("the value is not of type '(Listener or CallbackUnionProbe)'"))
     }
 
     /// Converts this union to a JavaScript value.
@@ -69,7 +69,7 @@ impl<'js> rquickjs::FromJs<'js> for ListenerOrCallbackUnionProbe {
         if value.is_object() {
             return { let value = value; if value.is_object() { <Listener as rquickjs::FromJs>::from_js(ctx, value) } else { Err(rquickjs::Exception::throw_type(ctx, "the value is not an object, so it is not an `Listener`")) } }.map(ListenerOrCallbackUnionProbe::Listener);
         }
-        Err(rquickjs::Exception::throw_type(ctx, "the value matches no arm of the union"))
+        Err(rquickjs::Exception::throw_type(ctx, "the value is not of type '(Listener or CallbackUnionProbe)'"))
     }
 }
 
@@ -110,7 +110,7 @@ impl ListenerOrHandler {
         if value.is_object() {
             return (if value.is_object() { value_from_v8(scope, value).map(Listener::from_bits) } else { Err::<Listener, JsError>(JsError::type_error("the value is not an object, so it is not an `Listener`")) }).map(ListenerOrHandler::Listener);
         }
-        Err(JsError::type_error("the value matches no arm of the union"))
+        Err(JsError::type_error("the value is not of type '(Listener or Handler)'"))
     }
 
     /// Converts this union to a JavaScript value.
@@ -140,7 +140,7 @@ impl<'js> rquickjs::FromJs<'js> for ListenerOrHandler {
         if value.is_object() {
             return { let value = value; if value.is_object() { <Listener as rquickjs::FromJs>::from_js(ctx, value) } else { Err(rquickjs::Exception::throw_type(ctx, "the value is not an object, so it is not an `Listener`")) } }.map(ListenerOrHandler::Listener);
         }
-        Err(rquickjs::Exception::throw_type(ctx, "the value matches no arm of the union"))
+        Err(rquickjs::Exception::throw_type(ctx, "the value is not of type '(Listener or Handler)'"))
     }
 }
 
@@ -181,7 +181,7 @@ impl ListenerOrSequenceOfDomString {
         if value.is_object() {
             return (if value.is_object() { value_from_v8(scope, value).map(Listener::from_bits) } else { Err::<Listener, JsError>(JsError::type_error("the value is not an object, so it is not an `Listener`")) }).map(ListenerOrSequenceOfDomString::Listener);
         }
-        Err(JsError::type_error("the value matches no arm of the union"))
+        Err(JsError::type_error("the value is not of type '(Listener or sequence<DOMString>)'"))
     }
 
     /// Converts this union to a JavaScript value.
@@ -211,7 +211,7 @@ impl<'js> rquickjs::FromJs<'js> for ListenerOrSequenceOfDomString {
         if value.is_object() {
             return { let value = value; if value.is_object() { <Listener as rquickjs::FromJs>::from_js(ctx, value) } else { Err(rquickjs::Exception::throw_type(ctx, "the value is not an object, so it is not an `Listener`")) } }.map(ListenerOrSequenceOfDomString::Listener);
         }
-        Err(rquickjs::Exception::throw_type(ctx, "the value matches no arm of the union"))
+        Err(rquickjs::Exception::throw_type(ctx, "the value is not of type '(Listener or sequence<DOMString>)'"))
     }
 }
 

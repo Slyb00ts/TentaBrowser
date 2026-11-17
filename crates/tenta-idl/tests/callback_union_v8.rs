@@ -122,7 +122,9 @@ fn callback_union_selects_plain_listener_objects_and_callable_functions() {
             let value = eval(scope, source);
             assert_eq!(
                 ListenerOrHandler::from_v8(scope, value),
-                Err(JsError::type_error("the value matches no arm of the union")),
+                Err(JsError::type_error(
+                    "the value is not of type '(Listener or Handler)'"
+                )),
                 "wrong primitive must fail before the host effect"
             );
             assert_eq!(host_calls.get(), 5);

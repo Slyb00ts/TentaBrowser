@@ -522,9 +522,14 @@ fn union_code(union: &Union, out: &mut String) {
     }
     match fallback {
         Some(text) => out.push_str(&text),
-        None => out.push_str(
-            "        Err(JsError::type_error(\"the value matches no arm of the union\"))\n",
-        ),
+        None => {
+            // The message names the union, so that a page's failure says which
+            // argument it was.
+            let _ = writeln!(
+                out,
+                "        Err(JsError::type_error(\"the value is not of type '({idl})'\"))"
+            );
+        }
     }
     out.push_str("    }\n\n    /// Converts this union to a JavaScript value.\n    pub fn to_v8<'s>(\n        &self,\n        scope: &mut v8::PinScope<'s, '_>,\n    ) -> Result<v8::Local<'s, v8::Value>, JsError> {\n        match self {\n");
     for member in &union.members {
@@ -567,9 +572,12 @@ fn union_code(union: &Union, out: &mut String) {
     }
     match qjs_fallback {
         Some(text) => out.push_str(&text),
-        None => out.push_str(
-            "        Err(rquickjs::Exception::throw_type(ctx, \"the value matches no arm of the union\"))\n",
-        ),
+        None => {
+            let _ = writeln!(
+                out,
+                "        Err(rquickjs::Exception::throw_type(ctx, \"the value is not of type '({idl})'\"))"
+            );
+        }
     }
     out.push_str("    }\n}\n");
 

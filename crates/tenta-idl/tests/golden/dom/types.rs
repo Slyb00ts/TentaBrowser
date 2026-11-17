@@ -798,7 +798,7 @@ impl AddEventListenerOptionsOrBoolean {
         if value.is_boolean() {
             return (Ok::<bool, JsError>(bool_from_v8(scope, value))).map(AddEventListenerOptionsOrBoolean::Boolean);
         }
-        Err(JsError::type_error("the value matches no arm of the union"))
+        Err(JsError::type_error("the value is not of type '(AddEventListenerOptions or boolean)'"))
     }
 
     /// Converts this union to a JavaScript value.
@@ -828,7 +828,7 @@ impl<'js> rquickjs::FromJs<'js> for AddEventListenerOptionsOrBoolean {
         if value.is_bool() {
             return rquickjs::Coerced::<bool>::from_js(ctx, value).map(|v| v.0).map(AddEventListenerOptionsOrBoolean::Boolean);
         }
-        Err(rquickjs::Exception::throw_type(ctx, "the value matches no arm of the union"))
+        Err(rquickjs::Exception::throw_type(ctx, "the value is not of type '(AddEventListenerOptions or boolean)'"))
     }
 }
 
@@ -869,7 +869,7 @@ impl EventListenerOptionsOrBoolean {
         if value.is_boolean() {
             return (Ok::<bool, JsError>(bool_from_v8(scope, value))).map(EventListenerOptionsOrBoolean::Boolean);
         }
-        Err(JsError::type_error("the value matches no arm of the union"))
+        Err(JsError::type_error("the value is not of type '(EventListenerOptions or boolean)'"))
     }
 
     /// Converts this union to a JavaScript value.
@@ -899,7 +899,7 @@ impl<'js> rquickjs::FromJs<'js> for EventListenerOptionsOrBoolean {
         if value.is_bool() {
             return rquickjs::Coerced::<bool>::from_js(ctx, value).map(|v| v.0).map(EventListenerOptionsOrBoolean::Boolean);
         }
-        Err(rquickjs::Exception::throw_type(ctx, "the value matches no arm of the union"))
+        Err(rquickjs::Exception::throw_type(ctx, "the value is not of type '(EventListenerOptions or boolean)'"))
     }
 }
 
