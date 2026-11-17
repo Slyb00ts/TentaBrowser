@@ -26,3 +26,15 @@ threads-required = "num-test-threads"
 [[profile.ci.overrides]]
 filter = 'binary(image_events) & (test(/thousand/) | test(/more_pending_images_than_the_cap/))'
 threads-required = "num-test-threads"
+
+# These two tests are about which of two real clocks fires first: the
+# harness's own timeout against the driver's, 250 ms apart, and a deadline
+# against the tests started before it. Sharing the CPU with the rest of the
+# suite moves either clock by more than the margin, so they run alone.
+[[profile.default.overrides]]
+filter = 'binary(wpt_driver) & (test(/a_live_harness_reports_from_its_own_timeout/) | test(/tests_started_before_the_deadline_drain/))'
+threads-required = "num-test-threads"
+
+[[profile.ci.overrides]]
+filter = 'binary(wpt_driver) & (test(/a_live_harness_reports_from_its_own_timeout/) | test(/tests_started_before_the_deadline_drain/))'
+threads-required = "num-test-threads"

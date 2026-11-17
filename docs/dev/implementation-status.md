@@ -3337,6 +3337,16 @@ this series with the cause recorded as not established.
   TW1 and here) set a 10 ms script deadline for the whole test, so the
   script before the checkpoint and the `3+4` after it were under it too.
   The deadline now covers the checkpoint it is for.
+- `tenta-browser::wpt_driver
+  a_live_harness_reports_from_its_own_timeout_before_the_driver_gives_up`
+  races the harness's timeout against the driver's, 250 ms apart, which
+  is its subject, so it was not rewritten. It failed in both full runs
+  of the feature set on 2026-11-17 (after NAV1 and after ST1) and passed
+  alone each time. It and `tests_started_before_the_deadline_drain_…`,
+  which failed once earlier, now run with no other test beside them
+  (`.config/nextest.toml`, the override the image-flood tests already
+  have). The feature set then passed 603 of 603 three times out of
+  three, in 29 s where it took about 20 s.
 
 
 ### GC2: the end of a script run collects only when a collection is owed (V8)
