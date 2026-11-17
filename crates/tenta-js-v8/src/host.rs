@@ -89,6 +89,7 @@ guarded_callback!(guarded_window_metric_setter => window_metric_setter);
 // The handwritten EventTarget methods acquire a callback before reading
 // page-controlled options. Their ordinary return closes that value lease.
 guarded_callback!(guarded_window_add_event_listener => window_add_event_listener, listener_lease);
+guarded_callback!(guarded_event_target_or_window => event_target_or_window);
 guarded_callback!(guarded_window_remove_event_listener => window_remove_event_listener, listener_lease);
 guarded_callback!(guarded_window_dispatch_event => window_dispatch_event);
 guarded_callback!(guarded_performance_now => performance_now);
@@ -108,6 +109,7 @@ guarded_callback!(guarded_java_enabled => java_enabled);
 // After `guarded_callback!`, which the module uses.
 pub(crate) mod custom_elements;
 pub(crate) mod history;
+mod message_channel;
 mod observers;
 mod window_extras;
 mod window_misc;
@@ -441,6 +443,8 @@ pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>, time_o
     observers::install(scope, global);
     custom_elements::install(scope, global);
     window_misc::install(scope, global, time_origin_ms);
+    // After `window_misc`, which defines the `origin` a posted message carries.
+    message_channel::install(scope, global);
 }
 
 /// `btoa(data)`: `data` as a binary string, base64-encoded.
@@ -820,6 +824,86 @@ fn install_window_event_target(scope: &mut v8::PinScope, global: v8::Local<v8::O
         "dispatchEvent",
         guarded_window_dispatch_event,
     );
+    forward_event_target_to_window(scope, global);
+}
+
+/// Makes `EventTarget.prototype`'s three operations work with the window as
+/// their receiver.
+///
+/// The generated operations carry the interface's signature, and the global
+/// object is not made from the `EventTarget` template, so V8 refused
+/// `EventTarget.prototype.addEventListener.call(window, …)` and a bare call
+/// of a stored reference, where Web IDL substitutes the global object for a
+/// missing receiver. Pages do both: a polyfill that copies the operations to
+/// another name on the prototype reaches them with the window as `this`.
+/// Each operation on the prototype is replaced by a function that hands the
+/// call to the window's own operation for that receiver and to the generated
+/// one for every other.
+fn forward_event_target_to_window(scope: &mut v8::PinScope, global: v8::Local<v8::Object>) {
+    let interface = v8::String::new(scope, "EventTarget").expect("a short name");
+    let Some(prototype) = global
+        .get(scope, interface.into())
+        .and_then(|constructor| v8::Local::<v8::Object>::try_from(constructor).ok())
+        .and_then(|constructor| {
+            let key = v8::String::new(scope, "prototype").expect("a short name");
+            constructor.get(scope, key.into())
+        })
+        .and_then(|prototype| v8::Local::<v8::Object>::try_from(prototype).ok())
+    else {
+        return;
+    };
+    for (name, length) in [
+        ("addEventListener", 2),
+        ("removeEventListener", 2),
+        ("dispatchEvent", 1),
+    ] {
+        let key = v8::String::new(scope, name).expect("a short name");
+        let generated = prototype.get(scope, key.into());
+        let own = global.get(scope, key.into());
+        let (Some(generated), Some(own)) = (generated, own) else {
+            continue;
+        };
+        if !generated.is_function() || !own.is_function() {
+            continue;
+        }
+        let pair = v8::Array::new_with_elements(scope, &[generated, own]);
+        let Some(forward) = v8::Function::builder(guarded_event_target_or_window)
+            .data(pair.into())
+            .length(length)
+            .build(scope)
+        else {
+            continue;
+        };
+        forward.set_name(key);
+        prototype.set(scope, key.into(), forward.into());
+    }
+}
+
+/// One `EventTarget` operation: the window's own for the window, the
+/// generated one for any other receiver (`forward_event_target_to_window`).
+fn event_target_or_window<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut retval: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Ok(pair) = v8::Local::<v8::Array>::try_from(args.data()) else {
+        return;
+    };
+    let global = scope.get_current_context().global(scope);
+    let receiver: v8::Local<v8::Value> = args.this().into();
+    // A missing receiver is the global object, as Web IDL has it.
+    let for_window = receiver.is_null_or_undefined() || receiver.strict_equals(global.into());
+    let Some(function) = pair
+        .get_index(scope, u32::from(for_window))
+        .and_then(|function| v8::Local::<v8::Function>::try_from(function).ok())
+    else {
+        return;
+    };
+    let receiver = if for_window { global.into() } else { receiver };
+    let arguments: Vec<v8::Local<v8::Value>> = (0..args.length()).map(|i| args.get(i)).collect();
+    if let Some(value) = function.call(scope, receiver, &arguments) {
+        retval.set(value);
+    }
 }
 
 /// Installs the window's event handler IDL attributes — the `on*` properties

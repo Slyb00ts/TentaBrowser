@@ -82,6 +82,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | Shadow trees are styled, laid out and painted (SD2) | Implemented; focused checks passed; not independently reviewed | Sheets inside a shadow root style that tree, `:host` and `::slotted()`; boxes follow the flat tree; a screenshot shows a component; see the section below |
 | `document.domain`, `crypto.randomUUID()`, `<meta>`/`<source>`/`<dialog>` interfaces (WIN2) | Implemented on both engines (generated); focused checks passed; not independently reviewed | What the sweep after CE1 and SD1 named most; a dialog has no top layer, `returnValue` or `close` event; see the section below |
 | Declarative shadow roots (DSD1) | Implemented in the parser and both sinks; focused checks passed; not independently reviewed | `<template shadowrootmode>` in a navigated document attaches a shadow root; `attachShadow()` takes it over; see the section below |
+| `MessageChannel`, `MessagePort`, `MessageEvent`, `window.postMessage()`; the window as receiver of `EventTarget` operations (MSG1) | Implemented on V8; focused checks passed; not independently reviewed | youtube.com, which stopped at both, renders; nothing is transferred between ports; QuickJS has no messaging; see the section below |
 | Nested flex and grid containers share their answers (LP1) | Implemented; measured; fragment output compared on a real page; not independently reviewed | One layout of a component-built page solved its containers 12 times less often; see the section below. Layout still starts over after every mutation |
 | Wrapper-graph collection at task ends is amortised (GC1) | Implemented on V8; measured; not independently reviewed; **changes when detached wrappers are reclaimed, which the specification may record as a decision** | A task end collects once 1024 wrappers are owed or the last collection is 250 ms old, not every time; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
@@ -2810,6 +2811,59 @@ reads `.ready` of an object that is undefined here, probably
 
 Workspace 4832 passed; the feature set 593 passed; fmt, both Clippy runs,
 `lint-deps`, `idl-manifest` and `cargo deny` clean.
+
+## MSG1: messaging in one realm, and the window as an `EventTarget` receiver (P2 package, V8)
+
+youtube.com returned an empty snapshot. Logging where its uncaught
+exceptions were thrown (a temporary print in the inspector's exception
+report) gave two causes.
+
+- **`Illegal invocation`.** The page's ShadyDOM copies
+  `EventTarget.prototype.addEventListener` to another name and calls it on
+  the window. The generated operations carry the interface's signature and
+  the global object is not made from the `EventTarget` template, so V8
+  refused the window as receiver, and a bare call of a stored reference
+  with it (Web IDL substitutes the global object for a missing receiver).
+  `EventTarget.prototype`'s three operations are now functions that hand
+  the call to the window's own operation for that receiver and to the
+  generated one for any other. A node's `addEventListener` therefore goes
+  through one more native call; its cost has not been measured. QuickJS
+  already behaved correctly and has a test saying so.
+- **`MessageChannel is not defined`.** `MessageChannel`, `MessagePort`,
+  `MessageEvent` and `window.postMessage()` are in
+  `crates/tenta-js-v8/src/host/message_channel.rs`. A posted value is
+  cloned at once with `structuredClone`, and each message is delivered as a
+  `message` event from a task of its own, in order. A port holds what
+  arrives until `start()` or an `onmessage` assignment and delivers nothing
+  after `close()`. `MessagePort` is a real `EventTarget` and `MessageEvent`
+  a real `Event`, each with its own prototype in front, as `MediaQueryList`
+  is built. `window.postMessage()` delivers to the window with the
+  document's origin and the window as source; the target origin is not
+  compared, there being no other browsing context.
+- **Not built:** transfer lists are accepted and ignored, so a port or a
+  buffer is never moved and `MessageEvent.ports` is empty; no
+  `messageerror`; `BroadcastChannel`; `initMessageEvent`; nothing on
+  QuickJS.
+- **Found on the way and open:** an uncaught exception fires no `error`
+  event, so `window.onerror` and `addEventListener('error', …)` never run
+  and there is no `ErrorEvent`; youtube.com still throws once reading
+  `startsWith` of undefined; amazon.com and imdb.com answer 202 with a
+  script challenge whose script fails here (`checkForceRefresh` of
+  undefined), which has not been looked into.
+- **Checks:** `tenta-js-v8::dom_messaging` 6 (the receiver, order and
+  cloning, start and close, refusals, `MessageEvent`, `window.postMessage`),
+  `tenta-js-qjs::runtime` 1 new. Workspace 4851 passed. The feature set
+  passed 595 of 595 in two runs of four; in the other two one test failed
+  each, and each passed alone afterwards: `tenta-browser::wpt_driver
+  a_live_harness_reports_from_its_own_timeout_before_the_driver_gives_up`
+  (a race of a 1 000 ms against a 1 250 ms clock; 4 of 4 alone) and
+  `tenta-mcp::reading network_requests_list_the_current_page_and_filter`
+  (a page without script; 6 of 6 alone). Their failure output was not kept
+  and no cause is established. Together with the two earlier one-off
+  failures recorded above, four different tests of the feature set have now
+  failed once each under the parallel run.
+- **Result:** youtube.com's snapshot has its banner, search form, main
+  region and consent dialog (68 lines, one navigation by hand).
 
 ## Implementation queue and dependencies
 

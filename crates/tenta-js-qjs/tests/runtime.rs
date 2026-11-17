@@ -327,3 +327,19 @@ fn two_runtimes_interleave_without_sharing_globals() {
     drop(one);
     assert_js(&mut two, "marker", "22");
 }
+
+/// `EventTarget`'s operations take the window as their receiver on QuickJS as
+/// well: called on it through the prototype, and bare.
+#[test]
+fn event_target_operations_take_the_window_as_receiver() {
+    let mut engine = page();
+    assert_js(
+        &mut engine,
+        "var seen = []; var proto = EventTarget.prototype; \
+         proto.addEventListener.call(window, 'ping', function () { seen.push('called'); }); \
+         var bare = proto.addEventListener; bare('ping', function () { seen.push('bare'); }); \
+         proto.dispatchEvent.call(window, new Event('ping')); \
+         seen.join(',')",
+        "called,bare",
+    );
+}
