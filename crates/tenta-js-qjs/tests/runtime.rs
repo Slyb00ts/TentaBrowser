@@ -364,6 +364,18 @@ fn an_error_event_carries_its_five_members_to_a_listener() {
     );
 }
 #[test]
+fn a_third_argument_of_any_type_is_an_options_value() {
+    let mut engine = page();
+    assert_js(
+        &mut engine,
+        "globalThis.seen=[];const t=document.documentElement;\
+         const listen=(label,options)=>t.addEventListener('probe',e=>seen.push(label+':'+e.eventPhase),options);\
+         listen('one',1);listen('zero',0);listen('null',null);listen('string','x');\
+         document.body.dispatchEvent(new Event('probe',{bubbles:true}));seen.join(',')",
+        "one:1,string:1,zero:3,null:3",
+    );
+}
+#[test]
 fn abort_throws_the_exact_reason() {
     let mut engine = page();
     assert_js(

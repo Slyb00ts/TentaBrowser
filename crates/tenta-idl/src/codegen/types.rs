@@ -483,6 +483,16 @@ fn union_code(union: &Union, out: &mut String) {
          /// is the fallback.\n    \
          pub fn from_v8<'s>(\n        scope: &mut v8::PinScope<'s, '_>,\n        value: v8::Local<'s, v8::Value>,\n    ) -> Result<Self, JsError> {{\n"
     );
+    // WebIDL's first step for a union: `null` and `undefined` are the
+    // dictionary arm's, when there is one, and convert to its default.
+    if let Some(member) = union_dictionary_member(union) {
+        let conversion = convert::from_v8(&member.ty, "scope", "value", IntegerMode::Modulo);
+        let _ = write!(
+            out,
+            "        if value.is_null_or_undefined() {{\n            return ({conversion}).map({name}::{});\n        }}\n",
+            member.rust_name
+        );
+    }
     let mut fallback: Option<String> = None;
     for member in union_conversion_members(union) {
         // Interface selection is one operation: it validates the native V8
@@ -520,6 +530,18 @@ fn union_code(union: &Union, out: &mut String) {
             }
         }
     }
+    // WebIDL's last steps: a value no test selected converts through the
+    // numeric arm when the union has one, and through the boolean arm
+    // otherwise, so `(AddEventListenerOptions or boolean)` given `1` is `true`.
+    if fallback.is_none()
+        && let Some(member) = union_last_resort_member(union)
+    {
+        let conversion = convert::from_v8(&member.ty, "scope", "value", IntegerMode::Modulo);
+        fallback = Some(format!(
+            "        ({conversion}).map({name}::{})\n",
+            member.rust_name
+        ));
+    }
     match fallback {
         Some(text) => out.push_str(&text),
         None => {
@@ -552,6 +574,14 @@ fn union_code(union: &Union, out: &mut String) {
         "\n#[cfg(feature = \"quickjs\")]\nimpl<'js> rquickjs::FromJs<'js> for {name} {{\n    \
          fn from_js(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {{\n"
     );
+    if let Some(member) = union_dictionary_member(union) {
+        let conversion = super::quickjs::from_value(&member.ty, "ctx", "value");
+        let _ = write!(
+            out,
+            "        if value.is_null() || value.is_undefined() {{\n            return {conversion}.map({name}::{});\n        }}\n",
+            member.rust_name
+        );
+    }
     let mut qjs_fallback: Option<String> = None;
     for member in union_conversion_members(union) {
         let conversion = super::quickjs::from_value(&member.ty, "ctx", "value");
@@ -569,6 +599,15 @@ fn union_code(union: &Union, out: &mut String) {
                 });
             }
         }
+    }
+    if qjs_fallback.is_none()
+        && let Some(member) = union_last_resort_member(union)
+    {
+        let conversion = super::quickjs::from_value(&member.ty, "ctx", "value");
+        qjs_fallback = Some(format!(
+            "        {conversion}.map({name}::{})\n",
+            member.rust_name
+        ));
     }
     match qjs_fallback {
         Some(text) => out.push_str(&text),
@@ -601,6 +640,30 @@ fn union_code(union: &Union, out: &mut String) {
 /// platform object, buffer or iterable before WebIDL's earlier union steps.
 /// Preserve declaration order among the other arms and keep the callback
 /// interface as the last tested object arm. String fallbacks remain last.
+/// The union's dictionary arm, which `null` and `undefined` convert to
+/// (<https://webidl.spec.whatwg.org/#es-union>, step 1).
+fn union_dictionary_member(union: &Union) -> Option<&UnionMember> {
+    union
+        .members
+        .iter()
+        .find(|member| matches!(&member.ty, Type::Dictionary(_)))
+}
+
+/// The arm a value converts through once no test has selected one and the
+/// union has no string arm: the numeric arm when there is one, else the
+/// boolean arm (the same algorithm, steps 18 and 19).
+fn union_last_resort_member(union: &Union) -> Option<&UnionMember> {
+    let numeric = |member: &&UnionMember| {
+        member.ty.is_integer() || matches!(&member.ty, Type::Float { .. } | Type::Double { .. })
+    };
+    union.members.iter().find(numeric).or_else(|| {
+        union
+            .members
+            .iter()
+            .find(|member| matches!(&member.ty, Type::Boolean))
+    })
+}
+
 fn union_conversion_members(union: &Union) -> impl Iterator<Item = &UnionMember> {
     union
         .members

@@ -92,6 +92,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `unhandledrejection` and `PromiseRejectionEvent` (ERR2) | Implemented on V8 as a prelude script; focused checks passed; not independently reviewed | Fired at the window when a task ends with a rejected promise nobody handled; a cancelled event keeps the rejection out of the inspector. The event is made by script, so its `isTrusted` is `false`; `rejectionhandled` is not fired. |
 | `document.fonts`, `FontFaceSet`, `FontFace` (FS1) | Implemented on V8 as a prelude script with no engine state behind it; focused checks passed; not independently reviewed | Answers as a document whose fonts have all loaded: `ready` is resolved, `status` is `loaded`, `check()` is `true`, `load()` resolves. Nothing is fetched and an added face is not used to draw text. |
 | The HTML element interfaces that were missing: `HTMLBodyElement`, `HTMLHeadingElement`, the table and list interfaces and 37 more (EL1) | Declared without members on both engines; focused checks passed; not independently reviewed | An element whose tag had no interface of its own was a plain `HTMLElement` and naming the missing interface was a `ReferenceError`. The reflected attributes and the table, list and form-control members of these interfaces are not implemented. |
+| A union converts `null`, `undefined` and an untested value as WebIDL says (UN1) | Implemented in the generator for both engines; focused checks passed; not independently reviewed | `addEventListener(type, fn, 1)` was a `TypeError`, where the standard converts the third argument to a boolean; bing.com does it. `null` and `undefined` now select a union's dictionary arm, and a value no test selects converts through the numeric arm, else the boolean arm. |
 | Nested flex and grid containers share their answers (LP1) | Implemented; measured; fragment output compared on a real page; not independently reviewed | One layout of a component-built page solved its containers 12 times less often; see the section below. Layout still starts over after every mutation |
 | Wrapper-graph collection at task ends is amortised (GC1) | Implemented on V8; measured; not independently reviewed; **changes when detached wrappers are reclaimed, which the specification may record as a decision** | A task end collects once 1024 wrappers are owed or the last collection is 250 ms old, not every time; see the section below |
 | Wrapper-graph collection at the end of a script run is amortised too (GC2) | Implemented on V8; measured; not independently reviewed; **extends the change of timing GC1 made, which the specification may record as a decision** | A script run ended with a full collection every time, about 0.45 ms on the smallest heap, so every `<script>` and every start-up script paid for one. It now collects under the rule a task end uses; see the section below |
@@ -3501,6 +3502,47 @@ React Router's render — was a `ReferenceError`.
   margin is 250 ms of wall-clock time under a suite of 600 tests. It was
   not rewritten: unlike the two tests rewritten after ERR2, the deadline
   is the thing under test.
+
+### Union conversion: the first and the last steps (UN1)
+
+Two errors in the sweeps named no interface: "the value matches no arm of
+the union" on bing.com and "expected an interface instance" on
+microsoft.com. Both messages now name the type they wanted (`608a854`),
+and with that the first is `(AddEventListenerOptions or boolean)`: the
+page passes a third argument to `addEventListener` that is neither an
+object nor a boolean.
+
+- **What was wrong.** The generator's union conversion tested each arm and
+  ended with the first arm that has no test, which is how a string arm
+  becomes the fallback. A union with no such arm ended in a `TypeError`.
+  WebIDL's algorithm (<https://webidl.spec.whatwg.org/#es-union>) starts
+  by giving `null` and `undefined` to the dictionary arm when there is
+  one, and ends by converting whatever is left through the numeric arm,
+  then the boolean arm, before it throws.
+- **The change** (`crates/tenta-idl/src/codegen/types.rs`). Both steps are
+  generated, for V8 and for QuickJS: a union with a dictionary arm takes
+  `null` and `undefined` as that dictionary's defaults, and a union whose
+  arms all have tests falls back to its numeric arm, else its boolean arm.
+  A union with a string arm is unchanged past the first step, since the
+  string arm was and is the fallback. In the committed goldens the two
+  listener-option unions are the ones that changed.
+- **What a page sees.** `addEventListener('x', f, 1)` registers a
+  capturing listener, `0`, `''` and `null` a bubbling one, and
+  `removeEventListener('x', f, 1)` names the capturing one. The two
+  listener-option unions are the only unions with a dictionary arm in
+  `idl/` today, so nothing else changes its answer; a union declared
+  later with a dictionary arm and a string arm will take `null` as the
+  dictionary's defaults and not as the string `"null"`.
+- **The other error is not fixed.** On microsoft.com it is "the value is
+  not of type 'Node'", from a promise; which member was handed something
+  that is not a node is not in the message, because a conversion error
+  does not say which operation it belongs to.
+- **Checks:** `tenta-js-v8::dom_events_basic` 1 and `tenta-js-qjs::runtime`
+  1 (six values as the third argument, observed through the phase the
+  listener runs in, and removal by a converted `1`); the generator's
+  goldens and its 88 tests with all features. The workspace passed 4926
+  of 4926 and the feature set 601 of 601; fmt, both Clippy runs,
+  `lint-deps`, `idl-manifest` and `cargo deny` were clean.
 
 ## Implementation queue and dependencies
 

@@ -598,3 +598,49 @@ fn a_window_listener_can_dispatch_a_node_event_and_be_seen() {
         "outer-path:5,inner,outer-after:5"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The third argument of addEventListener that is neither an object nor a
+// boolean
+// ---------------------------------------------------------------------------
+
+/// `(AddEventListenerOptions or boolean)` takes any value: `null` and
+/// `undefined` are the dictionary's defaults, and a value that is neither an
+/// object nor a boolean converts to a boolean, as WebIDL's union conversion
+/// ends. A page that passes `1` for "capture" used to get a `TypeError`.
+#[test]
+fn a_third_argument_of_any_type_is_an_options_value() {
+    let mut engine = Engine::with_document(test_document());
+    let out = engine
+        .evaluate(
+            r#"
+            const seen = [];
+            const target = document.documentElement;
+            const child = document.body;
+            const listen = (label, options) => {
+                target.addEventListener('probe', event => {
+                    seen.push(label + ':' + event.eventPhase);
+                }, options);
+            };
+            // Phase 1 is capturing and 3 is bubbling, seen from the ancestor.
+            listen('one', 1);
+            listen('zero', 0);
+            listen('null', null);
+            listen('undefined', undefined);
+            listen('string', 'capture');
+            listen('empty', '');
+            child.dispatchEvent(new Event('probe', { bubbles: true }));
+
+            // The same conversion decides which listener `removeEventListener`
+            // names: `1` is the capturing one.
+            const removed = [];
+            const callback = () => removed.push('ran');
+            target.addEventListener('gone', callback, true);
+            target.removeEventListener('gone', callback, 1);
+            target.dispatchEvent(new Event('gone'));
+            [seen.join(','), removed.length].join('|');
+            "#,
+        )
+        .expect("the listeners are registered without a TypeError");
+    assert_eq!(out, "one:1,string:1,zero:3,null:3,undefined:3,empty:3|0");
+}

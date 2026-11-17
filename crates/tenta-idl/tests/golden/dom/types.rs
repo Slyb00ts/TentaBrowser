@@ -792,13 +792,16 @@ impl AddEventListenerOptionsOrBoolean {
         scope: &mut v8::PinScope<'s, '_>,
         value: v8::Local<'s, v8::Value>,
     ) -> Result<Self, JsError> {
+        if value.is_null_or_undefined() {
+            return (AddEventListenerOptions::from_v8(scope, value)).map(AddEventListenerOptionsOrBoolean::AddEventListenerOptions);
+        }
         if value.is_object() {
             return (AddEventListenerOptions::from_v8(scope, value)).map(AddEventListenerOptionsOrBoolean::AddEventListenerOptions);
         }
         if value.is_boolean() {
             return (Ok::<bool, JsError>(bool_from_v8(scope, value))).map(AddEventListenerOptionsOrBoolean::Boolean);
         }
-        Err(JsError::type_error("the value is not of type '(AddEventListenerOptions or boolean)'"))
+        (Ok::<bool, JsError>(bool_from_v8(scope, value))).map(AddEventListenerOptionsOrBoolean::Boolean)
     }
 
     /// Converts this union to a JavaScript value.
@@ -822,13 +825,16 @@ impl AddEventListenerOptionsOrBoolean {
 #[cfg(feature = "quickjs")]
 impl<'js> rquickjs::FromJs<'js> for AddEventListenerOptionsOrBoolean {
     fn from_js(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {
+        if value.is_null() || value.is_undefined() {
+            return <AddEventListenerOptions as rquickjs::FromJs>::from_js(ctx, value).map(AddEventListenerOptionsOrBoolean::AddEventListenerOptions);
+        }
         if value.is_object() {
             return <AddEventListenerOptions as rquickjs::FromJs>::from_js(ctx, value).map(AddEventListenerOptionsOrBoolean::AddEventListenerOptions);
         }
         if value.is_bool() {
             return rquickjs::Coerced::<bool>::from_js(ctx, value).map(|v| v.0).map(AddEventListenerOptionsOrBoolean::Boolean);
         }
-        Err(rquickjs::Exception::throw_type(ctx, "the value is not of type '(AddEventListenerOptions or boolean)'"))
+        rquickjs::Coerced::<bool>::from_js(ctx, value).map(|v| v.0).map(AddEventListenerOptionsOrBoolean::Boolean)
     }
 }
 
@@ -863,13 +869,16 @@ impl EventListenerOptionsOrBoolean {
         scope: &mut v8::PinScope<'s, '_>,
         value: v8::Local<'s, v8::Value>,
     ) -> Result<Self, JsError> {
+        if value.is_null_or_undefined() {
+            return (EventListenerOptions::from_v8(scope, value)).map(EventListenerOptionsOrBoolean::EventListenerOptions);
+        }
         if value.is_object() {
             return (EventListenerOptions::from_v8(scope, value)).map(EventListenerOptionsOrBoolean::EventListenerOptions);
         }
         if value.is_boolean() {
             return (Ok::<bool, JsError>(bool_from_v8(scope, value))).map(EventListenerOptionsOrBoolean::Boolean);
         }
-        Err(JsError::type_error("the value is not of type '(EventListenerOptions or boolean)'"))
+        (Ok::<bool, JsError>(bool_from_v8(scope, value))).map(EventListenerOptionsOrBoolean::Boolean)
     }
 
     /// Converts this union to a JavaScript value.
@@ -893,13 +902,16 @@ impl EventListenerOptionsOrBoolean {
 #[cfg(feature = "quickjs")]
 impl<'js> rquickjs::FromJs<'js> for EventListenerOptionsOrBoolean {
     fn from_js(ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {
+        if value.is_null() || value.is_undefined() {
+            return <EventListenerOptions as rquickjs::FromJs>::from_js(ctx, value).map(EventListenerOptionsOrBoolean::EventListenerOptions);
+        }
         if value.is_object() {
             return <EventListenerOptions as rquickjs::FromJs>::from_js(ctx, value).map(EventListenerOptionsOrBoolean::EventListenerOptions);
         }
         if value.is_bool() {
             return rquickjs::Coerced::<bool>::from_js(ctx, value).map(|v| v.0).map(EventListenerOptionsOrBoolean::Boolean);
         }
-        Err(rquickjs::Exception::throw_type(ctx, "the value is not of type '(EventListenerOptions or boolean)'"))
+        rquickjs::Coerced::<bool>::from_js(ctx, value).map(|v| v.0).map(EventListenerOptionsOrBoolean::Boolean)
     }
 }
 
