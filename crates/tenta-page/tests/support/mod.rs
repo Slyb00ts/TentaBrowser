@@ -664,6 +664,7 @@ impl ProvenanceSink for RecordingSink {
 /// gc
 /// block
 /// spin <ms>
+/// navigate
 /// setTimeout <command…> <ms>
 /// setInterval <command…> <ms>
 /// raf <command…>
@@ -742,6 +743,16 @@ fn run_command(command: &str, context: &Rc<ScriptContext>) {
             while Instant::now() < until {
                 std::hint::spin_loop();
             }
+        }
+        // Asks the page to load the fixture document again, the way a script
+        // assigning `location` does: the request is left on the document and
+        // the page picks it up when this entry returns.
+        "navigate" => {
+            let url = URL.parse().expect("the fixture URL");
+            context
+                .document
+                .borrow_mut()
+                .request_navigation(tenta_dom::NavigationRequest::get(url));
         }
         "setTimeout" | "setInterval" | "loop-forever" => {
             // The delay of a scheduled command is its last token; everything

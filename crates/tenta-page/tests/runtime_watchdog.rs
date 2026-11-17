@@ -319,55 +319,28 @@ fn a_page_inside_its_budget_is_not_crashed() {
     );
 }
 
-/// The budget is the page's, not the navigation's.
+/// A document the host navigated to starts with nothing charged: what the
+/// documents before it ran is not what this one spent.
 ///
-/// Two navigations that each spend well under the budget together cross it, so
-/// the second crashes. A per-navigation accumulator would restart the second
-/// navigation at zero and never trip; this test is what catches that
-/// regression. `spin` spends the time without ever needing the entry killed, so
-/// nothing here depends on the watchdog thread's timing — the evidence is the
-/// observable behaviour, not a terminate count.
+/// Four navigations of 60 ms each are 240 ms, well past the 150 ms budget, and
+/// each alone is well inside it.
 #[test]
-fn the_script_budget_spans_navigations() {
+fn a_navigation_the_host_asks_for_starts_a_new_script_window() {
     let harness = Harness::builder(
         "<!doctype html><html><body>\
-         <script>spin 100</script>\
+         <script>spin 60</script>\
          </body></html>",
     )
-    // No watchdog: a `spin` always returns, so no entry needs terminating.
     .budgets(Budgets::default().script_cpu(Duration::from_millis(150)))
     .build();
 
-    let first = await_goto(&start_goto(&harness));
-    assert!(
-        first.error.is_none(),
-        "the first navigation is under the budget: {first:?}"
-    );
+    for round in 0..4 {
+        let navigation = await_goto(&start_goto(&harness));
+        assert!(navigation.error.is_none(), "round {round}: {navigation:?}");
+    }
     assert_eq!(
         harness.page.crash_reason(),
         None,
-        "one navigation's worth of script is not the page's budget"
-    );
-
-    let second = await_goto_result(&start_goto(&harness));
-    match second {
-        Err(Error::Crashed { reason }) => {
-            assert!(
-                reason.contains("script"),
-                "the reason names the budget: {reason}"
-            );
-        }
-        other => panic!("expected the second navigation to crash, got {other:?}"),
-    }
-    let reason = harness.page.crash_reason().expect("the page crashed");
-    let spent: u64 = reason
-        .split(" ms spent")
-        .next()
-        .and_then(|head| head.rsplit(' ').next())
-        .and_then(|millis| millis.parse().ok())
-        .unwrap_or_else(|| panic!("the reason names the spent total: {reason}"));
-    assert!(
-        spent >= 150,
-        "the accumulated total is past the 150 ms budget: {reason}"
+        "the host's navigations do not add up to one budget"
     );
 }

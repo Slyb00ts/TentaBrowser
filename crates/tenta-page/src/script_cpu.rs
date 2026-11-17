@@ -25,6 +25,18 @@
 //! a page that navigates — or reloads itself in a loop — could spend a fresh
 //! budget each time.
 //!
+//! # Why a navigation the host asks for starts a new window
+//!
+//! The limit exists to stop a page, and a document the host navigated to is not
+//! the page spending more: the host chose it. An agent that visits several
+//! script-heavy sites in one tab inside thirty seconds would otherwise have the
+//! last of them crashed for what the earlier ones ran. So the commit of a
+//! navigation the host issued — [`Page::goto`] and its siblings — empties the
+//! window with [`ScriptCpu::restart`]. A navigation the document asked for
+//! itself (`location`, a form submission, an activated link) does not, which
+//! keeps the reload loop above inside one budget.
+//!
+//! [`Page::goto`]: crate::Page::goto
 //! [`PageRuntime`]: crate::runtime::PageRuntime
 
 use std::collections::VecDeque;
@@ -98,6 +110,13 @@ impl ScriptCpu {
         let total = Self::total(&charges);
         drop(charges);
         total >= self.budget && !self.tripped.swap(true, Ordering::AcqRel)
+    }
+
+    /// Empties the window: the document a host navigation committed starts
+    /// with nothing charged. The latch is left alone, because a page that
+    /// crossed the budget is crashed and stays crashed.
+    pub(crate) fn restart(&self) {
+        self.lock().clear();
     }
 
     /// The script time inside the window ending now, for the crash message.
@@ -238,6 +257,24 @@ mod tests {
         assert!(
             tripped_at < 30,
             "it was stopped after {tripped_at} s, inside the 30 s window"
+        );
+    }
+
+    #[test]
+    fn a_restart_empties_the_window_and_keeps_the_latch() {
+        let (cpu, start) = cpu(100);
+        assert!(!cpu.charge_at(start, Duration::from_millis(90)));
+        cpu.restart();
+        assert_eq!(cpu.spent(), Duration::ZERO);
+        assert!(
+            !cpu.charge_at(start, Duration::from_millis(90)),
+            "the time before the restart no longer counts"
+        );
+        assert!(cpu.charge_at(start, Duration::from_millis(90)));
+        cpu.restart();
+        assert!(
+            !cpu.charge_at(start, Duration::from_millis(200)),
+            "a crashed page is not crashed a second time"
         );
     }
 

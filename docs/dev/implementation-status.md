@@ -84,6 +84,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | Declarative shadow roots (DSD1) | Implemented in the parser and both sinks; focused checks passed; not independently reviewed | `<template shadowrootmode>` in a navigated document attaches a shadow root; `attachShadow()` takes it over; see the section below |
 | `MessageChannel`, `MessagePort`, `MessageEvent`, `window.postMessage()`; the window as receiver of `EventTarget` operations (MSG1) | Implemented on V8; focused checks passed; not independently reviewed | youtube.com, which stopped at both, renders; nothing is transferred between ports; QuickJS has no messaging; see the section below |
 | `TreeWalker`, `NodeIterator`, `NodeFilter`, `CSS.escape()` (TW1) | Traversal implemented as a prelude script on V8, `CSS.escape` generated on both engines; focused checks passed; not independently reviewed | Pages built with Lit threw at their first render; see the section below |
+| A host navigation starts a new script CPU window (SW1) | Implemented; focused checks passed; changes D-033 with the owner's agreement of 2026-11-17, the decision entry is still to be written | The commit of a navigation the host issued (`Page::goto`, `goto_with_eval`, `begin_goto`) empties the page's script CPU window; a navigation the document asks for (`location`, a form submission, an activated link) goes on spending the window it started in, so a document that reloads itself still has one budget. |
 | Nested flex and grid containers share their answers (LP1) | Implemented; measured; fragment output compared on a real page; not independently reviewed | One layout of a component-built page solved its containers 12 times less often; see the section below. Layout still starts over after every mutation |
 | Wrapper-graph collection at task ends is amortised (GC1) | Implemented on V8; measured; not independently reviewed; **changes when detached wrappers are reclaimed, which the specification may record as a decision** | A task end collects once 1024 wrappers are owed or the last collection is 250 ms old, not every time; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
@@ -2935,6 +2936,53 @@ Still named by pages: `Request` (3), `ReadableStream` (3), `Worker`,
 `ready` is read (probably `document.fonts`), an unsupported CSS rule type
 in `insertRule`; 11 errors are `Failed to fetch` for hosts the sweep
 machine's DNS answers with `::`.
+
+### A host navigation starts a new script CPU window (SW1)
+
+D-033 made the script CPU budget the page's and not the navigation's, so
+that a page reloading itself cannot spend a new budget each time. The sweep
+above showed the other side of that: an agent that goes from one heavy site
+to the next in one tab has the last one crashed for what the earlier ones
+ran. The owner agreed on 2026-11-17 to change it; the entry for
+`docs/spec/18-decisions.md` is still to be written there.
+
+- **What changed:** `Page::begin_navigation` is told who asked (`Requester::
+  Host` for `goto`, `goto_with_eval` and `begin_goto`; `Requester::Document`
+  for a navigation the document's script requested). When a host navigation
+  commits its document — the fetched one or the error document —
+  `ScriptCpu::restart` empties the window. The crash latch is not reset: a
+  crashed page stays crashed.
+- **What did not change:** the budget, the window, the per-entry deadline,
+  and a navigation the document starts.
+- **What a host can now do that it could not:** navigate one page in a loop
+  and have each document spend a full budget. The limit was never a limit on
+  the host, which can also open pages.
+- **Not covered:** a navigation that follows a click the host dispatched is
+  the document's (a link activation or a script handler), so an agent that
+  moves between heavy sites by clicking links still shares one window.
+  Telling a host-caused activation from a script's own would need user
+  activation to be tracked, which the engine does not do.
+- **Checks:** `tenta-page::script_cpu` 1 new unit test;
+  `tenta-page::runtime_watchdog
+  a_navigation_the_host_asks_for_starts_a_new_script_window` (four
+  navigations of 60 ms against a 150 ms budget; fails with the restart
+  disabled); `tenta-page::persistent_engine
+  a_page_that_reloads_itself_spends_one_budget` replaces
+  `the_script_budget_spans_navigations`, which drove the old behaviour
+  through host navigations: the document now reloads itself and is crashed
+  on its third load.
+  The workspace passed 4860 of 4860. The feature set passed 594 of 595:
+  `tenta-browser::css_loading
+  a_stylesheet_is_requested_while_the_body_is_still_streaming` failed once
+  and then passed 5 times of 5 alone; it is the test that failed once after
+  DSD1 as well, it times a server that waits 1.2 s of real time, and why it
+  sometimes fails beside other tests was not established.
+- **Result:** one sweep run, same list and driver, 2026-11-17:
+  microsoft.com navigated in 6.0 s with its title and snapshot; no page was
+  closed for script time. Console errors 53 (52 before), the 35 navigations
+  59.7 s (58.5 s before); neither difference is outside what one run varies
+  by. amazon.com and imdb.com are still empty behind the operator's
+  challenge page.
 
 ## Implementation queue and dependencies
 

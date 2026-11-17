@@ -223,6 +223,16 @@ impl std::future::Future for GotoGuard {
     }
 }
 
+/// Who asked for a navigation, which decides whether its document starts a
+/// new script CPU window (`crate::script_cpu`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Requester {
+    /// The host: [`Page::goto`] and its siblings.
+    Host,
+    /// The document itself: `location`, a form submission, an activated link.
+    Document,
+}
+
 /// A navigation that has started, from [`Page::begin_goto`].
 pub struct PendingNavigation {
     guard: GotoGuard,
@@ -451,6 +461,15 @@ impl PageInner {
             frame: self.frame,
             commit,
         });
+    }
+
+    /// Called when a navigation commits its document. One the host asked for
+    /// starts with an empty script CPU window; one the document asked for goes
+    /// on spending the window it was started in (`crate::script_cpu`).
+    fn start_script_window(&self, requester: Requester) {
+        if requester == Requester::Host {
+            self.script_cpu.restart();
+        }
     }
 
     /// Records that the document of `navigation_id` reached `stage` and
@@ -960,7 +979,8 @@ impl Page {
         options: Goto,
         evaluation: Option<String>,
     ) -> Result<NavigateOutcome> {
-        self.begin_navigation(url, options, evaluation)?.await
+        self.begin_navigation(url, options, evaluation, Requester::Host)?
+            .await
     }
 
     /// Starts navigating to `url` and returns at once with the navigation's
@@ -971,7 +991,7 @@ impl Page {
     pub fn begin_goto(&self, url: &str, options: Goto) -> Result<PendingNavigation> {
         let url =
             Url::parse(url).map_err(|err| Error::invalid(format!("invalid URL {url:?}: {err}")))?;
-        let guard = self.begin_navigation(url, options, None)?;
+        let guard = self.begin_navigation(url, options, None, Requester::Host)?;
         Ok(PendingNavigation { guard })
     }
 
@@ -980,6 +1000,7 @@ impl Page {
         mut url: Url,
         options: Goto,
         evaluation: Option<String>,
+        requester: Requester,
     ) -> Result<GotoGuard> {
         // Credentials in the URL never reach the wire (tenta-net strips them)
         // and never show in `Navigation.url`, events or the document URL,
@@ -1014,7 +1035,7 @@ impl Page {
         thread.post_job(Box::new(move || {
             Box::pin(async move {
                 let (result, panicked) = match catch_unwind_future(navigate(
-                    inner, url, options, generation, evaluation,
+                    inner, url, options, generation, evaluation, requester,
                 ))
                 .await
                 {
@@ -1171,7 +1192,7 @@ fn start_requested_navigation(inner: Arc<PageInner>, request: tenta_dom::Navigat
     let page = Page {
         inner: Arc::clone(&inner),
     };
-    let guard = match page.begin_navigation(request.url, options, None) {
+    let guard = match page.begin_navigation(request.url, options, None, Requester::Document) {
         Ok(guard) => guard,
         // The page is closed or crashed: there is nothing to navigate.
         Err(_) => return,
@@ -1198,6 +1219,7 @@ async fn navigate(
     options: Goto,
     generation: u64,
     evaluation: Option<String>,
+    requester: Requester,
 ) -> Result<NavigateOutcome> {
     let _in_flight = InFlight::enter(&inner);
     // Check if this navigation was cancelled; if so, return an aborted error.
@@ -1354,6 +1376,9 @@ async fn navigate(
                     message: "navigation was cancelled".into(),
                 });
             }
+            if error_page.is_some() {
+                inner.start_script_window(requester);
+            }
             return Err(mapped);
         }
         Err(timeout_error) => {
@@ -1409,6 +1434,9 @@ async fn navigate(
                     code: ErrorName::Aborted.as_str().to_string(),
                     message: "navigation was cancelled".into(),
                 });
+            }
+            if error_page.is_some() {
+                inner.start_script_window(requester);
             }
             return Err(mapped);
         }
@@ -1489,6 +1517,7 @@ async fn navigate(
         unreachable_url: None,
     };
     inner.state.lock().commit_frame(&commit);
+    inner.start_script_window(requester);
     inner.announce_commit(commit);
 
     tracker.borrow_mut().note_parser_running(true);

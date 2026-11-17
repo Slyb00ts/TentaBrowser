@@ -557,3 +557,61 @@ async fn one_terminated_runaway_survives_and_two_in_one_window_crash_the_page() 
     })
     .await;
 }
+
+/// The budget is the page's, not the navigation's: a document that reloads
+/// itself goes on spending the window it started in.
+///
+/// Every load of the fixture spends 60 ms and then asks for the same document
+/// again, so the third load crosses a 150 ms budget. A window that restarted on
+/// every navigation would let the loop run for ever; this test is what catches
+/// that regression. `spin` spends the time without ever needing the entry
+/// killed, so nothing here depends on a watchdog thread's timing.
+#[tokio::test(flavor = "current_thread")]
+async fn a_page_that_reloads_itself_spends_one_budget() {
+    let harness = Harness::builder(
+        "<!doctype html><html><body>\
+         <script>spin 60</script>\
+         <script>navigate</script>\
+         </body></html>",
+    )
+    .budgets(Budgets::default().script_cpu(Duration::from_millis(150)))
+    .build();
+    with_page_thread(&harness.thread, async {
+        let mut events = harness.page.events();
+        // The host starts the loop and is not interested in how its own
+        // navigation ends: the document replaces itself before it has loaded.
+        let page = harness.page.clone();
+        let started = tokio::task::spawn_local(async move {
+            let _ = page.goto(URL, Goto::new().wait_until(Settle::Load)).await;
+        });
+
+        let reason = tokio::time::timeout(PATIENCE, async {
+            loop {
+                match events.next().await {
+                    Some(PageEvent::Crashed { reason, .. }) => break reason,
+                    Some(_) => {}
+                    None => panic!("the page's events ended before it crashed"),
+                }
+            }
+        })
+        .await
+        .expect("the reload loop spends the budget");
+        started.abort();
+
+        assert!(
+            reason.contains("script"),
+            "the reason names the budget: {reason}"
+        );
+        let spent: u64 = reason
+            .split(" ms spent")
+            .next()
+            .and_then(|head| head.rsplit(' ').next())
+            .and_then(|millis| millis.parse().ok())
+            .unwrap_or_else(|| panic!("the reason names the spent total: {reason}"));
+        assert!(
+            spent >= 150,
+            "the accumulated total is past the 150 ms budget: {reason}"
+        );
+    })
+    .await;
+}
