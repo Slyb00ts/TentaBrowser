@@ -3575,6 +3575,33 @@ still collects unconditionally, which is what it is for.
 - **Not measured:** a real site, and the resident memory of a long-lived
   page, as for GC1 and GC2.
 
+### The 35-site sweep after EL1, UN1 and GC3
+
+One run, 2026-11-17, same list and driver, release CLI built from
+`94b7dfa`. Console errors 45 (49 in the run before, 53 before that).
+youtube.com has its snapshot; amazon.com and imdb.com are the two empty
+pages, behind the operator's challenge.
+
+- **Gone:** `HTMLHeadingElement is not defined` (github.com) and the
+  union error (bing.com).
+- **The 35 navigations took 63.6 s, against 58.2 s.** Seven sites moved
+  by more than 0.4 s, in both directions: bbc.com 5.8 to 2.0 s,
+  cloudflare.com 8.0 to 6.4 s, onet.pl 1.9 to 6.5 s, github.com 2.3 to
+  5.3 s, youtube.com 1.2 to 2.8 s (it had no content in the earlier run),
+  apple.com and nytimes.com by under a second. onet.pl and github.com
+  were then loaded three times each, alternating the build from before
+  GC2 and this one: onet.pl 1.61 to 1.71 s on both, github.com 1.84 to
+  3.04 s on the older and 2.05 to 2.16 s on this one. So the two slow
+  navigations of this run are not the build's; what they were was not
+  established, and a sweep's total is not a measurement of the engine.
+- **Still named by pages:** a canvas with no 2D context (3), `ReadableStream`
+  (3) and `.stream is not a function` (2), `UnsupportedRuleType` from
+  `insertRule` (3), `the value is not of type 'Node'` (microsoft.com),
+  `Worker`, `SVGAnimatedString`, `DOMMatrix`,
+  `PerformanceNavigationTiming`, `getSelection`, `Illegal constructor`,
+  one each. Nineteen are requests the sweep machine's resolver does not
+  answer.
+
 ## Implementation queue and dependencies
 
 - P2 CSSOM uses Stylo per D-003. Inline declarations and constructed
