@@ -2919,8 +2919,9 @@ script CPU budget, not the page.** The page was closed with "ran out of
 script time: 15017 ms spent of a 15000 ms budget within 30 s" 5.7 s into
 its navigation. The driver uses one page for all 35 sites, the budget is
 the page's and not the navigation's (D-033, `crates/tenta-page/src/
-script_cpu.rs`), and the three sites before it in the list (cloudflare.com,
-apple.com and getbootstrap.com) had spent most of the window. Alone, in a
+script_cpu.rs`), and the sites before it in the list (getbootstrap.com,
+cloudflare.com and apple.com directly before) share its 30 s window; how
+much each of them spent was not measured. Alone, in a
 new session, microsoft.com loaded twice of twice in 5.7 s with its title
 and snapshot. Each package that lets more page script run (GC1, MSG1, TW1)
 makes this more likely for an agent that goes from one heavy site to the
