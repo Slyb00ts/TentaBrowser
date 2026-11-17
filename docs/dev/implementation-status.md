@@ -93,6 +93,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `document.fonts`, `FontFaceSet`, `FontFace` (FS1) | Implemented on V8 as a prelude script with no engine state behind it; focused checks passed; not independently reviewed | Answers as a document whose fonts have all loaded: `ready` is resolved, `status` is `loaded`, `check()` is `true`, `load()` resolves. Nothing is fetched and an added face is not used to draw text. |
 | Nested flex and grid containers share their answers (LP1) | Implemented; measured; fragment output compared on a real page; not independently reviewed | One layout of a component-built page solved its containers 12 times less often; see the section below. Layout still starts over after every mutation |
 | Wrapper-graph collection at task ends is amortised (GC1) | Implemented on V8; measured; not independently reviewed; **changes when detached wrappers are reclaimed, which the specification may record as a decision** | A task end collects once 1024 wrappers are owed or the last collection is 250 ms old, not every time; see the section below |
+| Wrapper-graph collection at the end of a script run is amortised too (GC2) | Implemented on V8; measured; not independently reviewed; **extends the change of timing GC1 made, which the specification may record as a decision** | A script run ended with a full collection every time, about 0.45 ms on the smallest heap, so every `<script>` and every start-up script paid for one. It now collects under the rule a task end uses; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
 
 QuickJS runtime implementation alone does not complete its timezone hook,
@@ -3332,6 +3333,75 @@ this series with the cause recorded as not established.
   script before the checkpoint and the `3+4` after it were under it too.
   The deadline now covers the checkpoint it is for.
 
+
+### GC2: the end of a script run collects only when a collection is owed (V8)
+
+- **How it was found.** ERR1, ERR2 and FS1 together cost `S-js-xhr`
+  0.9 ms of navigation in three runs (the section above). A temporary
+  release test timed 200 engines: `evaluate("1")` took 0.45 ms, and the
+  four start-up scripts 2.1 ms together, as much as making the engine.
+  `Engine::run_with`, which every script run goes through, ended with
+  `graph_checkpoint`, a full collection, whatever the script had done. GC1
+  had amortised the collection at a task end and said in so many words
+  that the end of a script run collects as before.
+- **The change.** `run_with` calls `collect_after_task`: the run collects
+  when the wrappers made since the last collection have reached
+  `SOFT_WRAPPER_MATERIALIZATIONS` (1024) or the last collection is 250 ms
+  old. The first run of an engine still collects, because nothing has
+  been collected yet. Fetch and XHR settlement, lifecycle events and
+  `trim_memory` collect every time, as before.
+- **What it changes for a caller.** The same thing GC1 changed, for
+  script runs: wrappers and native records a script left unreachable are
+  reclaimed at the next collection, not when that script returns, and a
+  page that goes idle keeps up to 1023 of them until its next entry or
+  `trim_memory`. Three tests depended on the old timing; each tests what
+  a collection does, not when it happens, and now asks for it
+  (`trim_memory`): two in `standalone_event_target_tests.inc.rs` and
+  `detached_sweep a_listener_on_a_node_that_reuses_a_freed_slot_survives_
+  the_drain`. `Engine::graph_checkpoint` called outside an engine entry
+  did not reclaim what those tests wait for; `trim_memory`, which enters
+  first, does. Not looked into further.
+- **Result.** Release, 25 interleaved pairs, `ad8d789` against this tree,
+  2026-11-17:
+
+  | benchmark | before p50 / p95 | after p50 / p95 | p50 |
+  |---|---|---|---|
+  | `bench/js_xhr.py` navigation | 15.50 / 16.47 ms | 12.80 / 13.49 ms | -17.4% |
+  | `bench/js_xhr.py` process RSS | 31.0 / 31.4 MiB | 31.0 / 31.4 MiB | 0 |
+  | `bench/listener_gc.py` wall | 52.99 / 56.38 ms | 46.07 / 49.44 ms | -13.1% |
+  | `bench/listener_gc.py` CPU | 134.55 / 144.53 ms | 109.94 / 122.76 ms | -18.3% |
+  | `bench/dom_mutation_hooks.py --backend v8` CPU | 133.08 / 134.85 ms | 108.32 / 110.97 ms | -18.6% |
+  | `bench/wrapper_pressure.py` `connected` task | 13.45 / 13.88 ms | 11.59 / 12.55 ms | -13.8% |
+  | `bench/wrapper_pressure.py` `deep` task | 8.70 / 9.17 ms | 7.39 / 8.14 ms | -15.1% |
+
+  Inside the 10% floor, so not claims: `dom_mutation_hooks` detached
+  47.76 to 47.14 ms, connected 48.58 to 44.52 ms and wall 110.58 to
+  101.89 ms; `wrapper_pressure` `detached` 38.84 to 38.04 ms and `owners`
+  68.32 to 66.97 ms (a candidate-only driver, run on each build);
+  `bench/dom_calls.py` `has` 27.68 to 26.36 ns and `get` 82.73 to
+  81.30 ns.
+  **One phase got slower:** `listener_gc`'s explicit collection of the
+  `self_capture` shape went from 3.25 to 3.65 ms (+12.0%) and of
+  `cross_capture` from 3.24 to 3.53 ms (+9.2%); the other three moved
+  +0.2% to +1.9%. The collection a script run used to do is now done by
+  the explicit one that follows it. Every phase freed and retained what
+  it did before. Peak RSS: `listener_gc` 24.1 to 24.0 MiB,
+  `dom_mutation_hooks` 36.1 MiB both, `wrapper_pressure` within 0.1% for
+  the shape read (`detached`), with 741 nodes after the task on both
+  builds and 22 collections where there were 24.
+  `S-js-xhr` after this change is 12.80 ms where it was 14.6 ms before
+  ERR1, ERR2 and FS1 in the runs of the section above; those were other
+  runs, so the two figures are not a measured pair.
+- **Checks:** two new tests in `task_collection_tests.inc.rs` (200 script
+  runs share collections; a run that brings the debt to the bound
+  collects and one that does not carries it over). With `graph_checkpoint`
+  back in `run_with` both fail. The `tenta-js-v8` suite takes 3.2 s
+  where it took 10.7 s. The workspace passed 4920 of 4920 and the feature
+  set 601 of 601, the two tests rewritten in the section above among
+  them; fmt, both Clippy runs, `lint-deps`, `idl-manifest` and
+  `cargo deny` were clean.
+- **Not measured:** the resident memory of a long-lived page under the
+  new timing, as for GC1, and a real site. QuickJS has no such collection.
 
 ## Implementation queue and dependencies
 

@@ -1,5 +1,5 @@
 // Include inside lib.rs::tests: when the wrapper graph is collected at the
-// end of a task (`Engine::collect_after_task`).
+// end of a task or of a script run (`Engine::collect_after_task`).
 
 fn wrapper_debt(engine: &Engine) -> usize {
     engine
@@ -39,7 +39,7 @@ fn timer_tasks_share_collections_of_the_wrapper_graph() {
 fn a_task_that_reaches_the_wrapper_bound_collects_at_its_end() {
     let document = Rc::new(RefCell::new(Document::new()));
     let mut engine = Engine::with_document(document);
-    // The script's own task end collects, so the timer starts without debt.
+    // The script makes no wrapper, so the timers start without debt.
     engine
         .evaluate(
             "setTimeout(()=>{for(let i=0;i<12;i++)document.createElement('div')},0);\
@@ -103,4 +103,53 @@ fn trimming_memory_collects_without_waiting_for_a_task() {
     tenta_js::engine::PageEngine::trim_memory(&mut engine);
     assert_eq!(wrapper_debt(&engine), 0);
     assert_eq!(engine.host_record_count(), records_before);
+}
+
+#[test]
+fn script_runs_share_collections_of_the_wrapper_graph() {
+    let document = Rc::new(RefCell::new(Document::new()));
+    let mut engine = Engine::with_document(document);
+    // The first run of an engine collects: nothing has been collected yet.
+    engine.evaluate("1").unwrap();
+    let before = collections(&engine);
+    for _ in 0..200 {
+        engine
+            .evaluate("document.createElement('div');1")
+            .unwrap();
+    }
+    let during = collections(&engine) - before;
+    assert!(
+        during < 100,
+        "200 script runs ran {during} garbage collections; each run paid for its own"
+    );
+    assert_eq!(engine.native_failure(), None);
+}
+
+#[test]
+fn a_script_run_that_reaches_the_wrapper_bound_collects_at_its_end() {
+    let document = Rc::new(RefCell::new(Document::new()));
+    let mut engine = Engine::with_document(document);
+    engine.evaluate("1").unwrap();
+    engine
+        .host
+        .last_graph_collection
+        .set(Some(std::time::Instant::now()));
+
+    // Twelve wrappers are far from the bound and the last collection is
+    // recent: the run ends without one and the debt carries over.
+    engine
+        .evaluate("for(let i=0;i<12;i++)document.createElement('div');1")
+        .unwrap();
+    assert_eq!(wrapper_debt(&engine), 12);
+
+    // The second run brings the debt to the bound exactly, with no binding
+    // call left to collect inside the run.
+    engine
+        .evaluate(&format!(
+            "for(let i=0;i<{};i++)document.createElement('div');1",
+            crate::world::SOFT_WRAPPER_MATERIALIZATIONS - 12
+        ))
+        .unwrap();
+    assert_eq!(wrapper_debt(&engine), 0);
+    assert_eq!(engine.native_failure(), None);
 }

@@ -87,6 +87,9 @@ fn held_event_keeps_one_standalone_target_record_until_its_edge_is_reset() {
     engine
         .evaluate("savedEvent.initEvent('reset',false,false)")
         .unwrap();
+    // The end of a script run collects the graph only when a collection is
+    // owed, so the one this assertion is about is asked for.
+    tenta_js::engine::PageEngine::trim_memory(&mut engine);
     engine.low_memory_gc();
     engine.reclaim_dead_hosts();
     assert_eq!(engine.host_record_count(), records_before);
@@ -140,6 +143,7 @@ fn refused_standalone_constructors_leave_exactly_the_published_records() {
     // the hot getter above can hold the array itself across a low-memory GC
     // (see `nested_event_constructors_refuse_before_publishing_native_records`).
     engine.evaluate("retainedTargets.length=0").unwrap();
+    tenta_js::engine::PageEngine::trim_memory(&mut engine);
     engine.low_memory_gc();
     engine.reclaim_dead_hosts();
     assert_eq!(engine.host_record_count(), records_before);

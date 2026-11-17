@@ -1892,12 +1892,14 @@ impl Engine {
             (outcome, tc.has_terminated())
         };
         self.host.exit_script();
-        // The script's handle scopes and callback frames are closed. Keep the
-        // deadline armed while the closed graph checkpoint runs: its elapsed
-        // time belongs to this task, and a request during recovery is handed
-        // off only after the graph has been restored.
+        // The script's handle scopes and callback frames are closed. The run
+        // collects the wrapper graph when a collection is owed, as a task end
+        // does: a collection is a full garbage collection, and a page pays for
+        // one per `<script>` otherwise. Keep the deadline armed while it runs:
+        // its elapsed time belongs to this task, and a request during recovery
+        // is handed off only after the graph has been restored.
         if self.dom.is_some() && self.native_memory.first_failure().is_none() {
-            self.graph_checkpoint();
+            self.collect_after_task();
         }
 
         if let Some((cancel_tx, join)) = watchdog {
@@ -2137,14 +2139,15 @@ impl Engine {
         }
     }
 
-    /// Collects the wrapper graph at the end of a task, when a collection is
-    /// owed.
+    /// Collects the wrapper graph at the end of a task or of a script run,
+    /// when a collection is owed.
     ///
-    /// A collection is a full garbage collection: about 2 ms on a small heap
-    /// and over 10 ms on a large page's. Timer callbacks, animation frames and
-    /// image events each end a task, and a page that animates ends one every
-    /// frame, so paying for a collection each time spends most of a frame on
-    /// it. One is owed once the wrappers made since the last collection reach
+    /// A collection is a full garbage collection: about half a millisecond on
+    /// the smallest heap, 2 ms on a small page's and over 10 ms on a large
+    /// one's. Script runs, timer callbacks, animation frames and image events
+    /// each end with one, a page with fifty scripts ends fifty runs, and a
+    /// page that animates ends a task every frame, so paying for a collection
+    /// each time spends most of a frame on it. One is owed once the wrappers made since the last collection reach
     /// the count at which the next binding call would collect anyway, or once
     /// the last collection is [`TASK_COLLECTION_INTERVAL`] old. What is left
     /// uncollected in between stays within the bound admission enforces inside

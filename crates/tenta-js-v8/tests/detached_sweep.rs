@@ -218,8 +218,9 @@ fn a_listener_on_a_node_that_reuses_a_freed_slot_survives_the_drain() {
     );
 
     // Script allocates a node into the freed slot and registers a listener.
-    // Its task-end checkpoint drains the old generation before run_script
-    // returns, without removing the new generation's listener.
+    // The next collection drains the old generation without removing the new
+    // generation's listener. A script run collects only when a collection is
+    // owed, so this one is asked for.
     engine
         .run_script(
             "globalThis.reused = document.createElement('span'); \
@@ -227,6 +228,7 @@ fn a_listener_on_a_node_that_reuses_a_freed_slot_survives_the_drain() {
             ScriptKind::Classic,
         )
         .expect("the reusing script runs");
+    engine.trim_memory();
 
     // The slot really was reused under a bumped generation, so the test cannot
     // pass by the allocation landing elsewhere.
@@ -242,7 +244,7 @@ fn a_listener_on_a_node_that_reuses_a_freed_slot_survives_the_drain() {
     assert_eq!(
         engine.listener_count(),
         1,
-        "task-end collection drains the old entry but keeps the reused slot's listener"
+        "the collection drains the old entry but keeps the reused slot's listener"
     );
     assert_eq!(
         engine.stored_value_count(),
