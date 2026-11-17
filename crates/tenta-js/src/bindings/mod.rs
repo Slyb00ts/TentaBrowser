@@ -2067,7 +2067,7 @@ mod prelude_helpers {
     /// `new Response(body, init)`.
     fn response(
         realm: &Realm,
-        body: Option<BufferSourceOrUsvString>,
+        body: Option<BodyInit>,
         init: ResponseInit,
     ) -> Result<HostObject, JsError> {
         <HostObject as ResponseConstructor>::construct(realm, Some(body), Some(init))
@@ -2215,8 +2215,7 @@ mod prelude_helpers {
     #[test]
     fn response_applies_the_body_rules_of_initialize_a_response() {
         let realm = host_realm();
-        let of =
-            |body: BufferSourceOrUsvString, init: ResponseInit| response(&realm, Some(body), init);
+        let of = |body: BodyInit, init: ResponseInit| response(&realm, Some(body), init);
 
         // The five null body statuses. Two of them — 101 and 103 — are below
         // the status range, so step 1 of *initialize a response* rejects them
@@ -2225,7 +2224,7 @@ mod prelude_helpers {
         for status in [101u16, 103] {
             assert_eq!(
                 of(
-                    BufferSourceOrUsvString::UsvString("hi".to_owned()),
+                    BodyInit::UsvString("hi".to_owned()),
                     ResponseInit {
                         status,
                         ..Default::default()
@@ -2240,7 +2239,7 @@ mod prelude_helpers {
         }
         for status in [204u16, 205, 304] {
             let error = of(
-                BufferSourceOrUsvString::UsvString("hi".to_owned()),
+                BodyInit::UsvString("hi".to_owned()),
                 ResponseInit {
                     status,
                     ..Default::default()
@@ -2266,11 +2265,8 @@ mod prelude_helpers {
             );
         }
 
-        let text = of(
-            BufferSourceOrUsvString::UsvString("hi".to_owned()),
-            Default::default(),
-        )
-        .expect("the body is valid");
+        let text = of(BodyInit::UsvString("hi".to_owned()), Default::default())
+            .expect("the body is valid");
         assert_eq!(
             response_headers(&realm, &text),
             vec![(
@@ -2280,11 +2276,8 @@ mod prelude_helpers {
             "a `USVString` body's type is appended to the header list"
         );
 
-        let bytes = of(
-            BufferSourceOrUsvString::BufferSource(vec![b'h', b'i']),
-            Default::default(),
-        )
-        .expect("the body is valid");
+        let bytes = of(BodyInit::BufferSource(vec![b'h', b'i']), Default::default())
+            .expect("the body is valid");
         assert_eq!(
             response_headers(&realm, &bytes),
             Vec::new(),
@@ -2294,7 +2287,7 @@ mod prelude_helpers {
         // The append is skipped when the list already names `Content-Type`,
         // whatever case the caller spelled it in.
         let named = of(
-            BufferSourceOrUsvString::UsvString("hi".to_owned()),
+            BodyInit::UsvString("hi".to_owned()),
             ResponseInit {
                 headers: Some(pairs(&[("Content-Type", "text/plain")])),
                 ..Default::default()
@@ -2461,7 +2454,7 @@ mod prelude_helpers {
         let (realm, script) = body_realm();
         let built = response(
             &realm,
-            Some(BufferSourceOrUsvString::UsvString("hi".to_owned())),
+            Some(BodyInit::UsvString("hi".to_owned())),
             Default::default(),
         )
         .expect("a string body");
@@ -2545,7 +2538,7 @@ mod prelude_helpers {
         let (realm, script) = body_realm();
         let built = response(
             &realm,
-            Some(BufferSourceOrUsvString::UsvString("{\"a\":1}".to_owned())),
+            Some(BodyInit::UsvString("{\"a\":1}".to_owned())),
             Default::default(),
         )
         .expect("a JSON body");
@@ -2707,10 +2700,14 @@ mod prelude_helpers {
 /// `crates/tenta-js-v8/tests/dom_fetch.rs`.
 #[cfg(test)]
 mod request_init {
-    use super::host::{refused_request_init_member, request_from_init};
+    use super::host::{HostContext, refused_request_init_member, request_from_init};
     use super::*;
+    use crate::event_loop::{Clock, MonoTime, SharedClock};
     use crate::fetch::FetchRequest;
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use tenta_core::Origin;
+    use tenta_dom::Document;
     use url::Url;
 
     fn url(text: &str) -> Url {
@@ -2720,7 +2717,15 @@ mod request_init {
     /// The request `init` builds for a document at `http://origin.test/x`.
     fn request_for(init: RequestInit) -> Result<FetchRequest, JsError> {
         let url = url("http://origin.test/x");
-        request_from_init(init, url.clone(), url, Origin::Tracked)
+        // A body arm that names a record is looked up in a context; none of
+        // these requests has one, so the context is an empty one.
+        let ctx = HostContext::new(
+            Rc::new(RefCell::new(Document::new())),
+            SharedClock::new(Clock::virtual_at(MonoTime::ZERO)),
+            tenta_net::CookieJar::new(),
+            crate::storage::PageStorage::isolated(),
+        );
+        request_from_init(&ctx, init, url.clone(), url, Origin::Tracked)
     }
 
     /// An initializer naming one `method` and nothing else.
@@ -2733,7 +2738,7 @@ mod request_init {
 
     /// An initializer with a `POST` method and `body` — the shape a request with
     /// a payload needs, because a `GET` may not carry one.
-    fn post(body: Option<BufferSourceOrUsvString>) -> RequestInit {
+    fn post(body: Option<BodyInit>) -> RequestInit {
         RequestInit {
             method: Some(b"POST".to_vec()),
             body: Some(body),
@@ -2742,12 +2747,12 @@ mod request_init {
     }
 
     /// A body's bytes as the `BufferSource` arm of `BodyInit`.
-    fn bytes(body: &[u8]) -> BufferSourceOrUsvString {
-        BufferSourceOrUsvString::BufferSource(body.to_vec())
+    fn bytes(body: &[u8]) -> BodyInit {
+        BodyInit::BufferSource(body.to_vec())
     }
 
-    fn text(body: &str) -> BufferSourceOrUsvString {
-        BufferSourceOrUsvString::UsvString(body.to_owned())
+    fn text(body: &str) -> BodyInit {
+        BodyInit::UsvString(body.to_owned())
     }
 
     /// The `headers` member from a page's own pairs.
@@ -2971,7 +2976,7 @@ mod request_init {
     /// step). A null body is not a body, and `POST` is not `GET`.
     #[test]
     fn a_body_on_a_get_or_a_head_is_a_type_error() {
-        let with = |method: &[u8], body: Option<BufferSourceOrUsvString>| {
+        let with = |method: &[u8], body: Option<BodyInit>| {
             request_for(RequestInit {
                 method: Some(method.to_vec()),
                 body: Some(body),

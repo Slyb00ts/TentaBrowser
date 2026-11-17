@@ -80,33 +80,15 @@
 //    value built once per finished response — an `ArrayBuffer`, a `Blob` typed
 //    by the response's `Content-Type`, or the parsed JSON (`null` when it does
 //    not parse). `overrideMimeType()` does not change the `Blob`'s type.
-//  - `send()`'s body is the two arms `XMLHttpRequestBodyInit` converts to here,
-//    and the parameter's other arm is absent. The standard's parameter is
-//    `(Document or XMLHttpRequestBodyInit)?` and `XMLHttpRequestBodyInit` is
-//    `(Blob or BufferSource or FormData or URLSearchParams or USVString)`; the
-//    typedef below is the served subset, matching `BodyInit` in
-//    `idl/fetch/Response.webidl`. Blob and FormData interfaces and generated
-//    interface-brand checks now exist, but this send path still needs their
-//    body extraction implementations. The Document arm also needs whole-document
-//    serialization with the standard's inferred content type. The serializer
-//    (`crates/tenta-dom/src/serialize.rs`) exposes `inner_html`, `outer_html`
-//    and `serialize_xml` over a `NodeId`, and its walk does carry a document
-//    case, but nothing is named for a whole document and nothing applies the
-//    standard's two type branches (`text/html;charset=UTF-8` for an HTML
-//    document, `application/xml;charset=UTF-8` otherwise). Serving the arm is a
-//    separate slice rather than a widening of this one.
-//
-//    One consequence of the narrowing is visible, and it is the same one
-//    `BodyInit` has: a `URLSearchParams` body falls to the `USVString` arm, whose
-//    conversion calls the object's stringifier, so the **bytes are the
-//    serialization** — `URLSearchParams`'s stringifier *is* the
-//    `application/x-www-form-urlencoded` serializer — while the `Content-Type`
-//    the body step infers is that arm's `text/plain;charset=UTF-8` where the
-//    standard's own `URLSearchParams` branch sets
-//    `application/x-www-form-urlencoded;charset=UTF-8`
-//    (<https://fetch.spec.whatwg.org/#concept-bodyinit-extract>). The bytes are
-//    right and the inferred type is not. Interface-brand selection is available;
-//    widening this body union and its host extraction remains a separate slice.
+//  - `send()`'s parameter is `XMLHttpRequestBodyInit?` where the standard's is
+//    `(Document or XMLHttpRequestBodyInit)?`. The Document arm needs
+//    whole-document serialization with the standard's inferred content type.
+//    The serializer (`crates/tenta-dom/src/serialize.rs`) exposes `inner_html`,
+//    `outer_html` and `serialize_xml` over a `NodeId`, and its walk does carry
+//    a document case, but nothing is named for a whole document and nothing
+//    applies the standard's two type branches (`text/html;charset=UTF-8` for an
+//    HTML document, `application/xml;charset=UTF-8` otherwise). A document
+//    passed to `send()` is therefore stringified.
 //
 // One more deviation is a limit of the transport rather than a narrowing:
 // `statusText` reads back as the status code's canonical reason text, and an
@@ -173,16 +155,12 @@
 // sibling file; the lexer lowers all of `idl/` as one model, so the parent and
 // the attribute type are visible here.
 
-// The standard's `typedef (Blob or BufferSource or FormData or URLSearchParams
-// or USVString) XMLHttpRequestBodyInit;` (<https://fetch.spec.whatwg.org/>,
-// where the typedef is defined even though only `send()` consumes it), narrowed
-// to the arms this engine can convert — the same pair `BodyInit` is, and for the
-// same reasons. The header above records what the narrowing costs and why the
-// missing arms are not declared as stand-ins. The arm order is load-bearing:
-// `BufferSource` carries a test of its own (`buffer_union_test`) and `USVString`
-// has none, so it is the union's fallback and a non-buffer value is stringified
-// rather than refused.
-typedef (BufferSource or USVString) XMLHttpRequestBodyInit;
+// The standard's typedef (<https://fetch.spec.whatwg.org/>, where it is defined
+// even though only `send()` consumes it). The arm order is load-bearing: the
+// three interfaces are selected by brand and `BufferSource` by a test of its own
+// (`buffer_union_test`), and `USVString` has none, so it is the union's fallback
+// and any other value is stringified rather than refused.
+typedef (Blob or BufferSource or FormData or URLSearchParams or USVString) XMLHttpRequestBodyInit;
 
 [Exposed=(Window,Worker)]
 interface XMLHttpRequest : XMLHttpRequestEventTarget {

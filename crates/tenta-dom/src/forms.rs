@@ -566,7 +566,7 @@ pub fn urlencoded(entries: &[Entry]) -> String {
 
 /// A name or filename inside a multipart header: line breaks and the quote
 /// are percent-encoded, as the standard's multipart encoding has it.
-fn multipart_name(text: &str) -> String {
+pub fn multipart_name(text: &str) -> String {
     text.replace('\n', "%0A")
         .replace('\r', "%0D")
         .replace('"', "%22")

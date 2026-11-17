@@ -27,7 +27,7 @@ use crate::bindings::{
 };
 
 /// A boundary for a `multipart/form-data` body, in the shape Chrome writes.
-fn multipart_boundary() -> String {
+pub(super) fn multipart_boundary() -> String {
     const ALPHABET: &[u8; 62] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut random = [0u8; 16];
     // Without entropy the boundary is fixed; it only has to be absent from

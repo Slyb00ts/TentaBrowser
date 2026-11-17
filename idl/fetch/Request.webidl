@@ -51,22 +51,8 @@
 // `body` reuses `BodyInit`, declared in the sibling `Response.webidl`: the
 // lexer lowers all of `idl/` as one model, so the name is visible here, and a
 // second declaration of it would be a fatal `Error::Model` rather than a
-// deduplication (`crates/tenta-idl/src/front.rs`). That typedef is the
-// **servable subset** of the standard's `BodyInit` — `(ReadableStream or Blob
-// or BufferSource or FormData or URLSearchParams or USVString)` — narrowed to
-// the two arms this engine can convert, a buffer source and a scalar value
-// string. One visible consequence for a *request*: a `URLSearchParams` body
-// falls to the `USVString` arm, whose stringifier *is* the
-// `application/x-www-form-urlencoded` serializer, so the bytes are right while
-// the inferred `Content-Type` is the string arm's
-// `text/plain;charset=UTF-8` rather than the standard's
-// `application/x-www-form-urlencoded;charset=UTF-8`, which the standard's own
-// `URLSearchParams` branch sets. Interface-brand selection is available in the
-// generator; widening this body union and its host extraction remains separate.
-//
-// `Blob`, `FormData` and `URLSearchParams` are **not** declared as stand-in
-// interfaces to complete the union: a declared-but-unimplemented interface is
-// the bug class slice 4a removed.
+// deduplication (`crates/tenta-idl/src/front.rs`). It is the standard's
+// `BodyInit` without the `ReadableStream` arm.
 
 dictionary RequestInit {
   ByteString method;

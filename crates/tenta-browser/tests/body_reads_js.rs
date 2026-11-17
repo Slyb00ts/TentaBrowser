@@ -1,7 +1,10 @@
-//! The body reads that are not text, over a real socket and on both engines:
-//! `XMLHttpRequest`'s `json`, `arraybuffer` and `blob` response types, and
-//! `Response.arrayBuffer()`, `blob()` and `clone()` on what `fetch()` resolves
-//! with.
+//! Bodies over a real socket and on both engines.
+//!
+//! Read: `XMLHttpRequest`'s `json`, `arraybuffer` and `blob` response types,
+//! and `Response.arrayBuffer()`, `blob()` and `clone()` on what `fetch()`
+//! resolves with. Sent: a `FormData`, a `URLSearchParams` and a `Blob` as the
+//! body of a `fetch()` and of a `send()`, checked against what the server says
+//! it received.
 //!
 //! `crates/tenta-js-v8/tests/dom_xhr.rs` and `dom_response.rs` cover each member
 //! against a recording driver and a constructed response; QuickJS has no such
@@ -43,9 +46,56 @@ fetch('/api/echo?item=beta').then(function (response) {
 });
 </script></body></html>"#;
 
+const SENDING_PAGE: &str = r#"<!doctype html><html><body><script>
+window.out = {};
+function summary(reply) {
+    var type = reply.headers['content-type'];
+    var boundary = type.indexOf('boundary=') < 0 ? null : type.split('boundary=')[1];
+    return [boundary ? type.split(';')[0] : type,
+            boundary ? reply.body.split('--' + boundary).length - 1 : reply.body].join(',');
+}
+var form = new FormData();
+form.append('name', 'value');
+form.append('file', new File(['abc'], 'a.txt', {type: 'text/plain'}));
+fetch('/api/echo', {method: 'POST', body: form})
+    .then(function (response) { return response.json(); })
+    .then(function (reply) {
+        out.form = [summary(reply), reply.body.indexOf('filename="a.txt"') > 0,
+                    reply.body.indexOf('\r\n\r\nabc\r\n') > 0].join(',');
+    });
+fetch('/api/echo', {method: 'POST', body: new URLSearchParams({q: 'a b'})})
+    .then(function (response) { return response.json(); })
+    .then(function (reply) { out.params = summary(reply); });
+var xhr = new XMLHttpRequest();
+xhr.open('POST', '/api/echo');
+xhr.responseType = 'json';
+xhr.onload = function () { out.blob = summary(xhr.response); };
+xhr.send(new Blob(['raw'], {type: 'application/x-test'}));
+</script></body></html>"#;
+
 async fn read_bodies(js: JsEngine) -> String {
+    evaluate_on(
+        js,
+        PAGE,
+        "[out.json, out.buffer, out.blob, out.fetch].join('|')",
+    )
+    .await
+}
+
+async fn send_bodies(js: JsEngine) -> String {
+    evaluate_on(
+        js,
+        SENDING_PAGE,
+        "[out.form, out.params, out.blob].join('|')",
+    )
+    .await
+}
+
+/// Navigates a new page to `markup`, waits for the network, and evaluates
+/// `expression` in it.
+async fn evaluate_on(js: JsEngine, markup: &str, expression: &str) -> String {
     let fixtures = tenta_testutil::temp_dir("body-reads");
-    fixtures.write("index.html", PAGE);
+    fixtures.write("index.html", markup);
     let server = FixtureServer::start(FixtureServerConfig::new(fixtures.path()))
         .await
         .expect("fixture server");
@@ -73,7 +123,7 @@ async fn read_bodies(js: JsEngine) -> String {
             Goto::default()
                 .wait_until(Settle::NetworkIdle)
                 .timeout(Duration::from_secs(10)),
-            "[out.json, out.buffer, out.blob, out.fetch].join('|')",
+            expression,
         )
         .await
         .expect("navigation and evaluation");
@@ -96,4 +146,23 @@ async fn v8_reads_bodies_as_json_buffers_and_blobs() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn quickjs_reads_bodies_as_json_buffers_and_blobs() {
     assert_eq!(read_bodies(JsEngine::QuickJs).await, EXPECTED);
+}
+
+/// The multipart body has three boundary lines for two entries (two openers and
+/// the closer), carries the file's name and its bytes; the other two arrive as
+/// the bytes and the type their arm gives them.
+const SENT: &str = "multipart/form-data,3,true,true|\
+                    application/x-www-form-urlencoded;charset=UTF-8,q=a+b|\
+                    application/x-test,raw";
+
+#[cfg(feature = "v8")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v8_sends_a_form_params_and_a_blob_as_a_body() {
+    assert_eq!(send_bodies(JsEngine::V8).await, SENT);
+}
+
+#[cfg(feature = "quickjs")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn quickjs_sends_a_form_params_and_a_blob_as_a_body() {
+    assert_eq!(send_bodies(JsEngine::QuickJs).await, SENT);
 }

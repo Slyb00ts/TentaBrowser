@@ -611,29 +611,19 @@ the isolate is still alive.
 
 `Response`'s `BodyInit` is the first *shipped* union with a buffer-source arm,
 and its arm order is load-bearing: the union's first arm with no test of its own
-becomes the fallback, so `(BufferSource or USVString)` converts by
-`is_array_buffer() || is_shared_array_buffer() || is_array_buffer_view()` and
-falls back to `USVString` (`ToString`) for everything else. Only three of the
-standard's six arm types are declared here — `ReadableStream` does not exist in
-this repository, and `Blob` (`idl/fileapi/Blob.webidl`) and `FormData`
-(`idl/xhr/FormData.webidl`) do but are deliberately not added to `BodyInit`
-(neither a single-object body nor a multipart serializer exists for them) — and
-dropping `URLSearchParams` does
-**not** cost nothing observable, which
-an earlier revision of this paragraph claimed. It is an object with no
-buffer-source shape, so it does reach the `USVString` arm whose conversion calls
-its stringifier, and `URLSearchParams`'s stringifier *is* its form-encoded
-serialization — so the **bytes** are right. What is wrong is the body *type*:
-Fetch's *extract a body with type* gives `URLSearchParams`
-`application/x-www-form-urlencoded;charset=UTF-8` and everything else the scalar
-value string branch's `text/plain;charset=UTF-8`, and both the `Response`
-constructor and `XMLHttpRequest.send()` write that type into their headers
-(`crates/tenta-js/src/bindings/host.rs`). The union is declared in
-`idl/fetch/Response.webidl`, and narrowed the same way a second time in
-`idl/xhr/XMLHttpRequest.webidl` for `XMLHttpRequestBodyInit`; each header records
-what its interface leaves out. `crates/tenta-js-v8/tests/dom_xhr.rs`'s
-`a_url_search_params_body_serializes_but_infers_the_plain_text_type` pins the XHR
-half so an arm added later has to come back and flip it.
+becomes the fallback. It is `XMLHttpRequestBodyInit` — `(Blob or BufferSource or
+FormData or URLSearchParams or USVString)` — so the three interfaces are selected
+by brand, a buffer source by `is_array_buffer() || is_shared_array_buffer() ||
+is_array_buffer_view()`, and everything else falls back to `USVString`
+(`ToString`). The standard's sixth arm, `ReadableStream`, does not exist in this
+repository. Each arm's bytes and the `Content-Type` it infers are Fetch's
+*extract a body with type*, in one function (`extract_body`,
+`crates/tenta-js/src/bindings/host.rs`) that the `Response` constructor,
+`fetch()`'s initializer and `XMLHttpRequest.send()` all call: a `Blob` gives its
+bytes and its `type`, a `FormData` the `multipart/form-data` encoding with a
+boundary made for that body, a `URLSearchParams` its serialization as
+`application/x-www-form-urlencoded;charset=UTF-8`, a string its UTF-8 as
+`text/plain;charset=UTF-8`, and a buffer source its bytes and no type.
 
 `Headers`' guard is part of the same slice. `HeadersGuard`
 (`crates/tenta-js/src/bindings/host.rs`) now has `None` and `Response`, split
@@ -1715,24 +1705,15 @@ generated code:
   request, and what the network layer does with URL userinfo is unverified),
   `withCredentials = true` threw it until CO1 and is now stored and honoured,
   `responseType` refuses `"document"`, and `send()`'s body is declared
-  as `XMLHttpRequestBodyInit` and narrowed to the two arms `BodyInit` is —
-  `(BufferSource or USVString)` — because `FormData` has an entry list but no
-  multipart serializer and the
-  `Blob` arm is deliberately not added by this slice (a `Blob` now exists, but
-  widening `BodyInit` is a change to the send path rather than a declaration)
-  and the `Document` arm needs a `tenta-dom` entry point that serialises a whole
-  document plus the HTML-versus-XML choice. `b-9` is what makes the body move:
+  as `XMLHttpRequestBodyInit` without the standard's `Document` arm, which needs
+  a `tenta-dom` entry point that serialises a whole document plus the
+  HTML-versus-XML choice. `b-9` is what makes the body move:
   the converted bytes reach the driver (`XhrRequest.body`), `GET`/`HEAD` drop the
   body at step 3 before the conversion's own step, and the type the body infers is
   written into the author request headers only when the author set none — the
   `Otherwise` of step 4's sub-step 5, with `set_inferred_content_type` shared
-  with the `Response` constructor and `fetch()`'s initializer. Two deviations come
-  with the body. The inferred type for a `URLSearchParams` body is
-  `text/plain;charset=UTF-8` where the standard's own branch sets
-  `application/x-www-form-urlencoded;charset=UTF-8`: the bytes are right, because
-  that object's stringifier *is* the serializer, and the `Response`/`BodyInit`
-  paragraph above carries the whole story and the reason the arm cannot be
-  declared. And step 4's `charset` rewrite is not implemented: when the author
+  with the `Response` constructor and `fetch()`'s initializer. One deviation comes
+  with the body. Step 4's `charset` rewrite is not implemented: when the author
   *has* set a `Content-Type` and the body is a string, the standard parses it and
   re-serialises the whole type with its `charset` replaced by `UTF-8`, which
   `parse_mime_type` cannot do because it reduces a MIME type to its essence and

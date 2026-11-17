@@ -65,8 +65,8 @@ use super::SequenceOfSequenceOfUsvStringOrRecordOfUsvStringToUsvStringOrUsvStrin
 use super::{
     AbortControllerConstructor, AbortControllerOps, AbortSignal, AbortSignalOps, AbstractRangeOps,
     AddEventListenerOptionsOrBoolean, AnyValue, Attr, AttrOps, Blob, BlobConstructor, BlobOps,
-    BlobOrUsvString, BlobPart, BlobPropertyBag, BufferSourceOrUsvString, CDATASection,
-    CDATASectionOps, CSSStyleProperties, Callback, CharacterDataOps, Comment, CommentOps,
+    BlobOrUsvString, BlobPart, BlobPropertyBag, BodyInit, CDATASection, CDATASectionOps,
+    CSSStyleProperties, Callback, CharacterDataOps, Comment, CommentOps,
     CompositionEventConstructor, CompositionEventInit, CompositionEventOps, CustomEventConstructor,
     CustomEventInit, CustomEventOps, DOMImplementation, DOMImplementationOps, DOMParserConstructor,
     DOMParserOps, DOMParserSupportedType, DOMStringMap, DOMTokenList, DOMTokenListOps,
@@ -11233,38 +11233,151 @@ const BODY_UNUSABLE: &str = "The body has already been read";
 /// [`CONTENT_TYPE`].
 const TEXT_PLAIN_UTF8: &str = "text/plain;charset=UTF-8";
 
-/// Fetch's *extract a body with type*, over the one union this engine's
-/// `BodyInit` can hold: the bytes, and the `Content-Type` the arm infers, or
-/// `None` for an arm that infers none
+/// The type *extract a body with type* gives a `URLSearchParams`.
+const FORM_URLENCODED_UTF8: &str = "application/x-www-form-urlencoded;charset=UTF-8";
+
+/// Fetch's *extract a body with type*, over the union this engine's `BodyInit`
+/// holds: the bytes, and the `Content-Type` the arm infers, or `None` for an
+/// arm that infers none
 /// (`<https://fetch.spec.whatwg.org/#concept-bodyinit-extract>`).
 ///
-/// This is the whole of the rule for the two arms a body can arrive as, so it is
-/// **one function and not one per caller**. Its three callers are the `Response`
-/// constructor's step 4, the `fetch()` initializer's body step and `send()`'s;
-/// each then writes the type into its own header list when it is non-null and
-/// that list has no `Content-Type`, which is the second half of the standard's
-/// step and belongs to each caller's own list
-/// ([`set_inferred_content_type`]).
+/// This is the whole of the rule, so it is **one function and not one per
+/// caller**. Its three callers are the `Response` constructor's step 4, the
+/// `fetch()` initializer's body step and `send()`'s; each then writes the type
+/// into its own header list when it is non-null and that list has no
+/// `Content-Type`, which is the second half of the standard's step and belongs
+/// to each caller's own list ([`set_inferred_content_type`]).
 ///
-/// `send(body)` needs the same step for WebIDL's `XMLHttpRequestBodyInit?`, whose
-/// servable arms are this same pair — which is why the function takes the
-/// generated union and the *union-to-bytes* half stands alone, while "which
-/// member set does this interface accept" is the caller's declared member type
-/// and not something this decides.
+/// Per arm:
 ///
-/// One deviation reaches all three callers: a `URLSearchParams` body falls to the
-/// `UsvString` arm because `BufferSourceOrUsvString` has no arm for it. Its
-/// stringifier *is* the `application/x-www-form-urlencoded` serializer, so the
-/// bytes are right, and the type this returns is `text/plain;charset=UTF-8`
-/// where the standard's own `URLSearchParams` branch would set
-/// `application/x-www-form-urlencoded;charset=UTF-8`. Serving it needs a
-/// platform-object brand-check arm in the generator's `union_test`
-/// (`crates/tenta-idl/src/codegen/types.rs`), which is a separate slice.
-fn extract_body(body: BufferSourceOrUsvString) -> (Vec<u8>, Option<&'static str>) {
+///  - a `Blob` is its bytes, with its `type` when that is not the empty string;
+///  - a buffer source is a copy of its bytes and no type;
+///  - a `FormData` is the `multipart/form-data` encoding of its entry list with
+///    a boundary made for this body, and the type names that boundary;
+///  - a `URLSearchParams` is its `application/x-www-form-urlencoded`
+///    serialization;
+///  - a string is its UTF-8 encoding, as `text/plain`.
+///
+/// A handle that names no record of its interface cannot come out of the
+/// generated conversion, which brand-checks each interface arm, so the error is
+/// defensive.
+fn extract_body(ctx: &SharedContext, body: BodyInit) -> Result<(Vec<u8>, Option<String>), JsError> {
+    let not_a = |interface: &str| {
+        JsError::type_error(format!(
+            "the body is not the {interface} it was converted as"
+        ))
+    };
     match body {
-        BufferSourceOrUsvString::BufferSource(bytes) => (bytes, None),
-        BufferSourceOrUsvString::UsvString(text) => (text.into_bytes(), Some(TEXT_PLAIN_UTF8)),
+        BodyInit::Blob(handle) => {
+            let (bytes, blob_type) = blob_of(ctx, handle).ok_or_else(|| not_a("Blob"))?;
+            Ok((bytes, (!blob_type.is_empty()).then_some(blob_type)))
+        }
+        BodyInit::BufferSource(bytes) => Ok((bytes, None)),
+        BodyInit::FormData(handle) => {
+            let boundary = forms::multipart_boundary();
+            let records = ctx.host_records.borrow();
+            let Some(HostRecord::FormData(record)) = host_record_of(&records, handle.bits()) else {
+                return Err(not_a("FormData"));
+            };
+            let bytes = multipart_form_data(&records, &record.list, &boundary);
+            Ok((
+                bytes,
+                Some(format!("multipart/form-data; boundary={boundary}")),
+            ))
+        }
+        BodyInit::URLSearchParams(handle) => {
+            let records = ctx.host_records.borrow();
+            let Some(HostRecord::Params(record)) = host_record_of(&records, handle.bits()) else {
+                return Err(not_a("URLSearchParams"));
+            };
+            Ok((
+                serialize_pairs(&record.list).into_bytes(),
+                Some(FORM_URLENCODED_UTF8.to_owned()),
+            ))
+        }
+        BodyInit::UsvString(text) => Ok((text.into_bytes(), Some(TEXT_PLAIN_UTF8.to_owned()))),
     }
+}
+
+/// The record handle `bits` name, when they name a host record at all.
+///
+/// The tag is checked before the key is read: a handle that is not a host
+/// handle has no key, and reading one would ask for an unrelated slot.
+fn host_record_of(records: &HostSlab, bits: u64) -> Option<&HostRecord> {
+    let decoded = decode(bits);
+    (decoded.tag == TAG_HOST)
+        .then(|| records.get(decoded.host_key()))
+        .flatten()
+}
+
+/// The `multipart/form-data` encoding of a `FormData` entry list
+/// (<https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#multipart-form-data>).
+///
+/// A string entry's line breaks are written as CRLF. A file entry carries its
+/// name as the `filename`, its type — `application/octet-stream` when it has
+/// none — and its bytes untouched. An entry whose `File` record is gone is
+/// skipped; the entry list is what keeps that record alive, so there is none.
+fn multipart_form_data(
+    records: &HostSlab,
+    list: &[(String, EntryValue)],
+    boundary: &str,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (name, value) in list {
+        let name = tenta_dom::forms::multipart_name(&normalize_crlf(name));
+        match value {
+            EntryValue::String(text) => {
+                out.extend_from_slice(
+                    format!(
+                        "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n"
+                    )
+                    .as_bytes(),
+                );
+                out.extend_from_slice(normalize_crlf(text).as_bytes());
+            }
+            EntryValue::File(key) => {
+                let Some(HostRecord::File(file)) = records.get(*key) else {
+                    continue;
+                };
+                let filename = tenta_dom::forms::multipart_name(&file.name);
+                let content_type = match file.blob.blob_type.as_str() {
+                    "" => "application/octet-stream",
+                    content_type => content_type,
+                };
+                out.extend_from_slice(
+                    format!(
+                        "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; \
+                         filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
+                    )
+                    .as_bytes(),
+                );
+                out.extend_from_slice(&file.blob.bytes);
+            }
+        }
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    out
+}
+
+/// `text` with every line break — a lone CR, a lone LF or a CRLF — written as
+/// CRLF, which is how the multipart encoding writes names and string values.
+fn normalize_crlf(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                out.push_str("\r\n");
+            }
+            '\n' => out.push_str("\r\n"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Writes `Content-Type: body_type` into `headers` when [`extract_body`] inferred
@@ -11287,7 +11400,7 @@ fn extract_body(body: BufferSourceOrUsvString) -> (Vec<u8>, Option<&'static str>
 ///
 /// A *buffer source* body infers no type at all, so it appends none; `None` is
 /// therefore a no-op rather than a mistake.
-fn set_inferred_content_type(headers: &mut HeaderList, body_type: Option<&'static str>) {
+fn set_inferred_content_type(headers: &mut HeaderList, body_type: Option<&str>) {
     let Some(body_type) = body_type else {
         return;
     };
@@ -11462,7 +11575,7 @@ pub fn insert_opaque_response(ctx: &SharedContext) -> HostKey {
 impl ResponseConstructor for HostObject {
     fn construct(
         realm: &Realm,
-        body: Option<Option<BufferSourceOrUsvString>>,
+        body: Option<Option<BodyInit>>,
         init: Option<ResponseInit>,
     ) -> Result<Self, JsError> {
         let context = "Failed to construct 'Response'";
@@ -11500,7 +11613,7 @@ impl ResponseConstructor for HostObject {
         // rule itself is [`extract_body`], shared with the `fetch()`
         // initializer's body step.
         let body = match body {
-            Some(Some(body)) => Some(extract_body(body)),
+            Some(Some(body)) => Some(extract_body(&realm_context(realm)?, body)?),
             Some(None) | None => None,
         };
 
@@ -11520,7 +11633,7 @@ impl ResponseConstructor for HostObject {
                     "{context}: a response with a null body status cannot have a body"
                 )));
             }
-            set_inferred_content_type(&mut list, body_type);
+            set_inferred_content_type(&mut list, body_type.as_deref());
             body_bytes = Some(bytes);
         }
 
@@ -11962,6 +12075,7 @@ pub fn forget_fetch_signal(ctx: &SharedContext, resolver: u64) {
 /// and each member's — are the only throws on this path, which is the
 /// distinction the `fetch` global's own comment records.
 pub fn request_from_init(
+    ctx: &SharedContext,
     init: RequestInit,
     url: Url,
     initiator: Url,
@@ -12057,8 +12171,8 @@ pub fn request_from_init(
     }
     let body = match body {
         Some(body) => {
-            let (bytes, body_type) = extract_body(body);
-            set_inferred_content_type(&mut headers, body_type);
+            let (bytes, body_type) = extract_body(ctx, body)?;
+            set_inferred_content_type(&mut headers, body_type.as_deref());
             Some(bytes)
         }
         None => None,
@@ -12269,15 +12383,19 @@ fn normalize_blob_type(value: &str) -> String {
 /// `host_key` and looking that up would ask for slab slot 0 and could append an
 /// unrelated record's bytes.
 fn blob_bytes_of(ctx: &SharedContext, handle: Handle<Blob>) -> Option<Vec<u8>> {
-    let decoded = decode(handle.bits());
-    if decoded.tag != TAG_HOST {
-        return None;
-    }
-    match ctx.host_records.borrow().get(decoded.host_key())? {
-        HostRecord::Blob(blob) => Some(blob.bytes.clone()),
-        HostRecord::File(file) => Some(file.blob.bytes.clone()),
-        _ => None,
-    }
+    blob_of(ctx, handle).map(|(bytes, _)| bytes)
+}
+
+/// The bytes and the `type` of the `Blob` or `File` `handle` names, with the
+/// same tag check as [`blob_bytes_of`].
+fn blob_of(ctx: &SharedContext, handle: Handle<Blob>) -> Option<(Vec<u8>, String)> {
+    let records = ctx.host_records.borrow();
+    let blob = match host_record_of(&records, handle.bits())? {
+        HostRecord::Blob(blob) => blob,
+        HostRecord::File(file) => &file.blob,
+        _ => return None,
+    };
+    Some((blob.bytes.clone(), blob.blob_type.clone()))
 }
 
 /// *process blob parts* (<https://w3c.github.io/FileAPI/#process-blob-parts>).
@@ -13264,7 +13382,7 @@ impl HostObject {
     /// `String`, no stored reference to hand back. That is why this is a plain
     /// method rather than the release-wrapping one it used to be, and why a
     /// conversion that fails is the glue's to raise rather than this function's.
-    fn send_request(&self, body: Option<BufferSourceOrUsvString>) -> Result<(), JsError> {
+    fn send_request(&self, body: Option<BodyInit>) -> Result<(), JsError> {
         // Step 1: "If this's state is not opened, then throw an
         // InvalidStateError."
         if self.with_xhr(<HostObject as XMLHttpRequestOps>::UNSENT, |record| {
@@ -13367,11 +13485,14 @@ impl HostObject {
         // flag is set — `setRequestHeader` throws on it, and `open()` clears it —
         // so the write reaches the request, which is the only place it is read.
         let mut headers = headers;
-        let body = body.map(|body| {
-            let (bytes, body_type) = extract_body(body);
-            set_inferred_content_type(&mut headers, body_type);
-            bytes
-        });
+        let body = match body {
+            Some(body) => {
+                let (bytes, body_type) = extract_body(self.context(), body)?;
+                set_inferred_content_type(&mut headers, body_type.as_deref());
+                Some(bytes)
+            }
+            None => None,
+        };
 
         // Step 11: "Fire a progress event named loadstart at this with 0 and 0."
         // It is the one event `send()` fires itself, and it comes before the
@@ -13740,7 +13861,7 @@ impl XMLHttpRequestOps for HostObject {
         Ok(())
     }
 
-    fn send(&self, body: Option<Option<BufferSourceOrUsvString>>) -> Result<(), JsError> {
+    fn send(&self, body: Option<Option<BodyInit>>) -> Result<(), JsError> {
         // The outer `None` is an omitted argument and the inner one the IDL's
         // nullable `body`; the declared union is converted by the generated glue,
         // which makes all three of an absent argument, `undefined` and `null` the

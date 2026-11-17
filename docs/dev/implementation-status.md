@@ -86,6 +86,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `TreeWalker`, `NodeIterator`, `NodeFilter`, `CSS.escape()` (TW1) | Traversal implemented as a prelude script on V8, `CSS.escape` generated on both engines; focused checks passed; not independently reviewed | Pages built with Lit threw at their first render; see the section below |
 | A host navigation starts a new script CPU window (SW1) | Implemented; focused checks passed; changes D-033 with the owner's agreement of 2026-11-17, the decision entry is still to be written | The commit of a navigation the host issued (`Page::goto`, `goto_with_eval`, `begin_goto`) empties the page's script CPU window; a navigation the document asks for (`location`, a form submission, an activated link) goes on spending the window it started in, so a document that reloads itself still has one budget. |
 | Body reads that are not text: `Response.arrayBuffer()/blob()/bytes()/clone()`, `Blob.arrayBuffer()/bytes()`, `XMLHttpRequest.response`, `responseURL` and the `arraybuffer`, `blob`, `json` response types (FB1) | Implemented on both engines; focused checks passed; not independently reviewed | A body was readable only as text. `Response.body`, `formData()`, the `Response` statics, `responseXML` and the `document` response type are still absent; `clone()` copies the bytes. |
+| A `Blob`, a `FormData` or a `URLSearchParams` as the body of `fetch()`, `XMLHttpRequest.send()` and `new Response()` (FB2) | Implemented on both engines; focused checks passed; not independently reviewed | `BodyInit` was `(BufferSource or USVString)`, so each of the three objects was stringified: a `FormData` body was the text `[object FormData]`. The `ReadableStream` arm and `send()`'s `Document` arm are still absent. |
 | Nested flex and grid containers share their answers (LP1) | Implemented; measured; fragment output compared on a real page; not independently reviewed | One layout of a component-built page solved its containers 12 times less often; see the section below. Layout still starts over after every mutation |
 | Wrapper-graph collection at task ends is amortised (GC1) | Implemented on V8; measured; not independently reviewed; **changes when detached wrappers are reclaimed, which the specification may record as a decision** | A task end collects once 1024 wrappers are owed or the last collection is 250 ms old, not every time; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
@@ -3035,6 +3036,44 @@ through `fetch()`, wraps `fetch()` and clones the response, or sets
   failed, and the binary then passed 12 of 12 five times alone. Both assert
   on a real-time margin (the second says so in its comment) and took 2.6 s
   and 3.0 s in the full run against 1.8 s for the whole binary alone.
+
+### Object bodies: `Blob`, `FormData`, `URLSearchParams` (FB2)
+
+`BodyInit` and `XMLHttpRequestBodyInit` were `(BufferSource or USVString)`.
+Any other object went to the string arm, so `fetch(url, {method: 'POST',
+body: formData})` sent the eighteen bytes `[object FormData]` as
+`text/plain`, a `Blob` body was `[object Blob]`, and a `URLSearchParams`
+body had the right bytes with the wrong `Content-Type`. The last was a
+recorded deviation with a test pinning it; the first two were not recorded
+anywhere as what a page would see.
+
+- **What changed:** `XMLHttpRequestBodyInit` is the standard's five arms
+  and `BodyInit` is that typedef. `extract_body`
+  (`crates/tenta-js/src/bindings/host.rs`) is still the one function the
+  `Response` constructor, `fetch()`'s initializer and `send()` call, and now
+  takes the context the three object arms are looked up in: a `Blob` gives
+  its bytes and its `type`; a `FormData` the `multipart/form-data` encoding
+  of its entries (string values with CRLF line breaks, files with their
+  name, type and bytes) under a boundary made for that body, which the
+  `Content-Type` names; a `URLSearchParams` its serialization as
+  `application/x-www-form-urlencoded;charset=UTF-8`. An author
+  `Content-Type` still wins. `request_from_init` takes the context as its
+  first argument.
+- **Still absent:** the `ReadableStream` arm (no Streams), and `send()`'s
+  `Document` arm, so a document passed to `send()` is stringified.
+- **Checks:** `tenta-js-v8::dom_xhr` 3 (one replaces
+  `a_url_search_params_body_serializes_but_infers_the_plain_text_type`, which
+  pinned the deviation; the multipart one compares the whole body byte for
+  byte), `dom_blob` 1 (replaces `a_blob_is_not_accepted_where_a_buffer_is_
+  required`, which pinned the stringified blob), `dom_fetch` 1;
+  `tenta-browser::body_reads_js` 2 new, a page that posts a form with a
+  file, a `URLSearchParams` and a `Blob` to the fixture server's echo route
+  and checks what the server received, on V8 and on QuickJS. The workspace
+  passed 4880 of 4880 and the feature set 599 of 599; fmt, both Clippy
+  runs, `lint-deps`, `idl-manifest` and `cargo deny` were clean.
+- **Not measured:** no benchmark. The string and buffer arms do the work
+  they did, plus one `String` allocation for the inferred type of a string
+  body; `S-js-xhr` was not re-run.
 
 ## Implementation queue and dependencies
 

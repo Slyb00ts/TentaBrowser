@@ -1179,3 +1179,58 @@ fn the_method_rules_reach_the_driver_as_the_standard_leaves_them() {
         "the six the standard uppercases arrive uppercased, the rest keep the page's case"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The body arms that name an object: Blob, FormData, URLSearchParams
+// ---------------------------------------------------------------------------
+
+/// `fetch()`'s body goes through the same *extract a body with type* as
+/// `send()`'s, so each object arm contributes its own bytes and its own
+/// `Content-Type`, and an author `Content-Type` still wins.
+#[test]
+fn an_object_body_contributes_its_bytes_and_its_content_type() {
+    let (mut engine, recorder) = engine();
+    eval(
+        &mut engine,
+        r#"
+        fetch('/a', { method: 'POST', body: new URLSearchParams({ q: 'a b' }) });
+        fetch('/a', { method: 'POST', body: new Blob(['{}'], { type: 'application/json' }) });
+        const form = new FormData();
+        form.append('k', 'v');
+        fetch('/a', { method: 'POST', body: form });
+        fetch('/a', { method: 'POST', body: new URLSearchParams('x=1'),
+                      headers: { 'Content-Type': 'text/x-own' } });
+        "#,
+    );
+
+    let requests = recorder.requests.borrow();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests[0].body.as_deref(), Some(b"q=a+b".as_slice()));
+    assert_eq!(
+        requests[0].headers,
+        vec![(
+            "content-type".to_owned(),
+            "application/x-www-form-urlencoded;charset=UTF-8".to_owned()
+        )]
+    );
+    assert_eq!(requests[1].body.as_deref(), Some(b"{}".as_slice()));
+    assert_eq!(
+        requests[1].headers,
+        vec![("content-type".to_owned(), "application/json".to_owned())]
+    );
+    let content_type = &requests[2].headers[0].1;
+    let boundary = content_type
+        .strip_prefix("multipart/form-data; boundary=")
+        .unwrap_or_else(|| panic!("the type names a boundary: {content_type}"));
+    assert_eq!(
+        String::from_utf8_lossy(requests[2].body.as_deref().expect("a body")),
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"k\"\r\n\r\nv\r\n--{boundary}--\r\n"
+        )
+    );
+    assert_eq!(
+        requests[3].headers,
+        vec![("content-type".to_owned(), "text/x-own".to_owned())],
+        "the author's type is kept"
+    );
+}

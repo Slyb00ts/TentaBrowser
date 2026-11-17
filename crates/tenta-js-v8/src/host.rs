@@ -1949,7 +1949,7 @@ fn fetch(
         return_promise(scope, &mut retval, promise);
         return;
     }
-    let request = match request_from_init(init, url, initiator, origin) {
+    let request = match request_from_init(&ctx, init, url, initiator, origin) {
         Ok(request) => request,
         Err(error) => {
             reject_promise(scope, &mut retval, &script, promise, error.message());

@@ -449,21 +449,25 @@ fn a_typed_array_still_reaches_the_buffer_arm() {
 }
 
 #[test]
-fn a_blob_is_not_accepted_where_a_buffer_is_required() {
-    // The other direction. A `Blob` has no buffer-source shape, so `Response`'s
-    // `BodyInit` — `(BufferSource or USVString)`, which this slice deliberately
-    // does *not* widen — stringifies it instead of reading its bytes. Pinned so
-    // that widening `BodyInit` later is a deliberate change with a test to
-    // update, not a silent one.
+fn a_blob_body_is_its_bytes_and_its_type() {
+    // `BodyInit`'s `Blob` arm: the body is the blob's byte sequence, and the
+    // blob's `type` is the `Content-Type` when it has one. A blob with no type
+    // infers none, and a `File` is a `Blob`.
     assert_eq!(
         settled(
             r#"
-            globalThis.seen = 'pending';
-            new Response(new Blob(['hi'])).text().then(v => { globalThis.seen = v; });
+            globalThis.seen = [];
+            const typed = new Response(new Blob([new Uint8Array([104, 105])], {type: 'Text/X-Test'}));
+            const plain = new Response(new Blob(['hi']));
+            const file = new Response(new File(['f'], 'f.txt', {type: 'a/b'}));
+            seen.push(typed.headers.get('content-type'), String(plain.headers.get('content-type')),
+                      file.headers.get('content-type'));
+            typed.text().then(text => { seen.push(text); return file.text(); })
+                 .then(text => seen.push(text));
             "#,
-            "seen;"
+            "seen.join('|');"
         ),
-        "[object Blob]"
+        "text/x-test|null|a/b|hi|f"
     );
 }
 

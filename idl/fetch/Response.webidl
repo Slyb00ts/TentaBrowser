@@ -9,43 +9,18 @@
 // no network and no streams. Four decisions are this file's own, and all four
 // are reductions:
 //
-//  - `BodyInit` is declared as the arms this slice can convert. The standard's
-//    `BodyInit` is `(ReadableStream or XMLHttpRequestBodyInit)` and
-//    `XMLHttpRequestBodyInit` is `(Blob or BufferSource or FormData or
-//    URLSearchParams or USVString)`. The served body extraction remains limited
-//    to a buffer source and a scalar value string; Streams is unimplemented,
-//    and FormData body extraction has not been added. `Blob` has a real
-//    declaration (`idl/fileapi/Blob.webidl`, which carries the host-side brand
-//    check its own `BlobPart` arm needs) and this union is deliberately not
-//    widened to it, because that changes the body path of `Response`, `Request`
-//    and `fetch()` and is a send-path change rather than a declaration. The arm
-//    order is load-bearing and cannot be rearranged — the first arm with *no*
-//    test of its own becomes the union's fallback (`crates/tenta-idl/src/codegen/
-//    types.rs`'s `union_code`), `USVString` has no test, and a buffer source
-//    has one only because slice 4a-0a gave `Type::Buffer` a `buffer_union_test`
-//    (`union_test` in the same file). The generated `from_v8` is therefore
-//    `if value.is_array_buffer() || value.is_shared_array_buffer() ||
-//    value.is_array_buffer_view() { <bytes> } else { <USVString> }`, which is
+//  - `BodyInit` is `XMLHttpRequestBodyInit`, the typedef `idl/xhr/
+//    XMLHttpRequest.webidl` declares: `(Blob or BufferSource or FormData or
+//    URLSearchParams or USVString)`. The standard's is `(ReadableStream or
+//    XMLHttpRequestBodyInit)`; Streams is unimplemented, so that arm is absent.
+//    Each arm's bytes and inferred `Content-Type` are *extract a body with
+//    type* (`extract_body` in `crates/tenta-js/src/bindings/host.rs`). The arm
+//    order is load-bearing — the first arm with *no* test of its own becomes
+//    the union's fallback (`crates/tenta-idl/src/codegen/types.rs`'s
+//    `union_code`), and `USVString` is the one with none: the three interface
+//    arms are selected by brand and the buffer source by its class, which is
 //    what makes `new Response(new Uint8Array([104, 105])).text()` the string
-//    `"hi"` rather than `"104,105"`. Dropping `URLSearchParams` from the union
-//    does **not** cost nothing observable, and an earlier revision of this
-//    comment claimed it did. It is an object with no buffer-source shape, so it
-//    does fall to the `USVString` arm, whose conversion calls the object's
-//    stringifier, and `URLSearchParams`'s stringifier *is* its form-encoded
-//    serialization — so the **bytes** are right. What is wrong is the body
-//    *type*: the standard's *extract a body with type* gives `URLSearchParams`
-//    the type `application/x-www-form-urlencoded;charset=UTF-8`
-//    (<https://fetch.spec.whatwg.org/#bodyinit-safely-extract>) and everything
-//    else the scalar value string branch's `text/plain;charset=UTF-8`, and the
-//    `Response` constructor infers `Content-Type` from that type
-//    (`crates/tenta-js/src/bindings/host.rs`). So
-//    `new Response(new URLSearchParams("a=b")).headers.get("Content-Type")`
-//    reads `text/plain;charset=UTF-8` here against the standard's
-//    `application/x-www-form-urlencoded;charset=UTF-8` — a page-visible
-//    deviation, and the same one `fetch()`'s `body` has.
-//    The generator now supports interface-brand selection. Serving this arm
-//    still requires widening BodyInit and implementing the corresponding host
-//    body extraction and inferred content type.
+//    `"hi"` rather than `"104,105"`, and anything else is stringified.
 //  - `Body` declares the members that read the whole body: `bodyUsed`,
 //    `arrayBuffer()`, `blob()`, `bytes()`, `json()` and `text()`. `body` and
 //    `textStream()` are left out because each is a `ReadableStream`
@@ -86,7 +61,7 @@
 // a second declaration of it would be a fatal `Error::Model` rather than a
 // deduplication (`crates/tenta-idl/src/front.rs`).
 
-typedef (BufferSource or USVString) BodyInit;
+typedef XMLHttpRequestBodyInit BodyInit;
 
 interface mixin Body {
   readonly attribute boolean bodyUsed;

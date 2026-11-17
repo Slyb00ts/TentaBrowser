@@ -671,6 +671,7 @@ pub(crate) fn install<'js>(ctx: &Ctx<'js>, state: &Rc<State>) -> rquickjs::Resul
                             (url, initiator)
                         };
                         let request = request_from_init(
+                            &state_fetch.world.host,
                             init,
                             url,
                             initiator,

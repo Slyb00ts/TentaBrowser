@@ -1810,19 +1810,10 @@ fn an_author_content_type_survives_the_inferred_one() {
     });
 }
 
-/// A `URLSearchParams` body falls to the `USVString` arm because
-/// `XMLHttpRequestBodyInit` still declares no arm for it. Generated interface
-/// brand checks exist, but this host body extraction has not been widened.
-///
-/// The bytes are right and the inferred type is not. This regression must be
-/// updated when that body arm is implemented. `URLSearchParams`'s stringifier is the
-/// `application/x-www-form-urlencoded` serializer, so the body is exactly what a
-/// browser sends; the type is `text/plain;charset=UTF-8`, where the standard's
-/// own `URLSearchParams` branch of *extract a body with type* sets
-/// `application/x-www-form-urlencoded;charset=UTF-8`. The deviation is recorded
-/// in full in `idl/xhr/XMLHttpRequest.webidl`.
+/// A `URLSearchParams` body is its serialization, typed as a form: the
+/// standard's own `URLSearchParams` branch of *extract a body with type*.
 #[test]
-fn a_url_search_params_body_serializes_but_infers_the_plain_text_type() {
+fn a_url_search_params_body_is_a_urlencoded_form() {
     with_page(|engine| {
         let recorder = install_recorder(engine);
         recorder.hold.set(true);
@@ -1831,27 +1822,111 @@ fn a_url_search_params_body_serializes_but_infers_the_plain_text_type() {
             r#"
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '/submit');
-            xhr.send(new URLSearchParams('a=1&b=two'));
+            xhr.send(new URLSearchParams('a=1&b=two words'));
             "#,
         );
 
         let starts = recorder.starts.borrow();
         let request = &starts[0].0;
-        assert_eq!(
-            request.body.as_deref(),
-            Some(b"a=1&b=two".as_slice()),
-            "the stringifier is the serializer, so the bytes are the standard's"
-        );
+        assert_eq!(request.body.as_deref(), Some(b"a=1&b=two+words".as_slice()));
         assert_eq!(
             request.headers,
             vec![(
                 "content-type".to_owned(),
-                "text/plain;charset=UTF-8".to_owned()
-            )],
-            "the recorded deviation: the standard says \
-             `application/x-www-form-urlencoded;charset=UTF-8` here, and saying \
-             so needs a branded `URLSearchParams` arm that this engine has not got"
+                "application/x-www-form-urlencoded;charset=UTF-8".to_owned()
+            )]
         );
+    });
+}
+
+/// A `Blob` body is its bytes, with its `type` as the `Content-Type` unless
+/// the author set one.
+#[test]
+fn a_blob_body_is_sent_with_the_blobs_type() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        eval(
+            engine,
+            r#"
+            const typed = new XMLHttpRequest();
+            typed.open('POST', '/submit');
+            typed.send(new Blob([new Uint8Array([0, 255])], {type: 'application/x-test'}));
+            const untyped = new XMLHttpRequest();
+            untyped.open('POST', '/submit');
+            untyped.send(new Blob(['x']));
+            "#,
+        );
+
+        let starts = recorder.starts.borrow();
+        assert_eq!(starts[0].0.body.as_deref(), Some([0u8, 255].as_slice()));
+        assert_eq!(
+            starts[0].0.headers,
+            vec![("content-type".to_owned(), "application/x-test".to_owned())]
+        );
+        assert_eq!(starts[1].0.body.as_deref(), Some(b"x".as_slice()));
+        assert!(
+            starts[1].0.headers.is_empty(),
+            "a blob with no type infers none: {:?}",
+            starts[1].0.headers
+        );
+    });
+}
+
+/// A `FormData` body is the multipart encoding of its entries, and the
+/// `Content-Type` names the boundary the body uses.
+#[test]
+fn a_form_data_body_is_multipart_with_its_boundary_in_the_type() {
+    with_page(|engine| {
+        let recorder = install_recorder(engine);
+        recorder.hold.set(true);
+        eval(
+            engine,
+            r#"
+            const form = new FormData();
+            form.append('name', 'line one\nline "two"');
+            form.append('up"load', new File([new Uint8Array([1, 2, 3])], 'a b.bin', {type: 'x/y'}));
+            form.append('blob', new Blob(['raw']));
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/submit');
+            xhr.send(form);
+            "#,
+        );
+
+        let starts = recorder.starts.borrow();
+        let request = &starts[0].0;
+        let (name, content_type) = &request.headers[0];
+        assert_eq!(name, "content-type");
+        let boundary = content_type
+            .strip_prefix("multipart/form-data; boundary=")
+            .unwrap_or_else(|| panic!("the type names a boundary: {content_type}"));
+        assert!(!boundary.is_empty());
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n\
+                 line one\r\nline \"two\"\r\n\
+                 --{boundary}\r\nContent-Disposition: form-data; name=\"up%22load\"; \
+                 filename=\"a b.bin\"\r\nContent-Type: x/y\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        expected.extend_from_slice(&[1, 2, 3]);
+        expected.extend_from_slice(
+            format!(
+                "\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"blob\"; \
+                 filename=\"blob\"\r\nContent-Type: application/octet-stream\r\n\r\n\
+                 raw\r\n--{boundary}--\r\n"
+            )
+            .as_bytes(),
+        );
+        let body = request.body.as_deref().expect("the request has a body");
+        assert_eq!(
+            String::from_utf8_lossy(body),
+            String::from_utf8_lossy(&expected)
+        );
+        assert_eq!(body, expected.as_slice());
     });
 }
 
