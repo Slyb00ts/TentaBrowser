@@ -73,12 +73,13 @@ use super::{
     CustomEventInit, CustomEventOps, DOMImplementation, DOMImplementationOps, DOMParserConstructor,
     DOMParserOps, DOMParserSupportedType, DOMStringMap, DOMTokenList, DOMTokenListOps,
     DocumentConstructor, DocumentFragment, DocumentFragmentOps, DocumentOps, DocumentType,
-    DocumentTypeOps, Element, ElementOps, EndingType, Event, EventConstructor, EventInit,
-    EventListener, EventListenerOptionsOrBoolean, EventOps, EventTarget, EventTargetConstructor,
-    EventTargetOps, FileConstructor, FileOps, FileOrUsvString, FilePropertyBag,
-    FocusEventConstructor, FocusEventInit, FocusEventOps, FocusOptions, FormDataConstructor,
-    FormDataOps, HTMLAnchorElementOps, HTMLCollection, HTMLCollectionOps, HTMLDivElementOps,
-    HTMLElement, HTMLElementOps, HTMLFormElement, HTMLIFrameElementOps, HTMLImageElementOps,
+    DocumentTypeOps, Element, ElementOps, EndingType, ErrorEventConstructor, ErrorEventInit,
+    ErrorEventOps, Event, EventConstructor, EventInit, EventListener,
+    EventListenerOptionsOrBoolean, EventOps, EventTarget, EventTargetConstructor, EventTargetOps,
+    FileConstructor, FileOps, FileOrUsvString, FilePropertyBag, FocusEventConstructor,
+    FocusEventInit, FocusEventOps, FocusOptions, FormDataConstructor, FormDataOps,
+    HTMLAnchorElementOps, HTMLCollection, HTMLCollectionOps, HTMLDivElementOps, HTMLElement,
+    HTMLElementOps, HTMLFormElement, HTMLIFrameElementOps, HTMLImageElementOps,
     HTMLLabelElementOps, HTMLLinkElementOps, HTMLParagraphElementOps, HTMLScriptElementOps,
     HTMLSpanElementOps, HTMLStyleElementOps, HTMLTemplateElementOps, Handle, Headers,
     HeadersConstructor, HeadersInit, HeadersOps, IterableEntries, JsError,
@@ -7741,6 +7742,82 @@ impl ProgressEventConstructor for HostObject {
                 total: init.total,
             },
         ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ErrorEvent (constructor, getters)
+// ---------------------------------------------------------------------------
+
+impl ErrorEventConstructor for HostObject {
+    fn construct(
+        realm: &Realm,
+        r#type: &str,
+        event_init_dict: Option<ErrorEventInit>,
+    ) -> Result<Self, JsError> {
+        let ctx = realm_context(realm)?;
+        let init = event_init_dict.unwrap_or_default();
+        // `error` is an `any` the glue interned during dictionary conversion
+        // (+1 ref); the record owns that reference until it is reclaimed, as a
+        // `CustomEvent` owns its `detail`.
+        let error = init.error.map(|value| value.0);
+        Ok(new_event(
+            &ctx,
+            r#type,
+            init.bubbles,
+            init.cancelable,
+            init.composed,
+            EventKind::Error {
+                message: init.message,
+                filename: init.filename,
+                lineno: init.lineno,
+                colno: init.colno,
+                error,
+            },
+        ))
+    }
+}
+
+impl ErrorEventOps for HostObject {
+    fn message(&self) -> Result<String, JsError> {
+        Ok(self.with_event(String::new(), |r| match &r.kind {
+            EventKind::Error { message, .. } => message.clone(),
+            _ => String::new(),
+        }))
+    }
+
+    fn filename(&self) -> Result<String, JsError> {
+        Ok(self.with_event(String::new(), |r| match &r.kind {
+            EventKind::Error { filename, .. } => filename.clone(),
+            _ => String::new(),
+        }))
+    }
+
+    fn lineno(&self) -> u32 {
+        self.with_event(0, |r| match r.kind {
+            EventKind::Error { lineno, .. } => lineno,
+            _ => 0,
+        })
+    }
+
+    fn colno(&self) -> u32 {
+        self.with_event(0, |r| match r.kind {
+            EventKind::Error { colno, .. } => colno,
+            _ => 0,
+        })
+    }
+
+    fn error(&self) -> Result<AnyValue, JsError> {
+        // An event made without an `error` reads back as `undefined`, the
+        // member's default in the standard.
+        let stored = self.with_event(None, |r| match r.kind {
+            EventKind::Error { error, .. } => error,
+            _ => None,
+        });
+        Ok(match stored {
+            Some(bits) => AnyValue(bits),
+            None => self.context().undefined_value(),
+        })
     }
 }
 

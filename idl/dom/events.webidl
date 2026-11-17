@@ -81,6 +81,29 @@ interface CustomEvent : Event {
   undefined initCustomEvent(DOMString type, optional boolean bubbles = false, optional boolean cancelable = false, optional any detail = null);
 };
 
+// ErrorEvent (HTML, <https://html.spec.whatwg.org/multipage/webappapis.html#errorevent>).
+// The engine fires one named `error` at the window for an exception nothing
+// caught. `error` has no default for the reason `CustomEventInit.detail` has
+// none; an absent member reads back as `undefined`, which is the standard's
+// default for it.
+dictionary ErrorEventInit : EventInit {
+  DOMString message = "";
+  USVString filename = "";
+  unsigned long lineno = 0;
+  unsigned long colno = 0;
+  any error;
+};
+
+[Exposed=Window]
+interface ErrorEvent : Event {
+  constructor(DOMString type, optional ErrorEventInit eventInitDict = {});
+  readonly attribute DOMString message;
+  readonly attribute USVString filename;
+  readonly attribute unsigned long lineno;
+  readonly attribute unsigned long colno;
+  readonly attribute any error;
+};
+
 // UIEvent / MouseEvent. `Window` is an opaque interface marker here: the page
 // global is its only supported instance until the Window bindings are modeled.
 dictionary UIEventInit : EventInit {

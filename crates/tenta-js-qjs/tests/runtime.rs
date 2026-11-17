@@ -336,6 +336,23 @@ fn a_request_is_constructed_copied_cloned_and_read() {
     );
 }
 #[test]
+fn an_error_event_carries_its_five_members_to_a_listener() {
+    // The window of this backend has no `onerror` handler attribute, so the
+    // handler's own five-argument call is not reachable here; the interface
+    // and a listener are.
+    let mut engine = page();
+    assert_js(
+        &mut engine,
+        "globalThis.out=[];const reason={};\
+         const e=new ErrorEvent('error',{message:'m',filename:'f.js',lineno:3,colno:7,error:reason,cancelable:true});\
+         out.push(e instanceof Event,new ErrorEvent('x').error===undefined);\
+         window.addEventListener('error',function(event){out.push(event===e,event.message,event.filename,event.lineno,event.colno,event.error===reason);event.preventDefault()});\
+         window.dispatchEvent(e);out.push(e.defaultPrevented);\
+         out.join('|')",
+        "true|true|true|m|f.js|3|7|true|true",
+    );
+}
+#[test]
 fn abort_throws_the_exact_reason() {
     let mut engine = page();
     assert_js(

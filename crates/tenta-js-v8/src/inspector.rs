@@ -31,6 +31,25 @@ struct Rejection {
     reason: v8::Global<v8::Value>,
 }
 
+/// An exception nothing caught, waiting for its `error` event.
+pub(crate) struct Uncaught {
+    /// The thrown value.
+    pub(crate) error: v8::Global<v8::Value>,
+    /// V8's message for it, which is what a browser reports: `Uncaught` and
+    /// the value's description.
+    pub(crate) message: String,
+    /// The URL of the script that threw, or the empty string.
+    pub(crate) filename: String,
+    /// The line, 1-based, or 0 when unknown.
+    pub(crate) lineno: u32,
+    /// The column, 1-based, or 0 when unknown.
+    pub(crate) colno: u32,
+}
+
+/// How many exceptions wait for their `error` event at once. A task that
+/// throws more loses the oldest, as with rejections.
+const MAX_PENDING_UNCAUGHT: usize = 100;
+
 /// The inspection state of one realm, reached from native callbacks through the
 /// host state in the context slot.
 pub(crate) struct InspectorState {
@@ -39,6 +58,12 @@ pub(crate) struct InspectorState {
     sink: RefCell<Option<Rc<dyn InspectorSink>>>,
     dispatcher: RefCell<Option<v8::Global<v8::Function>>>,
     rejections: RefCell<Vec<Rejection>>,
+    /// The exceptions nothing caught since the last task end, oldest first.
+    uncaught: RefCell<Vec<Uncaught>>,
+    /// Set while their `error` events are being fired: an exception an error
+    /// listener throws is reported, and is not an error event of its own
+    /// (HTML's *in error reporting mode*).
+    reporting_errors: Cell<bool>,
 }
 
 impl InspectorState {
@@ -49,11 +74,24 @@ impl InspectorState {
             sink: RefCell::new(None),
             dispatcher: RefCell::new(None),
             rejections: RefCell::new(Vec::new()),
+            uncaught: RefCell::new(Vec::new()),
+            reporting_errors: Cell::new(false),
         }
     }
 
     pub(crate) fn sink(&self) -> Option<Rc<dyn InspectorSink>> {
         self.sink.borrow().clone()
+    }
+
+    /// Takes the exceptions waiting for their `error` event.
+    pub(crate) fn take_uncaught(&self) -> Vec<Uncaught> {
+        std::mem::take(&mut *self.uncaught.borrow_mut())
+    }
+
+    /// Marks the firing of `error` events, during which no exception is
+    /// queued for one, and returns what the mark was.
+    pub(crate) fn set_reporting_errors(&self, reporting: bool) -> bool {
+        self.reporting_errors.replace(reporting)
     }
 
     /// Drops every V8 handle this state holds. The engine calls it while the
@@ -62,6 +100,7 @@ impl InspectorState {
     pub(crate) fn clear(&self) {
         self.dispatcher.borrow_mut().take();
         self.rejections.borrow_mut().clear();
+        self.uncaught.borrow_mut().clear();
         self.sink.borrow_mut().take();
     }
 }
@@ -303,9 +342,15 @@ fn deliver_exception(
     }
 }
 
-/// Reports the exception a `TryCatch` holds as uncaught, then clears it. Does
-/// nothing when nothing listens, when the script was terminated, or when no
-/// exception is held.
+/// Reports the exception a `TryCatch` holds as uncaught: it is queued for the
+/// `error` event the engine fires at the window when the task ends, and, when
+/// something listens to the inspector, reported there and cleared. Does nothing
+/// when the script was terminated or no exception is held.
+///
+/// The two reports are independent. The standard does not report an error
+/// whose `error` event was cancelled; here the inspector's report is made at
+/// once, before the event exists, so a page that handles its errors in
+/// `window.onerror` still shows them in the console.
 pub(crate) fn report_caught(
     tc: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>,
     host: &HostState,
@@ -313,16 +358,11 @@ pub(crate) fn report_caught(
     if tc.has_terminated() {
         return;
     }
-    let Some(sink) = host.inspector.sink() else {
-        return;
-    };
-    if !sink.listening() {
-        return;
-    }
     let Some(exception) = tc.exception() else {
         return;
     };
-    let (line, column) = match tc.message() {
+    let message = tc.message();
+    let (line, column) = match message {
         Some(message) => (
             message
                 .get_line_number(tc)
@@ -332,8 +372,65 @@ pub(crate) fn report_caught(
         ),
         None => (None, None),
     };
+    if !host.inspector.reporting_errors.get() {
+        let (text, filename) = match message {
+            Some(message) => (
+                message.get(tc).to_rust_string_lossy(tc),
+                message
+                    .get_script_resource_name(tc)
+                    .filter(|name| name.is_string())
+                    .map(|name| name.to_rust_string_lossy(tc))
+                    .unwrap_or_default(),
+            ),
+            None => ("Uncaught".to_owned(), String::new()),
+        };
+        let mut pending = host.inspector.uncaught.borrow_mut();
+        if pending.len() >= MAX_PENDING_UNCAUGHT {
+            pending.remove(0);
+        }
+        pending.push(Uncaught {
+            error: v8::Global::new(tc, exception),
+            message: text,
+            filename,
+            // Both are 1-based in an `ErrorEvent`, and 0 is "unknown".
+            lineno: line.map_or(0, |line| line.saturating_add(1)),
+            colno: column.map_or(0, |column| column.saturating_add(1)),
+        });
+    }
+    let Some(sink) = host.inspector.sink() else {
+        return;
+    };
+    if !sink.listening() {
+        return;
+    }
     tc.reset();
     deliver_exception(tc, host, &sink, "Uncaught", exception, line, column, false);
+}
+
+/// `reportError(value)`: reports `value` as an exception nothing caught, which
+/// is what the standard's *report an exception* does with it.
+pub(crate) fn report_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _retval: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(host) = host_state(scope) else {
+        return;
+    };
+    if args.length() == 0 {
+        let message = v8::String::new(scope, "reportError requires 1 argument");
+        if let Some(message) = message {
+            let error = v8::Exception::type_error(scope, message);
+            scope.throw_exception(error);
+        }
+        return;
+    }
+    v8::tc_scope!(let tc, scope);
+    tc.throw_exception(args.get(0));
+    report_caught(tc, &host);
+    // Whatever the report left is this function's to clear: the value was
+    // reported, not thrown at the caller.
+    tc.reset();
 }
 
 impl Engine {

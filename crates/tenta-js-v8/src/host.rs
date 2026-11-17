@@ -99,6 +99,8 @@ guarded_callback!(guarded_clear_timeout => clear_timeout);
 guarded_callback!(guarded_set_interval => set_interval);
 guarded_callback!(guarded_clear_interval => clear_interval);
 guarded_callback!(guarded_queue_microtask => queue_microtask);
+use crate::inspector::report_error;
+guarded_callback!(guarded_report_error => report_error);
 guarded_callback!(guarded_fetch => fetch);
 guarded_callback!(guarded_get_computed_style => get_computed_style);
 guarded_callback!(guarded_request_animation_frame => request_animation_frame);
@@ -397,6 +399,7 @@ pub fn install(scope: &mut v8::PinScope, context: v8::Local<v8::Context>, time_o
     define(scope, global, "setInterval", guarded_set_interval);
     define(scope, global, "clearInterval", guarded_clear_interval);
     define(scope, global, "queueMicrotask", guarded_queue_microtask);
+    define(scope, global, "reportError", guarded_report_error);
     crate::structured_clone::install(scope, global);
     // `fetch` is defined here, before any driver exists: the global has to be
     // present from the moment script can run, and a call made before a driver is

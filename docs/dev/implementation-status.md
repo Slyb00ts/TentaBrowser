@@ -88,6 +88,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | Body reads that are not text: `Response.arrayBuffer()/blob()/bytes()/clone()`, `Blob.arrayBuffer()/bytes()`, `XMLHttpRequest.response`, `responseURL` and the `arraybuffer`, `blob`, `json` response types (FB1) | Implemented on both engines; focused checks passed; not independently reviewed | A body was readable only as text. `Response.body`, `formData()`, the `Response` statics, `responseXML` and the `document` response type are still absent; `clone()` copies the bytes. |
 | A `Blob`, a `FormData` or a `URLSearchParams` as the body of `fetch()`, `XMLHttpRequest.send()` and `new Response()` (FB2) | Implemented on both engines; focused checks passed; not independently reviewed | `BodyInit` was `(BufferSource or USVString)`, so each of the three objects was stringified: a `FormData` body was the text `[object FormData]`. The `ReadableStream` arm and `send()`'s `Document` arm are still absent. |
 | `Request` and `fetch(request)` (RQ1) | Implemented on both engines; focused checks passed; not independently reviewed | The constructor from a URL or from another request, the accessors, `clone()`, the `Body` members, and `fetch()` taking a `Request`. `signal` is the signal the initializer named, not one that follows it; `body`, `formData()`, `isReloadNavigation` and `isHistoryNavigation` are absent; QuickJS refuses to fetch a request that has a signal. |
+| `ErrorEvent`, the `error` event for an uncaught exception, the window's `onerror` handler, `reportError()` (ERR1) | Implemented on V8; `ErrorEvent` alone on QuickJS; focused checks passed; not independently reviewed | An uncaught exception was reported to the inspector and to nothing else, so `window.onerror` and `addEventListener('error')` never ran. The event is fired when the task ends, not where the exception is thrown; its `filename` is empty and its line is counted from the start of the script. `unhandledrejection` is still absent. |
 | Nested flex and grid containers share their answers (LP1) | Implemented; measured; fragment output compared on a real page; not independently reviewed | One layout of a component-built page solved its containers 12 times less often; see the section below. Layout still starts over after every mutation |
 | Wrapper-graph collection at task ends is amortised (GC1) | Implemented on V8; measured; not independently reviewed; **changes when detached wrappers are reclaimed, which the specification may record as a decision** | A task end collects once 1024 wrappers are owed or the last collection is 250 ms old, not every time; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
@@ -3145,6 +3146,82 @@ improvement. The absolute figures are higher than the 12.94 ms recorded
 for this scenario after GC1; that run and this one were not interleaved
 with each other, so the two are not comparable and the cause of the
 difference was not looked for.
+
+### The `error` event (ERR1)
+
+An exception nothing caught was reported to the inspector, when something
+listened to it, and to nothing else: no `error` event was fired at the
+window, so a page's `window.onerror` and its `addEventListener('error')`
+never ran, and `ErrorEvent` and `reportError` were not defined. The API
+probe of 2026-11-17 listed both as missing.
+
+- **What changed (V8):**
+  - `ErrorEvent` is an interface (`idl/dom/events.webidl`, `EventKind::
+    Error`); its `error` is a stored value the record owns, as a
+    `CustomEvent` owns its `detail`.
+  - Every uncaught-exception site already went through one function,
+    `inspector::report_caught`. It now also queues the exception, with
+    V8's message and position, and `Engine::flush_uncaught` fires an
+    `error` event at the window for each queued one when the task and its
+    microtasks are over, then runs the microtasks the listeners queued. A
+    page with no `error` listener on the window builds no event.
+  - The dispatcher calls the window's `onerror` handler with the event's
+    five values for an `ErrorEvent` named `error`
+    (`ScriptHost::invoke_error_handler`), and that handler cancels by
+    returning `true`. Any other event named `error` reaches the handler as
+    an event.
+  - An exception a listener of these events throws is reported to the
+    inspector and is not an event of its own.
+  - `reportError(value)` reports the value the same way.
+- **Deviations:**
+  - The event is fired at the end of the task, where the standard reports
+    in the middle of it; a handler therefore runs after the rest of the
+    task.
+  - The inspector's report is made when the exception is caught, before
+    the event exists, so an error a page cancels in `onerror` is still in
+    the console.
+  - `filename` is the empty string and `lineno` is counted from the start
+    of the script that threw: scripts are compiled without an origin, so
+    V8 knows neither the URL nor the line the script starts on in its
+    document. The same is true of every stack trace. Not fixed here.
+  - At most 100 exceptions wait for their event at once; a task that
+    throws more loses the oldest.
+- **QuickJS:** `ErrorEvent` is installed and a listener reads its members.
+  The engine does not fire `error` for an uncaught exception there, and
+  that backend's window has no `onerror` handler attribute, so the
+  handler's own call is not implemented for it.
+- **Still absent:** `unhandledrejection` and `PromiseRejectionEvent`. An
+  event record owns one stored value and that event needs two (the promise
+  and the reason); the five places that release an event's value would
+  have to learn a second one.
+- **Checks:** `tenta-js-v8::dom_error_event` 11 (the interface; an
+  exception thrown by a listener becomes an event only at the task end,
+  with the thrown value, a position and `isTrusted`; several in order;
+  the handler's five arguments and `true` cancelling, `false` not; a plain
+  `Event` named `error`; a throwing error listener is not re-dispatched
+  over three task ends; a listener's microtask runs; nobody listening;
+  `reportError`; an event a page keeps survives collection with its
+  error); `tenta-browser::error_events_js` 1, a served page whose inline
+  script, timer and `DOMContentLoaded` listener each throw and whose
+  `onerror` hears all three; `tenta-js-qjs::runtime` 1.
+  The workspace passed 4908 of 4908. The feature set passed 599 of 600:
+  `tenta-browser::css_loading
+  a_stylesheet_is_requested_while_the_body_is_still_streaming` failed, for
+  the third time in this series of packages (after DSD1 and SW1 as well),
+  and passed alone. It was then looked at: it passed 6 times of 6 with 64
+  busy loops on the 32 cores, and did not fail in 8 further runs of the
+  whole feature suite, so neither CPU load nor the suite running beside it
+  reproduces it. In the failing run it took 1.44 s against 1.22 s, which is
+  what it would take if the stylesheet were requested only after the body
+  ended. Cause not established. One thing read in the code and not
+  tested: after an encoding restart the buffered chunks are fed again
+  without the sweep that starts the stylesheets found so far
+  (`parse_body`, `crates/tenta-page/src/page.rs`); whether this test ever
+  restarts was not checked.
+- **Not measured:** no benchmark. A task end now takes an empty `Vec` out
+  of a `RefCell` once more than it did; an uncaught exception, which
+  already called into the inspector, also makes one `v8::Global` and two
+  strings.
 
 ## Implementation queue and dependencies
 

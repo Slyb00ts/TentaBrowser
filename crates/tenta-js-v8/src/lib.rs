@@ -32,7 +32,9 @@ use tenta_js::bindings::{
     install_native_callback_state_for_isolate, install_v8_callback_admission,
     v8_isolate_callback_boundary,
 };
-use tenta_js::dom::events::{DispatchTarget, EventKind, EventRecord, ScriptHost, dispatch_at};
+use tenta_js::dom::events::{
+    DispatchTarget, EventKind, EventRecord, ScriptHost, TargetKey, dispatch_at,
+};
 use tenta_js::engine::{LifecycleEvent, ScriptErrorKind};
 use tenta_js::event_loop::{Clock, EventLoop, FiringRelease, MonoTime};
 use tenta_js::fetch::{FetchCompletion, FetchOutcome};
@@ -1186,6 +1188,13 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the ProgressEvent interface");
+            // So does ErrorEvent's.
+            tenta_js::bindings::install_error_event::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the ErrorEvent interface");
             // `URL` and `URLSearchParams` carry no parent chain of their own;
             // their order among themselves does not matter, but
             // `URLSearchParams` must precede no one either — `URL.searchParams`
@@ -2038,8 +2047,94 @@ impl Engine {
             self.isolate.perform_microtask_checkpoint();
         }
         self.host.microtasks_pending.set(false);
+        self.flush_uncaught();
         self.flush_rejections();
         self.collect_after_task();
+    }
+
+    /// Fires `error` at the window for each exception nothing caught during
+    /// the task that just ended, oldest first.
+    ///
+    /// The standard reports an exception where it is thrown, in the middle of
+    /// the task. Here the report is queued (`inspector::report_caught`) and the
+    /// event is fired once the task and its microtasks are over, which is the
+    /// one point where the engine may dispatch with no script on the stack. A
+    /// handler therefore runs after the rest of the task instead of inside it.
+    ///
+    /// An exception a listener of these events throws is reported to the
+    /// inspector and is not an event of its own. The microtasks the listeners
+    /// queued run before this returns.
+    fn flush_uncaught(&mut self) {
+        let pending = self.host.inspector.take_uncaught();
+        if pending.is_empty() || self.native_failure().is_some() {
+            return;
+        }
+        let Some(dom) = &self.dom else {
+            return;
+        };
+        // Nothing listens on most pages, and then there is nothing to build.
+        let listened = {
+            let listeners = dom.ctx.listeners.borrow();
+            [false, true].into_iter().any(|capture| {
+                !listeners
+                    .snapshot_at(TargetKey::Window, "error", capture)
+                    .is_empty()
+            })
+        };
+        if !listened {
+            return;
+        }
+        let _native = self.host.enter_native_dispatch();
+        let was_reporting = self.host.inspector.set_reporting_errors(true);
+        for uncaught in pending {
+            // The thrown value becomes a stored value the event record owns,
+            // as a `CustomEvent` owns its `detail`.
+            let error = {
+                v8::scope!(let handle_scope, &mut self.isolate);
+                let context = v8::Local::new(handle_scope, &self.context);
+                let mut context_scope = v8::ContextScope::new(handle_scope, context);
+                v8::scope!(let scope, &mut context_scope);
+                let value = v8::Local::new(scope, &uncaught.error);
+                dom.state.borrow_mut().store_value(scope, value)
+            };
+            let mut record = EventRecord::new(
+                "error".to_owned(),
+                EventKind::Error {
+                    message: uncaught.message,
+                    filename: uncaught.filename,
+                    lineno: uncaught.lineno,
+                    colno: uncaught.colno,
+                    error: Some(error),
+                },
+                dom.ctx.time_stamp(),
+            );
+            record.cancelable = true;
+            record.flags.initialized = true;
+            let event_key = dom.ctx.events.borrow_mut().insert(record);
+            let _ = dispatch_at(&dom.ctx, DispatchTarget::window(), event_key, true);
+            // A record no listener made a wrapper for is removed here, with
+            // the stored value it owns; one with a wrapper is the world's
+            // dead-event sweep's to remove.
+            let orphaned = dom
+                .ctx
+                .events
+                .borrow()
+                .get(event_key)
+                .is_some_and(|record| !record.has_wrapper);
+            if orphaned {
+                dom.ctx.events.borrow_mut().remove(event_key);
+                dom.state.borrow_mut().release_value(error);
+            }
+            if self.native_failure().is_some() {
+                break;
+            }
+        }
+        self.host.inspector.set_reporting_errors(was_reporting);
+        drop(_native);
+        if self.native_failure().is_none() {
+            self.isolate.perform_microtask_checkpoint();
+            self.host.microtasks_pending.set(false);
+        }
     }
 
     /// Collects the wrapper graph at the end of a task, when a collection is
@@ -2358,6 +2453,7 @@ impl Engine {
             // event's, but the wrapper graph is only walked once, below.
             self.isolate.perform_microtask_checkpoint();
             self.host.microtasks_pending.set(false);
+            self.flush_uncaught();
             self.flush_rejections();
         }
         self.collect_after_task();

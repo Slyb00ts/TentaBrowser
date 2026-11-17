@@ -965,6 +965,7 @@ fn install_bindings<'js>(ctx: &Ctx<'js>, global: &Object<'js>) -> rquickjs::Resu
     install_mouse_event::<HostObject>(ctx, global, registry)?;
     install_wheel_event::<HostObject>(ctx, global, registry)?;
     install_progress_event::<HostObject>(ctx, global, registry)?;
+    install_error_event::<HostObject>(ctx, global, registry)?;
     install_url_search_params::<HostObject>(ctx, global, registry)?;
     install_url::<HostObject>(ctx, global, registry)?;
     install_headers::<HostObject>(ctx, global, registry)?;

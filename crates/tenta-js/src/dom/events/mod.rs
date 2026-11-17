@@ -80,6 +80,21 @@ pub enum PromiseOutcome<'a> {
     ParseJson(&'a [u8]),
 }
 
+/// What a window `onerror` handler is called with, in argument order.
+#[derive(Clone, Copy, Debug)]
+pub struct ErrorReport<'a> {
+    /// The error's message.
+    pub message: &'a str,
+    /// The URL of the script that threw.
+    pub filename: &'a str,
+    /// The line, 1-based, or 0 when unknown.
+    pub lineno: u32,
+    /// The column, 1-based, or 0 when unknown.
+    pub colno: u32,
+    /// The thrown value's stored bits; `None` is `undefined`.
+    pub error: Option<u64>,
+}
+
 /// What [`ScriptHost::invoke_mutation_callback`] did with a batch of records.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MutationDelivery {
@@ -113,6 +128,26 @@ pub trait ScriptHost {
     /// The caller holds no `RefCell` borrow of the document, listener table or
     /// event slab (invariant A5).
     fn invoke_listener(&self, callback: CallbackRef, current_target: u64, event: u64) -> bool;
+
+    /// Calls the window's `onerror` event handler for an `ErrorEvent`, which
+    /// takes the event's five values instead of the event
+    /// (<https://html.spec.whatwg.org/multipage/webappapis.html#the-event-handler-processing-algorithm>,
+    /// the `OnErrorEventHandler` case), and reports whether it returned exactly
+    /// `true`, which is how that one handler cancels.
+    ///
+    /// The default is a backend that has no such call: the handler is invoked
+    /// like any other, with the event, and cancels nothing.
+    fn invoke_error_handler(
+        &self,
+        callback: CallbackRef,
+        current_target: u64,
+        event: u64,
+        error: &ErrorReport<'_>,
+    ) -> bool {
+        let _ = error;
+        self.invoke_listener(callback, current_target, event);
+        false
+    }
 
     /// Invokes a `MutationObserver`'s `MutationCallback` with `this` set to the
     /// observer's wrapper and the arguments `(records, observer)`, where
@@ -678,6 +713,20 @@ pub enum EventKind {
         /// `ProgressEvent.total`.
         total: f64,
     },
+    /// An `ErrorEvent`; `error` is interned value bits (released on reclaim),
+    /// and `None` reads back as `undefined`.
+    Error {
+        /// `ErrorEvent.message`.
+        message: String,
+        /// `ErrorEvent.filename`.
+        filename: String,
+        /// `ErrorEvent.lineno`.
+        lineno: u32,
+        /// `ErrorEvent.colno`.
+        colno: u32,
+        /// The `error` value's handle bits, if any.
+        error: Option<u64>,
+    },
 }
 
 impl EventKind {
@@ -694,6 +743,7 @@ impl EventKind {
             EventKind::Mouse { wheel: Some(_), .. } => "WheelEvent",
             EventKind::Mouse { .. } => "MouseEvent",
             EventKind::Progress { .. } => "ProgressEvent",
+            EventKind::Error { .. } => "ErrorEvent",
         }
     }
 
@@ -703,6 +753,7 @@ impl EventKind {
     pub fn owned_stored_value(&self) -> Option<u64> {
         match self {
             EventKind::Custom { detail } => *detail,
+            EventKind::Error { error, .. } => *error,
             EventKind::Mouse { related_value, .. } | EventKind::Focus { related_value, .. } => {
                 *related_value
             }
@@ -1871,8 +1922,32 @@ fn invoke_listeners(
             set_passive(event_ctx, key, true);
         }
 
-        // No borrow is held across the call into script.
-        let returned_false = script.invoke_listener(listener.callback, entry.bits, event_bits);
+        // No borrow is held across the call into script. The window's
+        // `onerror` handler is the one handler with a signature of its own.
+        let window_error = (listener.handler && target == TargetKey::Window && type_ == "error")
+            .then(|| error_payload(event_ctx, key))
+            .flatten();
+        let (returned_false, returned_true) = match &window_error {
+            Some((message, filename, lineno, colno, error)) => (
+                false,
+                script.invoke_error_handler(
+                    listener.callback,
+                    entry.bits,
+                    event_bits,
+                    &ErrorReport {
+                        message,
+                        filename,
+                        lineno: *lineno,
+                        colno: *colno,
+                        error: *error,
+                    },
+                ),
+            ),
+            None => (
+                script.invoke_listener(listener.callback, entry.bits, event_bits),
+                false,
+            ),
+        };
 
         if listener.passive {
             set_passive(event_ctx, key, false);
@@ -1889,9 +1964,9 @@ fn invoke_listeners(
         // The flag is set unconditionally rather than gated on `cancelable`,
         // which is what `Event.canceled` applies. The standard's two exceptions
         // are a window `onerror` handler, where `true` cancels, and
-        // `onbeforeunload`, where any non-null value cancels; neither is
-        // implemented.
-        if listener.handler && returned_false {
+        // `onbeforeunload`, where any non-null value cancels; the second is
+        // not implemented.
+        if listener.handler && (returned_false || returned_true) {
             set_canceled(event_ctx, key);
         }
         if immediate_stopped(event_ctx, key) {
@@ -1900,6 +1975,25 @@ fn invoke_listeners(
     }
 
     propagation_stopped(event_ctx, key)
+}
+
+/// The five values of the `ErrorEvent` at `key`, or `None` when the event is
+/// some other kind — an `Event` named `error` is handed to the handler as any
+/// event is.
+fn error_payload(
+    ctx: &HostContext,
+    key: EventKey,
+) -> Option<(String, String, u32, u32, Option<u64>)> {
+    match &ctx.events.borrow().get(key)?.kind {
+        EventKind::Error {
+            message,
+            filename,
+            lineno,
+            colno,
+            error,
+        } => Some((message.clone(), filename.clone(), *lineno, *colno, *error)),
+        _ => None,
+    }
 }
 
 fn set_passive(ctx: &HostContext, key: EventKey, value: bool) {

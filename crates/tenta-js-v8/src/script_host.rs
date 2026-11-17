@@ -30,7 +30,7 @@ use tenta_js::bindings::{
     array_buffer_to_v8, array_buffer_view_to_v8, handle_to_v8, value_to_v8,
 };
 use tenta_js::dom::events::{
-    CallbackRef, HostValue, MutationDelivery, PromiseOutcome, PromiseRef, ScriptHost,
+    CallbackRef, ErrorReport, HostValue, MutationDelivery, PromiseOutcome, PromiseRef, ScriptHost,
 };
 use tenta_js::fetch::FetchStartError;
 use tenta_js::xhr::{XhrHandle, XhrRequest};
@@ -343,6 +343,63 @@ impl ScriptHost for V8ScriptHost {
         }
 
         cancelled
+    }
+
+    fn invoke_error_handler(
+        &self,
+        callback: CallbackRef,
+        current_target: u64,
+        _event: u64,
+        error: &ErrorReport<'_>,
+    ) -> bool {
+        self.with_context(|scope| {
+            let Ok(this) = handle_to_v8::<EventTarget>(scope, Handle::from_bits(current_target))
+            else {
+                return false;
+            };
+            let Ok(callee) = value_to_v8(scope, callback.0) else {
+                return false;
+            };
+            // An event handler attribute only ever holds a callable.
+            let Ok(function) = v8::Local::<v8::Function>::try_from(callee) else {
+                return false;
+            };
+            let (Some(message), Some(filename)) = (
+                v8::String::new(scope, error.message),
+                v8::String::new(scope, error.filename),
+            ) else {
+                return false;
+            };
+            let thrown = match error.error {
+                Some(bits) => match value_to_v8(scope, bits) {
+                    Ok(value) => value,
+                    Err(_) => return false,
+                },
+                None => v8::undefined(scope).into(),
+            };
+            let lineno = v8::Integer::new_from_unsigned(scope, error.lineno);
+            let colno = v8::Integer::new_from_unsigned(scope, error.colno);
+
+            v8::tc_scope!(let tc, scope);
+            self.host.enter_script();
+            let result = function.call(
+                tc,
+                this,
+                &[
+                    message.into(),
+                    filename.into(),
+                    lineno.into(),
+                    colno.into(),
+                    thrown,
+                ],
+            );
+            if result.is_none() {
+                crate::inspector::report_caught(tc, &self.host);
+            }
+            self.host.exit_script();
+            // This handler cancels by returning exactly `true`.
+            result.is_some_and(|value| value.is_true())
+        })
     }
 
     fn invoke_mutation_callback(
