@@ -87,6 +87,11 @@ const SCENARIOS: &[Scenario] = &[
         run: layout_5k,
     },
     Scenario {
+        name: "S-layout-nested",
+        iterations: 10,
+        run: layout_nested,
+    },
+    Scenario {
         name: "S-dl-5k",
         iterations: 25,
         run: display_list_5k,
@@ -283,6 +288,45 @@ fn text_page_5k(seed: usize) -> String {
     for i in 0..2500 {
         html.push_str(&format!("<p>item {seed}-{i} <b>bold</b> short text</p>"));
     }
+    html
+}
+
+/// A component-built page: flex rows, grids and flex columns inside one
+/// another, eight containers deep, with block wrappers between some levels.
+/// About 430 containers, each holding little text.
+fn nested_containers_page() -> String {
+    let mut html = String::from(
+        "<!doctype html><style>body{margin:0}main{display:flex;flex-direction:column;gap:8px}\
+         .shell{display:grid;grid-template-columns:minmax(0,1fr)}\
+         .stack{display:flex;flex-direction:column}\
+         .row{display:flex;gap:12px}.col{flex:1}\
+         .grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}\
+         .card{display:flex;flex-direction:column;padding:4px}\
+         .head{display:flex;align-items:center;gap:4px}.icon{width:16px;height:16px}\
+         .line{display:flex;gap:4px}.pair{display:grid;grid-template-columns:1fr auto;flex:1}\
+         p{margin:0}</style><body><main>",
+    );
+    for section in 0..12 {
+        html.push_str("<div class=shell><div class=stack><section class=row>");
+        for col in 0..3 {
+            html.push_str("<div class=col><div class=grid>");
+            for card in 0..2 {
+                html.push_str(&format!(
+                    "<div class=card><div class=head><span class=icon></span>\
+                     <div>card {section}-{col}-{card}</div></div><div><div class=line>"
+                ));
+                for pair in 0..2 {
+                    html.push_str(&format!(
+                        "<div class=pair><p>some text of pair {pair} that wraps</p><p>{pair}</p></div>"
+                    ));
+                }
+                html.push_str("</div></div></div>");
+            }
+            html.push_str("</div></div>");
+        }
+        html.push_str("</section></div></div>");
+    }
+    html.push_str("</main>");
     html
 }
 
@@ -560,6 +604,22 @@ fn layout_5k(iterations: usize) {
     lay_out(&mut fonts, &doc, &sources);
     for i in 0..iterations {
         record("S-layout-5k", "repeat", "warm", i, || {
+            let (stages, frags, boxes) = lay_out(&mut fonts, &doc, &sources);
+            let mut sample = Sample::staged(stages, Some(frags.len()));
+            sample.extra = json!({ "boxes": boxes });
+            sample
+        });
+    }
+}
+
+/// The same nested-container document laid out again, so shaping is warm and
+/// what is timed is how often the container algorithms run.
+fn layout_nested(iterations: usize) {
+    let mut fonts = FontSystem::new_embedded();
+    let (doc, sources) = parse(&nested_containers_page(), viewport_f32());
+    lay_out(&mut fonts, &doc, &sources);
+    for i in 0..iterations {
+        record("S-layout-nested", "repeat", "warm", i, || {
             let (stages, frags, boxes) = lay_out(&mut fonts, &doc, &sources);
             let mut sample = Sample::staged(stages, Some(frags.len()));
             sample.extra = json!({ "boxes": boxes });

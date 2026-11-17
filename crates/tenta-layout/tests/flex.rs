@@ -132,4 +132,86 @@ mod behaviour {
         let leaf = laid.rect("leaf");
         assert_eq!((leaf.x, leaf.y), (depth as f32 / 2.0, depth as f32 / 2.0));
     }
+
+    // The three tests below pin what an answer about a nested container
+    // depends on besides the question Taffy asks. A nested container is solved
+    // inside its parent's view and again as the root of its own, and the
+    // answers are shared between the views, so an answer taken from the wrong
+    // one shows up as a wrong size here.
+
+    #[test]
+    fn a_percentage_height_resolves_against_the_height_its_container_ends_up_with() {
+        // `k` is first sized with its height unknown, where `l`'s percentage
+        // is `auto`, and then laid out stretched to 200px, where it is 100px.
+        let laid = lay_out(
+            r#"<!doctype html><body style="margin:0">
+            <div style="display:flex;width:300px;height:200px">
+              <div id=k style="display:flex;flex-direction:column;width:100px">
+                <div id=l style="display:flex;height:50%"><div id=leaf style="width:10px"></div></div>
+              </div>
+            </div>"#,
+            (800.0, 600.0),
+        );
+        assert_eq!(laid.rect("k").h, 200.0);
+        assert_eq!(laid.rect("l").h, 100.0);
+        assert_eq!(laid.rect("leaf").h, 100.0);
+    }
+
+    #[test]
+    fn a_ratio_only_image_fills_the_container_it_is_in_not_an_outer_one() {
+        // The grid column is sized by its content before any width is known,
+        // so the image falls back to its container's width: 100px once `k` is
+        // laid out, although `k` was measured inside a 400px row first.
+        let laid = lay_out(
+            r#"<!doctype html><body style="margin:0">
+            <div style="display:flex;width:400px;align-items:flex-start">
+              <div id=k style="display:grid;grid-template-columns:auto;width:100px">
+                <img id=i style="aspect-ratio:2/1">
+              </div>
+            </div>"#,
+            (800.0, 600.0),
+        );
+        let image = laid.rect("i");
+        assert_eq!((image.w, image.h), (100.0, 50.0));
+    }
+
+    #[test]
+    fn nested_containers_keep_their_layout_at_every_depth() {
+        // Rows, grids and columns inside one another with block wrappers in
+        // between: every level re-enters the levels below it, so each size
+        // here is the product of answers shared across several views.
+        let laid = lay_out(
+            r#"<!doctype html><body style="margin:0">
+            <div id=row style="display:flex;width:600px;gap:20px">
+              <div id=col style="flex:1"><div id=grid style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <div id=card style="display:flex;flex-direction:column;padding:5px">
+                  <div id=head style="display:flex;height:20px"><div id=icon style="width:16px"></div></div>
+                  <div><div id=line style="display:flex;gap:4px">
+                    <div id=pair style="display:grid;grid-template-columns:1fr 30px;flex:1">
+                      <div id=cell style="height:12px"></div><div id=tail style="height:8px"></div>
+                    </div>
+                  </div></div>
+                </div>
+                <div id=other style="height:40px"></div>
+              </div></div>
+              <div id=side style="width:80px"></div>
+            </div>"#,
+            (800.0, 600.0),
+        );
+        let rect = |id: &str| {
+            let r = laid.rect(id);
+            [r.x, r.y, r.w, r.h]
+        };
+        assert_eq!(rect("col"), [0.0, 0.0, 500.0, 42.0]);
+        assert_eq!(rect("grid"), [0.0, 0.0, 500.0, 42.0]);
+        assert_eq!(rect("card"), [0.0, 0.0, 245.0, 42.0]);
+        assert_eq!(rect("head"), [5.0, 5.0, 235.0, 20.0]);
+        assert_eq!(rect("icon"), [5.0, 5.0, 16.0, 20.0]);
+        assert_eq!(rect("line"), [5.0, 25.0, 235.0, 12.0]);
+        assert_eq!(rect("pair"), [5.0, 25.0, 235.0, 12.0]);
+        assert_eq!(rect("cell"), [5.0, 25.0, 205.0, 12.0]);
+        assert_eq!(rect("tail"), [210.0, 25.0, 30.0, 8.0]);
+        assert_eq!(rect("other"), [255.0, 0.0, 245.0, 40.0]);
+        assert_eq!(rect("side"), [520.0, 0.0, 80.0, 42.0]);
+    }
 }

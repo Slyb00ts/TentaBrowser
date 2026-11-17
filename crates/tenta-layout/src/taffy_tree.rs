@@ -13,15 +13,16 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::iter::Copied;
 use std::slice::Iter;
 
 use smallvec::SmallVec;
 use style::Atom;
 use taffy::{
-    AvailableSpace, Cache, CacheTree, Layout, LayoutInput, LayoutOutput, LayoutPartialTree, Line,
-    NodeId, RequestedAxis, ResolveOrZero, RunMode, Size, SizingMode, Style, TraversePartialTree,
-    compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
+    AvailableSpace, Cache, Layout, LayoutInput, LayoutOutput, LayoutPartialTree, Line, NodeId,
+    RequestedAxis, ResolveOrZero, RunMode, Size, SizingMode, Style, TraversePartialTree,
+    compute_flexbox_layout, compute_grid_layout,
 };
 
 use crate::block::layout_block;
@@ -49,6 +50,42 @@ fn scrolls(b: &LayoutBox) -> bool {
 /// baseline.
 type Measured = (f32, Option<f32>);
 
+/// A multiply-and-rotate hasher for the small integer keys of this module.
+/// Box ids are dense indices made by this crate, so nothing hostile chooses
+/// them, and the maps are consulted several times per Taffy question.
+#[derive(Default)]
+struct IdHasher(u64);
+
+impl Hasher for IdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.write_u64(u64::from(byte));
+        }
+    }
+
+    fn write_u8(&mut self, value: u8) {
+        self.write_u64(u64::from(value));
+    }
+
+    fn write_u32(&mut self, value: u32) {
+        self.write_u64(u64::from(value));
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        self.write_u64(value as u64);
+    }
+}
+
+type IdMap<K, V> = HashMap<K, V, BuildHasherDefault<IdHasher>>;
+
 /// Every input that `item_space` varies must be part of this key, or a memo hit
 /// would return the answer for a different question.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -57,6 +94,25 @@ struct MeasureKey {
     width: u32,
     percent_base: (Option<u32>, Option<u32>),
     rtl: bool,
+}
+
+/// What, besides the question Taffy asks, an answer about a box depends on.
+///
+/// Taffy's own cache key covers the known dimensions and the available space,
+/// and compares the parent size in full for a final layout but only its inline
+/// size for a measurement. An item is measured against both parent sizes
+/// (percentages resolve against them) and in the direction of the view that
+/// asked, so both are part of the key here. Keying by the parent also gives
+/// the answers for different parents a cache each: one container is asked
+/// under several, and they would otherwise evict one another.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct SolvedKey {
+    id: BoxId,
+    parent: (Option<u32>, Option<u32>),
+    rtl: bool,
+    /// `Some` for an answer that read the view's `inner_width`, which then
+    /// holds only for views with the same one.
+    inner_width: Option<Option<u32>>,
 }
 
 thread_local! {
@@ -68,12 +124,22 @@ thread_local! {
     /// level of nesting; with one, a repeated question costs a lookup. The memo
     /// lives only while a layout call is on the stack, so it can never outlive
     /// the tree, the fonts or the viewport its answers came from.
-    static MEASURED: RefCell<HashMap<MeasureKey, Measured>> = RefCell::new(HashMap::new());
+    static MEASURED: RefCell<IdMap<MeasureKey, Measured>> = RefCell::new(IdMap::default());
+    /// Taffy's answers about the boxes below the views of the outermost layout
+    /// in progress, kept for the same span as [`MEASURED`].
+    ///
+    /// A nested container is solved inside its parent's view while the parent
+    /// sizes its items, and again as the root of its own view when its
+    /// fragments are made, and its own nested containers once more below that.
+    /// A cache per view starts every one of those empty, so a container was
+    /// solved once per ancestor and question; sharing the answers leaves each
+    /// view only the algorithm of its own root to run.
+    static SOLVED: RefCell<IdMap<SolvedKey, Cache>> = RefCell::new(IdMap::default());
     static ACTIVE_VIEWS: Cell<u32> = const { Cell::new(0) };
 }
 
-/// Keeps the thread's [`MEASURED`] memo alive while a view exists; the last
-/// view to go clears it.
+/// Keeps the thread's [`MEASURED`] and [`SOLVED`] memos alive while a view
+/// exists; the last view to go clears them.
 struct MemoScope;
 
 impl MemoScope {
@@ -91,6 +157,7 @@ impl Drop for MemoScope {
         });
         if remaining == 0 {
             MEASURED.with(|memo| memo.borrow_mut().clear());
+            SOLVED.with(|memo| memo.borrow_mut().clear());
         }
     }
 }
@@ -114,19 +181,22 @@ pub(crate) struct TreeView<'a, 'c> {
     /// Converted styles. They borrow the computed values stored in `tree`, which
     /// outlives the view, so every `calc()` handle Taffy holds stays valid for
     /// as long as it can be resolved.
-    styles: HashMap<BoxId, ConvertedStyle<'a>>,
+    styles: IdMap<BoxId, ConvertedStyle<'a>>,
     /// In-flow children of each container that has been prepared, in `order`.
-    children: HashMap<BoxId, Vec<NodeId>>,
-    caches: HashMap<BoxId, Cache>,
-    layouts: HashMap<BoxId, Layout>,
+    children: IdMap<BoxId, Vec<NodeId>>,
+    layouts: IdMap<BoxId, Layout>,
     /// First baselines of the root's children, taken from their final layouts.
-    baselines: HashMap<BoxId, Option<f32>>,
+    baselines: IdMap<BoxId, Option<f32>>,
     /// The grid area each of a grid root's children was last laid out in, the
     /// containing block its percentages resolve against.
-    areas: HashMap<BoxId, Size<Option<f32>>>,
+    areas: IdMap<BoxId, Size<Option<f32>>>,
     /// The content width of the root container, which a ratio-only image fills
     /// when Taffy measures it before any width is known (a flex base size).
     inner_width: Option<f32>,
+    /// Counts the answers so far that read `inner_width`. An answer computed
+    /// while this moved depends on the view and is shared only with views of
+    /// the same inner width.
+    inner_width_reads: u32,
     _memo: MemoScope,
 }
 
@@ -137,13 +207,13 @@ impl<'a, 'c> TreeView<'a, 'c> {
             tree,
             root,
             direction: own_direction(&tree.get(root).style),
-            styles: HashMap::new(),
-            children: HashMap::new(),
-            caches: HashMap::new(),
-            layouts: HashMap::new(),
-            baselines: HashMap::new(),
-            areas: HashMap::new(),
+            styles: IdMap::default(),
+            children: IdMap::default(),
+            layouts: IdMap::default(),
+            baselines: IdMap::default(),
+            areas: IdMap::default(),
             inner_width: None,
+            inner_width_reads: 0,
             _memo: MemoScope::enter(),
         };
         view.convert(root);
@@ -337,6 +407,9 @@ impl<'a, 'c> TreeView<'a, 'c> {
 
         if let BoxKind::Replaced(kind) = b.kind {
             // A ratio-only image fills its container's width.
+            if parent_size.width.is_none() {
+                self.inner_width_reads += 1;
+            }
             let stretch = parent_size
                 .width
                 .or(self.inner_width)
@@ -620,26 +693,43 @@ impl LayoutPartialTree for TreeView<'_, '_> {
         {
             self.areas.insert(id, inputs.parent_size);
         }
-        compute_cached_layout(self, node, inputs, |view, node, inputs| {
-            view.compute_uncached(box_id(node), inputs)
-        })
-    }
-}
-
-impl CacheTree for TreeView<'_, '_> {
-    fn cache_get(&mut self, node: NodeId, input: &LayoutInput) -> Option<LayoutOutput> {
-        self.caches.get_mut(&box_id(node))?.get(input)
-    }
-
-    fn cache_store(&mut self, node: NodeId, input: &LayoutInput, output: LayoutOutput) {
-        self.caches
-            .entry(box_id(node))
-            .or_default()
-            .store(input, output);
-    }
-
-    fn cache_clear(&mut self, node: NodeId) {
-        self.caches.remove(&box_id(node));
+        let bits = f32::to_bits;
+        let shared = SolvedKey {
+            id,
+            parent: (
+                inputs.parent_size.width.map(bits),
+                inputs.parent_size.height.map(bits),
+            ),
+            rtl: self.direction == Direction::Rtl,
+            inner_width: None,
+        };
+        let of_this_width = SolvedKey {
+            inner_width: Some(self.inner_width.map(bits)),
+            ..shared
+        };
+        let cached =
+            |key: &SolvedKey| SOLVED.with(|memo| memo.borrow_mut().get_mut(key)?.get(&inputs));
+        if let Some(output) = cached(&shared) {
+            return output;
+        }
+        if let Some(output) = cached(&of_this_width) {
+            self.inner_width_reads += 1;
+            return output;
+        }
+        let reads = self.inner_width_reads;
+        let output = self.compute_uncached(id, inputs);
+        let key = if self.inner_width_reads == reads {
+            shared
+        } else {
+            of_this_width
+        };
+        SOLVED.with(|memo| {
+            memo.borrow_mut()
+                .entry(key)
+                .or_default()
+                .store(&inputs, output);
+        });
+        output
     }
 }
 

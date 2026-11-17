@@ -436,6 +436,15 @@ applicable_to = ["tentabrowser"]
 definition = "Style flush, box tree and layout of a 5 000-box text page at 1280×800, single-threaded; cold = distinct text every iteration, warm = the same document again; budget 10 ms (spec 06 §7)"
 
 [[scenario]]
+name = "S-layout-nested"
+phase = "P3"
+fixture = "none"
+path = "/"
+mode = "inprocess"
+applicable_to = ["tentabrowser"]
+definition = "Style flush, box tree and layout of about 430 flex and grid containers nested eight deep with block wrappers between levels, at 1280×800; the same document laid out again, so text is warm and the container algorithms are what is timed"
+
+[[scenario]]
 name = "S-dl-5k"
 phase = "P3"
 fixture = "none"

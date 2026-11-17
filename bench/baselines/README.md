@@ -314,7 +314,7 @@ Per-run TentaBrowser commands (ports vary):
 `tenta-render` (style flush, box tree, layout, display list, raster, PNG encode,
 RSS). Scenarios are listed by `render_bench --list` and defined in
 `bench/scenarios.toml` (`S-screenshot`/`S-fullpage` stay the CLI comparison
-entries; the in-process ones are `S-screenshot-inproc`, `S-fullpage-inproc`, `S-style-10k`, `S-layout-5k`, `S-dl-5k`,
+entries; the in-process ones are `S-screenshot-inproc`, `S-fullpage-inproc`, `S-style-10k`, `S-layout-5k`, `S-layout-nested`, `S-dl-5k`,
 `S-raster-1280`, `S-fullpage-12000`, `S-fixtures`, `S-font-init`).
 
 ```
