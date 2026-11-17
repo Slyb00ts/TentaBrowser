@@ -7,7 +7,7 @@ pub fn install_node_list<'js, T: NodeListOps + 'static>(ctx: &rquickjs::Ctx<'js>
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let index: u32 = rquickjs::Coerced::<f64>::from_js(&ctx, __raw_value).map(|v| to_unsigned_long(v.0))?;
-        let result = host.item(index).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).item(index).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         match result { Some(inner) => rquickjs::IntoJs::into_js(inner, &ctx), None => Ok(rquickjs::Value::new_null(ctx.clone())) }
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("length", rquickjs::object::Accessor::new_get(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "length", || { let host = quickjs_host::<T>(&ctx, &this.0, "NodeList")?; let result = host.length(); rquickjs::IntoJs::into_js(result, &ctx) }) }).enumerable().configurable())?;

@@ -85,12 +85,12 @@ use super::{
     NodeOps, NodeOrDomString, ProcessingInstruction, ProcessingInstructionOps,
     ProgressEventConstructor, ProgressEventInit, ProgressEventOps, Promise, Range,
     RangeConstructor, RangeOps, Realm, ReferrerPolicy, RequestCache, RequestCredentials,
-    RequestInit, RequestMode, RequestRedirect, ResponseConstructor, ResponseInit, ResponseOps,
-    ResponseType, SVGElementOps, StaticRangeConstructor, StaticRangeInit, StaticRangeOps, Text,
-    TextDecodeOptions, TextDecoderConstructor, TextDecoderOps, TextDecoderOptions,
-    TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
-    URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
-    WheelEventConstructor, WheelEventInit, WheelEventOps, Window, WindowProxy,
+    RequestInit, RequestMode, RequestRedirect, Response, ResponseConstructor, ResponseInit,
+    ResponseOps, ResponseType, SVGElementOps, StaticRangeConstructor, StaticRangeInit,
+    StaticRangeOps, Text, TextDecodeOptions, TextDecoderConstructor, TextDecoderOps,
+    TextDecoderOptions, TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor,
+    UIEventInit, UIEventOps, URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor,
+    URLSearchParamsOps, WheelEventConstructor, WheelEventInit, WheelEventOps, Window, WindowProxy,
     XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps, XMLHttpRequestOps,
     XMLHttpRequestResponseType, XMLSerializerConstructor, XMLSerializerOps,
 };
@@ -772,6 +772,9 @@ pub struct XhrResponse {
     headers: HeaderList,
     /// The response's *body*, or `None` for a null body.
     body: Option<Vec<u8>>,
+    /// The response's URL after redirects, which `responseURL` reads back
+    /// without its fragment.
+    url: String,
 }
 
 impl XhrResponse {
@@ -804,6 +807,7 @@ impl XhrResponse {
             status_text,
             headers,
             body,
+            url: data.url.clone(),
         }
     }
 }
@@ -923,6 +927,24 @@ pub struct XhrRecord {
     /// `open()` does not clear it: the standard says so explicitly, because
     /// `overrideMimeType()` may be called before `open()`.
     pub override_charset: Option<Vec<u8>>,
+    /// The value the `response` getter last built, and what it was built for.
+    ///
+    /// The standard caches the *response object* of an `arraybuffer`, `blob` or
+    /// `json` response so that every read is the same object; the text is kept
+    /// the same way so that a read does not store a new string each time. The
+    /// bits carry one stored reference, released when the value is replaced and
+    /// when the record is freed.
+    pub response_value: Option<XhrResponseValue>,
+}
+
+/// A built `response` value and the state it belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct XhrResponseValue {
+    /// The stored value.
+    pub bits: u64,
+    /// The request, the state and the response type the value was built for. A
+    /// read under any other combination builds a new one.
+    pub built_for: (u64, u16, XMLHttpRequestResponseType),
 }
 
 /// A `Blob` record: the spec's *underlying byte sequence* and its `type`.
@@ -10032,6 +10054,12 @@ fn free_record(slab: &mut HostSlab, key: HostKey, out: &mut ReclaimedHost) {
         }
         HostRecord::MutationObserver(observer) => observer.retire(out),
         HostRecord::MutationRecord(record) => record.retire(out),
+        // The `response` value an `XMLHttpRequest` last built is its own.
+        HostRecord::Xhr(xhr) => {
+            if let Some(value) = xhr.response_value {
+                out.values.push(value.bits);
+            }
+        }
         _ => {}
     }
 }
@@ -11669,6 +11697,105 @@ impl ResponseOps for HostObject {
             ))))
         })
     }
+
+    fn array_buffer(&self) -> Result<Promise<Vec<u8>>, JsError> {
+        // "consume body with this and the following step given a byte sequence
+        // bytes: return the result of creating an ArrayBuffer from bytes".
+        self.consume_body(|bytes| {
+            Ok(PromiseOutcome::Resolve(HostValue::ArrayBuffer(
+                bytes.to_vec(),
+            )))
+        })
+    }
+
+    fn bytes(&self) -> Result<Promise<Vec<u8>>, JsError> {
+        // The same bytes as a `Uint8Array`.
+        self.consume_body(|bytes| {
+            Ok(PromiseOutcome::Resolve(HostValue::Uint8Array(
+                bytes.to_vec(),
+            )))
+        })
+    }
+
+    fn blob(&self) -> Result<Promise<Handle<Blob>>, JsError> {
+        // "return a Blob whose contents are bytes and whose type attribute is
+        // this's MIME type". The type is read before the body is consumed; the
+        // record is made inside the conversion, so an unusable body, which
+        // never reaches it, leaves no record behind.
+        let HostObject::Host { ctx, .. } = self else {
+            return Err(JsError::type_error("blob: the receiver is not a Response"));
+        };
+        let blob_type = self
+            .with_response(None, |record| Some(record.headers))
+            .and_then(|headers| match ctx.host_records.borrow().get(headers) {
+                Some(HostRecord::Headers(record)) => body_mime_type(&record.list),
+                _ => None,
+            })
+            .unwrap_or_default();
+        self.consume_body(|bytes| {
+            let key = ctx
+                .host_records
+                .borrow_mut()
+                .insert(HostRecord::Blob(BlobRecord {
+                    bytes: bytes.to_vec(),
+                    blob_type,
+                }));
+            Ok(PromiseOutcome::Resolve(HostValue::Blob(encode_host(
+                ctx.slot, key,
+            ))))
+        })
+    }
+
+    fn clone(&self) -> Result<Handle<Response>, JsError> {
+        // "If this is unusable, then throw a TypeError." The clone is a second
+        // response with the same fields, a header list of its own under the
+        // same guard, and the same body: the body is a byte sequence held
+        // whole, so the standard's tee is a copy of it.
+        let HostObject::Host { ctx, .. } = self else {
+            return Err(JsError::type_error("clone: the receiver is not a Response"));
+        };
+        let parts = self.with_response(None, |record| {
+            (!record.is_unusable()).then(|| {
+                (
+                    record.headers,
+                    NewResponse {
+                        status: record.status,
+                        status_text: record.status_text.clone(),
+                        url: record.url.clone(),
+                        response_type: record.response_type,
+                        redirected: record.redirected,
+                        body: record.body.clone(),
+                    },
+                )
+            })
+        });
+        let Some((headers, parts)) = parts else {
+            return Err(JsError::type_error(
+                "Failed to execute 'clone' on 'Response': the body has already been read",
+            ));
+        };
+        let list = match ctx.host_records.borrow().get(headers) {
+            Some(HostRecord::Headers(record)) => record.list.clone(),
+            _ => HeaderList::new(),
+        };
+        let key = insert_response(ctx, list, parts);
+        Ok(Handle::from_bits(encode_host(ctx.slot, key)))
+    }
+}
+
+/// The `type` of the `Blob` a body is read into: the first `Content-Type` value
+/// that parses as a MIME type, in the lower-case form a `Blob` stores.
+///
+/// The standard serializes the MIME type it extracted, which also rewrites the
+/// spacing of its parameters; the value is kept as the header spelled it.
+fn body_mime_type(headers: &HeaderList) -> Option<String> {
+    headers
+        .iter()
+        .filter(|(name, _)| name.as_slice() == CONTENT_TYPE)
+        .flat_map(|(_, value)| split_header_value(value))
+        .find(|value| parse_mime_type(value).is_some())
+        .and_then(|value| String::from_utf8(value).ok())
+        .map(|value| normalize_blob_type(value.trim()))
 }
 
 // ---------------------------------------------------------------------------
@@ -12434,8 +12561,7 @@ impl BlobOps for HostObject {
         // stream and run UTF-8 decode on it
         // (<https://w3c.github.io/FileAPI/#text-method-algo>). The bytes are
         // held directly here, so the decode is the whole of it — `Response.text`
-        // is the same shape, and `HostValue::String` is one of the four promise
-        // outcomes this engine can build.
+        // is the same shape.
         let script = self.script_host()?;
         let promise = script
             .new_promise()
@@ -12445,6 +12571,33 @@ impl BlobOps for HostObject {
             promise.resolver,
             PromiseOutcome::Resolve(HostValue::String(text)),
         );
+        Ok(Promise::from_bits(promise.promise))
+    }
+
+    fn array_buffer(&self) -> Result<Promise<Vec<u8>>, JsError> {
+        self.read_blob("Blob.arrayBuffer", HostValue::ArrayBuffer)
+    }
+
+    fn bytes(&self) -> Result<Promise<Vec<u8>>, JsError> {
+        self.read_blob("Blob.bytes", HostValue::Uint8Array)
+    }
+}
+
+impl HostObject {
+    /// A promise resolved with a copy of this `Blob`'s bytes in the shape
+    /// `value` gives them: the read the standard does through the blob's
+    /// stream, which here is the byte sequence the record holds.
+    fn read_blob<T>(
+        &self,
+        member: &str,
+        value: impl FnOnce(Vec<u8>) -> HostValue<'static>,
+    ) -> Result<Promise<T>, JsError> {
+        let script = self.script_host()?;
+        let promise = script.new_promise().ok_or_else(|| {
+            JsError::type_error(format!("{member}: the promise could not be created"))
+        })?;
+        let bytes = self.with_blob(Vec::new(), |blob| blob.bytes.clone());
+        script.settle_promise(promise.resolver, PromiseOutcome::Resolve(value(bytes)));
         Ok(Promise::from_bits(promise.promise))
     }
 }
@@ -13820,25 +13973,143 @@ impl XMLHttpRequestOps for HostObject {
             ));
         }
         match value {
-            XMLHttpRequestResponseType::EmptyString | XMLHttpRequestResponseType::Text => {
+            XMLHttpRequestResponseType::Document => Err(JsError::dom_exception(
+                "NotSupportedError",
+                "this engine cannot serve a document response",
+            )),
+            _ => {
                 self.with_xhr_mut((), |record| record.response_type = value);
                 Ok(())
             }
-            _ => Err(JsError::dom_exception(
-                "NotSupportedError",
-                "this engine can only serve a text response",
-            )),
         }
     }
 
-    fn response_text(&self) -> Result<String, JsError> {
-        // The standard's three steps: a `responseType` that is neither the empty
-        // string nor `"text"` throws an `InvalidStateError` (unreachable, since
-        // the setter stores no other value and is not written here as a check
-        // that cannot be reached), a state that is not loading or done returns
-        // the empty string, and otherwise the text response is the received
-        // bytes decoded with the response's final encoding.
+    fn response_url(&self) -> Result<String, JsError> {
+        // "the empty string if this's response's URL is null; otherwise its
+        // serialization with the exclude fragment flag set."
         Ok(self.with_xhr(String::new(), |record| {
+            record
+                .response
+                .as_ref()
+                .and_then(|response| Url::parse(&response.url).ok())
+                .map(|mut url| {
+                    url.set_fragment(None);
+                    url.into()
+                })
+                .unwrap_or_default()
+        }))
+    }
+
+    fn response(&self) -> Result<AnyValue, JsError> {
+        // The standard's getter. For `""` and `"text"` it is the text response
+        // (the empty string before the state is loading or done). For the other
+        // types it is `null` until the state is done, and then the *response
+        // object*, built on the first read and the same value on every later
+        // one: an `ArrayBuffer`, a `Blob`, or the parsed JSON, with `null` for a
+        // body that does not parse and for a network error.
+        let done = <HostObject as XMLHttpRequestOps>::DONE;
+        let (built_for, cached) = self.with_xhr(
+            (
+                (0, 0, XMLHttpRequestResponseType::EmptyString),
+                None::<XhrResponseValue>,
+            ),
+            |record| {
+                (
+                    (record.request_id, record.ready_state, record.response_type),
+                    record.response_value,
+                )
+            },
+        );
+        if let Some(value) = cached
+            && value.built_for == built_for
+        {
+            return Ok(AnyValue(value.bits));
+        }
+        let (_, ready_state, response_type) = built_for;
+        let text = matches!(
+            response_type,
+            XMLHttpRequestResponseType::EmptyString | XMLHttpRequestResponseType::Text
+        );
+        if !text && ready_state != done {
+            return Ok(AnyValue::NULL);
+        }
+        let script = self.script_host()?;
+        let bits = if text {
+            script.build_value(HostValue::String(self.text_response()))
+        } else {
+            let HostObject::Host { ctx, .. } = self else {
+                return Ok(AnyValue::NULL);
+            };
+            // A network error has no response at all, and that is `null`
+            // rather than an empty value.
+            let Some((body, blob_type)) = self.with_xhr(None, |record| {
+                record.response.as_ref().map(|response| {
+                    (
+                        response.body.clone().unwrap_or_default(),
+                        body_mime_type(&response.headers).unwrap_or_default(),
+                    )
+                })
+            }) else {
+                return Ok(AnyValue::NULL);
+            };
+            match response_type {
+                XMLHttpRequestResponseType::Arraybuffer => {
+                    script.build_value(HostValue::ArrayBuffer(body))
+                }
+                XMLHttpRequestResponseType::Blob => {
+                    let key = ctx
+                        .host_records
+                        .borrow_mut()
+                        .insert(HostRecord::Blob(BlobRecord {
+                            bytes: body,
+                            blob_type,
+                        }));
+                    script.build_value(HostValue::Blob(encode_host(ctx.slot, key)))
+                }
+                XMLHttpRequestResponseType::Json => script.build_value(HostValue::Json(&body)),
+                _ => None,
+            }
+        };
+        let Some(bits) = bits else {
+            return Ok(AnyValue::NULL);
+        };
+        let mut replaced = None;
+        self.with_xhr_mut((), |record| {
+            replaced = record
+                .response_value
+                .replace(XhrResponseValue { bits, built_for });
+        });
+        if let Some(old) = replaced {
+            script.release_value(old.bits);
+        }
+        Ok(AnyValue(bits))
+    }
+
+    fn response_text(&self) -> Result<String, JsError> {
+        // "If this's response type is not the empty string or "text", then
+        // throw an "InvalidStateError" DOMException."
+        let response_type = self.with_xhr(XMLHttpRequestResponseType::EmptyString, |record| {
+            record.response_type
+        });
+        if !matches!(
+            response_type,
+            XMLHttpRequestResponseType::EmptyString | XMLHttpRequestResponseType::Text
+        ) {
+            return Err(JsError::dom_exception(
+                "InvalidStateError",
+                "responseText is only readable when responseType is '' or 'text'",
+            ));
+        }
+        Ok(self.text_response())
+    }
+}
+
+impl HostObject {
+    /// The standard's *text response*: the empty string for a state that is not
+    /// loading or done, and otherwise the received bytes decoded with the
+    /// response's final encoding.
+    fn text_response(&self) -> String {
+        self.with_xhr(String::new(), |record| {
             if record.ready_state != <HostObject as XMLHttpRequestOps>::LOADING
                 && record.ready_state != <HostObject as XMLHttpRequestOps>::DONE
             {
@@ -13861,7 +14132,7 @@ impl XMLHttpRequestOps for HostObject {
             let encoding = text_response_encoding(record.override_charset.as_deref(), response);
             let (text, _, _) = encoding.decode(body);
             text.into_owned()
-        }))
+        })
     }
 }
 
@@ -13899,6 +14170,7 @@ impl XMLHttpRequestConstructor for HostObject {
                 // nothing has been asked for with `overrideMimeType`.
                 response: None,
                 override_charset: None,
+                response_value: None,
             }));
         Ok(HostObject::host_record(ctx, key))
     }

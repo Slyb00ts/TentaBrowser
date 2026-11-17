@@ -19,7 +19,7 @@ pub fn install_byte_box<'js, T: ByteBoxOps + 'static>(ctx: &rquickjs::Ctx<'js>, 
         let host = quickjs_host::<T>(&ctx, &this.0, "ByteBox")?;
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let data: Option<Vec<u8>> = if __raw_value.is_undefined() { None } else { Some(quickjs_buffer_bytes(&ctx, __raw_value, "BufferSource")?) };
-        host.decode(data).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        (*host).decode(data).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop(rquickjs::atom::PredefinedAtom::SymbolToStringTag, rquickjs::object::Property::from("ByteBox").configurable())?;

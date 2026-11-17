@@ -12,7 +12,7 @@ pub fn install_event_target<'js, T: EventTargetOps + EventTargetConstructor + 's
         let callback: Option<EventListener> = { let value = __raw_value; if value.is_null() || value.is_undefined() { Ok(None) } else { { let value = value; if value.is_object() { <EventListener as rquickjs::FromJs>::from_js(&ctx, value) } else { Err(rquickjs::Exception::throw_type(&ctx, "the value is not an object, so it is not an `EventListener`")) } }.map(Some) } }?;
         let __raw_value = args.0.get(2).cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let options: Option<AddEventListenerOptionsOrBoolean> = if __raw_value.is_undefined() { None } else { Some(<AddEventListenerOptionsOrBoolean as rquickjs::FromJs>::from_js(&ctx, __raw_value)?) };
-        host.add_event_listener(&r#type, callback, options).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        (*host).add_event_listener(&r#type, callback, options).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         quickjs_check_native_failure(&ctx)?;
         quickjs_transfer_stored_value_lease(&ctx)?;
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
@@ -27,7 +27,7 @@ pub fn install_event_target<'js, T: EventTargetOps + EventTargetConstructor + 's
         let callback: Option<EventListener> = { let value = __raw_value; if value.is_null() || value.is_undefined() { Ok(None) } else { { let value = value; if value.is_object() { <EventListener as rquickjs::FromJs>::from_js(&ctx, value) } else { Err(rquickjs::Exception::throw_type(&ctx, "the value is not an object, so it is not an `EventListener`")) } }.map(Some) } }?;
         let __raw_value = args.0.get(2).cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let options: Option<EventListenerOptionsOrBoolean> = if __raw_value.is_undefined() { None } else { Some(<EventListenerOptionsOrBoolean as rquickjs::FromJs>::from_js(&ctx, __raw_value)?) };
-        host.remove_event_listener(&r#type, callback, options).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        (*host).remove_event_listener(&r#type, callback, options).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         quickjs_check_native_failure(&ctx)?;
         quickjs_transfer_stored_value_lease(&ctx)?;
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
@@ -37,7 +37,7 @@ pub fn install_event_target<'js, T: EventTargetOps + EventTargetConstructor + 's
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let event: Handle<Event> = <Handle<Event> as rquickjs::FromJs>::from_js(&ctx, __raw_value)?;
-        let result = host.dispatch_event(event).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).dispatch_event(event).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop(rquickjs::atom::PredefinedAtom::SymbolToStringTag, rquickjs::object::Property::from("EventTarget").configurable())?;

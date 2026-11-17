@@ -7,7 +7,7 @@ pub fn install_callback_union_probe<'js, T: CallbackUnionProbeOps + 'static>(ctx
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let value: ListenerOrHandler = <ListenerOrHandler as rquickjs::FromJs>::from_js(&ctx, __raw_value)?;
-        host.choose(value).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        (*host).choose(value).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("chooseIterable", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "chooseIterable", || {
@@ -15,7 +15,7 @@ pub fn install_callback_union_probe<'js, T: CallbackUnionProbeOps + 'static>(ctx
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let value: ListenerOrSequenceOfDomString = <ListenerOrSequenceOfDomString as rquickjs::FromJs>::from_js(&ctx, __raw_value)?;
-        host.choose_iterable(value).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        (*host).choose_iterable(value).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("choosePlatform", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "choosePlatform", || {
@@ -23,7 +23,7 @@ pub fn install_callback_union_probe<'js, T: CallbackUnionProbeOps + 'static>(ctx
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let value: ListenerOrCallbackUnionProbe = <ListenerOrCallbackUnionProbe as rquickjs::FromJs>::from_js(&ctx, __raw_value)?;
-        host.choose_platform(value).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        (*host).choose_platform(value).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop(rquickjs::atom::PredefinedAtom::SymbolToStringTag, rquickjs::object::Property::from("CallbackUnionProbe").configurable())?;

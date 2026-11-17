@@ -26,8 +26,8 @@ use std::rc::Rc;
 
 use tenta_js::bindings::host::encode_window;
 use tenta_js::bindings::{
-    Event, EventTarget, Handle, JsError, MutationObserver, MutationRecord, handle_to_v8,
-    value_to_v8,
+    Blob, Event, EventTarget, Handle, JsError, MutationObserver, MutationRecord,
+    array_buffer_to_v8, array_buffer_view_to_v8, handle_to_v8, value_to_v8,
 };
 use tenta_js::dom::events::{
     CallbackRef, HostValue, MutationDelivery, PromiseOutcome, PromiseRef, ScriptHost,
@@ -171,6 +171,25 @@ impl V8ScriptHost {
                 let message = v8::String::new(scope, message)?;
                 let object = construct_global(scope, "TypeError", &[message.into()])?;
                 Some(self.state.borrow_mut().store_value(scope, object))
+            }
+            HostValue::ArrayBuffer(bytes) => {
+                let buffer = array_buffer_to_v8(scope, bytes).ok()?;
+                Some(self.state.borrow_mut().store_value(scope, buffer))
+            }
+            HostValue::Uint8Array(bytes) => {
+                let view = array_buffer_view_to_v8(scope, bytes).ok()?;
+                Some(self.state.borrow_mut().store_value(scope, view))
+            }
+            HostValue::Blob(bits) => {
+                let blob = handle_to_v8::<Blob>(scope, Handle::from_bits(bits)).ok()?;
+                Some(self.state.borrow_mut().store_value(scope, blob))
+            }
+            HostValue::Json(bytes) => {
+                // The parse throws for a malformed body; the exception ends
+                // with this scope instead of reaching the binding call.
+                v8::tc_scope!(let tc, scope);
+                let json = promise::parse_json(tc, bytes)?;
+                Some(self.state.borrow_mut().store_value(tc, json))
             }
         }
     }

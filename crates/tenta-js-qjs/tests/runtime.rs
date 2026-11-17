@@ -290,6 +290,28 @@ fn response_consumption_and_json_promises() {
     assert_js(&mut engine, "result", "42");
 }
 #[test]
+fn a_body_is_read_as_a_buffer_bytes_or_a_blob_and_a_response_is_cloned() {
+    let mut engine = page();
+    engine
+        .evaluate(
+            "globalThis.out=[];\
+             const r=new Response('hi',{status:201,headers:{'content-type':'text/x-test'}});\
+             const c=r.clone();out.push(c.status,c!==r,c.headers.get('content-type'));\
+             r.arrayBuffer().then(b=>{out.push(b instanceof ArrayBuffer,Array.from(new Uint8Array(b)).join(','));return c.blob()})\
+              .then(b=>{out.push(b instanceof Blob,b.size,b.type);return b.bytes()})\
+              .then(v=>{out.push(v instanceof Uint8Array,v.length);return new Blob(['abc']).arrayBuffer()})\
+              .then(b=>out.push(b.byteLength));\
+             try{r.clone();out.push('cloned')}catch(e){out.push(e instanceof TypeError)}",
+        )
+        .unwrap();
+    engine.run_microtasks();
+    assert_js(
+        &mut engine,
+        "out.join('|')",
+        "201|true|text/x-test|true|true|104,105|true|2|text/x-test|true|2|3",
+    );
+}
+#[test]
 fn abort_throws_the_exact_reason() {
     let mut engine = page();
     assert_js(

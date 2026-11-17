@@ -1,7 +1,7 @@
 // Minimal Response WebIDL for the P2 package (c) bindings
 // (`docs/spec/05-javascript.md`). The member text of the `Response` interface,
 // its `ResponseInit` dictionary, its `ResponseType` enumeration and the `Body`
-// mixin's `bodyUsed`, `json()` and `text()` operations are copied from the
+// mixin's attribute and operations are copied from the
 // Fetch Standard's own IDL index (<https://fetch.spec.whatwg.org/>), so the
 // names, types and order are the spec's.
 //
@@ -46,24 +46,23 @@
 //    The generator now supports interface-brand selection. Serving this arm
 //    still requires widening BodyInit and implementing the corresponding host
 //    body extraction and inferred content type.
-//  - `Body` declares only the three members that need neither a
-//    `ReadableStream` nor a `Blob`: `bodyUsed`, `json()` and `text()`. `body`,
-//    `arrayBuffer()`, `blob()`, `bytes()`, `formData()` and `textStream()` are
-//    left out, because every one of them returns or reads a `ReadableStream`
-//    (or need body conversions for `FormData` and `Blob`, declared in
-//    `idl/xhr/FormData.webidl` and `idl/fileapi/Blob.webidl`, and the value kinds
-//    below rather than a declaration). `Response.body` in
-//    particular arrives with Streams (`d-5b`). A declared-but-unimplemented
-//    member is the bug class slice 4a removed, so none is declared.
-//  - The static `error()`, `redirect()` and `json()` methods, the static
-//    `from()` method of later revisions, and `clone()` are absent. `clone()`
-//    needs a body tee and the statics need the request/redirect machinery.
-//    All are recorded in `docs/dev/idl.md`.
+//  - `Body` declares the members that read the whole body: `bodyUsed`,
+//    `arrayBuffer()`, `blob()`, `bytes()`, `json()` and `text()`. `body` and
+//    `textStream()` are left out because each is a `ReadableStream`
+//    (`Response.body` arrives with Streams, `d-5b`), and `formData()` because
+//    it needs a multipart parser. A declared-but-unimplemented member is the
+//    bug class slice 4a removed, so none is declared. `blob()`'s type is the
+//    first `Content-Type` value that parses as a MIME type, lower-cased and
+//    otherwise as the header spelled it; the standard serializes the parsed
+//    type, which also rewrites the spacing of its parameters.
+//  - `clone()` copies the response: the body is a byte sequence held whole, so
+//    the standard's tee of a stream is a copy of it. The static `error()`,
+//    `redirect()` and `json()` methods and the static `from()` method of later
+//    revisions are absent. All are recorded in `docs/dev/idl.md`.
 //  - `ResponseType` keeps the standard's six values even though a
 //    constructor-built response can only ever be `"default"`: the standard
 //    declares the enumeration and `type` is a plain read of it, so narrowing it
-//    would delete a value a future network response will carry while buying
-//    nothing.
+//    would delete a value a network response carries while buying nothing.
 //
 // The `Headers` object the constructor installs is under guard `"response"`
 // (constructor step 2), which is the one guard this repository implements
@@ -91,6 +90,9 @@ typedef (BufferSource or USVString) BodyInit;
 
 interface mixin Body {
   readonly attribute boolean bodyUsed;
+  [NewObject] Promise<ArrayBuffer> arrayBuffer();
+  [NewObject] Promise<Blob> blob();
+  [NewObject] Promise<Uint8Array> bytes();
   [NewObject] Promise<any> json();
   [NewObject] Promise<USVString> text();
 };
@@ -106,6 +108,8 @@ interface Response {
   readonly attribute boolean ok;
   readonly attribute ByteString statusText;
   [SameObject] readonly attribute Headers headers;
+
+  [NewObject, Throws] Response clone();
 };
 
 Response includes Body;

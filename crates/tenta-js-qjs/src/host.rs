@@ -163,6 +163,14 @@ impl State {
                     FromJs::from_js(ctx, quickjs_intrinsic(ctx, "TypeError")?)?;
                 constructor.construct((message,))
             }
+            HostValue::ArrayBuffer(bytes) => quickjs_buffer_value(ctx, bytes, "ArrayBuffer"),
+            HostValue::Uint8Array(bytes) => quickjs_buffer_value(ctx, bytes, "Uint8Array"),
+            HostValue::Blob(bits) => handle_to_quickjs::<Blob>(ctx, Handle::from_bits(bits)),
+            HostValue::Json(bytes) => ctx.json_parse(bytes).inspect_err(|_| {
+                // A malformed body is an answer, not an exception to leave
+                // pending in the context.
+                let _ = ctx.catch();
+            }),
         }
     }
     pub fn call_frame(handler: Handler, timestamp: f64, ctx: &Ctx<'_>) -> rquickjs::Result<()> {

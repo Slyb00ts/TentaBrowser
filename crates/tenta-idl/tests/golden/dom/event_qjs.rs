@@ -12,19 +12,19 @@ pub fn install_event<'js, T: EventOps + EventConstructor + 'static>(ctx: &rquick
     prototype.prop("currentTarget", rquickjs::object::Accessor::new_get(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "currentTarget", || { let host = quickjs_host::<T>(&ctx, &this.0, "Event")?; let result = host.current_target().map_err(|e| throw_quickjs_error(&ctx, &e))?; match result { Some(inner) => rquickjs::IntoJs::into_js(inner, &ctx), None => Ok(rquickjs::Value::new_null(ctx.clone())) } }) }).enumerable().configurable())?;
     prototype.prop("composedPath", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "composedPath", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Event")?;
-        let result = host.composed_path().map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).composed_path().map_err(|e| throw_quickjs_error(&ctx, &e))?;
         quickjs_sequence_value(&ctx, result, |item| rquickjs::IntoJs::into_js(item, &ctx))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("eventPhase", rquickjs::object::Accessor::new_get(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "eventPhase", || { let host = quickjs_host::<T>(&ctx, &this.0, "Event")?; let result = host.event_phase(); rquickjs::IntoJs::into_js(result, &ctx) }) }).enumerable().configurable())?;
     prototype.prop("stopPropagation", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "stopPropagation", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Event")?;
-        host.stop_propagation();
+        (*host).stop_propagation();
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("cancelBubble", rquickjs::object::Accessor::new(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "cancelBubble", || { let host = quickjs_host::<T>(&ctx, &this.0, "Event")?; let result = host.cancel_bubble(); rquickjs::IntoJs::into_js(result, &ctx) }) }, |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, value: rquickjs::Value<'js>| -> rquickjs::Result<()> { quickjs_callback_boundary(&ctx, "cancelBubble", || { let host = quickjs_host::<T>(&ctx, &this.0, "Event")?; let value = rquickjs::Coerced::<bool>::from_js(&ctx, value).map(|v| v.0)?; host.set_cancel_bubble(value); Ok(()) }) }).enumerable().configurable())?;
     prototype.prop("stopImmediatePropagation", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "stopImmediatePropagation", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Event")?;
-        host.stop_immediate_propagation();
+        (*host).stop_immediate_propagation();
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("bubbles", rquickjs::object::Accessor::new_get(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "bubbles", || { let host = quickjs_host::<T>(&ctx, &this.0, "Event")?; let result = host.bubbles(); rquickjs::IntoJs::into_js(result, &ctx) }) }).enumerable().configurable())?;
@@ -32,7 +32,7 @@ pub fn install_event<'js, T: EventOps + EventConstructor + 'static>(ctx: &rquick
     prototype.prop("returnValue", rquickjs::object::Accessor::new(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "returnValue", || { let host = quickjs_host::<T>(&ctx, &this.0, "Event")?; let result = host.return_value(); rquickjs::IntoJs::into_js(result, &ctx) }) }, |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, value: rquickjs::Value<'js>| -> rquickjs::Result<()> { quickjs_callback_boundary(&ctx, "returnValue", || { let host = quickjs_host::<T>(&ctx, &this.0, "Event")?; let value = rquickjs::Coerced::<bool>::from_js(&ctx, value).map(|v| v.0)?; host.set_return_value(value); Ok(()) }) }).enumerable().configurable())?;
     prototype.prop("preventDefault", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "preventDefault", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Event")?;
-        host.prevent_default();
+        (*host).prevent_default();
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("defaultPrevented", rquickjs::object::Accessor::new_get(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "defaultPrevented", || { let host = quickjs_host::<T>(&ctx, &this.0, "Event")?; let result = host.default_prevented(); rquickjs::IntoJs::into_js(result, &ctx) }) }).enumerable().configurable())?;
@@ -48,7 +48,7 @@ pub fn install_event<'js, T: EventOps + EventConstructor + 'static>(ctx: &rquick
         let bubbles: Option<bool> = if __raw_value.is_undefined() { None } else { Some(rquickjs::Coerced::<bool>::from_js(&ctx, __raw_value).map(|v| v.0)?) };
         let __raw_value = args.0.get(2).cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let cancelable: Option<bool> = if __raw_value.is_undefined() { None } else { Some(rquickjs::Coerced::<bool>::from_js(&ctx, __raw_value).map(|v| v.0)?) };
-        host.init_event(&r#type, bubbles, cancelable).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        (*host).init_event(&r#type, bubbles, cancelable).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop(rquickjs::atom::PredefinedAtom::SymbolToStringTag, rquickjs::object::Property::from("Event").configurable())?;

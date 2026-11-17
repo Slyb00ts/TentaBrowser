@@ -30,14 +30,14 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         let host = quickjs_host::<T>(&ctx, &this.0, "Node")?;
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let options: Option<Handle<GetRootNodeOptions>> = if __raw_value.is_undefined() { None } else { Some(<Handle<GetRootNodeOptions> as rquickjs::FromJs>::from_js(&ctx, __raw_value)?) };
-        let result = host.get_root_node(options).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).get_root_node(options).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("parentNode", rquickjs::object::Accessor::new_get(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "parentNode", || { let host = quickjs_host::<T>(&ctx, &this.0, "Node")?; let result = host.parent_node().map_err(|e| throw_quickjs_error(&ctx, &e))?; match result { Some(inner) => rquickjs::IntoJs::into_js(inner, &ctx), None => Ok(rquickjs::Value::new_null(ctx.clone())) } }) }).enumerable().configurable())?;
     prototype.prop("parentElement", rquickjs::object::Accessor::new_get(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "parentElement", || { let host = quickjs_host::<T>(&ctx, &this.0, "Node")?; let result = host.parent_element().map_err(|e| throw_quickjs_error(&ctx, &e))?; match result { Some(inner) => rquickjs::IntoJs::into_js(inner, &ctx), None => Ok(rquickjs::Value::new_null(ctx.clone())) } }) }).enumerable().configurable())?;
     prototype.prop("hasChildNodes", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "hasChildNodes", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Node")?;
-        let result = host.has_child_nodes();
+        let result = (*host).has_child_nodes();
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("childNodes", rquickjs::object::Accessor::new_get(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "childNodes", || { let host = quickjs_host::<T>(&ctx, &this.0, "Node")?; let result = host.child_nodes().map_err(|e| throw_quickjs_error(&ctx, &e))?; rquickjs::IntoJs::into_js(result, &ctx) }) }).enumerable().configurable())?;
@@ -49,14 +49,14 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
     prototype.prop("textContent", rquickjs::object::Accessor::new(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "textContent", || { let host = quickjs_host::<T>(&ctx, &this.0, "Node")?; let result = host.text_content().map_err(|e| throw_quickjs_error(&ctx, &e))?; match result { Some(inner) => rquickjs::IntoJs::into_js(inner, &ctx), None => Ok(rquickjs::Value::new_null(ctx.clone())) } }) }, |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, value: rquickjs::Value<'js>| -> rquickjs::Result<()> { quickjs_callback_boundary(&ctx, "textContent", || { let host = quickjs_host::<T>(&ctx, &this.0, "Node")?; let value = { let value = value; if value.is_null() || value.is_undefined() { Ok(None) } else { rquickjs::Coerced::<rquickjs::String>::from_js(&ctx, value).and_then(|v| v.0.to_string_lossy()).map(Some) } }?; host.set_text_content(value.as_deref()).map_err(|e| throw_quickjs_error(&ctx, &e))?; Ok(()) }) }).enumerable().configurable())?;
     prototype.prop("normalize", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "normalize", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Node")?;
-        host.normalize();
+        (*host).normalize();
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("cloneNode", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "cloneNode", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Node")?;
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let subtree: Option<bool> = if __raw_value.is_undefined() { None } else { Some(rquickjs::Coerced::<bool>::from_js(&ctx, __raw_value).map(|v| v.0)?) };
-        let result = host.clone_node(subtree).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).clone_node(subtree).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("isEqualNode", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "isEqualNode", || {
@@ -64,7 +64,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let other_node: Option<Handle<Node>> = { let value = __raw_value; if value.is_null() || value.is_undefined() { Ok(None) } else { <Handle<Node> as rquickjs::FromJs>::from_js(&ctx, value).map(Some) } }?;
-        let result = host.is_equal_node(other_node).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).is_equal_node(other_node).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("isSameNode", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "isSameNode", || {
@@ -72,7 +72,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let other_node: Option<Handle<Node>> = { let value = __raw_value; if value.is_null() || value.is_undefined() { Ok(None) } else { <Handle<Node> as rquickjs::FromJs>::from_js(&ctx, value).map(Some) } }?;
-        let result = host.is_same_node(other_node).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).is_same_node(other_node).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("compareDocumentPosition", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "compareDocumentPosition", || {
@@ -80,7 +80,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let other: Handle<Node> = <Handle<Node> as rquickjs::FromJs>::from_js(&ctx, __raw_value)?;
-        let result = host.compare_document_position(other).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).compare_document_position(other).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("contains", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "contains", || {
@@ -88,7 +88,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let other: Option<Handle<Node>> = { let value = __raw_value; if value.is_null() || value.is_undefined() { Ok(None) } else { <Handle<Node> as rquickjs::FromJs>::from_js(&ctx, value).map(Some) } }?;
-        let result = host.contains(other).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).contains(other).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("lookupPrefix", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "lookupPrefix", || {
@@ -96,7 +96,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let namespace: Option<String> = { let value = __raw_value; if value.is_null() || value.is_undefined() { Ok(None) } else { rquickjs::Coerced::<rquickjs::String>::from_js(&ctx, value).and_then(|v| v.0.to_string_lossy()).map(Some) } }?;
-        let result = host.lookup_prefix(namespace.as_deref()).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).lookup_prefix(namespace.as_deref()).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         match result { Some(inner) => rquickjs::IntoJs::into_js(inner, &ctx), None => Ok(rquickjs::Value::new_null(ctx.clone())) }
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("lookupNamespaceURI", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "lookupNamespaceURI", || {
@@ -104,7 +104,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let prefix: Option<String> = { let value = __raw_value; if value.is_null() || value.is_undefined() { Ok(None) } else { rquickjs::Coerced::<rquickjs::String>::from_js(&ctx, value).and_then(|v| v.0.to_string_lossy()).map(Some) } }?;
-        let result = host.lookup_namespace_uri(prefix.as_deref()).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).lookup_namespace_uri(prefix.as_deref()).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         match result { Some(inner) => rquickjs::IntoJs::into_js(inner, &ctx), None => Ok(rquickjs::Value::new_null(ctx.clone())) }
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("isDefaultNamespace", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "isDefaultNamespace", || {
@@ -112,7 +112,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let namespace: Option<String> = { let value = __raw_value; if value.is_null() || value.is_undefined() { Ok(None) } else { rquickjs::Coerced::<rquickjs::String>::from_js(&ctx, value).and_then(|v| v.0.to_string_lossy()).map(Some) } }?;
-        let result = host.is_default_namespace(namespace.as_deref()).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).is_default_namespace(namespace.as_deref()).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("insertBefore", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "insertBefore", || {
@@ -122,7 +122,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         let node: Handle<Node> = <Handle<Node> as rquickjs::FromJs>::from_js(&ctx, __raw_value)?;
         let __raw_value = args.0.get(1).cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let child: Option<Handle<Node>> = { let value = __raw_value; if value.is_null() || value.is_undefined() { Ok(None) } else { <Handle<Node> as rquickjs::FromJs>::from_js(&ctx, value).map(Some) } }?;
-        let result = host.insert_before(node, child).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).insert_before(node, child).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("appendChild", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "appendChild", || {
@@ -130,7 +130,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let node: Handle<Node> = <Handle<Node> as rquickjs::FromJs>::from_js(&ctx, __raw_value)?;
-        let result = host.append_child(node).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).append_child(node).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("replaceChild", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "replaceChild", || {
@@ -140,7 +140,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         let node: Handle<Node> = <Handle<Node> as rquickjs::FromJs>::from_js(&ctx, __raw_value)?;
         let __raw_value = args.0.get(1).cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let child: Handle<Node> = <Handle<Node> as rquickjs::FromJs>::from_js(&ctx, __raw_value)?;
-        let result = host.replace_child(node, child).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).replace_child(node, child).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("removeChild", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "removeChild", || {
@@ -148,7 +148,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let child: Handle<Node> = <Handle<Node> as rquickjs::FromJs>::from_js(&ctx, __raw_value)?;
-        let result = host.remove_child(child).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).remove_child(child).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("scroll", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "scroll", || {
@@ -156,7 +156,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         if matches!(args.0.len(), 0 | 1) { return (|| {
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let options: Option<ScrollToOptions> = if __raw_value.is_undefined() { None } else { Some(<ScrollToOptions as rquickjs::FromJs>::from_js(&ctx, __raw_value)?) };
-        host.scroll_1(options).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        (*host).scroll_1(options).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
         })(); }
         if matches!(args.0.len(), 2..) { return (|| {
@@ -165,7 +165,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         let x: f64 = rquickjs::Coerced::<f64>::from_js(&ctx, __raw_value).and_then(|v| { if true || v.0.is_finite() { Ok(v.0 as f64) } else { Err(rquickjs::Exception::throw_type(&ctx, "non-finite number")) } })?;
         let __raw_value = args.0.get(1).cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let y: f64 = rquickjs::Coerced::<f64>::from_js(&ctx, __raw_value).and_then(|v| { if true || v.0.is_finite() { Ok(v.0 as f64) } else { Err(rquickjs::Exception::throw_type(&ctx, "non-finite number")) } })?;
-        host.scroll_2(x, y);
+        (*host).scroll_2(x, y);
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
         })(); }
         Err(rquickjs::Exception::throw_type(&ctx, "no matching overload"))
@@ -175,7 +175,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
     prototype.prop("depth", rquickjs::object::Accessor::new_get(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "depth", || { let host = quickjs_host::<T>(&ctx, &this.0, "Node")?; let result = host.depth(); rquickjs::IntoJs::into_js(result, &ctx) }) }).enumerable().configurable())?;
     prototype.prop("toString", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "toString", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Node")?;
-        let result = host.to_string().map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).to_string().map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("setOpacity", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "setOpacity", || {
@@ -183,17 +183,17 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let alpha: u8 = rquickjs::Coerced::<f64>::from_js(&ctx, __raw_value).map(|v| clamp_octet(v.0))?;
-        host.set_opacity(alpha);
+        (*host).set_opacity(alpha);
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("attributeMap", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "attributeMap", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Node")?;
-        let result = host.attribute_map().map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).attribute_map().map_err(|e| throw_quickjs_error(&ctx, &e))?;
         quickjs_record_value(&ctx, result, |key| rquickjs::IntoJs::into_js(key, &ctx), |item| rquickjs::IntoJs::into_js(item, &ctx))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("requestFullscreen", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "requestFullscreen", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Node")?;
-        let result = host.request_fullscreen().map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).request_fullscreen().map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("children", rquickjs::object::Accessor::new_get(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "children", || { let host = quickjs_host::<T>(&ctx, &this.0, "Node")?; let result = host.children().map_err(|e| throw_quickjs_error(&ctx, &e))?; rquickjs::IntoJs::into_js(result, &ctx) }) }).enumerable().configurable())?;
@@ -203,19 +203,19 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
     prototype.prop("prepend", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "prepend", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Node")?;
         let nodes: Vec<NodeOrDomString> = args.0.iter().cloned().map(|__raw_value| <NodeOrDomString as rquickjs::FromJs>::from_js(&ctx, __raw_value)).collect::<rquickjs::Result<_>>()?;
-        host.prepend(nodes).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        (*host).prepend(nodes).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("append", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "append", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Node")?;
         let nodes: Vec<NodeOrDomString> = args.0.iter().cloned().map(|__raw_value| <NodeOrDomString as rquickjs::FromJs>::from_js(&ctx, __raw_value)).collect::<rquickjs::Result<_>>()?;
-        host.append(nodes).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        (*host).append(nodes).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("replaceChildren", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "replaceChildren", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Node")?;
         let nodes: Vec<NodeOrDomString> = args.0.iter().cloned().map(|__raw_value| <NodeOrDomString as rquickjs::FromJs>::from_js(&ctx, __raw_value)).collect::<rquickjs::Result<_>>()?;
-        host.replace_children(nodes).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        (*host).replace_children(nodes).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("querySelector", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "querySelector", || {
@@ -223,7 +223,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let selectors: String = rquickjs::Coerced::<rquickjs::String>::from_js(&ctx, __raw_value).and_then(|v| v.0.to_string_lossy())?;
-        let result = host.query_selector(&selectors).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).query_selector(&selectors).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         match result { Some(inner) => rquickjs::IntoJs::into_js(inner, &ctx), None => Ok(rquickjs::Value::new_null(ctx.clone())) }
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("querySelectorAll", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "querySelectorAll", || {
@@ -231,7 +231,7 @@ pub fn install_node<'js, T: NodeOps + 'static>(ctx: &rquickjs::Ctx<'js>, global:
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let selectors: String = rquickjs::Coerced::<rquickjs::String>::from_js(&ctx, __raw_value).and_then(|v| v.0.to_string_lossy())?;
-        let result = host.query_selector_all(&selectors).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).query_selector_all(&selectors).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop(rquickjs::atom::PredefinedAtom::SymbolToStringTag, rquickjs::object::Property::from("Node").configurable())?;

@@ -701,3 +701,174 @@ fn a_live_response_keeps_its_record_across_a_sweep() {
     }
     assert_eq!(engine.host_record_count(), baseline);
 }
+
+// ---------------------------------------------------------------------------
+// The body reads that are not text: arrayBuffer(), bytes(), blob(), and clone()
+// ---------------------------------------------------------------------------
+
+#[test]
+fn array_buffer_and_bytes_resolve_with_the_bodys_bytes() {
+    assert_eq!(
+        settled(
+            r#"
+            globalThis.out = [];
+            new Response(new Uint8Array([1, 2, 255])).arrayBuffer().then(buffer => {
+                out.push(Object.prototype.toString.call(buffer), buffer.byteLength,
+                         Array.from(new Uint8Array(buffer)).join(','));
+            });
+            new Response('hi').bytes().then(view => {
+                out.push(view.constructor.name, view.length, Array.from(view).join(','));
+            });
+            new Response(null).arrayBuffer().then(buffer => out.push(buffer.byteLength));
+            "#,
+            "out.join('|')"
+        ),
+        "[object ArrayBuffer]|3|1,2,255|Uint8Array|2|104,105|0"
+    );
+}
+
+#[test]
+fn every_read_resolves_with_a_buffer_of_its_own() {
+    // The bytes are copied into the value, so writing to one read's buffer is
+    // not visible through a clone's.
+    assert_eq!(
+        settled(
+            r#"
+            globalThis.out = [];
+            const first = new Response('ab');
+            const second = first.clone();
+            first.arrayBuffer().then(buffer => {
+                new Uint8Array(buffer)[0] = 0;
+                return second.text();
+            }).then(text => out.push(text));
+            "#,
+            "out.join('|')"
+        ),
+        "ab"
+    );
+}
+
+#[test]
+fn blob_resolves_with_a_blob_typed_by_the_content_type() {
+    assert_eq!(
+        settled(
+            r#"
+            globalThis.out = [];
+            new Response('hello', {headers: {'Content-Type': 'Text/HTML; charset=utf-8'}})
+                .blob()
+                .then(blob => {
+                    out.push(blob instanceof Blob, blob.size, blob.type);
+                    return blob.text();
+                })
+                .then(text => out.push(text));
+            new Response(new Uint8Array([1])).blob().then(blob => out.push('[' + blob.type + ']'));
+            new Response('x').blob().then(blob => out.push(blob.type));
+            "#,
+            "out.join('|')"
+        ),
+        "true|5|text/html; charset=utf-8|[]|text/plain;charset=utf-8|hello"
+    );
+}
+
+#[test]
+fn the_new_reads_disturb_the_body_like_text_does() {
+    assert_eq!(
+        settled(
+            r#"
+            globalThis.out = [];
+            for (const member of ['arrayBuffer', 'bytes', 'blob']) {
+                const response = new Response('x');
+                response[member]();
+                out.push(response.bodyUsed);
+                response[member]().then(
+                    () => out.push(member + ' resolved'),
+                    error => out.push(error.constructor.name),
+                );
+            }
+            "#,
+            "out.join('|')"
+        ),
+        "true|true|true|TypeError|TypeError|TypeError"
+    );
+}
+
+#[test]
+fn clone_copies_the_response_and_reads_separately() {
+    assert_eq!(
+        settled(
+            r#"
+            globalThis.out = [];
+            const original = new Response('body', {
+                status: 201, statusText: 'Made', headers: {'X-One': '1'},
+            });
+            const copy = original.clone();
+            out.push(copy instanceof Response, copy !== original, copy.status, copy.statusText,
+                     copy.headers.get('x-one'), copy.headers !== original.headers,
+                     copy.type, copy.bodyUsed);
+            copy.headers.set('x-one', '2');
+            out.push(original.headers.get('x-one'));
+            original.text().then(text => {
+                out.push(text, original.bodyUsed, copy.bodyUsed);
+                return copy.text();
+            }).then(text => out.push(text));
+            "#,
+            "out.join('|')"
+        ),
+        "true|true|201|Made|1|true|default|false|1|body|true|false|body"
+    );
+}
+
+#[test]
+fn clone_of_a_read_response_throws() {
+    assert_eq!(
+        caught(
+            r#"
+            const read = new Response('x');
+            read.text();
+            results.push(attempt(() => read.clone()));
+            // A null body is never disturbed, so a response without one can
+            // always be cloned.
+            const empty = new Response(null);
+            empty.text();
+            results.push(attempt(() => empty.clone()));
+            "#
+        ),
+        "TypeError:TypeError|no throw"
+    );
+}
+
+#[test]
+fn the_blob_of_a_body_and_a_clone_are_freed_with_their_wrappers() {
+    let mut engine = Engine::with_document(document());
+    let baseline = engine.host_record_count();
+    engine
+        .evaluate(
+            r#"
+            globalThis.kept = [];
+            {
+                const response = new Response('hi');
+                kept.push(response.clone());
+                response.blob().then(blob => kept.push(blob));
+            }
+            "#,
+        )
+        .expect("evaluate");
+    engine.run_microtasks();
+    for _ in 0..5 {
+        engine.low_memory_gc();
+        engine.reclaim_dead_hosts();
+    }
+    assert_eq!(
+        engine.host_record_count(),
+        baseline + 3,
+        "the clone, its headers and the blob are held by the page"
+    );
+    engine
+        .evaluate("globalThis.kept = null;")
+        .expect("evaluate the release");
+    for _ in 0..5 {
+        engine.low_memory_gc();
+        engine.reclaim_dead_hosts();
+    }
+    assert_eq!(engine.host_record_count(), baseline);
+}

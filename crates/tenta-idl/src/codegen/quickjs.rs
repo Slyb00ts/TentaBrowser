@@ -276,7 +276,9 @@ fn method_property(
 }
 fn operation(op: &Operation, instance: bool, transfers_stored_values: bool, out: &mut String) {
     let passes = arguments(&op.arguments, op.buffer_references(), out);
-    let receiver = if instance { "host." } else { "T::" };
+    // The host is behind an `Rc`, so the receiver is dereferenced: an
+    // operation named `clone` would otherwise be `Rc::clone`.
+    let receiver = if instance { "(*host)." } else { "T::" };
     let invocation = call(
         &format!("{receiver}{}({})", op.rust_name, passes.join(", ")),
         op.fast,

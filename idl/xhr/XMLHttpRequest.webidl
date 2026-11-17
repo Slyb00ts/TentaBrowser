@@ -38,14 +38,9 @@
 //    sends a body can therefore observe the absence: the standard fires
 //    `loadstart`, `progress`, `load` and `loadend` at the upload object while
 //    such a request is transmitted, and this engine fires none of them.
-//  - `readonly attribute USVString responseURL`, `readonly attribute any
-//    response` and `readonly attribute Document? responseXML`. The machine and
-//    the text response are here, but `response` needs the response type's
-//    conversions (`arraybuffer`, `blob`, `json`), each of which needs an
-//    interface this engine has no value for yet, `responseXML` needs a document
-//    the parsed body would build, and `responseURL` needs the URL field the
-//    transport does not carry at this boundary. Every one of them is recorded
-//    rather than declared with a stand-in value.
+//  - `readonly attribute Document? responseXML`, which needs a document the
+//    parsed body would build. The `"document"` response type is refused for the
+//    same reason.
 //
 // `[Throws]` is this repository's spelling for "this member can fail, so it
 // takes the fallible, non-fast-API path" (`idl/dom/AbortSignal.webidl`): a fast
@@ -79,9 +74,12 @@
 //  - `withCredentials = true` is refused with a `NotSupportedError`: the shared
 //    cookie jar attaches credentials on its own policy, and honouring a
 //    per-request opt-out would silently mean the opposite of what it says.
-//  - `responseType` accepts only `""` and `"text"`, the two values a decoded
-//    text response can serve; every other value of the (fully declared)
-//    enumeration is refused with a `NotSupportedError`.
+//  - `responseType` accepts every value but `"document"`, which is refused
+//    with a `NotSupportedError`: there is no `responseXML` to read it through.
+//    `response` is the text for `""` and `"text"`, and for the other three a
+//    value built once per finished response — an `ArrayBuffer`, a `Blob` typed
+//    by the response's `Content-Type`, or the parsed JSON (`null` when it does
+//    not parse). `overrideMimeType()` does not change the `Blob`'s type.
 //  - `send()`'s body is the two arms `XMLHttpRequestBodyInit` converts to here,
 //    and the parameter's other arm is absent. The standard's parameter is
 //    `(Document or XMLHttpRequestBodyInit)?` and `XMLHttpRequestBodyInit` is
@@ -216,8 +214,10 @@ interface XMLHttpRequest : XMLHttpRequestEventTarget {
   DOMString? getResponseHeader(ByteString name);
   ByteString getAllResponseHeaders();
   [Throws] undefined overrideMimeType(DOMString mime);
+  readonly attribute USVString responseURL;
   [Throws] attribute XMLHttpRequestResponseType responseType;
-  readonly attribute USVString responseText;
+  [Throws] readonly attribute any response;
+  [Throws] readonly attribute USVString responseText;
 };
 
 // The standard's enumeration, complete. Every value is declared even though the

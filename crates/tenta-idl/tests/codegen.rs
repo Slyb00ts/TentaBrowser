@@ -197,7 +197,7 @@ fn event_listener_methods_lease_converted_callbacks_without_widening_other_opera
         )));
         assert!(v8.contains(&format!("host.{method}(&r#type, callback, options)")));
         assert!(quickjs.contains(&format!(
-            "host.{method}(&r#type, callback, options).map_err"
+            "(*host).{method}(&r#type, callback, options).map_err"
         )));
     }
     assert_eq!(

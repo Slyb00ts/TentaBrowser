@@ -910,7 +910,7 @@ fn the_refusing_setters_accept_only_what_this_engine_can_serve() {
                 const xhr = new XMLHttpRequest();
                 const attempt = f => { try { f(); return 'ok'; } catch (error) { return error.name; } };
                 const results = [
-                    attempt(() => { xhr.responseType = 'json'; }),
+                    attempt(() => { xhr.responseType = 'document'; }),
                     attempt(() => { xhr.responseType = 'text'; }),
                     attempt(() => { xhr.responseType = 'bogus'; }),
                     attempt(() => { xhr.withCredentials = true; }),
@@ -2707,6 +2707,221 @@ fn a_timeout_of_zero_arms_no_timer() {
                 .iter()
                 .all(|handle| handle.request == 0),
             "no timer fired, so only `open()`'s step 10 ever named a request"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// `response`, the response types other than text, and `responseURL`
+// ---------------------------------------------------------------------------
+
+/// Opens the global `xhr` with `response_type` and delivers `outcome` at it.
+fn typed_response(engine: &mut Engine, response_type: &str, outcome: FetchOutcome) {
+    eval(
+        engine,
+        &format!(
+            "globalThis.xhr = new XMLHttpRequest(); xhr.open('GET', '/x'); \
+             xhr.responseType = '{response_type}';"
+        ),
+    );
+    deliver(engine, outcome);
+}
+
+#[test]
+fn response_is_the_text_for_the_two_text_types() {
+    with_page(|engine| {
+        eval(
+            engine,
+            "globalThis.xhr = new XMLHttpRequest(); xhr.open('GET', '/x');",
+        );
+        assert_eq!(
+            eval(
+                engine,
+                "[typeof xhr.response, xhr.response.length].join('|')"
+            ),
+            "string|0",
+            "before the response it is the empty string"
+        );
+        deliver(engine, response(200, &[], Some("zażółć".as_bytes())));
+        assert_eq!(
+            eval(
+                engine,
+                "[xhr.response, xhr.response === xhr.responseText, xhr.responseType].join('|')"
+            ),
+            "zażółć|true|"
+        );
+    });
+}
+
+#[test]
+fn a_json_response_is_parsed_once_and_is_null_when_it_does_not_parse() {
+    with_page(|engine| {
+        eval(
+            engine,
+            "globalThis.xhr = new XMLHttpRequest(); xhr.open('GET', '/x'); xhr.responseType = 'json';",
+        );
+        assert_eq!(
+            eval(engine, "String(xhr.response)"),
+            "null",
+            "it is null until the request is done"
+        );
+        deliver(
+            engine,
+            response(200, &[], Some(br#"{"items":[1,2],"name":"x"}"#)),
+        );
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                const attempt = f => { try { return f(); } catch (error) { return error.name; } };
+                [xhr.response.items.length, xhr.response.name, xhr.response === xhr.response,
+                 attempt(() => xhr.responseText)].join('|');
+                "#
+            ),
+            "2|x|true|InvalidStateError",
+            "every read is the same object, and the text is not readable for this type"
+        );
+
+        typed_response(engine, "json", response(200, &[], Some(b"{not json")));
+        assert_eq!(
+            eval(
+                engine,
+                "[String(xhr.response), xhr.readyState, xhr.status].join('|')"
+            ),
+            "null|4|200",
+            "a body that does not parse is null and throws nothing"
+        );
+    });
+}
+
+#[test]
+fn an_arraybuffer_response_holds_the_bodys_bytes() {
+    with_page(|engine| {
+        typed_response(
+            engine,
+            "arraybuffer",
+            response(200, &[], Some(&[1, 2, 255])),
+        );
+        assert_eq!(
+            eval(
+                engine,
+                r#"
+                [Object.prototype.toString.call(xhr.response),
+                 Array.from(new Uint8Array(xhr.response)).join(','),
+                 xhr.response === xhr.response].join('|');
+                "#
+            ),
+            "[object ArrayBuffer]|1,2,255|true"
+        );
+    });
+}
+
+#[test]
+fn a_blob_response_is_typed_by_the_content_type() {
+    with_page(|engine| {
+        typed_response(
+            engine,
+            "blob",
+            response(200, &[("Content-Type", "image/PNG")], Some(&[137, 80])),
+        );
+        assert_eq!(
+            eval(
+                engine,
+                "[xhr.response instanceof Blob, xhr.response.size, xhr.response.type, \
+                  xhr.response === xhr.response].join('|')"
+            ),
+            "true|2|image/png|true"
+        );
+    });
+}
+
+#[test]
+fn a_failed_request_has_a_null_response_for_the_object_types() {
+    with_page(|engine| {
+        typed_response(
+            engine,
+            "arraybuffer",
+            FetchOutcome::Failed("refused".to_owned()),
+        );
+        assert_eq!(
+            eval(engine, "[String(xhr.response), xhr.readyState].join('|')"),
+            "null|4"
+        );
+    });
+}
+
+#[test]
+fn a_new_request_on_the_same_object_gets_a_new_response_value() {
+    with_page(|engine| {
+        typed_response(engine, "json", response(200, &[], Some(b"{\"n\":1}")));
+        eval(engine, "globalThis.first = xhr.response;");
+        eval(engine, "xhr.open('GET', '/y');");
+        assert_eq!(
+            eval(engine, "String(xhr.response)"),
+            "null",
+            "an opened request has no response yet"
+        );
+        // The second `open()` is the object's second request.
+        let target = target_bits(engine, "xhr");
+        engine.settle_xhr(vec![hand(
+            target,
+            OPENED_ONLY + 1,
+            response(200, &[], Some(b"{\"n\":2}")),
+        )]);
+        assert_eq!(
+            eval(
+                engine,
+                "[first.n, xhr.response.n, xhr.response !== first].join('|')"
+            ),
+            "1|2|true"
+        );
+    });
+}
+
+#[test]
+fn response_url_is_the_final_url_without_its_fragment() {
+    with_page(|engine| {
+        eval(
+            engine,
+            "globalThis.xhr = new XMLHttpRequest(); xhr.open('GET', '/x');",
+        );
+        assert_eq!(eval(engine, "'[' + xhr.responseURL + ']'"), "[]");
+        deliver(
+            engine,
+            FetchOutcome::Response(FetchedResponse {
+                url: "http://fixture.test/moved?q=1#part".to_owned(),
+                status: 200,
+                redirected: true,
+                headers: Vec::new(),
+                body: Some(b"x".to_vec()),
+            }),
+        );
+        assert_eq!(
+            eval(engine, "xhr.responseURL"),
+            "http://fixture.test/moved?q=1"
+        );
+    });
+}
+
+#[test]
+fn the_response_value_is_released_with_the_request() {
+    with_page(|engine| {
+        let baseline = engine.host_record_count();
+        typed_response(
+            engine,
+            "blob",
+            response(200, &[("Content-Type", "text/plain")], Some(b"abc")),
+        );
+        assert_eq!(eval(engine, "xhr.response.size"), "3");
+        eval(engine, "globalThis.xhr = null;");
+        for _ in 0..5 {
+            engine.low_memory_gc();
+            engine.reclaim_dead_hosts();
+        }
+        assert_eq!(
+            engine.host_record_count(),
+            baseline,
+            "the request and the blob it kept are both gone"
         );
     });
 }

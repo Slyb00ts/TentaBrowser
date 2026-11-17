@@ -6,12 +6,12 @@ pub fn install_timed_counter<'js, T: TimedCounterOps + 'static>(ctx: &rquickjs::
     prototype.prop("interval", rquickjs::object::Accessor::new(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "interval", || { let host = quickjs_host::<T>(&ctx, &this.0, "TimedCounter")?; let result = host.interval(); rquickjs::IntoJs::into_js(result, &ctx) }) }, |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, value: rquickjs::Value<'js>| -> rquickjs::Result<()> { quickjs_callback_boundary(&ctx, "interval", || { let host = quickjs_host::<T>(&ctx, &this.0, "TimedCounter")?; let value = rquickjs::Coerced::<f64>::from_js(&ctx, value).map(|v| to_unsigned_long(v.0))?; host.set_interval(value); Ok(()) }) }).enumerable().configurable())?;
     prototype.prop("startTimer", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "startTimer", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "TimedCounter")?;
-        host.start_timer();
+        (*host).start_timer();
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("describe", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "describe", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "TimedCounter")?;
-        let result = host.describe().map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).describe().map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop(rquickjs::atom::PredefinedAtom::SymbolToStringTag, rquickjs::object::Property::from("TimedCounter").configurable())?;

@@ -232,6 +232,11 @@ impl ScriptHost for MockHost {
             }
             HostValue::String(text) => (MOCK_STRING, format!("string:{text}")),
             HostValue::TypeError { message } => (MOCK_TYPE_ERROR, format!("TypeError: {message}")),
+            HostValue::ArrayBuffer(bytes) | HostValue::Uint8Array(bytes) => {
+                (MOCK_STRING, format!("bytes:{}", bytes.len()))
+            }
+            HostValue::Blob(bits) => (MOCK_STRING, format!("blob:{bits}")),
+            HostValue::Json(bytes) => (MOCK_STRING, format!("json:{}", bytes.len())),
         };
         self.built.borrow_mut().push((bits, description));
         Some(bits)

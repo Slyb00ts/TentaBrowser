@@ -85,6 +85,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `MessageChannel`, `MessagePort`, `MessageEvent`, `window.postMessage()`; the window as receiver of `EventTarget` operations (MSG1) | Implemented on V8; focused checks passed; not independently reviewed | youtube.com, which stopped at both, renders; nothing is transferred between ports; QuickJS has no messaging; see the section below |
 | `TreeWalker`, `NodeIterator`, `NodeFilter`, `CSS.escape()` (TW1) | Traversal implemented as a prelude script on V8, `CSS.escape` generated on both engines; focused checks passed; not independently reviewed | Pages built with Lit threw at their first render; see the section below |
 | A host navigation starts a new script CPU window (SW1) | Implemented; focused checks passed; changes D-033 with the owner's agreement of 2026-11-17, the decision entry is still to be written | The commit of a navigation the host issued (`Page::goto`, `goto_with_eval`, `begin_goto`) empties the page's script CPU window; a navigation the document asks for (`location`, a form submission, an activated link) goes on spending the window it started in, so a document that reloads itself still has one budget. |
+| Body reads that are not text: `Response.arrayBuffer()/blob()/bytes()/clone()`, `Blob.arrayBuffer()/bytes()`, `XMLHttpRequest.response`, `responseURL` and the `arraybuffer`, `blob`, `json` response types (FB1) | Implemented on both engines; focused checks passed; not independently reviewed | A body was readable only as text. `Response.body`, `formData()`, the `Response` statics, `responseXML` and the `document` response type are still absent; `clone()` copies the bytes. |
 | Nested flex and grid containers share their answers (LP1) | Implemented; measured; fragment output compared on a real page; not independently reviewed | One layout of a component-built page solved its containers 12 times less often; see the section below. Layout still starts over after every mutation |
 | Wrapper-graph collection at task ends is amortised (GC1) | Implemented on V8; measured; not independently reviewed; **changes when detached wrappers are reclaimed, which the specification may record as a decision** | A task end collects once 1024 wrappers are owed or the last collection is 250 ms old, not every time; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
@@ -2983,6 +2984,57 @@ ran. The owner agreed on 2026-11-17 to change it; the entry for
   59.7 s (58.5 s before); neither difference is outside what one run varies
   by. amazon.com and imdb.com are still empty behind the operator's
   challenge page.
+
+### Body reads that are not text (FB1)
+
+A probe of about 400 interface and member names on a blank page (one run,
+2026-11-17, release CLI, not a site measurement) showed that a response body
+could only be read as text: `Response` had `text()` and `json()` and nothing
+else, `Blob` had `text()`, and `XMLHttpRequest` had `responseText`, refused
+every `responseType` but `""` and `"text"` with `NotSupportedError`, and had
+no `response`. A page that reads a font, an image or a WebAssembly module
+through `fetch()`, wraps `fetch()` and clones the response, or sets
+`xhr.responseType = 'json'`, failed at that call.
+
+- **What changed:**
+  - `HostValue` (`crates/tenta-js/src/dom/events/mod.rs`) has four new
+    values the engines build: `ArrayBuffer`, `Uint8Array`, `Blob` (the
+    wrapper of a record) and `Json` (the parse of a byte sequence, nothing
+    when it does not parse). Both engines build all four.
+  - `Response`: `arrayBuffer()`, `blob()`, `bytes()`, `clone()`.
+    `Blob`: `arrayBuffer()`, `bytes()`.
+  - `XMLHttpRequest`: `response`, `responseURL`, and the `arraybuffer`,
+    `blob` and `json` response types. The value `response` builds is kept
+    on the record with the request, state and type it was built for, so
+    every read of a finished response is the same object, and its stored
+    reference is released when it is replaced and when the record is freed.
+    `responseText` now throws `InvalidStateError` for a type that is not
+    text, which the setter used to make unreachable.
+  - The QuickJS glue calls an operation as `(*host).name(..)`: the host is
+    behind an `Rc`, and an operation named `clone` was `Rc::clone`. The
+    generator's goldens changed with it.
+- **Deviations, recorded in the IDL files:** `clone()` copies the bytes
+  where the standard tees a stream; `blob()`'s type is the `Content-Type`
+  value lower-cased, not re-serialized; `overrideMimeType()` does not change
+  a `blob` response's type; `responseType = "document"` is still refused and
+  there is no `responseXML`; `Response.body`, `formData()` and the statics
+  are still absent.
+- **Not measured:** no benchmark. No existing path changed its work: the new
+  members are new calls, and `response` builds its value on the first read.
+  The QuickJS receiver change is a dereference the compiler already did.
+- **Checks:** `tenta-js-v8::dom_response` 7 new, `dom_blob` 1 new and 1
+  changed (the member list), `dom_xhr` 8 new and 1 changed (the refused
+  type is now `document`); `tenta-js-qjs::runtime` 1 new;
+  `tenta-browser::body_reads_js` 2 new, the same page over a real socket on
+  V8 and on QuickJS, which is the only place QuickJS's `XMLHttpRequest`
+  response is exercised; `tenta-idl::codegen` 1 assertion changed with the
+  receiver. The workspace passed 4877 of 4877. The feature set passed 595
+  of 597: `tenta-browser::wpt_driver
+  a_live_harness_reports_from_its_own_timeout_before_the_driver_gives_up`
+  and `tests_started_before_the_deadline_drain_and_the_next_is_not_run`
+  failed, and the binary then passed 12 of 12 five times alone. Both assert
+  on a real-time margin (the second says so in its comment) and took 2.6 s
+  and 3.0 s in the full run against 1.8 s for the whole binary alone.
 
 ## Implementation queue and dependencies
 

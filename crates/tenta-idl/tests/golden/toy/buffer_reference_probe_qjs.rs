@@ -8,7 +8,7 @@ pub fn install_buffer_reference_probe<'js, T: BufferReferenceProbeOps + 'static>
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let value: ArrayBufferViewRef = array_buffer_view_ref_from_quickjs(&ctx, __raw_value)?;
-        let result = host.echo_view(value).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).echo_view(value).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         array_buffer_view_ref_to_quickjs(&ctx, result)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("echoSource", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "echoSource", || {
@@ -17,7 +17,7 @@ pub fn install_buffer_reference_probe<'js, T: BufferReferenceProbeOps + 'static>
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let value: BufferSourceRef = buffer_source_ref_from_quickjs(&ctx, __raw_value)?;
-        let result = host.echo_source(value).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).echo_source(value).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         buffer_source_ref_to_quickjs(&ctx, result)
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("acceptSource", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "acceptSource", || {
@@ -26,7 +26,7 @@ pub fn install_buffer_reference_probe<'js, T: BufferReferenceProbeOps + 'static>
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let value: BufferSourceRef = buffer_source_ref_from_quickjs(&ctx, __raw_value)?;
-        host.accept_source(value).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        (*host).accept_source(value).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("acceptThenString", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "acceptThenString", || {
@@ -37,7 +37,7 @@ pub fn install_buffer_reference_probe<'js, T: BufferReferenceProbeOps + 'static>
         let value: BufferSourceRef = buffer_source_ref_from_quickjs(&ctx, __raw_value)?;
         let __raw_value = args.0.get(1).cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let label: String = rquickjs::Coerced::<rquickjs::String>::from_js(&ctx, __raw_value).and_then(|v| v.0.to_string_lossy())?;
-        host.accept_then_string(value, &label).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        (*host).accept_then_string(value, &label).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop(rquickjs::atom::PredefinedAtom::SymbolToStringTag, rquickjs::object::Property::from("BufferReferenceProbe").configurable())?;

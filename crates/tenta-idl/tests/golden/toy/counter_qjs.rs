@@ -9,19 +9,19 @@ pub fn install_counter<'js, T: CounterOps + CounterConstructor + 'static>(ctx: &
     prototype.prop("state", rquickjs::object::Accessor::new_get(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "state", || { let host = quickjs_host::<T>(&ctx, &this.0, "Counter")?; let result = host.state().map_err(|e| throw_quickjs_error(&ctx, &e))?; rquickjs::IntoJs::into_js(result, &ctx) }) }).enumerable().configurable())?;
     prototype.prop("reset", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "reset", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Counter")?;
-        host.reset();
+        (*host).reset();
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("advance", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "advance", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Counter")?;
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let by: Option<u32> = if __raw_value.is_undefined() { None } else { Some(rquickjs::Coerced::<f64>::from_js(&ctx, __raw_value).map(|v| to_unsigned_long(v.0))?) };
-        host.advance(by).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        (*host).advance(by).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("stop", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "stop", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "Counter")?;
-        host.stop();
+        (*host).stop();
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("stopped", rquickjs::object::Accessor::new_get(|ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "stopped", || { let host = quickjs_host::<T>(&ctx, &this.0, "Counter")?; let result = host.stopped(); rquickjs::IntoJs::into_js(result, &ctx) }) }).enumerable().configurable())?;

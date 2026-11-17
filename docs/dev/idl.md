@@ -1683,18 +1683,16 @@ generated code:
   mechanism at all. `TextDecoderStream` and `TextEncoderStream` are absent for a
   different reason: they are `TransformStream` subclasses and the Streams
   interfaces have not been lowered yet.
-- `Response` declares the part of `Body` a constructor-built response can
-  serve — `bodyUsed`, `json()`, `text()` — and leaves out `body`,
-  `arrayBuffer()`, `blob()`, `bytes()`, `formData()` and `textStream()`, because
-  every one of them reads a `ReadableStream` (or `FormData`, which now exists
-  but needs multipart parsing; `Blob` and `FormData` both now exist, but
-  `blob()` and `bytes()` need the value kinds
-  below rather than a declaration). `Response.body` arrives with Streams
-  (`d-5b`). Its static
-  `error()`, `redirect()` and `json()` and its `clone()` are absent too:
-  `clone()` needs a body tee and the statics need the request and redirect
-  machinery. `Response.body`'s stand-in in the record is a `Vec<u8>`, which is
-  what makes *unusable* "the body has already been read".
+- `Response` declares the part of `Body` that reads the whole body —
+  `bodyUsed`, `arrayBuffer()`, `blob()`, `bytes()`, `json()`, `text()` — and
+  `clone()`. `body`, `formData()` and `textStream()` are left out: the first
+  and the last are a `ReadableStream`, and `formData()` needs a multipart
+  parser. `Response.body`'s stand-in in the record is a `Vec<u8>`, which is
+  what makes *unusable* "the body has already been read" and what makes
+  `clone()` a copy of the bytes where the standard tees a stream. `blob()`'s
+  type is the first `Content-Type` value that parses, lower-cased and
+  otherwise as the header spelled it, where the standard re-serializes the
+  MIME type. The static `error()`, `redirect()` and `json()` are absent.
 - `XMLHttpRequest` is declared down to the whole of its state machine
   (`UNSENT`, `OPENED`, `HEADERS_RECEIVED`, `LOADING`, `DONE`), the request
   attributes `open()` sets up, and the response the machine stores with its
@@ -1705,17 +1703,18 @@ generated code:
   `PageEngine::net_request` carries it (`b-6`, `b-6.5`), `abort()` and the
   `timeout` attribute end one before its answer arrives (`b-7`), and `send()`
   carries a request body (`b-9`).
-  `[SameObject] upload` / `XMLHttpRequestUpload` and
-  `responseURL`/`response`/`responseXML` are the members still absent — an inert
-  upload object would invite handlers that can never fire, and the three
-  response readers need conversions this engine has no value for yet. Five
-  narrowings are this engine's own and each refuses synchronously:
+  `[SameObject] upload` / `XMLHttpRequestUpload` and `responseXML` are the
+  members still absent — an inert upload object would invite handlers that can
+  never fire, and `responseXML` needs a document the parsed body would build.
+  `response` is the text for `""` and `"text"` and, for `arraybuffer`, `blob`
+  and `json`, a value built once per finished response and the same on every
+  read. Five narrowings are this engine's own and each refuses synchronously:
   `open(…, async = false)` throws `NotSupportedError` (the driver is
   asynchronous and a blocking request would deadlock the page's turn loop), a
   non-null `username`/`password` throws it (this engine sends no credentialed
   request, and what the network layer does with URL userinfo is unverified),
   `withCredentials = true` threw it until CO1 and is now stored and honoured,
-  `responseType` accepts only `""` and `"text"`, and `send()`'s body is declared
+  `responseType` refuses `"document"`, and `send()`'s body is declared
   as `XMLHttpRequestBodyInit` and narrowed to the two arms `BodyInit` is —
   `(BufferSource or USVString)` — because `FormData` has an entry list but no
   multipart serializer and the
@@ -1775,12 +1774,10 @@ generated code:
   `a_number_body_is_stringified_and_a_symbol_starts_a_request_before_it_throws`
   (`crates/tenta-js-v8/tests/dom_xhr.rs`) pins the pair until it is.
 - `Blob` declares the half a constructor and a byte sequence can serve — both
-  constructors, `size`, `type`, `slice()` and `text()` — and leaves out
-  `stream()`, `textStream()`, `arrayBuffer()`, `bytes()` and the `Serializable`
-  attribute. The two stream members need the Streams interfaces (`d-5a`), the
-  two byte readers need a promise outcome this engine has no value for
-  (`HostValue` has exactly four variants and none holds a byte sequence, which
-  is the same gap that keeps `Body.arrayBuffer()` out), and `Serializable` needs
+  constructors, `size`, `type`, `slice()`, `text()`, `arrayBuffer()` and
+  `bytes()` — and leaves out `stream()`, `textStream()` and the `Serializable`
+  attribute. The two stream members need the Streams interfaces (`d-5a`), and
+  `Serializable` needs
   a structured clone. `FileList`, `FileReader`, `FileReaderSync` and
   `URL.createObjectURL()` are absent for reasons of their own and are listed in
   `idl/fileapi/Blob.webidl`'s header beside the deviations the declarations

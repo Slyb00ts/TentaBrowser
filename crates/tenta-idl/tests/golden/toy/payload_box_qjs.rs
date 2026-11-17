@@ -7,12 +7,12 @@ pub fn install_payload_box<'js, T: PayloadBoxOps + 'static>(ctx: &rquickjs::Ctx<
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let data: BufferSourceOrUsvString = <BufferSourceOrUsvString as rquickjs::FromJs>::from_js(&ctx, __raw_value)?;
-        host.send(data).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        (*host).send(data).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         Ok(rquickjs::Value::new_undefined(ctx.clone()))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop("bytes", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, this: rquickjs::function::This<rquickjs::Value<'js>>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "bytes", || {
         let host = quickjs_host::<T>(&ctx, &this.0, "PayloadBox")?;
-        let result = host.bytes().map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = (*host).bytes().map_err(|e| throw_quickjs_error(&ctx, &e))?;
         quickjs_sequence_value(&ctx, result, |item| rquickjs::IntoJs::into_js(item, &ctx))
     }) })?).writable().configurable().enumerable())?;
     prototype.prop(rquickjs::atom::PredefinedAtom::SymbolToStringTag, rquickjs::object::Property::from("PayloadBox").configurable())?;

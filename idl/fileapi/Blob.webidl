@@ -12,36 +12,21 @@
 // implements it.
 //
 // This slice implements the *constructible, byte-carrying* half of `Blob`:
-// both constructors, `size`, `type`, `slice()`, `text()`, and `File`'s `name`
-// and `lastModified`. Everything it leaves out is named below rather than
+// both constructors, `size`, `type`, `slice()`, `text()`, `arrayBuffer()`,
+// `bytes()`, and `File`'s `name` and `lastModified`. Everything it leaves out is named below rather than
 // silently dropped, because a declared-but-unimplemented member is the bug
 // class slice 4a removed.
 //
 // ## What is absent, and why
 //
 //  - `[NewObject] ReadableStream stream()`
-//    (<https://w3c.github.io/FileAPI/#stream-method-algo>),
+//    (<https://w3c.github.io/FileAPI/#stream-method-algo>) and
 //    `[NewObject] ReadableStream textStream()`
-//    (<https://w3c.github.io/FileAPI/#text-stream-method-algo>) and
-//    `[NewObject] Promise<ArrayBuffer> arrayBuffer()`
-//    (<https://w3c.github.io/FileAPI/#arraybuffer-method-algo>) all need the
+//    (<https://w3c.github.io/FileAPI/#text-stream-method-algo>) need the
 //    Streams machinery this engine does not have (`d-5a`, the Streams package;
-//    `d-5b` is `Response.body`, which consumes one). `textStream()` is
-//    the fourth member of the standard's block and is easy to miss: it is a
-//    `ReadableStream` and not a promise, so it does not travel with
-//    `arrayBuffer()`/`bytes()`.
-//  - `[NewObject] Promise<Uint8Array> bytes()`
-//    (<https://w3c.github.io/FileAPI/#bytes-method-algo>) cannot settle a
-//    promise in this engine at all, and that is a property of the *promise
-//    seam*, not of `Blob`. `PromiseOutcome::Resolve` carries a `HostValue`
-//    (`crates/tenta-js/src/dom/events/mod.rs`), `HostValue` has exactly four
-//    variants — `Undefined`, `DomException`, `String`, `TypeError` — and the V8
-//    implementation of `build_value_in` (`crates/tenta-js-v8/src/script_host.rs`)
-//    matches them exhaustively. A byte-sequence variant is a slice of its own,
-//    and it is the same slice that unblocks `Body.arrayBuffer()`, `Body.bytes()`
-//    and `Body.blob()` in `idl/fetch/Response.webidl` and `idl/xhr/
-//    XMLHttpRequest.webidl`. `text()` is served because
-//    `PromiseOutcome::Resolve(HostValue::String(..))` is one of the four.
+//    `d-5b` is `Response.body`, which consumes one). `arrayBuffer()` and
+//    `bytes()` are read through the stream in the standard and from the byte
+//    sequence the record holds here; each resolves with a copy.
 //  - `FileList` (<https://w3c.github.io/FileAPI/#filelist-section>), and with it
 //    the `files` attribute every `HTMLInputElement` would carry: nothing in
 //    this engine can produce one. `HTMLInputElement` in `idl/dom/dom.webidl`
@@ -54,7 +39,7 @@
 //    (<https://w3c.github.io/FileAPI/#fileReadingTaskSource>): both read a
 //    `Blob` — `text()` is the one read this slice serves, and `FileReader`'s
 //    `readAsText` differs from it exactly in honouring a page-supplied encoding
-//    — and both need `Blob.arrayBuffer()`, which is above.
+//    — and neither has been written.
 //  - `URL.createObjectURL()`/`revokeObjectURL()`
 //    (<https://w3c.github.io/FileAPI/#dfn-createObjectURL>) need a blob-URL
 //    registry and a `blob:` fetch path. Their only evidence in this repository
@@ -129,6 +114,8 @@ interface Blob {
              optional DOMString contentType);
 
   [NewObject] Promise<USVString> text();
+  [NewObject] Promise<ArrayBuffer> arrayBuffer();
+  [NewObject] Promise<Uint8Array> bytes();
 };
 
 dictionary BlobPropertyBag {

@@ -391,6 +391,20 @@ pub enum HostValue<'a> {
         /// The `TypeError.message` of the new object.
         message: &'a str,
     },
+    /// A fresh `ArrayBuffer` holding these bytes, which is how
+    /// `arrayBuffer()` resolves.
+    ArrayBuffer(Vec<u8>),
+    /// A fresh `Uint8Array` over a fresh `ArrayBuffer` holding these bytes,
+    /// which is how `bytes()` resolves.
+    Uint8Array(Vec<u8>),
+    /// The wrapper of the `Blob` record these handle bits name, which is how
+    /// `blob()` resolves. The record exists before the value is built; the
+    /// wrapper is made for it, or revived, when the value is.
+    Blob(u64),
+    /// The value `JSON.parse` gives for these bytes, UTF-8 decoded. Bytes that
+    /// do not parse build nothing, and the engine leaves no exception pending:
+    /// `XMLHttpRequest`'s `response` answers `null` for them.
+    Json(&'a [u8]),
 }
 
 // ---------------------------------------------------------------------------

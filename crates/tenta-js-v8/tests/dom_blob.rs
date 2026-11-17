@@ -125,7 +125,7 @@ fn blob_and_file_are_installed_with_file_below_blob() {
             ].join('|');
             "#
         ),
-        "true|true|function|function|true|true|true|true|true|size,type,slice,text|name,lastModified|0"
+        "true|true|function|function|true|true|true|true|true|size,type,slice,text,arrayBuffer,bytes|name,lastModified|0"
     );
 }
 
@@ -509,5 +509,30 @@ fn the_refusal_names_the_member_and_the_constructor() {
         ),
         "Failed to construct 'Blob': the BlobPropertyBag member 'endings' is not implemented|\
          Failed to construct 'File': the FilePropertyBag member 'endings' is not implemented"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// arrayBuffer() and bytes()
+// ---------------------------------------------------------------------------
+
+#[test]
+fn array_buffer_and_bytes_resolve_with_a_copy_of_the_blobs_bytes() {
+    assert_eq!(
+        settled(
+            r#"
+            globalThis.out = [];
+            const blob = new Blob([new Uint8Array([1, 2]), 'a']);
+            blob.arrayBuffer().then(buffer => {
+                out.push(Object.prototype.toString.call(buffer),
+                         Array.from(new Uint8Array(buffer)).join(','));
+                new Uint8Array(buffer)[0] = 9;
+                return blob.bytes();
+            }).then(view => out.push(view.constructor.name, Array.from(view).join(',')));
+            new File(['xy'], 'f.txt').arrayBuffer().then(buffer => out.push(buffer.byteLength));
+            "#,
+            "out.join('|')"
+        ),
+        "[object ArrayBuffer]|1,2,97|2|Uint8Array|1,2,97"
     );
 }

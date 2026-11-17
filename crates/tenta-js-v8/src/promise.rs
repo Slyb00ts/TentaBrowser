@@ -423,7 +423,7 @@ pub(crate) fn queue_settlement(
 /// a parse: a byte sequence that is not valid UTF-8 is not valid JSON either,
 /// and the replacement characters it decodes to fail the parse rather than
 /// raising a decode error.
-fn parse_json<'s>(
+pub(crate) fn parse_json<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     bytes: &[u8],
 ) -> Option<v8::Local<'s, v8::Value>> {
