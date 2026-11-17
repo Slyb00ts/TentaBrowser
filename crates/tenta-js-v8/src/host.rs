@@ -187,10 +187,10 @@ pub struct HostState {
     /// count as something the page did on its own and no longer hold the
     /// settle open.
     pub microtask_origin: std::cell::Cell<Origin>,
-    /// Image events delivered since the wrapper graph was last collected, and
-    /// when that was. A collection is a full garbage collection, so a stream of
-    /// one-event entries pays for it only now and then (`Engine::settle_images`).
-    pub image_graph_debt: std::cell::Cell<(usize, Option<std::time::Instant>)>,
+    /// When the wrapper graph was last collected. A collection is a full
+    /// garbage collection, so the tasks of a busy page pay for one only now
+    /// and then (`Engine::collect_after_task`).
+    pub last_graph_collection: std::cell::Cell<Option<std::time::Instant>>,
     /// The driver `fetch()` hands its requests to, or `None` before one is
     /// installed.
     ///
@@ -264,7 +264,7 @@ impl HostState {
             script_depth: std::cell::Cell::new(0),
             microtasks_pending: std::cell::Cell::new(false),
             microtask_origin: std::cell::Cell::new(Origin::Background),
-            image_graph_debt: std::cell::Cell::new((0, None)),
+            last_graph_collection: std::cell::Cell::new(None),
             fetch_driver: RefCell::new(None),
             cookies,
             xhr_driver: RefCell::new(None),

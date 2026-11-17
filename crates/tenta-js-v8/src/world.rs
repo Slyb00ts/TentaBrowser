@@ -141,6 +141,11 @@ pub struct WorldState {
 }
 
 impl WorldState {
+    /// Wrappers published since the last collection of the wrapper graph.
+    pub(crate) fn wrapper_debt(&self) -> usize {
+        self.new_wrapper_materializations
+    }
+
     /// Captures the native ArrayBuffer resizable accessor before page script.
     /// Both roots are owned by this world and cleared during teardown.
     pub(crate) fn capture_buffer_intrinsic(

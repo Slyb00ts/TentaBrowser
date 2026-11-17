@@ -1742,7 +1742,15 @@ impl Engine {
             }
         }));
         match result {
-            Ok(Ok(completed)) => completed,
+            Ok(Ok(completed)) => {
+                // A checkpoint that could not run is owed at the next task end.
+                if completed {
+                    self.host
+                        .last_graph_collection
+                        .set(Some(std::time::Instant::now()));
+                }
+                completed
+            }
             Ok(Err(())) => {
                 tenta_js::bindings::poison_native_callback(
                     &self.isolate,
@@ -2026,7 +2034,40 @@ impl Engine {
         }
         self.host.microtasks_pending.set(false);
         self.flush_rejections();
-        if self.dom.is_some() {
+        self.collect_after_task();
+    }
+
+    /// Collects the wrapper graph at the end of a task, when a collection is
+    /// owed.
+    ///
+    /// A collection is a full garbage collection: about 2 ms on a small heap
+    /// and over 10 ms on a large page's. Timer callbacks, animation frames and
+    /// image events each end a task, and a page that animates ends one every
+    /// frame, so paying for a collection each time spends most of a frame on
+    /// it. One is owed once the wrappers made since the last collection reach
+    /// the count at which the next binding call would collect anyway, or once
+    /// the last collection is [`TASK_COLLECTION_INTERVAL`] old. What is left
+    /// uncollected in between stays within the bound admission enforces inside
+    /// a task, and [`PageEngine::trim_memory`] collects without waiting.
+    fn collect_after_task(&mut self) {
+        let Some(dom) = &self.dom else {
+            return;
+        };
+        if self.native_failure().is_some() {
+            return;
+        }
+        // A world that is borrowed here is one a failed callback left behind;
+        // the checkpoint is what reports that.
+        let debt = dom
+            .state
+            .try_borrow()
+            .map_or(usize::MAX, |state| state.wrapper_debt());
+        let waited = self
+            .host
+            .last_graph_collection
+            .get()
+            .map_or(Duration::MAX, |last| last.elapsed());
+        if debt >= world::SOFT_WRAPPER_MATERIALIZATIONS || waited >= TASK_COLLECTION_INTERVAL {
             self.graph_checkpoint();
         }
     }
@@ -2307,20 +2348,7 @@ impl Engine {
             self.host.microtasks_pending.set(false);
             self.flush_rejections();
         }
-        // Collecting the wrapper graph is a full garbage collection (about 2 ms
-        // on a small heap, more on a big one), which a stream of one-event
-        // entries cannot each afford. It runs once enough events have been
-        // delivered or enough time has passed since the last one.
-        let (debt, last) = self.host.image_graph_debt.get();
-        let debt = debt + events.len();
-        let now = std::time::Instant::now();
-        let waited = last.map_or(Duration::MAX, |last| now.duration_since(last));
-        if debt >= IMAGE_GRAPH_EVENTS || waited >= IMAGE_GRAPH_INTERVAL {
-            self.host.image_graph_debt.set((0, Some(now)));
-            self.graph_checkpoint();
-        } else {
-            self.host.image_graph_debt.set((debt, last.or(Some(now))));
-        }
+        self.collect_after_task();
     }
 
     /// Fires one user-agent lifecycle event — `DOMContentLoaded` or `load` — as
@@ -2861,15 +2889,13 @@ pub fn evaluate(source: &str) -> Result<String, JsError> {
     Engine::new().evaluate(source)
 }
 
+/// The longest the wrapper graph goes uncollected while tasks keep ending.
+const TASK_COLLECTION_INTERVAL: Duration = Duration::from_millis(250);
+
 /// Installs `globalThis.DOMException` and its legacy code table
 /// (<https://webidl.spec.whatwg.org/#idl-DOMException>).
 /// Native binding failures use the captured prototype and native own-property
 /// definitions, without calling the page-visible constructor.
-/// Image events after which the wrapper graph is collected, and the longest
-/// it goes uncollected while events keep arriving.
-const IMAGE_GRAPH_EVENTS: usize = 1024;
-const IMAGE_GRAPH_INTERVAL: Duration = Duration::from_millis(250);
-
 const DOM_EXCEPTION_BOOTSTRAP: &str = r#"
 (function () {
   "use strict";
@@ -3074,6 +3100,7 @@ mod tests {
     include!("slow_panic_continuation_tests.inc.rs");
     include!("buffer_reference_runtime_tests.inc.rs");
     include!("crypto_budget_tests.inc.rs");
+    include!("task_collection_tests.inc.rs");
 
     #[test]
     fn a_panic_in_the_host_promise_microtask_is_local() {
