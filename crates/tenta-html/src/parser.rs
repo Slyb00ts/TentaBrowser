@@ -70,6 +70,10 @@ pub struct ParserOptions<'cb> {
     pub iframe_srcdoc: bool,
     /// Whether to drop the DOCTYPE instead of appending it to the document.
     pub drop_doctype: bool,
+    /// Whether `<template shadowrootmode>` attaches a shadow root to its
+    /// parent (HTML "allow declarative shadow roots"). True for a document
+    /// that is navigated to; false for `innerHTML` and `DOMParser`.
+    pub declarative_shadow_roots: bool,
     /// Which text scanner the tokenizer uses; the scalar mode exists for the
     /// differential test (`docs/spec/13-performance.md` §5).
     pub scan_mode: ScanMode,
@@ -98,6 +102,7 @@ impl Default for ParserOptions<'_> {
             quirks_mode: None,
             iframe_srcdoc: false,
             drop_doctype: false,
+            declarative_shadow_roots: false,
             scan_mode: ScanMode::default(),
             default_locale: String::from("en"),
             encoding: None,
@@ -117,6 +122,7 @@ struct RestartOptions {
     quirks_mode: Option<QuirksMode>,
     iframe_srcdoc: bool,
     drop_doctype: bool,
+    declarative_shadow_roots: bool,
     scan_mode: ScanMode,
     default_locale: String,
     transport_charset: Option<String>,
@@ -166,6 +172,7 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
             quirks_mode,
             iframe_srcdoc,
             drop_doctype,
+            declarative_shadow_roots,
             scan_mode,
             default_locale,
             encoding,
@@ -178,6 +185,7 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
             scripting_enabled,
             iframe_srcdoc,
             drop_doctype,
+            declarative_shadow_roots,
             quirks_mode: quirks_mode.unwrap_or_default(),
             max_dom_nodes,
         };
@@ -228,6 +236,7 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
                 quirks_mode,
                 iframe_srcdoc,
                 drop_doctype,
+                declarative_shadow_roots,
                 scan_mode,
                 default_locale,
                 transport_charset,
@@ -324,6 +333,7 @@ impl<'cb, S: TreeSink> Parser<'cb, S> {
                 quirks_mode: options.quirks_mode,
                 iframe_srcdoc: options.iframe_srcdoc,
                 drop_doctype: options.drop_doctype,
+                declarative_shadow_roots: options.declarative_shadow_roots,
                 scan_mode: options.scan_mode,
                 default_locale: options.default_locale,
                 encoding: Some(encoding),

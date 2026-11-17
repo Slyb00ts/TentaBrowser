@@ -189,6 +189,15 @@ impl TreeSink for SharedSink {
         self.pin(node)
     }
 
+    fn attach_declarative_shadow_root(&mut self, host: &NodeId, closed: bool) -> Option<NodeId> {
+        let root = TreeSink::attach_declarative_shadow_root(
+            &mut *self.document.borrow_mut(),
+            host,
+            closed,
+        )?;
+        Some(self.pin(root))
+    }
+
     fn element_name(&self, target: &NodeId) -> QualName {
         TreeSink::element_name(&*self.document.borrow(), target)
     }

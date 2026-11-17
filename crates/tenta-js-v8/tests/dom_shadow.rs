@@ -249,3 +249,45 @@ fn events_at_slotted_nodes_pass_through_the_slot() {
         "light<light slot<light frame<light root<light host<light body<light"
     );
 }
+
+/// A host whose shadow root came from `<template shadowrootmode>` gives that
+/// root, emptied, to the first `attachShadow()` of the same mode; after that,
+/// and for the other mode, the host already has a shadow tree.
+#[test]
+fn attach_shadow_takes_over_a_declared_root_of_the_same_mode() {
+    use tenta_html::{Parser, ParserOptions};
+
+    let mut document = Document::new();
+    document.set_url(Some("https://example.com/".parse().expect("test URL")));
+    let mut parser = Parser::new(
+        document,
+        ParserOptions {
+            declarative_shadow_roots: true,
+            ..ParserOptions::default()
+        },
+    );
+    parser.feed_last(
+        b"<!doctype html><body>\
+          <div id=host><template shadowrootmode=open><p>server</p></template></div>\
+          <div id=sealed><template shadowrootmode=closed><p>server</p></template></div>",
+    );
+    let document = Rc::new(RefCell::new(parser.finish()));
+    let mut engine = Engine::with_document(document);
+    assert_eq!(
+        eval(
+            &mut engine,
+            "var attempt = f => { try { return String(f()); } catch (e) { return e.name; } }; \
+             var host = document.getElementById('host'); \
+             var declared = host.shadowRoot; \
+             var before = declared.childNodes.length; \
+             var root = host.attachShadow({mode: 'open'}); \
+             var sealed = document.getElementById('sealed'); \
+             [before, root === declared, root.childNodes.length, \
+              attempt(() => host.attachShadow({mode: 'open'})), \
+              String(sealed.shadowRoot), \
+              attempt(() => sealed.attachShadow({mode: 'open'})), \
+              attempt(() => sealed.attachShadow({mode: 'closed'}).childNodes.length)].join('|')"
+        ),
+        "1|true|0|NotSupportedError|null|NotSupportedError|0"
+    );
+}

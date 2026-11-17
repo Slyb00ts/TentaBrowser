@@ -16,7 +16,7 @@ use tenta_html::{
 
 use crate::arena::{NodeFlags, NodeKind};
 use crate::document::Document;
-use crate::mutation::Mutation;
+use crate::mutation::{Mutation, ShadowRootMode};
 
 impl Document {
     /// Inserts `child` into `parent`, reporting a parse error rather than
@@ -162,6 +162,15 @@ impl TreeSink for Document {
         }
     }
 
+    fn attach_declarative_shadow_root(&mut self, host: &NodeId, closed: bool) -> Option<NodeId> {
+        let mode = if closed {
+            ShadowRootMode::Closed
+        } else {
+            ShadowRootMode::Open
+        };
+        Document::attach_declarative_shadow_root(self, *host, mode)
+    }
+
     fn element_name(&self, target: &NodeId) -> QualName {
         Document::element_name(self, *target)
             .unwrap_or_else(|| QualName::new(atoms::EMPTY, atoms::EMPTY))
@@ -304,6 +313,10 @@ impl TreeSink for FragmentSink<'_> {
 
     fn get_template_contents(&mut self, target: &NodeId) -> NodeId {
         TreeSink::get_template_contents(self.document, target)
+    }
+
+    fn attach_declarative_shadow_root(&mut self, host: &NodeId, closed: bool) -> Option<NodeId> {
+        TreeSink::attach_declarative_shadow_root(self.document, host, closed)
     }
 
     fn element_name(&self, target: &NodeId) -> QualName {

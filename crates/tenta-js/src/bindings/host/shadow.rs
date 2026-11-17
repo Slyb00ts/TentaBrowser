@@ -7,7 +7,6 @@
 //! sees here is the node tree; the flat tree is what extraction and rendering
 //! read.
 
-use tenta_core::atom::atoms;
 use tenta_dom::{NodeKind, ShadowRootMode};
 
 use super::HostObject;
@@ -15,37 +14,6 @@ use crate::bindings::{
     AssignedNodesOptions, Element, HTMLSlotElement, HTMLSlotElementOps, Handle, JsError, Node,
     ShadowRoot, ShadowRootInit, ShadowRootOps,
 };
-
-/// The built-in elements that may host a shadow tree (DOM "attach a shadow
-/// root"); a valid custom element name may as well.
-const SHADOW_HOSTS: [&str; 18] = [
-    "article",
-    "aside",
-    "blockquote",
-    "body",
-    "div",
-    "footer",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "header",
-    "main",
-    "nav",
-    "p",
-    "section",
-    "span",
-];
-
-/// Whether `name` has the shape of a custom element name: a lowercase ASCII
-/// letter first and a hyphen somewhere, with no ASCII uppercase.
-fn looks_like_custom_element_name(name: &str) -> bool {
-    name.starts_with(|first: char| first.is_ascii_lowercase())
-        && name.contains('-')
-        && !name.chars().any(|c| c.is_ascii_uppercase())
-}
 
 impl HostObject {
     /// `Element.attachShadow(init)`.
@@ -70,16 +38,19 @@ impl HostObject {
         };
         let (doc, id) = self.anchor();
         let mut doc = doc.borrow_mut();
-        let allowed = doc.namespace(id) == Some(atoms::NS_HTML)
-            && doc.tag(id).is_some_and(|tag| {
-                let name = tag.as_str();
-                SHADOW_HOSTS.contains(&name) || looks_like_custom_element_name(name)
-            });
-        if !allowed {
+        if !doc.can_host_shadow_root(id) {
             return Err(JsError::dom_exception(
                 "NotSupportedError",
                 &format!("{PREFIX}: This element does not support attachShadow"),
             ));
+        }
+        // A root the parser attached for `<template shadowrootmode>` is the
+        // one a component's constructor gets, emptied.
+        if let Some(root) = doc.claim_declarative_shadow_root(id, mode) {
+            return Ok(Handle::from_bits(super::encode_node(
+                self.slot(),
+                doc.node_ref(root),
+            )));
         }
         if doc.shadow_root(id).is_some() {
             return Err(JsError::dom_exception(

@@ -94,6 +94,10 @@ pub(crate) struct OpenElem<Handle> {
     pub name: ElemName,
     /// True for a MathML `annotation-xml` that is an HTML integration point.
     pub annotation_xml_integration_point: bool,
+    /// For a `<template>` that declared a shadow root: the root, which takes
+    /// the place of its template contents. Such a template is on the stack
+    /// only and never in the tree.
+    pub shadow_root: Option<Handle>,
     /// Depth of this element; `<html>` = 1.
     pub depth: u32,
     /// Conservative upper bound on the deepest element depth in its subtree.

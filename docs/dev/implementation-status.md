@@ -80,6 +80,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `customElements` (CE1) | Implemented on V8, built lazily; focused checks passed; not independently reviewed | Autonomous custom elements: `define`/`get`/`getName`/`whenDefined`/`upgrade`, the HTML element constructor, upgrade and the connected, disconnected and attribute reactions; no customized built-ins, no shadow DOM yet; see the section below |
 | Shadow trees (SD1) | Script, events and extraction implemented on both engines; focused checks passed; not independently reviewed; **not styled, laid out or painted** | `attachShadow`, `ShadowRoot`, `shadowRoot`, slots, composed event paths with retargeting, flat-tree text and snapshot; a screenshot does not show shadow content; see the section below |
 | `document.domain`, `crypto.randomUUID()`, `<meta>`/`<source>`/`<dialog>` interfaces (WIN2) | Implemented on both engines (generated); focused checks passed; not independently reviewed | What the sweep after CE1 and SD1 named most; a dialog has no top layer, `returnValue` or `close` event; see the section below |
+| Declarative shadow roots (DSD1) | Implemented in the parser and both sinks; focused checks passed; not independently reviewed | `<template shadowrootmode>` in a navigated document attaches a shadow root; `attachShadow()` takes it over; see the section below |
 | Nested flex and grid containers share their answers (LP1) | Implemented; measured; fragment output compared on a real page; not independently reviewed | One layout of a component-built page solved its containers 12 times less often; see the section below. Layout still starts over after every mutation |
 | Wrapper-graph collection at task ends is amortised (GC1) | Implemented on V8; measured; not independently reviewed; **changes when detached wrappers are reclaimed, which the specification may record as a decision** | A task end collects once 1024 wrappers are owed or the last collection is 250 ms old, not every time; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
@@ -2528,8 +2529,7 @@ elements without it upgraded nothing that such a library defines.
   policy the specification owns.
 - **Open:** styles, layout and paint of the flat tree (`:host`,
   `::slotted()`, scoped `<style>`, `adoptedStyleSheets`), which is what a
-  screenshot needs; declarative shadow DOM (`<template shadowrootmode>`);
-  `slotchange`; manual slot assignment and `flatten`; `composedPath()`
+  screenshot needs; `slotchange`; manual slot assignment and `flatten`; `composedPath()`
   hiding closed trees; `ShadowRoot.activeElement`; whether scripts and
   images inside a shadow tree load has not been checked; the CDP DOM domain
   does not report shadow roots; a ref inside a closed shadow tree cannot be
@@ -2562,6 +2562,41 @@ elements without it upgraded nothing that such a library defines.
   `MessageChannel`, `Request`, `getSelection`, `DOMMatrix`,
   `SVGAnimatedString`, `createNodeIterator`, an unsupported CSS rule type in
   `insertRule`.
+
+## DSD1: declarative shadow roots (P2 package)
+
+- **Parser** (`tenta-html`): a `<template shadowrootmode="open|closed">`
+  start tag asks the sink to attach a shadow root to the adjusted current
+  node (HTML "in head" insertion mode). When the sink does, the template
+  goes on the stack of open elements only, with the shadow root in place of
+  its template contents, and never into the tree. It stays an ordinary
+  template when the parse does not allow declarations
+  (`ParserOptions::declarative_shadow_roots`, off by default and on for a
+  navigated document, so `innerHTML` and `DOMParser` declare nothing), when
+  the mode is neither value, when the adjusted current node is the root
+  element, or when the sink refuses. A sink without shadow trees keeps the
+  default and refuses.
+- **Document** (`tenta-dom`): `can_host_shadow_root` holds the list of
+  valid hosts (moved from the binding), `attach_declarative_shadow_root`
+  refuses an invalid host and a host that already has a root, and
+  `claim_declarative_shadow_root` is `attachShadow()` on such a host: a
+  declared root of the mode asked for is emptied and returned once, as DOM
+  "attach a shadow root" has it, which is what lets a component hydrate
+  over server-rendered markup.
+- **Not built:** `shadowrootdelegatesfocus`, `shadowrootclonable` and
+  `shadowrootserializable` are ignored; `setHTMLUnsafe()` and
+  `parseHTMLUnsafe()` do not exist; cloning a host does not clone a
+  declared root.
+- **Checks:** `tenta-dom::shadow` 3 new, `tenta-js-v8::dom_shadow` 1 new,
+  `tenta-browser::custom_elements_js` 1 new (a server-rendered component is
+  there before script and its constructor gets the declared root).
+  Workspace 4836 passed. The feature set passed 594 of 594 twice after a
+  first run in which `tenta-browser::css_loading
+  a_stylesheet_is_requested_while_the_body_is_still_streaming` failed. That
+  test asserts on wall-clock time (the sheet request at least 800 ms before
+  the end of a body the server holds for 1200 ms), alone it passed 6 times
+  of 6, and its failure output was not kept; load from the parallel run
+  delaying the request would explain it and has not been shown.
 
 ## LP1 and GC1: what a page that animates costs (performance)
 

@@ -199,6 +199,9 @@ pub struct Document {
     /// The shadow roots attached in closed mode. Open is the common mode and
     /// keeps no entry.
     closed_shadow_roots: Vec<NodeId>,
+    /// Shadow roots the parser attached for `<template shadowrootmode>` that
+    /// script has not yet claimed with `attachShadow()`.
+    declarative_shadow_roots: Vec<NodeId>,
     /// The dirty value of a form control whose value has been set by script or
     /// by the user (`docs/spec/05-javascript.md` §9a). Presence *is* the
     /// standard's "dirty value flag": once set, the `value` content attribute
@@ -304,6 +307,7 @@ impl Document {
             sweep_freed: Vec::new(),
             hosts: HashMap::new(),
             closed_shadow_roots: Vec::new(),
+            declarative_shadow_roots: Vec::new(),
             dirty_values: HashMap::new(),
             dirty_checkedness: HashMap::new(),
             dirty_selectedness: HashMap::new(),
@@ -1826,6 +1830,88 @@ impl Document {
         Ok(root)
     }
 
+    /// Whether `host` is an element that may have a shadow root (DOM "attach
+    /// a shadow root", steps 1 to 3): one of the listed HTML elements, or an
+    /// HTML element whose name has the shape of a custom element name.
+    pub fn can_host_shadow_root(&self, host: NodeId) -> bool {
+        const HOSTS: [&str; 18] = [
+            "article",
+            "aside",
+            "blockquote",
+            "body",
+            "div",
+            "footer",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "header",
+            "main",
+            "nav",
+            "p",
+            "section",
+            "span",
+        ];
+        if self.kind(host) != NodeKind::Element
+            || self.flags(host).contains(NodeFlags::TEMPLATE)
+            || self.namespace(host) != Some(atoms::NS_HTML)
+        {
+            return false;
+        }
+        self.tag(host).is_some_and(|tag| {
+            let name = tag.as_str();
+            HOSTS.contains(&name)
+                || (name.starts_with(|first: char| first.is_ascii_lowercase())
+                    && name.contains('-')
+                    && !name.chars().any(|c| c.is_ascii_uppercase()))
+        })
+    }
+
+    /// Attaches the shadow root a `<template shadowrootmode>` declares to
+    /// `host`. `None` when `host` cannot have a shadow root or already has
+    /// one; the parser then keeps the template as a template.
+    pub fn attach_declarative_shadow_root(
+        &mut self,
+        host: NodeId,
+        mode: ShadowRootMode,
+    ) -> Option<NodeId> {
+        if !self.can_host_shadow_root(host) || self.shadow_root(host).is_some() {
+            return None;
+        }
+        let root = self.attach_shadow_root_with_mode(host, mode).ok()?;
+        self.declarative_shadow_roots.push(root);
+        Some(root)
+    }
+
+    /// For `attachShadow()` on a host whose shadow root the parser attached
+    /// (DOM "attach a shadow root", step 5): when that root has the mode
+    /// asked for, it is emptied, stops being declarative and is returned.
+    /// `None` for a host without such a root or with one of the other mode.
+    pub fn claim_declarative_shadow_root(
+        &mut self,
+        host: NodeId,
+        mode: ShadowRootMode,
+    ) -> Option<NodeId> {
+        let root = self.shadow_root(host)?;
+        let at = self
+            .declarative_shadow_roots
+            .iter()
+            .position(|declared| *declared == root)?;
+        if self.shadow_root_mode(root) != Some(mode) {
+            return None;
+        }
+        self.declarative_shadow_roots.swap_remove(at);
+        loop {
+            let child = self.first_child(root);
+            if !child.is_some() || self.mutate(Mutation::Remove { child }).is_err() {
+                break;
+            }
+        }
+        Some(root)
+    }
+
     /// The mode of a shadow root, or `None` for any other node.
     pub fn shadow_root_mode(&self, root: NodeId) -> Option<ShadowRootMode> {
         (self.kind(root) == NodeKind::ShadowRoot).then(|| {
@@ -2391,6 +2477,9 @@ impl Document {
                 self.hosts.remove(node);
                 if !self.closed_shadow_roots.is_empty() {
                     self.closed_shadow_roots.retain(|root| root != node);
+                }
+                if !self.declarative_shadow_roots.is_empty() {
+                    self.declarative_shadow_roots.retain(|root| root != node);
                 }
                 self.element_prefixes.remove(node);
                 // A freed slot is reused under a fresh generation, so stale

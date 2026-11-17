@@ -127,6 +127,17 @@ pub trait TreeSink {
     fn remove_from_parent(&mut self, target: &Self::Handle);
     fn reparent_children(&mut self, node: &Self::Handle, new_parent: &Self::Handle);
     fn get_template_contents(&mut self, target: &Self::Handle) -> Self::Handle;
+    /// Attaches a shadow root declared by `<template shadowrootmode>` to
+    /// `host` and returns it. `None` when `host` cannot have one or already
+    /// has one; the template is then an ordinary template. A sink that has no
+    /// shadow trees keeps the default.
+    fn attach_declarative_shadow_root(
+        &mut self,
+        _host: &Self::Handle,
+        _closed: bool,
+    ) -> Option<Self::Handle> {
+        None
+    }
 
     fn same_node(&self, a: &Self::Handle, b: &Self::Handle) -> bool {
         a == b

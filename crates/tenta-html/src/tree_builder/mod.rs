@@ -86,6 +86,8 @@ pub(crate) struct TreeBuilderOpts {
     pub iframe_srcdoc: bool,
     /// Whether to drop the DOCTYPE instead of appending it.
     pub drop_doctype: bool,
+    /// Whether `<template shadowrootmode>` may attach a shadow root.
+    pub declarative_shadow_roots: bool,
     /// Initial quirks mode.
     pub quirks_mode: QuirksMode,
     /// Maximum number of nodes (elements, text, comments) the tree builder
@@ -101,6 +103,7 @@ impl Default for TreeBuilderOpts {
             scripting_enabled: true,
             iframe_srcdoc: false,
             drop_doctype: false,
+            declarative_shadow_roots: false,
             quirks_mode: QuirksMode::NoQuirks,
             max_dom_nodes: 4_194_304, // 2^22
         }
@@ -220,6 +223,7 @@ where
                 handle: context,
                 name: context_name,
                 annotation_xml_integration_point,
+                shadow_root: None,
                 depth: 1,   // Context element is at depth 1 (like html).
                 deepest: 1, // Will be updated during parsing.
             }),
@@ -412,7 +416,7 @@ where
         if !(self.foster_parenting && foster_target(target_name)) {
             return if target_name.is_html(Local::Template) {
                 (
-                    InsertionPoint::LastChild(self.sink.get_template_contents(&target)),
+                    InsertionPoint::LastChild(self.template_contents(index)),
                     child_depth,
                 )
             } else {
@@ -424,10 +428,9 @@ where
         for index in (0..self.open_elems.len()).rev() {
             let elem = &self.open_elems[index];
             if elem.name.is_html(Local::Template) {
-                let handle = elem.handle.clone();
                 let depth = elem.depth + 1;
                 return (
-                    InsertionPoint::LastChild(self.sink.get_template_contents(&handle)),
+                    InsertionPoint::LastChild(self.template_contents(index)),
                     depth,
                 );
             }
@@ -447,6 +450,56 @@ where
             InsertionPoint::LastChild(self.open_elems[0].handle.clone()),
             2,
         )
+    }
+
+    /// Where the children of the open `<template>` at `index` go: the shadow
+    /// root it declared, or its template contents.
+    fn template_contents(&mut self, index: usize) -> Handle {
+        let elem = &self.open_elems[index];
+        match &elem.shadow_root {
+            Some(root) => root.clone(),
+            None => {
+                let handle = elem.handle.clone();
+                self.sink.get_template_contents(&handle)
+            }
+        }
+    }
+
+    /// The `<template>` start tag that declares a shadow root
+    /// (<https://html.spec.whatwg.org/multipage/#parsing-main-inhead>, "a
+    /// start tag whose tag name is template"): the shadow root is attached to
+    /// the adjusted current node and the template only goes on the stack of
+    /// open elements, with the shadow root as its contents. Returns `false`
+    /// when the tag declares none or the host refuses one, and the caller
+    /// inserts an ordinary template.
+    fn insert_declarative_shadow_root(&mut self, tag: &Tag) -> bool {
+        if !self.opts.declarative_shadow_roots || self.open_elems.len() < 2 {
+            return false;
+        }
+        let closed =
+            match tag.attrs.iter().find(|attr| {
+                attr.name.prefix.is_none() && attr.name.local.as_str() == "shadowrootmode"
+            }) {
+                Some(attr) if attr.value.eq_ignore_ascii_case("open") => false,
+                Some(attr) if attr.value.eq_ignore_ascii_case("closed") => true,
+                _ => return false,
+            };
+        let host = self.adjusted_current();
+        let (host, depth) = (host.handle.clone(), host.depth + 1);
+        let Some(root) = self.sink.attach_declarative_shadow_root(&host, closed) else {
+            return false;
+        };
+        let name = ElemName {
+            ns: Ns::Html,
+            local: tag.local,
+            atom: tag.name,
+        };
+        let mut elem = self.create_element(name, tag.attrs.clone());
+        elem.shadow_root = Some(root);
+        elem.depth = depth;
+        elem.deepest = depth;
+        self.push_elem(elem);
+        true
     }
 
     fn insert_at(&mut self, point: InsertionPoint<Handle>, child: NodeOrText<'_, Handle>) {
@@ -907,6 +960,7 @@ where
             handle,
             name,
             annotation_xml_integration_point: integration_point,
+            shadow_root: None,
             depth: 1,
             deepest: 1,
         }

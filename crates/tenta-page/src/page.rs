@@ -2689,6 +2689,7 @@ async fn parse_body(
         ParserOptions {
             scripting_enabled: config.javascript,
             pause_on_script,
+            declarative_shadow_roots: true,
             default_locale: config.locale.clone(),
             transport_charset: transport_charset.clone(),
             encoding,

@@ -184,3 +184,31 @@ async fn a_shadow_tree_is_part_of_the_text_the_page_returns() {
     // document and the window.
     assert_eq!(text_of(&document, "#result"), "p/8|user-card");
 }
+
+/// A server-rendered component: the shadow tree arrives as
+/// `<template shadowrootmode>`, so the page has it before any script runs, and
+/// the component's constructor gets that same root from `attachShadow()`.
+const DECLARED: &str = r#"<!doctype html><html><body>
+<user-card id="card"><template shadowrootmode="open"><p id="line">server: <slot></slot></p></template>Ada</user-card>
+<p id="report"></p>
+<script>
+  var declared = document.getElementById('card').shadowRoot;
+  customElements.define('user-card', class extends HTMLElement {
+    constructor() {
+      super();
+      var root = this.attachShadow({ mode: 'open' });
+      root.innerHTML = '<p id="line">client: <slot></slot></p>';
+      document.getElementById('report').textContent =
+        (declared !== null) + ' ' + (root === declared);
+    }
+  });
+</script>
+</body></html>"#;
+
+#[tokio::test]
+async fn a_declared_shadow_root_is_there_before_script_and_is_reused_by_it() {
+    let (server, _files) = serve(&[("index.html", DECLARED)]).await;
+    let document = load(JsEngine::V8, &server).await;
+    assert_eq!(text_of(&document, "#report"), "true true");
+    assert_eq!(text_of(&document, "#card"), "client: Ada");
+}

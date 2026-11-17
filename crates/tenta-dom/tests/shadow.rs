@@ -175,3 +175,96 @@ fn the_lifecycle_log_follows_elements_into_shadow_trees() {
         vec![host, root, card, light]
     );
 }
+
+fn parse_declaring(html: &str) -> Document {
+    let document = Document::with_url("https://example.com/".parse().expect("the test URL"));
+    let mut parser = Parser::new(
+        document,
+        ParserOptions {
+            declarative_shadow_roots: true,
+            ..ParserOptions::default()
+        },
+    );
+    assert_eq!(parser.feed(html.as_bytes()), ParseStatus::Continue);
+    parser.finish()
+}
+
+#[test]
+fn a_template_with_a_shadow_root_mode_becomes_its_parents_shadow_root() {
+    let doc = parse_declaring(
+        "<!doctype html><body><div id=host>\
+         <template shadowrootmode=open><p id=inner>in the shadow <slot></slot></p></template>\
+         <b id=light>light</b></div>\
+         <section id=sealed><template shadowrootmode=CLOSED><i>x</i></template></section>",
+    );
+    let host = doc.get_element_by_id("host").expect("host");
+    let root = doc.shadow_root(host).expect("a declared shadow root");
+    assert_eq!(doc.shadow_root_mode(root), Some(ShadowRootMode::Open));
+    // The template is not in the tree: the host's only child is the light one.
+    let light = doc.get_element_by_id("light").expect("light");
+    assert_eq!(doc.children(host).collect::<Vec<_>>(), [light]);
+    assert!(doc.get_elements_by_tag_name("template").is_empty());
+    let inner = doc.first_child(root);
+    assert_eq!(doc.attribute(inner, atoms::ID), Some("inner"));
+    assert_eq!(doc.containing_shadow_root(inner), Some(root));
+    // The light child is slotted into the declared tree.
+    assert!(extract::text(&doc, host).contains("in the shadow light"));
+
+    let sealed = doc.get_element_by_id("sealed").expect("sealed");
+    let closed = doc.shadow_root(sealed).expect("a closed root");
+    assert_eq!(doc.shadow_root_mode(closed), Some(ShadowRootMode::Closed));
+}
+
+#[test]
+fn a_template_that_cannot_declare_a_shadow_root_stays_a_template() {
+    // Not a valid host, an unknown mode, and a second declaration on one host.
+    let doc = parse_declaring(
+        "<!doctype html><body><ul id=list><template shadowrootmode=open><li>x</li></template></ul>\
+         <div id=odd><template shadowrootmode=ajar>y</template></div>\
+         <div id=twice><template shadowrootmode=open>first</template>\
+         <template shadowrootmode=open>second</template></div>",
+    );
+    let list = doc.get_element_by_id("list").expect("list");
+    assert_eq!(doc.shadow_root(list), None);
+    let odd = doc.get_element_by_id("odd").expect("odd");
+    assert_eq!(doc.shadow_root(odd), None);
+    let twice = doc.get_element_by_id("twice").expect("twice");
+    let root = doc.shadow_root(twice).expect("the first declaration");
+    assert_eq!(doc.text_data(doc.first_child(root)), Some("first"));
+    let templates = doc.get_elements_by_tag_name("template");
+    assert_eq!(templates.len(), 3);
+    assert_eq!(doc.parent(templates[2]), twice);
+    let contents = doc.template_contents(templates[2]).expect("contents");
+    assert_eq!(doc.text_data(doc.first_child(contents)), Some("second"));
+
+    // Without the option nothing is declared: `innerHTML` and `DOMParser`.
+    let doc = parse("<!doctype html><body><div id=host><template shadowrootmode=open>x</template>");
+    let host = doc.get_element_by_id("host").expect("host");
+    assert_eq!(doc.shadow_root(host), None);
+    assert_eq!(doc.get_elements_by_tag_name("template").len(), 1);
+}
+
+#[test]
+fn a_declared_shadow_root_is_claimed_once_and_emptied() {
+    let mut doc = parse_declaring(
+        "<!doctype html><body><div id=host><template shadowrootmode=open><p>server</p></template></div>",
+    );
+    let host = doc.get_element_by_id("host").expect("host");
+    let root = doc.shadow_root(host).expect("declared");
+    assert_eq!(
+        doc.claim_declarative_shadow_root(host, ShadowRootMode::Closed),
+        None,
+        "the other mode does not claim it"
+    );
+    assert!(doc.first_child(root).is_some());
+    assert_eq!(
+        doc.claim_declarative_shadow_root(host, ShadowRootMode::Open),
+        Some(root)
+    );
+    assert!(!doc.first_child(root).is_some());
+    assert_eq!(
+        doc.claim_declarative_shadow_root(host, ShadowRootMode::Open),
+        None,
+        "claimed roots are ordinary ones"
+    );
+}

@@ -229,7 +229,9 @@ where
                     self.frameset_ok = false;
                     self.mode = InsertionMode::InTemplate;
                     self.template_modes.push(InsertionMode::InTemplate);
-                    self.insert_element_for(tag);
+                    if !self.insert_declarative_shadow_root(&tag) {
+                        self.insert_element_for(tag);
+                    }
                     ProcessResult::Done
                 }
 
@@ -333,6 +335,7 @@ where
                         handle: head.clone(),
                         name,
                         annotation_xml_integration_point: false,
+                        shadow_root: None,
                         // <head> is a child of <html>.
                         depth: 2,
                         deepest: 2,
