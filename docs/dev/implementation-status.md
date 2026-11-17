@@ -91,6 +91,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `ErrorEvent`, the `error` event for an uncaught exception, the window's `onerror` handler, `reportError()` (ERR1) | Implemented on V8; `ErrorEvent` alone on QuickJS; focused checks passed; not independently reviewed | An uncaught exception was reported to the inspector and to nothing else, so `window.onerror` and `addEventListener('error')` never ran. The event is fired when the task ends, not where the exception is thrown; its `filename` is empty and its line is counted from the start of the script. |
 | `unhandledrejection` and `PromiseRejectionEvent` (ERR2) | Implemented on V8 as a prelude script; focused checks passed; not independently reviewed | Fired at the window when a task ends with a rejected promise nobody handled; a cancelled event keeps the rejection out of the inspector. The event is made by script, so its `isTrusted` is `false`; `rejectionhandled` is not fired. |
 | `document.fonts`, `FontFaceSet`, `FontFace` (FS1) | Implemented on V8 as a prelude script with no engine state behind it; focused checks passed; not independently reviewed | Answers as a document whose fonts have all loaded: `ready` is resolved, `status` is `loaded`, `check()` is `true`, `load()` resolves. Nothing is fetched and an added face is not used to draw text. |
+| The HTML element interfaces that were missing: `HTMLBodyElement`, `HTMLHeadingElement`, the table and list interfaces and 37 more (EL1) | Declared without members on both engines; focused checks passed; not independently reviewed | An element whose tag had no interface of its own was a plain `HTMLElement` and naming the missing interface was a `ReferenceError`. The reflected attributes and the table, list and form-control members of these interfaces are not implemented. |
 | Nested flex and grid containers share their answers (LP1) | Implemented; measured; fragment output compared on a real page; not independently reviewed | One layout of a component-built page solved its containers 12 times less often; see the section below. Layout still starts over after every mutation |
 | Wrapper-graph collection at task ends is amortised (GC1) | Implemented on V8; measured; not independently reviewed; **changes when detached wrappers are reclaimed, which the specification may record as a decision** | A task end collects once 1024 wrappers are owed or the last collection is 250 ms old, not every time; see the section below |
 | Wrapper-graph collection at the end of a script run is amortised too (GC2) | Implemented on V8; measured; not independently reviewed; **extends the change of timing GC1 made, which the specification may record as a decision** | A script run ended with a full collection every time, about 0.45 ms on the smallest heap, so every `<script>` and every start-up script paid for one. It now collects under the rule a task end uses; see the section below |
@@ -3435,6 +3436,71 @@ a measurement.
   own is a plain `HTMLElement`, and naming the missing interface in an
   `instanceof` is a `ReferenceError`. `HTMLBodyElement`, `HTMLHtmlElement`
   and the table and list interfaces are among them.
+
+### The missing HTML element interfaces (EL1)
+
+The engine defined 26 of the HTML Standard's element interfaces. An
+element of any other tag was a plain `HTMLElement`, and the interface it
+should have had was not a global at all, so `x instanceof
+HTMLBodyElement` — or `HTMLHeadingElement`, which github.com names inside
+React Router's render — was a `ReferenceError`.
+
+- **What changed:** 45 interfaces are declared in `idl/dom/dom.webidl`
+  and installed on both engines: `HTMLHtmlElement`, `HTMLHeadElement`,
+  `HTMLTitleElement`, `HTMLBaseElement`, `HTMLBodyElement`,
+  `HTMLHeadingElement`, `HTMLHRElement`, `HTMLPreElement`,
+  `HTMLQuoteElement`, `HTMLOListElement`, `HTMLUListElement`,
+  `HTMLMenuElement`, `HTMLLIElement`, `HTMLDListElement`,
+  `HTMLDataElement`, `HTMLTimeElement`, `HTMLBRElement`, `HTMLModElement`,
+  `HTMLPictureElement`, `HTMLEmbedElement`, `HTMLObjectElement`,
+  `HTMLTrackElement`, `HTMLMapElement`, `HTMLAreaElement`, the six table
+  interfaces, `HTMLFieldSetElement`, `HTMLLegendElement`,
+  `HTMLOptGroupElement`, `HTMLDataListElement`, `HTMLOutputElement`,
+  `HTMLProgressElement`, `HTMLMeterElement`, `HTMLDetailsElement`, the
+  six obsolete ones (`param`, `font`, `dir`, `frame`, `frameset`,
+  `marquee`) and `HTMLUnknownElement`. Which interface a tag has is one
+  table now, `html_element_interface`
+  (`crates/tenta-js/src/bindings/host/element_interface.rs`), where each
+  engine's wrapper world had a copy of the same match.
+- **What they are not:** they have no members. `td.colSpan`,
+  `table.rows`, `ol.start`, `details.open`, `progress.value` and the rest
+  of what the standard gives these interfaces are absent, as they were
+  when the elements were `HTMLElement`s; the IDL says so where they are
+  declared. None of them can be constructed, and a customized built-in
+  (`class X extends HTMLLIElement`) is not supported.
+- **`HTMLUnknownElement`:** an HTML-namespace element whose name the
+  standard does not define is `HTMLUnknownElement` unless the name
+  contains a hyphen, in which case it is `HTMLElement`. The standard
+  tests for a valid custom element name, which also excludes eight
+  reserved hyphenated names; those are `HTMLElement` here.
+- **Checks:** `tenta-js::bindings::host::element_interface` 1 unit test;
+  `tenta-js-v8::dom_element_interfaces` 3 new (57 tags against their
+  interface by `instanceof`, constructor, class string and prototype
+  chain; the elements with no interface of their own, the custom-shaped
+  and the unknown; the interfaces refuse construction and have no own
+  members); `tenta-js-qjs::runtime` extended. Two expectations changed:
+  `<body>` is `[object HTMLBodyElement]`.
+- **Cost:** a temporary release test made 300 engines on each build:
+  1.75 ms before, 1.82 ms after (p50; p95 1.81 and 1.91 ms). The two
+  were separate runs, not interleaved, and the difference is 4%.
+  `html_element_interface` matches the tag's string where the old code
+  compared atoms, and it is on the path that makes an element's wrapper.
+  Release, against the build of `1329b24`: `bench/dom_calls.py` (25
+  interleaved pairs) `has` 26.12 to 26.16 ns, `get` 81.28 to 83.05 ns
+  (+2.2%), process RSS 34.7 to 35.2 MiB; `bench/wrapper_pressure.py`
+  (candidate-only driver, run on each build) `detached` 37.55 to
+  37.79 ms, `owners` 67.05 to 66.72 ms, `connected` 11.58 to 11.18 ms,
+  `deep` 7.26 to 7.28 ms. All inside the 10% floor: no change.
+- **Gates:** the workspace passed 4924 of 4924; fmt, both Clippy runs,
+  `lint-deps`, `idl-manifest` and `cargo deny` were clean. The feature set
+  passed 600 of 601: `tenta-browser::wpt_driver
+  a_live_harness_reports_from_its_own_timeout_before_the_driver_gives_up`
+  failed, for the third time in this series, and passed 3 times of 3
+  alone. Its subject is a race between two real clocks, a harness timer
+  at about 1 000 ms against the driver's deadline at 1 250 ms, so the
+  margin is 250 ms of wall-clock time under a suite of 600 tests. It was
+  not rewritten: unlike the two tests rewritten after ERR2, the deadline
+  is the thing under test.
 
 ## Implementation queue and dependencies
 

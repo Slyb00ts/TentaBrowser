@@ -213,3 +213,102 @@ fn constructors_are_present_on_the_global() {
         "function,function,function,function"
     );
 }
+
+// ---------------------------------------------------------------------------
+// EL1: every HTML element has the interface the standard gives its name
+// ---------------------------------------------------------------------------
+
+#[test]
+fn every_html_element_name_has_its_interface() {
+    // Each pair is a tag and the interface its wrapper must be an instance of
+    // and report as its constructor. The interfaces are all globals, so a page
+    // naming one in an `instanceof` does not get a `ReferenceError`.
+    assert_eq!(
+        eval(
+            r#"
+            const expected = {
+                html: 'HTMLHtmlElement', head: 'HTMLHeadElement', title: 'HTMLTitleElement',
+                base: 'HTMLBaseElement', body: 'HTMLBodyElement',
+                h1: 'HTMLHeadingElement', h2: 'HTMLHeadingElement', h3: 'HTMLHeadingElement',
+                h4: 'HTMLHeadingElement', h5: 'HTMLHeadingElement', h6: 'HTMLHeadingElement',
+                hr: 'HTMLHRElement', pre: 'HTMLPreElement', listing: 'HTMLPreElement',
+                xmp: 'HTMLPreElement', blockquote: 'HTMLQuoteElement', q: 'HTMLQuoteElement',
+                ol: 'HTMLOListElement', ul: 'HTMLUListElement', menu: 'HTMLMenuElement',
+                li: 'HTMLLIElement', dl: 'HTMLDListElement', data: 'HTMLDataElement',
+                time: 'HTMLTimeElement', br: 'HTMLBRElement', ins: 'HTMLModElement',
+                del: 'HTMLModElement', picture: 'HTMLPictureElement', embed: 'HTMLEmbedElement',
+                object: 'HTMLObjectElement', track: 'HTMLTrackElement', map: 'HTMLMapElement',
+                area: 'HTMLAreaElement', table: 'HTMLTableElement',
+                caption: 'HTMLTableCaptionElement', col: 'HTMLTableColElement',
+                colgroup: 'HTMLTableColElement', thead: 'HTMLTableSectionElement',
+                tbody: 'HTMLTableSectionElement', tfoot: 'HTMLTableSectionElement',
+                tr: 'HTMLTableRowElement', td: 'HTMLTableCellElement',
+                th: 'HTMLTableCellElement', fieldset: 'HTMLFieldSetElement',
+                legend: 'HTMLLegendElement', optgroup: 'HTMLOptGroupElement',
+                datalist: 'HTMLDataListElement', output: 'HTMLOutputElement',
+                progress: 'HTMLProgressElement', meter: 'HTMLMeterElement',
+                details: 'HTMLDetailsElement', param: 'HTMLParamElement',
+                font: 'HTMLFontElement', dir: 'HTMLDirectoryElement',
+                frame: 'HTMLFrameElement', frameset: 'HTMLFrameSetElement',
+                marquee: 'HTMLMarqueeElement',
+            };
+            const wrong = [];
+            for (const [tag, name] of Object.entries(expected)) {
+                const element = document.createElement(tag);
+                const Interface = globalThis[name];
+                if (typeof Interface !== 'function' || !(element instanceof Interface)
+                    || !(element instanceof HTMLElement) || element.constructor !== Interface
+                    || Object.prototype.toString.call(element) !== '[object ' + name + ']'
+                    || Object.getPrototypeOf(Interface.prototype) !== HTMLElement.prototype) {
+                    wrong.push(tag);
+                }
+            }
+            [Object.keys(expected).length, wrong.join(',')].join('|');
+            "#
+        ),
+        "57|"
+    );
+}
+
+#[test]
+fn an_element_with_no_interface_of_its_own_and_an_unknown_one_are_told_apart() {
+    assert_eq!(
+        eval(
+            r#"
+            const name = tag => document.createElement(tag).constructor.name;
+            [
+                name('section'), name('em'), name('summary'), name('main'), name('code'),
+                name('my-widget'), name('x-y-z'),
+                name('blink'), name('foo'), name('customelement'),
+                document.createElement('foo') instanceof HTMLElement,
+                document.createElement('section') instanceof HTMLUnknownElement,
+                // The document's own elements, not only ones script made.
+                document.documentElement.constructor.name, document.body.constructor.name,
+                document.body instanceof HTMLBodyElement,
+            ].join('|');
+            "#
+        ),
+        "HTMLElement|HTMLElement|HTMLElement|HTMLElement|HTMLElement|HTMLElement|HTMLElement|\
+         HTMLUnknownElement|HTMLUnknownElement|HTMLUnknownElement|true|false|HTMLHtmlElement|\
+         HTMLBodyElement|true"
+    );
+}
+
+#[test]
+fn the_interfaces_cannot_be_constructed_and_have_no_members_of_their_own() {
+    assert_eq!(
+        eval(
+            r#"
+            const attempt = f => { try { f(); return 'made'; } catch (e) { return e.constructor.name; } };
+            [
+                attempt(() => new HTMLBodyElement()), attempt(() => new HTMLTableElement()),
+                attempt(() => HTMLHeadingElement()),
+                Object.keys(HTMLTableElement.prototype).length,
+                Object.keys(HTMLLIElement.prototype).length,
+                HTMLUListElement.name, HTMLUnknownElement.length,
+            ].join('|');
+            "#
+        ),
+        "TypeError|TypeError|TypeError|0|0|HTMLUListElement|0"
+    );
+}

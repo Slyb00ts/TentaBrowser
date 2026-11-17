@@ -24,6 +24,7 @@ pub mod cssom;
 mod dataset;
 #[cfg(any(feature = "v8", feature = "quickjs"))]
 pub mod doc_sheets;
+mod element_interface;
 mod focus;
 mod forms;
 mod geometry;
@@ -31,6 +32,7 @@ mod media;
 mod mutation_observer;
 mod request;
 mod shadow;
+pub use element_interface::html_element_interface;
 pub use request::{RequestParts, RequestRecord, RequestSignal, request_parts};
 pub mod storage;
 mod tree_extras;
@@ -8009,6 +8011,53 @@ impl HTMLIFrameElementOps for HostObject {}
 impl HTMLDivElementOps for HostObject {}
 impl HTMLSpanElementOps for HostObject {}
 impl HTMLParagraphElementOps for HostObject {}
+
+// EL1: the element interfaces declared without members.
+impl super::HTMLHtmlElementOps for HostObject {}
+impl super::HTMLHeadElementOps for HostObject {}
+impl super::HTMLTitleElementOps for HostObject {}
+impl super::HTMLBaseElementOps for HostObject {}
+impl super::HTMLBodyElementOps for HostObject {}
+impl super::HTMLHeadingElementOps for HostObject {}
+impl super::HTMLHRElementOps for HostObject {}
+impl super::HTMLPreElementOps for HostObject {}
+impl super::HTMLQuoteElementOps for HostObject {}
+impl super::HTMLOListElementOps for HostObject {}
+impl super::HTMLUListElementOps for HostObject {}
+impl super::HTMLMenuElementOps for HostObject {}
+impl super::HTMLLIElementOps for HostObject {}
+impl super::HTMLDListElementOps for HostObject {}
+impl super::HTMLDataElementOps for HostObject {}
+impl super::HTMLTimeElementOps for HostObject {}
+impl super::HTMLBRElementOps for HostObject {}
+impl super::HTMLModElementOps for HostObject {}
+impl super::HTMLPictureElementOps for HostObject {}
+impl super::HTMLEmbedElementOps for HostObject {}
+impl super::HTMLObjectElementOps for HostObject {}
+impl super::HTMLTrackElementOps for HostObject {}
+impl super::HTMLMapElementOps for HostObject {}
+impl super::HTMLAreaElementOps for HostObject {}
+impl super::HTMLTableElementOps for HostObject {}
+impl super::HTMLTableCaptionElementOps for HostObject {}
+impl super::HTMLTableColElementOps for HostObject {}
+impl super::HTMLTableSectionElementOps for HostObject {}
+impl super::HTMLTableRowElementOps for HostObject {}
+impl super::HTMLTableCellElementOps for HostObject {}
+impl super::HTMLFieldSetElementOps for HostObject {}
+impl super::HTMLLegendElementOps for HostObject {}
+impl super::HTMLOptGroupElementOps for HostObject {}
+impl super::HTMLDataListElementOps for HostObject {}
+impl super::HTMLOutputElementOps for HostObject {}
+impl super::HTMLProgressElementOps for HostObject {}
+impl super::HTMLMeterElementOps for HostObject {}
+impl super::HTMLDetailsElementOps for HostObject {}
+impl super::HTMLParamElementOps for HostObject {}
+impl super::HTMLFontElementOps for HostObject {}
+impl super::HTMLDirectoryElementOps for HostObject {}
+impl super::HTMLFrameElementOps for HostObject {}
+impl super::HTMLFrameSetElementOps for HostObject {}
+impl super::HTMLMarqueeElementOps for HostObject {}
+impl super::HTMLUnknownElementOps for HostObject {}
 
 impl HTMLAnchorElementOps for HostObject {
     fn href(&self) -> Result<String, JsError> {

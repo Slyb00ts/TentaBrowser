@@ -790,6 +790,277 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the HTMLParagraphElement interface");
+            // EL1: the element interfaces declared without members.
+            tenta_js::bindings::install_html_html_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLHtmlElement interface");
+            tenta_js::bindings::install_html_head_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLHeadElement interface");
+            tenta_js::bindings::install_html_title_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLTitleElement interface");
+            tenta_js::bindings::install_html_base_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLBaseElement interface");
+            tenta_js::bindings::install_html_body_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLBodyElement interface");
+            tenta_js::bindings::install_html_heading_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLHeadingElement interface");
+            tenta_js::bindings::install_htmlhr_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLHRElement interface");
+            tenta_js::bindings::install_html_pre_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLPreElement interface");
+            tenta_js::bindings::install_html_quote_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLQuoteElement interface");
+            tenta_js::bindings::install_htmlo_list_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLOListElement interface");
+            tenta_js::bindings::install_htmlu_list_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLUListElement interface");
+            tenta_js::bindings::install_html_menu_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLMenuElement interface");
+            tenta_js::bindings::install_htmlli_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLLIElement interface");
+            tenta_js::bindings::install_htmld_list_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLDListElement interface");
+            tenta_js::bindings::install_html_data_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLDataElement interface");
+            tenta_js::bindings::install_html_time_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLTimeElement interface");
+            tenta_js::bindings::install_htmlbr_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLBRElement interface");
+            tenta_js::bindings::install_html_mod_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLModElement interface");
+            tenta_js::bindings::install_html_picture_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLPictureElement interface");
+            tenta_js::bindings::install_html_embed_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLEmbedElement interface");
+            tenta_js::bindings::install_html_object_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLObjectElement interface");
+            tenta_js::bindings::install_html_track_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLTrackElement interface");
+            tenta_js::bindings::install_html_map_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLMapElement interface");
+            tenta_js::bindings::install_html_area_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLAreaElement interface");
+            tenta_js::bindings::install_html_table_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLTableElement interface");
+            tenta_js::bindings::install_html_table_caption_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLTableCaptionElement interface");
+            tenta_js::bindings::install_html_table_col_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLTableColElement interface");
+            tenta_js::bindings::install_html_table_section_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLTableSectionElement interface");
+            tenta_js::bindings::install_html_table_row_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLTableRowElement interface");
+            tenta_js::bindings::install_html_table_cell_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLTableCellElement interface");
+            tenta_js::bindings::install_html_field_set_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLFieldSetElement interface");
+            tenta_js::bindings::install_html_legend_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLLegendElement interface");
+            tenta_js::bindings::install_html_opt_group_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLOptGroupElement interface");
+            tenta_js::bindings::install_html_data_list_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLDataListElement interface");
+            tenta_js::bindings::install_html_output_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLOutputElement interface");
+            tenta_js::bindings::install_html_progress_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLProgressElement interface");
+            tenta_js::bindings::install_html_meter_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLMeterElement interface");
+            tenta_js::bindings::install_html_details_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLDetailsElement interface");
+            tenta_js::bindings::install_html_param_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLParamElement interface");
+            tenta_js::bindings::install_html_font_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLFontElement interface");
+            tenta_js::bindings::install_html_directory_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLDirectoryElement interface");
+            tenta_js::bindings::install_html_frame_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLFrameElement interface");
+            tenta_js::bindings::install_html_frame_set_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLFrameSetElement interface");
+            tenta_js::bindings::install_html_marquee_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLMarqueeElement interface");
+            tenta_js::bindings::install_html_unknown_element::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the HTMLUnknownElement interface");
             tenta_js::bindings::install_html_anchor_element::<HostObject>(
                 scope,
                 interface_sink,

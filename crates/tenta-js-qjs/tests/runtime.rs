@@ -112,7 +112,14 @@ fn persistent_context_and_native_prototypes() {
     assert_js(
         &mut engine,
         "Object.prototype.toString.call(document.body)",
-        "[object HTMLElement]",
+        "[object HTMLBodyElement]",
+    );
+    // Every HTML element has the interface the standard gives its name.
+    assert_js(
+        &mut engine,
+        "document.body.innerHTML='<h2></h2><ul><li></li></ul><table><tbody><tr><td></td></tr></tbody></table><section></section><blink></blink><my-el></my-el>';\
+         [...document.body.querySelectorAll('*')].map(e=>e.constructor.name).join(',')",
+        "HTMLHeadingElement,HTMLUListElement,HTMLLIElement,HTMLTableElement,HTMLTableSectionElement,HTMLTableRowElement,HTMLTableCellElement,HTMLElement,HTMLUnknownElement,HTMLElement",
     );
 }
 #[test]

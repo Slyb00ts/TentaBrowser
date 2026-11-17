@@ -732,6 +732,149 @@ interface HTMLSpanElement : HTMLElement {};
 [Exposed=Window]
 interface HTMLParagraphElement : HTMLElement {};
 
+// EL1: the rest of the HTML element interfaces, so that every element of the
+// HTML Standard has the interface the standard gives it and a page can name
+// any of them in an `instanceof`. They are declared without members: the
+// reflected attributes and the table, list and form-control members each of
+// them has in the standard are not implemented, and an element read through
+// one of these interfaces has what `HTMLElement` has. `HTMLUnknownElement` is
+// the interface of an HTML-namespace element whose name the standard does not
+// define and that is not a valid custom element name.
+[Exposed=Window]
+interface HTMLHtmlElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLHeadElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLTitleElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLBaseElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLBodyElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLHeadingElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLHRElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLPreElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLQuoteElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLOListElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLUListElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLMenuElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLLIElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLDListElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLDataElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLTimeElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLBRElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLModElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLPictureElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLEmbedElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLObjectElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLTrackElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLMapElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLAreaElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLTableElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLTableCaptionElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLTableColElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLTableSectionElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLTableRowElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLTableCellElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLFieldSetElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLLegendElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLOptGroupElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLDataListElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLOutputElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLProgressElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLMeterElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLDetailsElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLParamElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLFontElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLDirectoryElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLFrameElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLFrameSetElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLMarqueeElement : HTMLElement {};
+
+[Exposed=Window]
+interface HTMLUnknownElement : HTMLElement {};
+
 // IF1: media, canvas and the SVG interfaces pages test with `instanceof`.
 //
 // There is no media pipeline (P5), so a media element has no playback state:

@@ -341,7 +341,7 @@ fn objects_without_the_blob_brand_use_the_string_arm() {
             ].join('|');
             "#
         ),
-        "true|https://example.com/|[object Headers]|[object HTMLElement]|\
+        "true|https://example.com/|[object Headers]|[object HTMLBodyElement]|\
          [object Object]|https://example.com/"
     );
 }

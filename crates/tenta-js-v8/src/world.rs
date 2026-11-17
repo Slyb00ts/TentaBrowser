@@ -27,6 +27,7 @@ use tenta_js::bindings::host::{
     DocumentSet, HostObject, HostRecord, SharedContext, TAG_DATASET, TAG_EVENT, TAG_HOST,
     TAG_HTML_COLLECTION, TAG_NAMED_NODE_MAP, TAG_NODE, TAG_NODE_LIST, TAG_STATIC_HTML_COLLECTION,
     TAG_STATIC_NODE_LIST, TAG_STYLE, TAG_TOKEN_LIST, TAG_WINDOW, decode, encode_window,
+    html_element_interface,
 };
 use tenta_js::bindings::{
     InterfaceDescriptor, InterfaceRegistry, WRAPPER_HOST_FIELD, WRAPPER_TAG, WrapperWorld,
@@ -885,33 +886,9 @@ impl WrapperWorld for V8World {
                         // `HTMLIFrameElement`; SVG-namespace elements get
                         // `SVGElement`; everything else stays `Element`.
                         NodeKind::Element => match doc.namespace(node_id) {
-                            Some(ns) if ns == atoms::NS_HTML => match doc.tag(node_id) {
-                                Some(tag) if tag == atoms::IFRAME => "HTMLIFrameElement",
-                                Some(tag) if tag == atoms::TEMPLATE => "HTMLTemplateElement",
-                                Some(tag) if tag == atoms::DIV => "HTMLDivElement",
-                                Some(tag) if tag == atoms::SPAN => "HTMLSpanElement",
-                                Some(tag) if tag == atoms::P => "HTMLParagraphElement",
-                                Some(tag) if tag == atoms::A => "HTMLAnchorElement",
-                                Some(tag) if tag == atoms::IMG => "HTMLImageElement",
-                                Some(tag) if tag == atoms::LABEL => "HTMLLabelElement",
-                                Some(tag) if tag == atoms::FORM => "HTMLFormElement",
-                                Some(tag) if tag == atoms::INPUT => "HTMLInputElement",
-                                Some(tag) if tag == atoms::BUTTON => "HTMLButtonElement",
-                                Some(tag) if tag == atoms::SELECT => "HTMLSelectElement",
-                                Some(tag) if tag == atoms::TEXTAREA => "HTMLTextAreaElement",
-                                Some(tag) if tag == atoms::OPTION => "HTMLOptionElement",
-                                Some(tag) if tag == atoms::SCRIPT => "HTMLScriptElement",
-                                Some(tag) if tag == atoms::LINK => "HTMLLinkElement",
-                                Some(tag) if tag == atoms::STYLE => "HTMLStyleElement",
-                                Some(tag) if tag == atoms::VIDEO => "HTMLVideoElement",
-                                Some(tag) if tag == atoms::AUDIO => "HTMLAudioElement",
-                                Some(tag) if tag == atoms::CANVAS => "HTMLCanvasElement",
-                                Some(tag) if tag == atoms::SLOT => "HTMLSlotElement",
-                                Some(tag) if tag == atoms::META => "HTMLMetaElement",
-                                Some(tag) if tag == atoms::SOURCE => "HTMLSourceElement",
-                                Some(tag) if tag == atoms::DIALOG => "HTMLDialogElement",
-                                _ => "HTMLElement",
-                            },
+                            Some(ns) if ns == atoms::NS_HTML => doc
+                                .tag(node_id)
+                                .map_or("HTMLElement", |tag| html_element_interface(tag.as_str())),
                             Some(ns) if ns == atoms::NS_SVG => match doc.tag(node_id) {
                                 Some(tag) if tag == atoms::SVG => "SVGSVGElement",
                                 Some(tag) if tag == atoms::A => "SVGAElement",

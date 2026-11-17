@@ -94,6 +94,57 @@ include!(concat!(env!("OUT_DIR"), "/css_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_div_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_span_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_paragraph_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_html_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_head_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_title_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_base_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_body_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_heading_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/htmlhr_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_pre_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_quote_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/htmlo_list_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/htmlu_list_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_menu_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/htmlli_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/htmld_list_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_data_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_time_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/htmlbr_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_mod_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_picture_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_embed_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_object_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_track_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_map_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_area_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_table_element_ops.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_table_caption_element_ops.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/html_table_col_element_ops.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_table_section_element_ops.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/html_table_row_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_table_cell_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_field_set_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_legend_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_opt_group_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_data_list_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_output_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_progress_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_meter_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_details_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_param_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_font_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_directory_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_frame_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_frame_set_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_marquee_element_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_unknown_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_media_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_video_element_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_audio_element_ops.rs"));
@@ -198,6 +249,99 @@ include!(concat!(env!("OUT_DIR"), "/html_span_element_register.rs"));
 include!(concat!(
     env!("OUT_DIR"),
     "/html_paragraph_element_register.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/html_html_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_head_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_title_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_base_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_body_element_register.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_heading_element_register.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/htmlhr_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_pre_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_quote_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/htmlo_list_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/htmlu_list_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_menu_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/htmlli_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/htmld_list_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_data_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_time_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/htmlbr_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_mod_element_register.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_picture_element_register.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/html_embed_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_object_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_track_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_map_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_area_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_table_element_register.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_table_caption_element_register.rs"
+));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_table_col_element_register.rs"
+));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_table_section_element_register.rs"
+));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_table_row_element_register.rs"
+));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_table_cell_element_register.rs"
+));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_field_set_element_register.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/html_legend_element_register.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_opt_group_element_register.rs"
+));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_data_list_element_register.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/html_output_element_register.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_progress_element_register.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/html_meter_element_register.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_details_element_register.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/html_param_element_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/html_font_element_register.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_directory_element_register.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/html_frame_element_register.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_frame_set_element_register.rs"
+));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_marquee_element_register.rs"
+));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_unknown_element_register.rs"
 ));
 include!(concat!(env!("OUT_DIR"), "/html_media_element_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_video_element_register.rs"));
@@ -352,6 +496,102 @@ include!(concat!(env!("OUT_DIR"), "/html_div_element_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/html_span_element_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/html_paragraph_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_html_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_head_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_title_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_base_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_body_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_heading_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/htmlhr_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_pre_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_quote_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/htmlo_list_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/htmlu_list_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_menu_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/htmlli_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/htmld_list_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_data_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_time_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/htmlbr_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_mod_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_picture_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_embed_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_object_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_track_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_map_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_area_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_table_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_table_caption_element_v8.rs"
+));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_table_col_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(
+    env!("OUT_DIR"),
+    "/html_table_section_element_v8.rs"
+));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_table_row_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_table_cell_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_field_set_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_legend_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_opt_group_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_data_list_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_output_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_progress_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_meter_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_details_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_param_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_font_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_directory_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_frame_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_frame_set_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_marquee_element_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/html_unknown_element_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/html_media_element_v8.rs"));
 #[cfg(feature = "v8")]
@@ -549,6 +789,57 @@ pub mod quickjs {
     include!(concat!(env!("OUT_DIR"), "/html_span_element_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/html_paragraph_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_html_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_head_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_title_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_base_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_body_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_heading_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/htmlhr_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_pre_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_quote_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/htmlo_list_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/htmlu_list_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_menu_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/htmlli_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/htmld_list_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_data_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_time_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/htmlbr_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_mod_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_picture_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_embed_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_object_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_track_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_map_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_area_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_table_element_qjs.rs"));
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/html_table_caption_element_qjs.rs"
+    ));
+    include!(concat!(env!("OUT_DIR"), "/html_table_col_element_qjs.rs"));
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/html_table_section_element_qjs.rs"
+    ));
+    include!(concat!(env!("OUT_DIR"), "/html_table_row_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_table_cell_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_field_set_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_legend_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_opt_group_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_data_list_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_output_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_progress_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_meter_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_details_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_param_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_font_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_directory_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_frame_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_frame_set_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_marquee_element_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/html_unknown_element_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/html_media_element_qjs.rs"));
     #[cfg(feature = "quickjs")]

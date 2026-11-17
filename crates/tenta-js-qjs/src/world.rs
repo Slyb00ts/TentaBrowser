@@ -1238,33 +1238,9 @@ fn node_interface(ctx: &SharedContext, node: tenta_core::NodeId) -> &'static str
     let doc = ctx.doc.borrow();
     match doc.kind(node) {
         NodeKind::Element => match doc.namespace(node) {
-            Some(ns) if ns == atoms::NS_HTML => match doc.tag(node) {
-                Some(tag) if tag == atoms::IFRAME => "HTMLIFrameElement",
-                Some(tag) if tag == atoms::TEMPLATE => "HTMLTemplateElement",
-                Some(tag) if tag == atoms::DIV => "HTMLDivElement",
-                Some(tag) if tag == atoms::SPAN => "HTMLSpanElement",
-                Some(tag) if tag == atoms::P => "HTMLParagraphElement",
-                Some(tag) if tag == atoms::A => "HTMLAnchorElement",
-                Some(tag) if tag == atoms::IMG => "HTMLImageElement",
-                Some(tag) if tag == atoms::LABEL => "HTMLLabelElement",
-                Some(tag) if tag == atoms::FORM => "HTMLFormElement",
-                Some(tag) if tag == atoms::INPUT => "HTMLInputElement",
-                Some(tag) if tag == atoms::BUTTON => "HTMLButtonElement",
-                Some(tag) if tag == atoms::SELECT => "HTMLSelectElement",
-                Some(tag) if tag == atoms::TEXTAREA => "HTMLTextAreaElement",
-                Some(tag) if tag == atoms::OPTION => "HTMLOptionElement",
-                Some(tag) if tag == atoms::SCRIPT => "HTMLScriptElement",
-                Some(tag) if tag == atoms::LINK => "HTMLLinkElement",
-                Some(tag) if tag == atoms::STYLE => "HTMLStyleElement",
-                Some(tag) if tag == atoms::VIDEO => "HTMLVideoElement",
-                Some(tag) if tag == atoms::AUDIO => "HTMLAudioElement",
-                Some(tag) if tag == atoms::CANVAS => "HTMLCanvasElement",
-                Some(tag) if tag == atoms::SLOT => "HTMLSlotElement",
-                Some(tag) if tag == atoms::META => "HTMLMetaElement",
-                Some(tag) if tag == atoms::SOURCE => "HTMLSourceElement",
-                Some(tag) if tag == atoms::DIALOG => "HTMLDialogElement",
-                _ => "HTMLElement",
-            },
+            Some(ns) if ns == atoms::NS_HTML => doc
+                .tag(node)
+                .map_or("HTMLElement", |tag| html_element_interface(tag.as_str())),
             Some(ns) if ns == atoms::NS_SVG => match doc.tag(node) {
                 Some(tag) if tag == atoms::SVG => "SVGSVGElement",
                 Some(tag) if tag == atoms::A => "SVGAElement",
