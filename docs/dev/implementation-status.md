@@ -80,6 +80,8 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `customElements` (CE1) | Implemented on V8, built lazily; focused checks passed; not independently reviewed | Autonomous custom elements: `define`/`get`/`getName`/`whenDefined`/`upgrade`, the HTML element constructor, upgrade and the connected, disconnected and attribute reactions; no customized built-ins, no shadow DOM yet; see the section below |
 | Shadow trees (SD1) | Script, events and extraction implemented on both engines; focused checks passed; not independently reviewed; **not styled, laid out or painted** | `attachShadow`, `ShadowRoot`, `shadowRoot`, slots, composed event paths with retargeting, flat-tree text and snapshot; a screenshot does not show shadow content; see the section below |
 | `document.domain`, `crypto.randomUUID()`, `<meta>`/`<source>`/`<dialog>` interfaces (WIN2) | Implemented on both engines (generated); focused checks passed; not independently reviewed | What the sweep after CE1 and SD1 named most; a dialog has no top layer, `returnValue` or `close` event; see the section below |
+| Nested flex and grid containers share their answers (LP1) | Implemented; measured; fragment output compared on a real page; not independently reviewed | One layout of a component-built page solved its containers 12 times less often; see the section below. Layout still starts over after every mutation |
+| Wrapper-graph collection at task ends is amortised (GC1) | Implemented on V8; measured; not independently reviewed; **changes when detached wrappers are reclaimed, which the specification may record as a decision** | A task end collects once 1024 wrappers are owed or the last collection is 250 ms old, not every time; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
 
 QuickJS runtime implementation alone does not complete its timezone hook,
@@ -2560,6 +2562,132 @@ elements without it upgraded nothing that such a library defines.
   `MessageChannel`, `Request`, `getSelection`, `DOMMatrix`,
   `SVGAnimatedString`, `createNodeIterator`, an unsupported CSS rule type in
   `insertRule`.
+
+## LP1 and GC1: what a page that animates costs (performance)
+
+After CE1 cloudflare.com stopped loading: its bundle ran, kept changing the
+document from timers and animation frames, and the page was closed for
+spending 15 s of script time within 30 s. Two costs were behind it, and
+neither is specific to that site.
+
+### LP1: nested flex and grid containers share their answers
+
+- **Where the time went.** A copy of that page without its scripts (2672
+  fragments, 445 flex and grid containers, nested 4 deep on average and up
+  to 9) took 126 ms to lay out. Counters in `tenta-layout`'s Taffy view
+  showed 94 544 runs of a container algorithm for those 445 containers, up
+  to 1566 for one of them, in 2890 views. A nested container is solved
+  inside its parent's view while the parent sizes its items, and again as
+  the root of its own view when its fragments are made, and the containers
+  below it once more under each of those; every view started with an empty
+  cache, so the work multiplied with the depth.
+- **The change** (`crates/tenta-layout/src/taffy_tree.rs`). Taffy's answers
+  about the boxes below a view are kept in a memo for the outermost layout
+  in progress, the same span as the existing scratch-layout memo, and
+  shared by every view inside it. An answer is keyed by the box, the parent
+  size it was asked under and the direction of the view. An answer that
+  read the view's own inner width (a ratio-only image measured before any
+  width is known) is shared only with views of the same inner width. The
+  view's maps hash box ids with a multiply-and-rotate hasher; SipHash was
+  13% of the profile.
+- **Result.** The same page: 7728 container runs, layout 126 to 24 ms, and
+  the fragment tree is identical fragment for fragment (node, rectangles,
+  edges, overflow, flags, children; 2672 of 2672). On the live page a
+  layout with its style flush went from about 127 to about 40 ms.
+  `bench/render.py`, release, 25 interleaved pairs: the new
+  `S-layout-nested` (about 430 containers nested eight deep, text warm)
+  total p50/p95 57.39/60.17 to 33.07/35.53 ms (-42.4%); `S-layout-5k` warm
+  18.56 to 18.39 ms and cold 39.95 to 39.99 ms, `S-screenshot-inproc`
+  relayout 9.16 to 9.14 ms, `S-fixtures` within 5%: all inside the 10%
+  floor. RSS deltas did not move.
+- **Checks:** `tenta-layout::flex` three new tests. With the inner-width
+  tracking removed, `a_ratio_only_image_fills_the_container_it_is_in_not_an_outer_one`
+  fails. With the parent's block size taken out of the key no test fails
+  and the page above lays out identically but 5% slower (60.7 against
+  57.8 ms with its style flush), because the answers for different parents
+  then evict one another; that part of the key is covered by measurement
+  only. The direction in the key mirrors the scratch-layout memo's and has
+  no test of its own.
+- **Open, with what was measured.** Layout is still redone in full after
+  every mutation, and so is style: `StyleEngine::flush` restyles the whole
+  tree whenever the document generation moved, 19 ms per flush on that
+  page, which is now half of what a forced layout costs there. Sizing a
+  container's inline size under min-content and max-content lays its items
+  out to learn block sizes nothing reads (31% of the remaining layout on
+  that page, 44% of `S-layout-nested`); skipping that is exact only where
+  no box derives an inline size from a block size (aspect ratios, wrapping
+  columns), which has not been built. A container is still entered once
+  per ancestor level when its fragments are made (2818 entries for 445
+  containers).
+
+### GC1: collecting the wrapper graph at task ends is amortised (V8)
+
+- **Where the time went.** With LP1 in, the page still ran out of script
+  time. Timing every engine entry showed 371 animation-frame entries of
+  12 to 13 ms that laid nothing out, and stack samples of the page thread
+  put them in `Engine::graph_checkpoint`: a full `LowMemoryNotification`
+  after every timer callback and every animation-frame callback. The ledger
+  already listed "empty or duplicate task checkpoints" as an optimisation
+  not yet accepted, and image events were already amortised (1024 events or
+  250 ms) for the same reason.
+- **The change** (`Engine::collect_after_task`). A task end collects when
+  the wrappers published since the last collection have reached the count
+  at which the next binding call would collect anyway
+  (`SOFT_WRAPPER_MATERIALIZATIONS`, 1024), or when the last collection is
+  250 ms old. It applies to the microtask checkpoint behind timer callbacks,
+  animation frames and `run_microtasks`, and replaces the separate
+  image-event counter. The end of a script run, fetch and XHR settlement,
+  lifecycle events and `trim_memory` collect as before. Admission inside a
+  task is unchanged, so the bound on wrappers between two collections is
+  the one that already held within a task.
+- **What it changes for a caller.** Wrappers and native records that became
+  unreachable in a timer or frame are reclaimed at the next collection, not
+  at the end of that task. A page that goes idle keeps up to 1023 of them
+  until its next entry or `trim_memory`. No existing test depended on the
+  earlier timing.
+- **Result.** cloudflare.com loads again: three navigations of three with
+  the release CLI, 7.7 to 7.8 s each to the busy cap, title and snapshot
+  present. Release, 25 interleaved pairs against 538ead7:
+  `bench/js_xhr.py` (`S-js-xhr`) navigation p50/p95 17.81/19.06 to
+  12.94/14.17 ms (-27.3%), RSS p50 30.5 MiB both. `bench/listener_gc.py`
+  whole-process wall p50 60.30 to 52.01 ms (-13.7%) and CPU 168.08 to
+  132.82 ms (-21.0%); its five explicit collection phases moved between
+  -1.9% and +4.3%, every phase freed or retained what it did before, peak
+  RSS 23.6 MiB both. `bench/dom_calls.py`: `has` 27.77 to 27.73 ns, `get`
+  83.88 both. `bench/dom_mutation_hooks.py --backend v8`: detached 48.82 to
+  49.09 ms, connected 49.79 to 50.43 ms (+0.5%, +1.3%, inside the floor).
+  `bench/wrapper_pressure.py` (candidate-only driver, run on each build):
+  task p50 within 3.4% for all four shapes, nodes after the task and GC
+  epochs identical, peak RSS within 0.7%. The `S-js-xhr`, listener and
+  `S-layout-nested` figures are from the committed code; the others here
+  and in LP1 were taken one edit earlier, before the time of a collection
+  was recorded at its end instead of its start.
+- **Checks:** four tests in `tenta-js-v8` (`task_collection_tests.inc.rs`).
+  With a collection at every task end all four fail; with the wrapper count
+  ignored `a_task_that_reaches_the_wrapper_bound_collects_at_its_end` fails.
+- **Not measured:** the resident memory of a long-lived animated page under
+  the new timing, and QuickJS, which has no such collection at task ends.
+
+### The 35-site sweep after LP1 and GC1
+
+One run, 2026-11-17, same list and driver as before; the earlier run
+predates WIN2, so the two differ by WIN2 as well and a change cannot be
+pinned on one package. Navigations that failed went from 1 to 0
+(cloudflare.com). Sites with no snapshot elements went from 6 to 3:
+cloudflare.com now has 12 refs, nytimes.com 18 and microsoft.com 5;
+youtube.com, amazon.com and imdb.com are still empty. The 35 navigations
+together took 56.8 s against 81.6 s; microsoft.com alone went from 23.6 to
+3.7 s. Console errors went from 53 to 60, again with more code running: 12
+are one page reading `nextSibling` of null, 11 are `Failed to fetch` for
+hosts the sweep machine's DNS answers with `::`, and the names still
+missing are `Request` (3), `ReadableStream` (3), `MessageChannel`, `Worker`,
+`getSelection`, `DOMMatrix`, `SVGAnimatedString`, `CSS.escape`,
+`PerformanceNavigationTiming` and `createNodeIterator`; cloudflare.com
+reads `.ready` of an object that is undefined here, probably
+`document.fonts`, which has not been confirmed.
+
+Workspace 4832 passed; the feature set 593 passed; fmt, both Clippy runs,
+`lint-deps`, `idl-manifest` and `cargo deny` clean.
 
 ## Implementation queue and dependencies
 
