@@ -60,6 +60,9 @@ pub(crate) struct InspectorState {
     rejections: RefCell<Vec<Rejection>>,
     /// The exceptions nothing caught since the last task end, oldest first.
     uncaught: RefCell<Vec<Uncaught>>,
+    /// The function that dispatches `unhandledrejection` at the window
+    /// (`tenta_js::rejection`), once the preludes have run.
+    rejection_dispatcher: RefCell<Option<v8::Global<v8::Function>>>,
     /// Set while their `error` events are being fired: an exception an error
     /// listener throws is reported, and is not an error event of its own
     /// (HTML's *in error reporting mode*).
@@ -75,6 +78,7 @@ impl InspectorState {
             dispatcher: RefCell::new(None),
             rejections: RefCell::new(Vec::new()),
             uncaught: RefCell::new(Vec::new()),
+            rejection_dispatcher: RefCell::new(None),
             reporting_errors: Cell::new(false),
         }
     }
@@ -101,6 +105,7 @@ impl InspectorState {
         self.dispatcher.borrow_mut().take();
         self.rejections.borrow_mut().clear();
         self.uncaught.borrow_mut().clear();
+        self.rejection_dispatcher.borrow_mut().take();
         self.sink.borrow_mut().take();
     }
 }
@@ -546,44 +551,116 @@ impl Engine {
         })
     }
 
-    /// Reports the rejections nobody handled during the checkpoint that just
-    /// ran. The caller's entry carries the deadline; a termination ends the
-    /// report.
+    /// Defines `PromiseRejectionEvent` and starts tracking rejections, so
+    /// that a page hears `unhandledrejection` whether or not anything listens
+    /// to the inspector. A realm the script does not run in keeps the
+    /// inspector's report and fires no event.
+    pub(crate) fn install_rejection_events(&mut self) {
+        if self.native_failure().is_some()
+            || self.host.inspector.rejection_dispatcher.borrow().is_some()
+        {
+            return;
+        }
+        let _entry = self.entered();
+        let dispatcher = {
+            v8::scope!(let handle_scope, &mut self.isolate);
+            let context = v8::Local::new(handle_scope, &self.context);
+            let mut context_scope = v8::ContextScope::new(handle_scope, context);
+            v8::scope!(let scope, &mut context_scope);
+            v8::tc_scope!(let tc, scope);
+            v8::String::new(tc, tenta_js::rejection::REJECTION_PRELUDE_SOURCE)
+                .and_then(|source| v8::Script::compile(tc, source, None))
+                .and_then(|script| script.run(tc))
+                .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+                .map(|function| v8::Global::new(tc, function))
+        };
+        *self.host.inspector.rejection_dispatcher.borrow_mut() = dispatcher;
+        self.isolate.set_promise_reject_callback(on_promise_reject);
+    }
+
+    /// Deals with the rejections nobody handled during the checkpoint that
+    /// just ran: `unhandledrejection` is dispatched at the window for each
+    /// when the window has a listener for it, and one that no listener
+    /// cancelled is reported to the inspector when something listens there.
+    /// The caller's entry carries the deadline; a termination ends the
+    /// report. The microtasks the listeners queued run before this returns.
     pub(crate) fn flush_rejections(&mut self) {
         let pending = std::mem::take(&mut *self.host.inspector.rejections.borrow_mut());
         if pending.is_empty() || self.native_failure().is_some() {
             return;
         }
         let host = Rc::clone(&self.host);
-        let Some(sink) = host.inspector.sink() else {
-            return;
-        };
-        if !sink.listening() {
+        let sink = host.inspector.sink().filter(|sink| sink.listening());
+        let dispatcher = host
+            .inspector
+            .rejection_dispatcher
+            .borrow()
+            .clone()
+            .filter(|_| {
+                self.dom.as_ref().is_some_and(|dom| {
+                    let listeners = dom.ctx.listeners.borrow();
+                    [false, true].into_iter().any(|capture| {
+                        !listeners
+                            .snapshot_at(
+                                tenta_js::dom::events::TargetKey::Window,
+                                "unhandledrejection",
+                                capture,
+                            )
+                            .is_empty()
+                    })
+                })
+            });
+        if sink.is_none() && dispatcher.is_none() {
             return;
         }
-        v8::scope!(let handle_scope, &mut self.isolate);
-        let context = v8::Local::new(handle_scope, &self.context);
-        let mut context_scope = v8::ContextScope::new(handle_scope, context);
-        v8::scope!(let scope, &mut context_scope);
-        v8::tc_scope!(let tc, scope);
-        for rejection in &pending {
-            let reason = v8::Local::new(tc, &rejection.reason);
-            deliver_exception(
-                tc,
-                &host,
-                &sink,
-                "Uncaught (in promise)",
-                reason,
-                None,
-                None,
-                true,
-            );
-            if tc.has_terminated() {
-                break;
+        {
+            v8::scope!(let handle_scope, &mut self.isolate);
+            let context = v8::Local::new(handle_scope, &self.context);
+            let mut context_scope = v8::ContextScope::new(handle_scope, context);
+            v8::scope!(let scope, &mut context_scope);
+            v8::tc_scope!(let tc, scope);
+            for rejection in &pending {
+                let reason = v8::Local::new(tc, &rejection.reason);
+                let cancelled = dispatcher.as_ref().is_some_and(|dispatcher| {
+                    let function = v8::Local::new(tc, dispatcher);
+                    let promise = v8::Local::new(tc, &rejection.promise);
+                    let receiver = v8::undefined(tc);
+                    host.enter_script();
+                    let result = function.call(tc, receiver.into(), &[promise.into(), reason]);
+                    host.exit_script();
+                    result.is_some_and(|value| value.is_true())
+                });
+                if tc.has_terminated() {
+                    break;
+                }
+                tc.reset();
+                if cancelled {
+                    continue;
+                }
+                let Some(sink) = &sink else {
+                    continue;
+                };
+                deliver_exception(
+                    tc,
+                    &host,
+                    sink,
+                    "Uncaught (in promise)",
+                    reason,
+                    None,
+                    None,
+                    true,
+                );
+                if tc.has_terminated() {
+                    break;
+                }
+                // Describing a hostile value may have thrown; nothing of it may
+                // stay pending in the isolate.
+                tc.reset();
             }
-            // Describing a hostile value may have thrown; nothing of it may
-            // stay pending in the isolate.
-            tc.reset();
+        }
+        if dispatcher.is_some() && self.native_failure().is_none() {
+            self.isolate.perform_microtask_checkpoint();
+            self.host.microtasks_pending.set(false);
         }
     }
 }

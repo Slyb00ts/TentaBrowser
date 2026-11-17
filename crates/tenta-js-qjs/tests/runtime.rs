@@ -230,11 +230,15 @@ fn deadline_also_bounds_completion_coercion() {
 #[test]
 fn recursive_microtasks_are_bounded() {
     let mut engine = page();
-    engine.set_script_timeout(Some(Duration::from_millis(10)));
     engine
         .evaluate("Promise.resolve().then(function again(){Promise.resolve().then(again)})")
         .unwrap();
+    // The deadline is for the checkpoint that would never end without one.
+    // The scripts around it are not under it, so a slow machine cannot fail
+    // them for taking longer than ten milliseconds.
+    engine.set_script_timeout(Some(Duration::from_millis(10)));
     engine.run_microtasks();
+    engine.set_script_timeout(None);
     assert_js(&mut engine, "3+4", "7");
 }
 #[test]

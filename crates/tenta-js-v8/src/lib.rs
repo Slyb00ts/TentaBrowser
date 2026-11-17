@@ -2387,19 +2387,24 @@ impl Engine {
     }
 
     /// Runs the scripts that define what WebIDL cannot declare:
-    /// `DOMRect.fromRect()`, `toJSON()` and the iterator of `DOMRectList`, and
+    /// `DOMRect.fromRect()`, `toJSON()` and the iterator of `DOMRectList`;
     /// the traversal interfaces (`TreeWalker`, `NodeIterator`, `NodeFilter`),
-    /// whose algorithms call back into the page at every step. A failure is
-    /// not an error of the host; the members are then absent.
+    /// whose algorithms call back into the page at every step; and
+    /// `document.fonts` with `FontFaceSet` and `FontFace`, which have no
+    /// engine state behind them. `PromiseRejectionEvent` and the dispatch
+    /// of `unhandledrejection` are installed with them. A failure is not an
+    /// error of the host; the members are then absent.
     pub fn install_preludes(&mut self) {
         for source in [
             tenta_js::geometry::GEOMETRY_PRELUDE_SOURCE,
             tenta_js::traversal::TRAVERSAL_PRELUDE_SOURCE,
+            tenta_js::fonts::FONTS_PRELUDE_SOURCE,
         ] {
             if self.native_failure().is_none() {
                 let _ = self.run_inner(source, None);
             }
         }
+        self.install_rejection_events();
     }
 
     /// Installs the page's image state for the document this engine is bound

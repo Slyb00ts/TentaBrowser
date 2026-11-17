@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use tenta_browser::{ContextOptions, Engine, Goto, JsEngine, PageOptions, Settle};
+use tenta_browser::{ContextOptions, Engine, Goto, JsEngine, PageEvent, PageOptions, Settle};
 use tenta_core::Tier;
 use tenta_testutil::{FixtureServer, FixtureServerConfig};
 
@@ -77,6 +77,76 @@ async fn a_page_hears_its_uncaught_exceptions_through_onerror() {
          Uncaught Error: timer string true true|\
          Uncaught TypeError: inline string true true|\
          the script after the one that threw still ran"
+    );
+    page.close().await.expect("close page");
+    context.close();
+    engine.close();
+}
+
+const REJECTING_PAGE: &str = r#"<!doctype html><html><body>
+<script>
+window.heard = [];
+addEventListener('unhandledrejection', function (event) {
+    heard.push(event.reason.message);
+    if (event.reason.message === 'cancelled') event.preventDefault();
+});
+Promise.reject(new Error('reported'));
+Promise.reject(new Error('cancelled'));
+</script>
+</body></html>"#;
+
+/// A rejection whose `unhandledrejection` event a listener cancelled is not
+/// reported as an exception; one that was heard and left alone is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_unhandledrejection_is_not_reported() {
+    let fixtures = tenta_testutil::temp_dir("rejection-events");
+    fixtures.write("index.html", REJECTING_PAGE);
+    let server = FixtureServer::start(FixtureServerConfig::new(fixtures.path()))
+        .await
+        .expect("fixture server");
+    let engine = Engine::builder()
+        .js(JsEngine::V8)
+        .max_tier(Tier::Js)
+        .io_threads(1)
+        .page_threads(1)
+        .ephemeral(true)
+        .build()
+        .expect("engine");
+    let context = engine
+        .new_context(ContextOptions {
+            allow_private_network: true,
+            ..ContextOptions::default()
+        })
+        .expect("context");
+    let page = context
+        .new_page(PageOptions::default())
+        .await
+        .expect("page");
+    let mut events = page.events();
+    let (_, heard) = page
+        .goto_with_eval(
+            &server.url("/index.html"),
+            Goto::default()
+                .wait_until(Settle::NetworkIdle)
+                .timeout(Duration::from_secs(10)),
+            "heard.join('|')",
+        )
+        .await
+        .expect("navigation and evaluation");
+    assert_eq!(heard, "reported|cancelled", "the page heard both");
+
+    let reported: Vec<String> = events
+        .drain()
+        .into_iter()
+        .filter_map(|event| match event {
+            PageEvent::Exception(event) => Some(event.details.message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reported,
+        ["Error: reported"],
+        "only the rejection nobody cancelled is an exception event"
     );
     page.close().await.expect("close page");
     context.close();

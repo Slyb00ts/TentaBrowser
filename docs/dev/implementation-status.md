@@ -88,7 +88,9 @@ are authorized, with prerequisite gates still tracked explicitly.
 | Body reads that are not text: `Response.arrayBuffer()/blob()/bytes()/clone()`, `Blob.arrayBuffer()/bytes()`, `XMLHttpRequest.response`, `responseURL` and the `arraybuffer`, `blob`, `json` response types (FB1) | Implemented on both engines; focused checks passed; not independently reviewed | A body was readable only as text. `Response.body`, `formData()`, the `Response` statics, `responseXML` and the `document` response type are still absent; `clone()` copies the bytes. |
 | A `Blob`, a `FormData` or a `URLSearchParams` as the body of `fetch()`, `XMLHttpRequest.send()` and `new Response()` (FB2) | Implemented on both engines; focused checks passed; not independently reviewed | `BodyInit` was `(BufferSource or USVString)`, so each of the three objects was stringified: a `FormData` body was the text `[object FormData]`. The `ReadableStream` arm and `send()`'s `Document` arm are still absent. |
 | `Request` and `fetch(request)` (RQ1) | Implemented on both engines; focused checks passed; not independently reviewed | The constructor from a URL or from another request, the accessors, `clone()`, the `Body` members, and `fetch()` taking a `Request`. `signal` is the signal the initializer named, not one that follows it; `body`, `formData()`, `isReloadNavigation` and `isHistoryNavigation` are absent; QuickJS refuses to fetch a request that has a signal. |
-| `ErrorEvent`, the `error` event for an uncaught exception, the window's `onerror` handler, `reportError()` (ERR1) | Implemented on V8; `ErrorEvent` alone on QuickJS; focused checks passed; not independently reviewed | An uncaught exception was reported to the inspector and to nothing else, so `window.onerror` and `addEventListener('error')` never ran. The event is fired when the task ends, not where the exception is thrown; its `filename` is empty and its line is counted from the start of the script. `unhandledrejection` is still absent. |
+| `ErrorEvent`, the `error` event for an uncaught exception, the window's `onerror` handler, `reportError()` (ERR1) | Implemented on V8; `ErrorEvent` alone on QuickJS; focused checks passed; not independently reviewed | An uncaught exception was reported to the inspector and to nothing else, so `window.onerror` and `addEventListener('error')` never ran. The event is fired when the task ends, not where the exception is thrown; its `filename` is empty and its line is counted from the start of the script. |
+| `unhandledrejection` and `PromiseRejectionEvent` (ERR2) | Implemented on V8 as a prelude script; focused checks passed; not independently reviewed | Fired at the window when a task ends with a rejected promise nobody handled; a cancelled event keeps the rejection out of the inspector. The event is made by script, so its `isTrusted` is `false`; `rejectionhandled` is not fired. |
+| `document.fonts`, `FontFaceSet`, `FontFace` (FS1) | Implemented on V8 as a prelude script with no engine state behind it; focused checks passed; not independently reviewed | Answers as a document whose fonts have all loaded: `ready` is resolved, `status` is `loaded`, `check()` is `true`, `load()` resolves. Nothing is fetched and an added face is not used to draw text. |
 | Nested flex and grid containers share their answers (LP1) | Implemented; measured; fragment output compared on a real page; not independently reviewed | One layout of a component-built page solved its containers 12 times less often; see the section below. Layout still starts over after every mutation |
 | Wrapper-graph collection at task ends is amortised (GC1) | Implemented on V8; measured; not independently reviewed; **changes when detached wrappers are reclaimed, which the specification may record as a decision** | A task end collects once 1024 wrappers are owed or the last collection is 250 ms old, not every time; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
@@ -3190,10 +3192,10 @@ probe of 2026-11-17 listed both as missing.
   The engine does not fire `error` for an uncaught exception there, and
   that backend's window has no `onerror` handler attribute, so the
   handler's own call is not implemented for it.
-- **Still absent:** `unhandledrejection` and `PromiseRejectionEvent`. An
-  event record owns one stored value and that event needs two (the promise
-  and the reason); the five places that release an event's value would
-  have to learn a second one.
+- **Not in this package:** `unhandledrejection`, which ERR2 below adds
+  another way: an event record owns one stored value and that event needs
+  two (the promise and the reason), and the five places that release an
+  event's value would have had to learn a second one.
 - **Checks:** `tenta-js-v8::dom_error_event` 11 (the interface; an
   exception thrown by a listener becomes an event only at the task end,
   with the thrown value, a position and `isTrusted`; several in order;
@@ -3222,6 +3224,114 @@ probe of 2026-11-17 listed both as missing.
   of a `RefCell` once more than it did; an uncaught exception, which
   already called into the inspector, also makes one `v8::Global` and two
   strings.
+
+### `unhandledrejection` (ERR2)
+
+- **What changed (V8):** `crates/tenta-js/src/rejection.rs` is a script
+  that defines `PromiseRejectionEvent` as a class over `Event` — script
+  can subclass `Event` in this engine, and the class keeps the promise and
+  the reason itself — and evaluates to the function the engine calls for a
+  rejected promise nobody handled. `Engine::install_rejection_events`
+  runs it with the other preludes and starts the isolate's rejection
+  tracking, which used to start only when an inspector was installed.
+  `flush_rejections` calls the function for each pending rejection when
+  the window has an `unhandledrejection` listener, skips the inspector's
+  report for one a listener cancelled, and runs the listeners' microtasks.
+  The function dispatches with the `dispatchEvent` it took before page
+  script ran.
+- **Deviations:** the event is made by script, so `isTrusted` is `false`
+  where a browser's is `true`; `rejectionhandled` is not fired; the script
+  functions show their source in `toString()`. QuickJS has neither the
+  interface nor the event.
+- **Checks:** `tenta-js-v8::dom_rejection` 5 (the interface and its
+  refusals; an unhandled rejection becomes an event only at the task end
+  and a handled one does not; the handler attribute and a listener's
+  microtask; nobody listening; a page that replaced `dispatchEvent` and
+  `PromiseRejectionEvent`); `tenta-browser::error_events_js` 1, a served
+  page that cancels one of two rejections, of which only the other is an
+  exception event.
+
+### `document.fonts` (FS1)
+
+Two sites in the sweep of 2026-11-17 failed on it: angular.dev read
+`load` of `undefined` six times and cloudflare.com read `ready` of
+`undefined` twice. Both are `document.fonts`.
+
+- **What changed (V8):** `crates/tenta-js/src/fonts.rs` is a script that
+  defines `FontFace`, `FontFaceSet` (a class over `EventTarget`) and
+  `Document.prototype.fonts`, one set per document.
+- **What it claims, and why:** script has no font to wait for here — text
+  is laid out with the fonts the render tier has, and nothing a page does
+  through this API fetches or decodes one — so the API answers as a
+  document whose fonts have all loaded. `ready` is a resolved promise,
+  `status` is `"loaded"`, `check()` is `true`, `load()` resolves with the
+  faces in the set whose family the font shorthand names, and a `FontFace`
+  becomes `"loaded"` when `load()` is called. That is a statement about
+  script's view, not about what was drawn: a page that adds a face from a
+  URL and draws with it gets the fallback font, and is told the face
+  loaded. Recorded in the module's documentation with the rest: no
+  `@font-face` rules in the set, no `loading`/`loadingdone`/`loadingerror`
+  events, a shorthand the script cannot read a family from resolves with
+  an empty list instead of rejecting.
+- **Checks:** `tenta-js-v8::dom_fonts` 5 (one set per document and its
+  refusals; `ready` and `load()` settle; a face's descriptors, setters and
+  `load()`; the set-like members and `load()` by family, case and quotes;
+  the handler attributes and that the set is an event target).
+- **Cost, measured:** `bench/js_xhr.py`, 25 interleaved pairs, three
+  times, release builds of `c688c71` (before ERR1) and of this tree
+  (ERR1, ERR2 and FS1 together), 2026-11-17:
+
+  | run | `c688c71` navigation p50 / p95 | this tree p50 / p95 |
+  |---|---|---|
+  | 1 | 14.66 / 15.83 ms | 15.61 / 16.52 ms |
+  | 2 | 14.58 / 14.92 ms | 15.46 / 16.46 ms |
+  | 3 | 14.55 / 15.45 ms | 15.46 / 16.29 ms |
+
+  Process RSS p50 went from 30.8–31.0 to 31.1–31.3 MiB. Each difference
+  is under the 10% floor, so none of them alone is a claim; the same
+  +0.9 ms in three runs is why it was looked into. A temporary test timed
+  a release engine (200 engines, not committed): making the engine takes
+  2.1 ms, `install_preludes` with its four scripts 2.1 ms, and
+  `evaluate("1")` alone 0.45 ms. The scripts are not what costs:
+  **every script entry ends with a full wrapper-graph collection**
+  (`Engine::run_with` calls `graph_checkpoint` unconditionally). GC1
+  amortised the collection at a task end and left this one. Two scripts
+  more at engine start are therefore two collections more, and every
+  `<script>` of a page pays the same. Not fixed in this package.
+- **Checks, whole tree:** the gates ran on these two packages before the
+  two tests below were rewritten: fmt, both Clippy runs, `lint-deps`,
+  `idl-manifest` and `cargo deny` clean; the workspace 4917 of 4918 and
+  the feature set 600 of 601, the two failures being the two tests below.
+  After the rewrites fmt and both Clippy runs were clean again and the
+  suites they are in passed: the three JS crates 1822 of 1822 and
+  `tenta-browser` with its features 245 of 245. The whole workspace was
+  not run again.
+
+### Two tests that asserted on the clock
+
+Both failed in the gates of this package, and both had failed before in
+this series with the cause recorded as not established.
+
+- `tenta-browser::css_loading
+  a_stylesheet_is_requested_while_the_body_is_still_streaming` (failed
+  after DSD1, SW1, ERR1 and here) had its server send the first part of
+  the body, wait 1.2 s of real time and send the rest, and asserted that
+  the stylesheet request came more than 0.8 s before the end. That gives
+  the page 0.4 s of wall-clock time, in a suite that runs hundreds of
+  tests beside it. The failing runs took 1.44 s and 1.98 s against 1.22 s,
+  so the whole test was slow in them, not only the request. The server
+  now holds the rest of the body until the stylesheet has been asked for
+  (or 60 s have passed) and the test asserts the order of the two. It
+  takes 0.02 s. With the sweep that requests stylesheets per chunk
+  disabled it fails, after the 60 s. Why the machine stalls for 0.4 s in
+  those runs was not established: the old test passed 6 times of 6 with
+  64 busy loops on 32 cores and did not fail in 8 runs of the feature
+  suite alone.
+- `tenta-js-qjs::runtime recursive_microtasks_are_bounded` (failed after
+  TW1 and here) set a 10 ms script deadline for the whole test, so the
+  script before the checkpoint and the `3+4` after it were under it too.
+  The deadline now covers the checkpoint it is for.
+
 
 ## Implementation queue and dependencies
 

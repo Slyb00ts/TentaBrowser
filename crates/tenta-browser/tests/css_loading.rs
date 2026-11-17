@@ -711,22 +711,27 @@ async fn standards_mode_wants_a_css_type_and_quirks_tolerance_is_same_origin_onl
     rig.finish();
 }
 
+/// The server holds the rest of the body back until the stylesheet has been
+/// asked for, so the order of the two is a fact of the page and not of the
+/// clock: a page that asks for a stylesheet only once the body has ended never
+/// releases the body, and the wait below gives up and says so.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stylesheet_is_requested_while_the_body_is_still_streaming() {
-    use std::time::Instant;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let seen: Arc<Mutex<Vec<(String, Instant)>>> = Arc::default();
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
     let log = Arc::clone(&seen);
+    let sheet_asked = Arc::new(tokio::sync::Notify::new());
     tokio::spawn(async move {
         loop {
             let Ok((mut stream, _)) = listener.accept().await else {
                 return;
             };
             let log = Arc::clone(&log);
+            let sheet_asked = Arc::clone(&sheet_asked);
             tokio::spawn(async move {
                 let mut head = Vec::new();
                 let mut chunk = [0_u8; 2048];
@@ -738,7 +743,6 @@ async fn a_stylesheet_is_requested_while_the_body_is_still_streaming() {
                 }
                 let text = String::from_utf8_lossy(&head).to_string();
                 let path = text.split_whitespace().nth(1).unwrap_or("/").to_owned();
-                log.lock().unwrap().push((path.clone(), Instant::now()));
                 if path == "/doc.html" {
                     let first = "<!doctype html><html><head><meta charset=utf-8>\
                                  <link rel=stylesheet href=/s.css></head><body><p>first</p>";
@@ -749,10 +753,23 @@ async fn a_stylesheet_is_requested_while_the_body_is_still_streaming() {
                         )
                         .await;
                     let _ = stream.flush().await;
-                    tokio::time::sleep(Duration::from_millis(1200)).await;
+                    // The permit is stored when the sheet is asked for first,
+                    // so the order of the two tasks does not matter.
+                    let released = tokio::time::timeout(PATIENCE, sheet_asked.notified())
+                        .await
+                        .is_ok();
+                    log.lock().unwrap().push(
+                        if released {
+                            "the body ended after the sheet was asked for"
+                        } else {
+                            "the body ended without the sheet being asked for"
+                        }
+                        .to_owned(),
+                    );
                     let _ = stream.write_all(b"<p>second</p></body></html>").await;
-                    log.lock().unwrap().push(("end".to_owned(), Instant::now()));
                 } else {
+                    log.lock().unwrap().push(path);
+                    sheet_asked.notify_one();
                     let body = "p{color:red}";
                     let _ = stream
                         .write_all(
@@ -768,24 +785,15 @@ async fn a_stylesheet_is_requested_while_the_body_is_still_streaming() {
     let page = rig.new_page().await;
     page.goto(
         &format!("{base}/doc.html"),
-        Goto::default().wait_until(Settle::Load).timeout(PATIENCE),
+        Goto::default()
+            .wait_until(Settle::Load)
+            .timeout(PATIENCE * 2),
     )
     .await
     .expect("navigation");
-    let seen = seen.lock().unwrap().clone();
-    let at = |name: &str| {
-        seen.iter()
-            .find(|(path, _)| path == name)
-            .map(|(_, at)| *at)
-    };
-    let (sheet, end) = (
-        at("/s.css").expect("the sheet"),
-        at("end").expect("the end"),
-    );
-    assert!(
-        end.duration_since(sheet) > Duration::from_millis(800),
-        "the sheet was requested {:?} before the body ended",
-        end.duration_since(sheet)
+    assert_eq!(
+        *seen.lock().unwrap(),
+        ["/s.css", "the body ended after the sheet was asked for"]
     );
     rig.finish();
 }
