@@ -2908,6 +2908,33 @@ not contain.
   sites; developer.mozilla.org's snapshot has 469 lines where it had about
   20.
 
+### The 35-site sweep after MSG1 and TW1
+
+One run, 2026-11-17, same list and driver. youtube.com has snapshot
+elements now. Console errors went from 59 to 52. The 35 navigations took
+58.5 s against 54.8 s.
+
+**microsoft.com's navigation failed in this run, and the cause is the
+script CPU budget, not the page.** The page was closed with "ran out of
+script time: 15017 ms spent of a 15000 ms budget within 30 s" 5.7 s into
+its navigation. The driver uses one page for all 35 sites, the budget is
+the page's and not the navigation's (D-033, `crates/tenta-page/src/
+script_cpu.rs`), and the three sites before it in the list (cloudflare.com,
+apple.com and getbootstrap.com) had spent most of the window. Alone, in a
+new session, microsoft.com loaded twice of twice in 5.7 s with its title
+and snapshot. Each package that lets more page script run (GC1, MSG1, TW1)
+makes this more likely for an agent that goes from one heavy site to the
+next in one tab. Changing whose budget it is would reopen D-033 and is not
+done here; a navigation the host asks for, as opposed to one the page
+starts, could begin a new window without giving a page that reloads itself
+a fresh budget.
+
+Still named by pages: `Request` (3), `ReadableStream` (3), `Worker`,
+`SVGAnimatedString`, `Element.animate`, an object whose `load` and one whose
+`ready` is read (probably `document.fonts`), an unsupported CSS rule type
+in `insertRule`; 11 errors are `Failed to fetch` for hosts the sweep
+machine's DNS answers with `::`.
+
 ## Implementation queue and dependencies
 
 - P2 CSSOM uses Stylo per D-003. Inline declarations and constructed
