@@ -3126,6 +3126,26 @@ sites in each of the last two), and `fetch()` could only take a URL:
   feature set 599 of 599; fmt, both Clippy runs, `lint-deps`,
   `idl-manifest` and `cargo deny` were clean.
 
+### `S-js-xhr` across FB1, FB2 and RQ1
+
+The three packages changed the path every `fetch()` and `send()` takes
+(the body union, `extract_body`, the request steps), and each was committed
+without a measurement. One measurement covers them: `bench/js_xhr.py`, 25
+interleaved pairs, release builds of the `js_xhr` example at `d9e7543`
+(before FB1) and `c688c71` (after RQ1), each from a worktree of its own,
+2026-11-17, nothing else running.
+
+| | navigation p50 / p95 | process RSS p50 / p95 |
+|---|---|---|
+| `d9e7543` | 14.67 / 15.06 ms | 30.7 / 31.1 MiB |
+| `c688c71` | 14.43 / 15.40 ms | 30.9 / 31.3 MiB |
+
+Both differences are inside the 10% floor, so this is no change, not an
+improvement. The absolute figures are higher than the 12.94 ms recorded
+for this scenario after GC1; that run and this one were not interleaved
+with each other, so the two are not comparable and the cause of the
+difference was not looked for.
+
 ## Implementation queue and dependencies
 
 - P2 CSSOM uses Stylo per D-003. Inline declarations and constructed
