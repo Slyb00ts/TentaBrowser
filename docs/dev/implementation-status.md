@@ -2640,6 +2640,15 @@ elements without it upgraded nothing that such a library defines.
   green, the click reports a point). Workspace 4844 passed; the feature set
   595 passed; fmt, both Clippy runs, `lint-deps`, `idl-manifest` and
   `cargo deny` clean.
+- **The 35-site sweep after DSD1 and SD2** (one run, 2026-11-17, same list
+  and driver): no navigation failed, the same three sites have no snapshot
+  elements (youtube.com, amazon.com, imdb.com), the 35 navigations took
+  54.8 s against 56.8 s and the console held 59 errors against 60. No site's
+  snapshot was compared line by line except developer.mozilla.org's, whose
+  first lines differ between the two runs: a promotion banner and menu
+  buttons stand where a list of links was. Whether the page served
+  something else or this package shows what it did not before has not
+  been determined.
 
 ## DSD1: declarative shadow roots (P2 package)
 
