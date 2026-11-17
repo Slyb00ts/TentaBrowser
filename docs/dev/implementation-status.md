@@ -3403,6 +3403,39 @@ this series with the cause recorded as not established.
 - **Not measured:** the resident memory of a long-lived page under the
   new timing, as for GC1, and a real site. QuickJS has no such collection.
 
+### The 35-site sweep after FB1 to GC2
+
+One run, 2026-11-17, same list and driver, release CLI built from
+`1329b24`. Console errors 49 (53 in the run after SW1); the 35
+navigations took 58.2 s (59.7 s). One run each, so neither difference is
+a measurement.
+
+- **Gone:** `Request is not defined` (three sites) and the two failures on
+  `document.fonts` (angular.dev went from 6 errors to 2).
+- **youtube.com had no snapshot in this run** and loaded in 1.2 s with no
+  console error at all, where it takes about 3 s and reports one. It was
+  then loaded five more times with the same build — alone, twice after
+  twitter.com in one tab, and twice after all fourteen sites that precede
+  it in the list — and had its content every time (2.8 to 3.4 s, 20 to 24
+  snapshot lines). What the one empty run was served was not captured.
+- **Still empty:** amazon.com and imdb.com, behind the operator's
+  challenge page.
+- **Named by pages now:** `HTMLHeadingElement is not defined` (github.com,
+  inside React Router's render, twice); a canvas with no 2D context
+  (`Cannot set properties of null (setting 'font')` twice, `Failed to
+  create chart`); `ReadableStream` (3) and `.stream is not a function`
+  (2); `the value matches no arm of the union` (2); `UnsupportedRuleType`
+  from `insertRule` (3); `Worker`, `SVGAnimatedString`, `DOMMatrix`,
+  `PerformanceNavigationTiming`, `getSelection`, `Illegal constructor`,
+  `expected an interface instance`, one each. Twelve `Failed to fetch`
+  and seven upload errors are requests the sweep machine's resolver does
+  not answer.
+- `HTMLHeadingElement` is one of about forty HTML element interfaces the
+  engine does not define: an element whose tag has no interface of its
+  own is a plain `HTMLElement`, and naming the missing interface in an
+  `instanceof` is a `ReferenceError`. `HTMLBodyElement`, `HTMLHtmlElement`
+  and the table and list interfaces are among them.
+
 ## Implementation queue and dependencies
 
 - P2 CSSOM uses Stylo per D-003. Inline declarations and constructed
