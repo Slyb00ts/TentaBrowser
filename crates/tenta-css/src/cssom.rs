@@ -1477,6 +1477,16 @@ impl CssStyleSheet {
     }
 }
 
+/// `CSS.escape(ident)`: the identifier serialized as CSSOM has it
+/// (<https://drafts.csswg.org/cssom/#serialize-an-identifier>), so that it can
+/// be put in a selector.
+pub fn escape_identifier(ident: &str) -> String {
+    let mut escaped = String::with_capacity(ident.len());
+    // Writing to a `String` cannot fail.
+    let _ = cssparser::serialize_identifier(ident, &mut escaped);
+    escaped
+}
+
 /// Evaluate a `CSS.supports(conditionText)` expression with Stylo.
 pub fn supports_condition(condition: &str, base_url: &Url) -> bool {
     configure_stylo();

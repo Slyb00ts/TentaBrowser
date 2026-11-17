@@ -198,9 +198,11 @@
 
   // ---- NodeFilter and TreeWalker (preorder walks) ----------------------------
 
-  // Puppeteer's selector waits walk the trees mutation records name. Only the
-  // forward walk is provided: `nextNode`, `currentNode`, `whatToShow` and a
-  // filter callback.
+  // Puppeteer's selector waits walk the trees mutation records name. The V8
+  // engine defines the traversal interfaces itself (the traversal prelude of
+  // `tenta-js`), and nothing below is installed there. This is the fallback
+  // for an engine without them, and only the forward walk: `nextNode`,
+  // `currentNode`, `whatToShow` and a filter callback.
   if (typeof global.NodeFilter === 'undefined') {
     const NodeFilter = {
       FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3,

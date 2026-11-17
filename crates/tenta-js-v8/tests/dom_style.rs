@@ -258,6 +258,29 @@ fn css_supports_uses_stylo_for_both_overloads() {
     );
 }
 
+/// `CSS.escape()` serializes an identifier as CSSOM does: a leading digit and
+/// control characters as code points, other special characters with a
+/// backslash, and the result selects the element whose id it was.
+#[test]
+fn css_escape_serializes_an_identifier() {
+    assert_eq!(
+        eval(
+            r#"
+            const el = document.querySelector('#target');
+            el.id = '1 a.b:c';
+            const found = document.querySelector('#' + CSS.escape(el.id)) === el;
+            el.id = 'target';
+            let missing;
+            try { CSS.escape(); missing = 'accepted'; } catch (error) { missing = error.name; }
+            [CSS.escape('abc'), CSS.escape('1 a.b:c'), CSS.escape('-'), CSS.escape('--x'),
+             CSS.escape('ab'), CSS.escape('é_-9'), CSS.escape(''), found, missing,
+             CSS.escape.length].join('|');
+        "#
+        ),
+        "abc|\\31 \\ a\\.b\\:c|\\-|--x|a\\1 b|\u{e9}_-9||true|TypeError|1"
+    );
+}
+
 #[test]
 fn style_is_the_same_object_on_every_read() {
     assert_eq!(

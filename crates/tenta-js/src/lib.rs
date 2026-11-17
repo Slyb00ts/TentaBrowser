@@ -19,4 +19,5 @@ pub mod modules;
 pub mod storage;
 pub mod structured_clone;
 pub mod stylesheets;
+pub mod traversal;
 pub mod xhr;

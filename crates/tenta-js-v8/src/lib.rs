@@ -2287,11 +2287,18 @@ impl Engine {
     }
 
     /// Runs the scripts that define what WebIDL cannot declare:
-    /// `DOMRect.fromRect()`, `toJSON()` and the iterator of `DOMRectList`. A
-    /// failure is not an error of the host; the members are then absent.
+    /// `DOMRect.fromRect()`, `toJSON()` and the iterator of `DOMRectList`, and
+    /// the traversal interfaces (`TreeWalker`, `NodeIterator`, `NodeFilter`),
+    /// whose algorithms call back into the page at every step. A failure is
+    /// not an error of the host; the members are then absent.
     pub fn install_preludes(&mut self) {
-        if self.native_failure().is_none() {
-            let _ = self.run_inner(tenta_js::geometry::GEOMETRY_PRELUDE_SOURCE, None);
+        for source in [
+            tenta_js::geometry::GEOMETRY_PRELUDE_SOURCE,
+            tenta_js::traversal::TRAVERSAL_PRELUDE_SOURCE,
+        ] {
+            if self.native_failure().is_none() {
+                let _ = self.run_inner(source, None);
+            }
         }
     }
 

@@ -83,6 +83,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `document.domain`, `crypto.randomUUID()`, `<meta>`/`<source>`/`<dialog>` interfaces (WIN2) | Implemented on both engines (generated); focused checks passed; not independently reviewed | What the sweep after CE1 and SD1 named most; a dialog has no top layer, `returnValue` or `close` event; see the section below |
 | Declarative shadow roots (DSD1) | Implemented in the parser and both sinks; focused checks passed; not independently reviewed | `<template shadowrootmode>` in a navigated document attaches a shadow root; `attachShadow()` takes it over; see the section below |
 | `MessageChannel`, `MessagePort`, `MessageEvent`, `window.postMessage()`; the window as receiver of `EventTarget` operations (MSG1) | Implemented on V8; focused checks passed; not independently reviewed | youtube.com, which stopped at both, renders; nothing is transferred between ports; QuickJS has no messaging; see the section below |
+| `TreeWalker`, `NodeIterator`, `NodeFilter`, `CSS.escape()` (TW1) | Traversal implemented as a prelude script on V8, `CSS.escape` generated on both engines; focused checks passed; not independently reviewed | Pages built with Lit threw at their first render; see the section below |
 | Nested flex and grid containers share their answers (LP1) | Implemented; measured; fragment output compared on a real page; not independently reviewed | One layout of a component-built page solved its containers 12 times less often; see the section below. Layout still starts over after every mutation |
 | Wrapper-graph collection at task ends is amortised (GC1) | Implemented on V8; measured; not independently reviewed; **changes when detached wrappers are reclaimed, which the specification may record as a decision** | A task end collects once 1024 wrappers are owed or the last collection is 250 ms old, not every time; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
@@ -2847,9 +2848,12 @@ report) gave two causes.
 - **Found on the way and open:** an uncaught exception fires no `error`
   event, so `window.onerror` and `addEventListener('error', …)` never run
   and there is no `ErrorEvent`; youtube.com still throws once reading
-  `startsWith` of undefined; amazon.com and imdb.com answer 202 with a
-  script challenge whose script fails here (`checkForceRefresh` of
-  undefined), which has not been looked into.
+  `startsWith` of undefined. amazon.com and imdb.com answer 202 with
+  `x-amzn-waf-action: challenge`: the operator's bot check. A local page
+  answered 202 with an external script runs here, so it is that script's
+  own logic that fails (`checkForceRefresh` of undefined), and it was not
+  taken apart: getting past a site's bot check is a decision for the
+  project owner, not a gap in the engine.
 - **Checks:** `tenta-js-v8::dom_messaging` 6 (the receiver, order and
   cloning, start and close, refusals, `MessageEvent`, `window.postMessage`),
   `tenta-js-qjs::runtime` 1 new. Workspace 4851 passed. The feature set
@@ -2864,6 +2868,45 @@ report) gave two causes.
   failed once each under the parallel run.
 - **Result:** youtube.com's snapshot has its banner, search form, main
   region and consent dialog (68 lines, one navigation by hand).
+
+## TW1: tree traversal and `CSS.escape()` (P2 package)
+
+developer.mozilla.org and microsoft.com threw `Cannot read properties of
+null (reading 'nextSibling')` at `nextNode`. Both render with Lit, which
+keeps one `TreeWalker` rooted at the document and points `currentNode` at
+the content of each template. The only `createTreeWalker` there was was a
+forward-only stand-in in the CDP interaction script, present only for pages
+driven through CDP or MCP, and it walked off the end of a tree its root did
+not contain.
+
+- **Traversal** (`crates/tenta-js/src/traversal.rs`, run by
+  `Engine::install_preludes` on V8): `NodeFilter` with its constants,
+  `TreeWalker` (all seven movements and a settable `currentNode`),
+  `NodeIterator` (`nextNode`, `previousNode`, the reference node and which
+  side of it the pointer is on), `Document.createTreeWalker()` and
+  `createNodeIterator()`, each following the algorithm of DOM §6, with the
+  filter given as a function or as an object with `acceptNode`. It is a
+  script and not a binding because every step may call the page's filter;
+  it reads the tree through `Node`'s accessors taken before page script
+  runs. A walk whose current node is outside the root ends with `null` when
+  it leaves that node's tree, as browsers do.
+- **`CSS.escape()`** (`idl/cssom/CSS.webidl`): cssparser's identifier
+  serializer. MDN called it once the walker let it get that far.
+- **Not built:** a `NodeIterator` is not adjusted when its reference node is
+  removed; the functions are script, so their `toString()` shows source and
+  not `[native code]`; QuickJS keeps the stand-in, and only when driven
+  through CDP or MCP.
+- **Checks:** `tenta-js-v8::dom_traversal` 6 (order both ways, `whatToShow`
+  and both filter forms, the seven movements, the template pattern, the
+  iterator, the interfaces' shape and errors), `tenta-js-v8::dom_style` 1
+  new. The feature set 595 passed. The workspace passed 4858 of 4858 on its
+  second run; on the first `tenta-js-qjs::runtime
+  recursive_microtasks_are_bounded` failed, a test that gives its script
+  10 ms of wall-clock time and passed 5 times of 5 alone. Output not kept,
+  cause not established.
+- **Result** (one navigation each, by hand): the error is gone from both
+  sites; developer.mozilla.org's snapshot has 469 lines where it had about
+  20.
 
 ## Implementation queue and dependencies
 

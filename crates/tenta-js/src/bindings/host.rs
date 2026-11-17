@@ -9625,6 +9625,10 @@ impl StaticRangeConstructor for HostObject {
 
 #[cfg(any(feature = "v8", feature = "quickjs"))]
 impl CSSOps for HostObject {
+    fn escape(ident: &str) -> Result<String, JsError> {
+        Ok(tenta_css::escape_identifier(ident))
+    }
+
     fn supports_1(condition_text: &str) -> Result<bool, JsError> {
         Ok(supports_condition(condition_text, &about_blank()))
     }
