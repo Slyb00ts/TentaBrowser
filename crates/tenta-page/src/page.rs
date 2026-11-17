@@ -391,6 +391,10 @@ struct PageState {
     /// The navigation that has started and has neither reached `load` nor
     /// been reported stopped.
     loading: Option<u64>,
+    /// The navigation the host asked for that has neither committed a document
+    /// nor ended. While there is one, the document it is about to replace
+    /// cannot start a navigation of its own ([`start_requested_navigation`]).
+    host_navigation_pending: Option<u64>,
 }
 
 impl PageState {
@@ -463,12 +467,24 @@ impl PageInner {
         });
     }
 
-    /// Called when a navigation commits its document. One the host asked for
-    /// starts with an empty script CPU window; one the document asked for goes
-    /// on spending the window it was started in (`crate::script_cpu`).
-    fn start_script_window(&self, requester: Requester) {
+    /// Called when the navigation `navigation_id` commits its document. One the
+    /// host asked for starts with an empty script CPU window; one the document
+    /// asked for goes on spending the window it was started in
+    /// (`crate::script_cpu`). From here on the document the page shows is the
+    /// one the host asked for, so it may navigate itself again.
+    fn note_commit(&self, navigation_id: u64, requester: Requester) {
         if requester == Requester::Host {
             self.script_cpu.restart();
+        }
+        self.host_navigation_over(navigation_id);
+    }
+
+    /// The host's navigation `navigation_id` committed or ended without a
+    /// document; a newer one of the host's stays pending.
+    fn host_navigation_over(&self, navigation_id: u64) {
+        let mut state = self.state.lock();
+        if state.host_navigation_pending == Some(navigation_id) {
+            state.host_navigation_pending = None;
         }
     }
 
@@ -498,6 +514,7 @@ impl PageInner {
     /// a failed or timed-out load, or a stop. Once per navigation, and not
     /// for one a newer navigation replaced.
     fn finish_navigation(&self, navigation_id: u64) {
+        self.host_navigation_over(navigation_id);
         let stopped = {
             let mut state = self.state.lock();
             (state.loading == Some(navigation_id)).then(|| state.loading.take())
@@ -730,6 +747,7 @@ impl Page {
                     title_generation: None,
                     frame: FrameState::initial(),
                     loading: None,
+                    host_navigation_pending: None,
                 }),
                 // Lazy event channel: allocated on first events() call (N-R3-5)
                 events: Mutex::new(None),
@@ -1022,6 +1040,9 @@ impl Page {
             // Bump generation to cancel any previous in-flight navigation
             state.navigation_generation = state.navigation_generation.wrapping_add(1);
             let generation = state.navigation_generation;
+            if requester == Requester::Host {
+                state.host_navigation_pending = Some(generation);
+            }
             // Wake any settle waiters so they check the new generation immediately (B-R3-1)
             drop(state);
             self.inner.generation_changed.notify_waiters();
@@ -1165,13 +1186,28 @@ const REQUESTED_NAVIGATION_TIMEOUT: Duration = Duration::from_secs(30);
 /// a host that asks right after the script entry that caused it sees it.
 ///
 /// Only `http` and `https` targets are followed, the same as for a navigation
-/// an action reports to a host; anything else is dropped.
+/// an action reports to a host; anything else is dropped. So is a request made
+/// while a navigation the host asked for has not committed yet.
 fn start_requested_navigation(inner: Arc<PageInner>, request: tenta_dom::NavigationRequest) {
     if !matches!(request.url.scheme(), "http" | "https") {
         tracing::debug!(
             page = ?inner.config.id,
             scheme = request.url.scheme(),
             "a navigation the page asked for was not followed: only http and https are"
+        );
+        return;
+    }
+    // The host's navigation outranks one asked for by the document it is
+    // about to replace, which goes on running until the new response commits:
+    // the agent that asked for a page must not be handed the one a timer of the
+    // previous page went to instead. Chromium ignores a renderer's navigation
+    // without a user gesture while a browser-initiated one is pending, for the
+    // same reason.
+    if inner.state.lock().host_navigation_pending.is_some() {
+        tracing::debug!(
+            page = ?inner.config.id,
+            url = %request.url,
+            "a navigation the page asked for was not followed: the host's own is pending"
         );
         return;
     }
@@ -1377,7 +1413,7 @@ async fn navigate(
                 });
             }
             if error_page.is_some() {
-                inner.start_script_window(requester);
+                inner.note_commit(generation, requester);
             }
             return Err(mapped);
         }
@@ -1436,7 +1472,7 @@ async fn navigate(
                 });
             }
             if error_page.is_some() {
-                inner.start_script_window(requester);
+                inner.note_commit(generation, requester);
             }
             return Err(mapped);
         }
@@ -1517,7 +1553,7 @@ async fn navigate(
         unreachable_url: None,
     };
     inner.state.lock().commit_frame(&commit);
-    inner.start_script_window(requester);
+    inner.note_commit(generation, requester);
     inner.announce_commit(commit);
 
     tracker.borrow_mut().note_parser_running(true);

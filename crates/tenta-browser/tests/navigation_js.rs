@@ -218,3 +218,134 @@ async fn a_host_can_navigate_by_post() {
     assert_eq!(echoed["headers"]["content-type"], "text/plain");
     world.close().await;
 }
+
+/// A tiny origin whose routes wait for each other, so the order the test is
+/// about is a fact of the exchange and not of the clock:
+///
+///  - `/old.html` is a page that waits for `/gate`, then assigns `location`
+///    and asks for `/after`;
+///  - `/gate` is answered once `/new.html` has been asked for;
+///  - `/new.html` is answered once `/after` has been asked for.
+///
+/// So the old page asks to navigate exactly while the host's navigation to
+/// `/new.html` is waiting for its response.
+async fn racing_origin() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::Notify;
+
+    const PATIENCE: Duration = Duration::from_secs(30);
+    const OLD: &str = "<!doctype html><title>Old</title><body><script>\
+        fetch('/gate').then(() => { location.href = '/stolen.html'; return fetch('/after'); });\
+        </script></body>";
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("an address"));
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = Arc::clone(&seen);
+    let new_asked = Arc::new(Notify::new());
+    let after_asked = Arc::new(Notify::new());
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let log = Arc::clone(&log);
+            let new_asked = Arc::clone(&new_asked);
+            let after_asked = Arc::clone(&after_asked);
+            tokio::spawn(async move {
+                let mut head = Vec::new();
+                let mut chunk = [0_u8; 2048];
+                while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match stream.read(&mut chunk).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => head.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let text = String::from_utf8_lossy(&head).to_string();
+                let path = text.split_whitespace().nth(1).unwrap_or("/").to_owned();
+                log.lock().expect("the log").push(path.clone());
+                // A permit is stored when the notification comes first, so the
+                // order the two connections are served in does not matter.
+                let (kind, body) = match path.as_str() {
+                    "/old.html" => ("text/html", OLD.to_owned()),
+                    "/gate" => {
+                        let _ = tokio::time::timeout(PATIENCE, new_asked.notified()).await;
+                        ("text/plain", "open".to_owned())
+                    }
+                    "/after" => {
+                        after_asked.notify_one();
+                        ("text/plain", "seen".to_owned())
+                    }
+                    "/new.html" => {
+                        new_asked.notify_one();
+                        let _ = tokio::time::timeout(PATIENCE, after_asked.notified()).await;
+                        (
+                            "text/html",
+                            "<!doctype html><title>New</title><body>new</body>".to_owned(),
+                        )
+                    }
+                    _ => (
+                        "text/html",
+                        "<!doctype html><title>Stolen</title><body>stolen</body>".to_owned(),
+                    ),
+                };
+                let _ = stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: {kind}\r\ncontent-length: {}\r\n\
+                             connection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await;
+            });
+        }
+    });
+    (base, seen)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_page_being_replaced_cannot_take_the_hosts_navigation_away() {
+    let world = world().await;
+    let (base, seen) = racing_origin().await;
+    world
+        .page
+        .goto(
+            &format!("{base}/old.html"),
+            Goto::default()
+                .wait_until(Settle::Load)
+                .timeout(Duration::from_secs(30)),
+        )
+        .await
+        .expect("the old page");
+    let navigation = world
+        .page
+        .goto(
+            &format!("{base}/new.html"),
+            Goto::default()
+                .wait_until(Settle::Load)
+                .timeout(Duration::from_secs(60)),
+        )
+        .await
+        .expect("the navigation the host asked for is the one that happens");
+    assert_eq!(navigation.final_url.as_str(), format!("{base}/new.html"));
+    assert_eq!(world.page.title().as_deref(), Some("New"));
+    assert!(
+        !world.page.navigation_in_flight(),
+        "nothing the old page asked for is still on its way"
+    );
+    let seen = seen.lock().expect("the log").clone();
+    assert!(
+        seen.iter().any(|path| path == "/after"),
+        "the old page ran past its `location` assignment: {seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|path| path == "/stolen.html"),
+        "the old page's navigation was not followed: {seen:?}"
+    );
+    world.close().await;
+}

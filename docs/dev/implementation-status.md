@@ -97,6 +97,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | Wrapper-graph collection at task ends is amortised (GC1) | Implemented on V8; measured; not independently reviewed; **changes when detached wrappers are reclaimed, which the specification may record as a decision** | A task end collects once 1024 wrappers are owed or the last collection is 250 ms old, not every time; see the section below |
 | Wrapper-graph collection at the end of a script run is amortised too (GC2) | Implemented on V8; measured; not independently reviewed; **extends the change of timing GC1 made, which the specification may record as a decision** | A script run ended with a full collection every time, about 0.45 ms on the smallest heap, so every `<script>` and every start-up script paid for one. It now collects under the rule a task end uses; see the section below |
 | Wrapper-graph collection after a settlement and a lifecycle event is amortised too (GC3) | Implemented on V8; measured; not independently reviewed; **the same change of timing as GC1 and GC2** | Fetch settlement, XHR settlement and `DOMContentLoaded`/`load` each ended with a full collection. They now collect under the rule a task end uses; only `trim_memory` collects every time |
+| The host's navigation outranks the page it is replacing (NAV1) | Implemented; focused check passed and mutation-checked; not independently reviewed; **a navigation rule the specification may record** | While a navigation the host asked for has not committed, a navigation the old document asks for is dropped. Before, a page that reloaded itself at that moment cancelled the host's navigation, and the agent was handed the page it had left; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
 
 QuickJS runtime implementation alone does not complete its timezone hook,
@@ -3601,6 +3602,71 @@ pages, behind the operator's challenge.
   `PerformanceNavigationTiming`, `getSelection`, `Illegal constructor`,
   one each. Nineteen are requests the sweep machine's resolver does not
   answer.
+
+### The host's navigation outranks the page it replaces (NAV1)
+
+In the sweep above the navigation to ebay.com answered with amazon.com's
+home page. The page before it had asked to reload itself while the
+host's navigation was waiting for its response, and a navigation the
+document asks for bumped the generation like any other, so it cancelled
+the host's; the tool then reported the navigation that replaced it.
+
+- **Rule.** From `begin_navigation` for the host until that navigation
+  commits a document (or an error document) or ends without one, a
+  navigation the document asks for — `location`, a form, a link — is
+  dropped (`PageState::host_navigation_pending`,
+  `start_requested_navigation`). The document being replaced goes on
+  running until the commit, as before; it just cannot navigate. After the
+  commit the new document may navigate itself, which is the script
+  redirect `a_script_that_redirects_while_loading_…` covers. Chromium
+  ignores a renderer's navigation without a user gesture while a
+  browser-initiated one is pending; this engine has no notion of a user
+  gesture there, so it drops every one, a click's included. Tools run one
+  at a time, so a click and a host navigation do not overlap through MCP
+  or the CLI; a CDP client that sends both at once gets the navigation it
+  asked for by URL.
+- **Checks:** `navigation_js.rs
+  the_page_being_replaced_cannot_take_the_hosts_navigation_away`, against
+  an origin whose routes wait for each other, so the old page assigns
+  `location` exactly while the host's request is unanswered; no clock is
+  involved. With the check disabled it fails with `net::ERR_ABORTED`.
+  The workspace passed 4927 of 4927; fmt, both Clippy runs, `lint-deps`,
+  `idl-manifest` and `cargo deny` were clean. The feature set passed 601
+  of 602: `wpt_driver a_live_harness_reports_from_its_own_timeout_…`,
+  the real-time race recorded above, failed in the full run and passed
+  three times out of three when its suite was run again.
+- **Not decided here:** `docs/spec` is not in this checkout; whether the
+  rule belongs in the navigation chapter is the owner's entry to make.
+
+### What the two empty pages of the sweep are
+
+amazon.com and imdb.com answer the first request with HTTP 202 and a
+page whose script fetches inputs, posts a verification and reloads. The
+sweep recorded them as empty, and the ledger said they were behind the
+operator's challenge. That was wrong about the cause: the engine runs
+that script to the end and the reload brings the real page — in a
+session that waited, `browser_wait_for` found amazon.com's content 1.0 s
+and 1.6 s after `browser_navigate` had returned (two runs, 2026-11-17).
+No interface the script uses is missing; `Worker` and `crypto.subtle`
+are absent and it does without them.
+
+What is early is the settle. Traced on a local copy of the page with
+`setTimeout`, `fetch` and `requestIdleCallback` wrapped: the script
+starts a `setTimeout(…, 10)` loop when it starts, and the verification
+request is issued from inside that loop once the inputs have arrived.
+A chain of one-shot timers stops being tracked after
+`tracked_timer_depth` (8) links — 80 ms of this loop — so on the real
+site, where the inputs take longer than that, the verification request
+has a background origin, holds nothing open, and `networkidle` is
+reached as soon as the inputs request ends (`settled.busy` false). The
+navigation tool returns the 202 page; the reload starts about 300 ms
+later. The sweep driver reads the page in the same millisecond, an
+agent usually later, and `browser_snapshot` waits for a navigation in
+flight, so an agent that is slower than the script sees the real page
+and one that is faster sees an empty one.
+
+The depth is a tunable of the settle rule (`02-architecture.md` §5.1),
+so it was not changed; the options are with the owner.
 
 ## Implementation queue and dependencies
 
