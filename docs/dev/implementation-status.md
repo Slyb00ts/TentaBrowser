@@ -96,6 +96,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | Nested flex and grid containers share their answers (LP1) | Implemented; measured; fragment output compared on a real page; not independently reviewed | One layout of a component-built page solved its containers 12 times less often; see the section below. Layout still starts over after every mutation |
 | Wrapper-graph collection at task ends is amortised (GC1) | Implemented on V8; measured; not independently reviewed; **changes when detached wrappers are reclaimed, which the specification may record as a decision** | A task end collects once 1024 wrappers are owed or the last collection is 250 ms old, not every time; see the section below |
 | Wrapper-graph collection at the end of a script run is amortised too (GC2) | Implemented on V8; measured; not independently reviewed; **extends the change of timing GC1 made, which the specification may record as a decision** | A script run ended with a full collection every time, about 0.45 ms on the smallest heap, so every `<script>` and every start-up script paid for one. It now collects under the rule a task end uses; see the section below |
+| Wrapper-graph collection after a settlement and a lifecycle event is amortised too (GC3) | Implemented on V8; measured; not independently reviewed; **the same change of timing as GC1 and GC2** | Fetch settlement, XHR settlement and `DOMContentLoaded`/`load` each ended with a full collection. They now collect under the rule a task end uses; only `trim_memory` collects every time |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
 
 QuickJS runtime implementation alone does not complete its timezone hook,
@@ -3543,6 +3544,36 @@ object nor a boolean.
   goldens and its 88 tests with all features. The workspace passed 4926
   of 4926 and the feature set 601 of 601; fmt, both Clippy runs,
   `lint-deps`, `idl-manifest` and `cargo deny` were clean.
+
+### GC3: settlements and lifecycle events collect only when a collection is owed (V8)
+
+GC2 left three entries that ended with a full collection every time:
+`settle_fetches`, `settle_xhr` and `dispatch_lifecycle`. They are the
+same case — a page that makes a hundred requests settled a hundred times
+and collected a hundred times — and they now call `collect_after_task`
+like a task end and a script run. `trim_memory` is the one entry that
+still collects unconditionally, which is what it is for.
+
+- **Result.** Release, 25 interleaved pairs, `c51014d` against this tree,
+  2026-11-17: `bench/js_xhr.py` navigation p50/p95 13.28/13.73 ms to
+  8.88/9.36 ms (-33.1%), process RSS 31.3 MiB both (p95 32.1 and
+  31.9 MiB). `bench/listener_gc.py` wall 48.74 to 48.27 ms and CPU 119.04
+  to 119.00 ms, its five explicit collections between -3.9% and +0.8%:
+  no change, and it makes no request. The scenario's page makes one XHR
+  and one `fetch()` and fires both lifecycle events, which is four of
+  these entries; how many collections they ran, and how long each took
+  on that page's heap, was not counted.
+- **What it changes for a caller.** What GC1 and GC2 changed: records and
+  wrappers that became unreachable in a settlement are reclaimed at the
+  next collection. No test depended on the earlier timing.
+- **Checks:** one new test in `task_collection_tests.inc.rs`, 200 XHR
+  settlements and 200 empty fetch batches against the collection count;
+  it fails with `graph_checkpoint` back in the two native-dispatch
+  entries. The lifecycle entry has no test of its own. The workspace
+  passed 4927 of 4927 and the feature set 601 of 601; fmt, both Clippy
+  runs, `lint-deps`, `idl-manifest` and `cargo deny` were clean.
+- **Not measured:** a real site, and the resident memory of a long-lived
+  page, as for GC1 and GC2.
 
 ## Implementation queue and dependencies
 

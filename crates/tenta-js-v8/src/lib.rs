@@ -2410,17 +2410,19 @@ impl Engine {
         }
     }
 
-    /// Collects the wrapper graph at the end of a task or of a script run,
-    /// when a collection is owed.
+    /// Collects the wrapper graph at the end of a task, a script run, a
+    /// settlement or a lifecycle event, when a collection is owed.
     ///
     /// A collection is a full garbage collection: about half a millisecond on
     /// the smallest heap, 2 ms on a small page's and over 10 ms on a large
-    /// one's. Script runs, timer callbacks, animation frames and image events
-    /// each end with one, a page with fifty scripts ends fifty runs, and a
-    /// page that animates ends a task every frame, so paying for a collection
-    /// each time spends most of a frame on it. One is owed once the wrappers made since the last collection reach
-    /// the count at which the next binding call would collect anyway, or once
-    /// the last collection is [`TASK_COLLECTION_INTERVAL`] old. What is left
+    /// one's. Script runs, timer callbacks, animation frames, image events,
+    /// fetch and XHR settlements each end with one; a page with fifty scripts
+    /// ends fifty runs, one that makes a hundred requests settles a hundred
+    /// times, and one that animates ends a task every frame, so paying for a
+    /// collection each time spends most of a frame on it. One is owed once
+    /// the wrappers made since the last collection reach the count at which
+    /// the next binding call would collect anyway, or once the last
+    /// collection is [`TASK_COLLECTION_INTERVAL`] old. What is left
     /// uncollected in between stays within the bound admission enforces inside
     /// a task, and [`PageEngine::trim_memory`] collects without waiting.
     fn collect_after_task(&mut self) {
@@ -2546,7 +2548,9 @@ impl Engine {
         if queued {
             self.host.owe_checkpoint();
         }
-        self.graph_checkpoint();
+        // A settlement ends a task like any other: the wrapper graph is
+        // collected when a collection is owed, not once per batch.
+        self.collect_after_task();
     }
 
     /// Delivers a batch of XHR completions: for each, the event its outcome
@@ -2649,7 +2653,7 @@ impl Engine {
             }
         }
         drop(_native);
-        self.graph_checkpoint();
+        self.collect_after_task();
     }
 
     /// Installs the page's linked stylesheets for the document this engine is
@@ -2853,7 +2857,7 @@ impl Engine {
             dom.ctx.events.borrow_mut().remove(event_key);
         }
         drop(_native);
-        self.graph_checkpoint();
+        self.collect_after_task();
     }
 
     /// Invokes up to `budget` handlers from the ready queue and returns how many

@@ -153,3 +153,34 @@ fn a_script_run_that_reaches_the_wrapper_bound_collects_at_its_end() {
     assert_eq!(wrapper_debt(&engine), 0);
     assert_eq!(engine.native_failure(), None);
 }
+
+#[test]
+fn settlements_share_collections_of_the_wrapper_graph() {
+    let document = Rc::new(RefCell::new(Document::new()));
+    let mut engine = Engine::with_document(document);
+    // The first entry of an engine collects: nothing has been collected yet.
+    engine
+        .evaluate("globalThis.heard=0;addEventListener('error',()=>{heard++});'on'")
+        .unwrap();
+    let before = collections(&engine);
+    for _ in 0..200 {
+        // A completion at the window is delivered as an `error` event there;
+        // each batch is one settlement.
+        engine.settle_xhr(vec![tenta_js::xhr::XhrCompletion {
+            handle: tenta_js::xhr::XhrHandle {
+                target: tenta_js::bindings::host::encode_window(),
+                request: 0,
+            },
+            outcome: FetchOutcome::Failed("refused".to_owned()),
+            origin: tenta_core::Origin::Tracked,
+        }]);
+        engine.settle_fetches(Vec::new());
+    }
+    let during = collections(&engine) - before;
+    assert!(
+        during < 100,
+        "200 settlements ran {during} garbage collections; each paid for its own"
+    );
+    assert_eq!(engine.evaluate("heard").unwrap(), "200");
+    assert_eq!(engine.native_failure(), None);
+}
