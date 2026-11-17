@@ -1673,13 +1673,16 @@ generated code:
   in the argument position, so a generated member has no way to hand the bytes
   it wrote back to the caller's view — the generator has no out-parameter
   mechanism at all. `TextDecoderStream` and `TextEncoderStream` are absent for a
-  different reason: they are `TransformStream` subclasses and the Streams
-  interfaces have not been lowered yet.
+  different reason: they are `TransformStream` subclasses, and the streams
+  prelude has `ReadableStream` only.
 - `Response` declares the part of `Body` that reads the whole body —
   `bodyUsed`, `arrayBuffer()`, `blob()`, `bytes()`, `json()`, `text()` — and
-  `clone()`. `body`, `formData()` and `textStream()` are left out: the first
-  and the last are a `ReadableStream`, and `formData()` needs a multipart
-  parser. `Response.body`'s stand-in in the record is a `Vec<u8>`, which is
+  `clone()`. `body`, `formData()` and `textStream()` are not declared: the
+  first and the last are a `ReadableStream`, and `formData()` needs a
+  multipart parser. On V8 `body` exists all the same, defined by the streams
+  prelude (`crates/tenta-js/src/streams.rs`) as a default stream that delivers
+  the body in one chunk; it is not generated from WebIDL. The body's stand-in
+  in the record is a `Vec<u8>`, which is
   what makes *unusable* "the body has already been read" and what makes
   `clone()` a copy of the bytes where the standard tees a stream. `blob()`'s
   type is the first `Content-Type` value that parses, lower-cased and
@@ -1759,8 +1762,9 @@ generated code:
 - `Blob` declares the half a constructor and a byte sequence can serve — both
   constructors, `size`, `type`, `slice()`, `text()`, `arrayBuffer()` and
   `bytes()` — and leaves out `stream()`, `textStream()` and the `Serializable`
-  attribute. The two stream members need the Streams interfaces (`d-5a`), and
-  `Serializable` needs
+  attribute. The two stream members need the Streams interfaces (`d-5a`);
+  on V8 the streams prelude defines `stream()` over `bytes()`, undeclared
+  here, and `textStream()` stays absent. `Serializable` needs
   a structured clone. `FileList`, `FileReader`, `FileReaderSync` and
   `URL.createObjectURL()` are absent for reasons of their own and are listed in
   `idl/fileapi/Blob.webidl`'s header beside the deviations the declarations

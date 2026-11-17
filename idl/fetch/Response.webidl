@@ -23,8 +23,11 @@
 //    `"hi"` rather than `"104,105"`, and anything else is stringified.
 //  - `Body` declares the members that read the whole body: `bodyUsed`,
 //    `arrayBuffer()`, `blob()`, `bytes()`, `json()` and `text()`. `body` and
-//    `textStream()` are left out because each is a `ReadableStream`
-//    (`Response.body` arrives with Streams, `d-5b`), and `formData()` because
+//    `textStream()` are not declared because each is a `ReadableStream`, which
+//    is not WebIDL in this repository; on V8 the streams prelude
+//    (`crates/tenta-js/src/streams.rs`) defines `body` in script, over
+//    `bytes()`, as one chunk (a streamed `Response.body` is `d-5b`).
+//    `formData()` is left out because
 //    it needs a multipart parser. A declared-but-unimplemented member is the
 //    bug class slice 4a removed, so none is declared. `blob()`'s type is the
 //    first `Content-Type` value that parses as a MIME type, lower-cased and

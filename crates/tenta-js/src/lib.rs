@@ -19,6 +19,7 @@ pub mod location;
 pub mod modules;
 pub mod rejection;
 pub mod storage;
+pub mod streams;
 pub mod structured_clone;
 pub mod stylesheets;
 pub mod traversal;

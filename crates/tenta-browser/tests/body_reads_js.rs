@@ -1,5 +1,8 @@
 //! Bodies over a real socket and on both engines.
 //!
+//! Streamed, on V8 only: the body of a fetched response read through
+//! `Response.body` with a reader and with `for await`.
+//!
 //! Read: `XMLHttpRequest`'s `json`, `arraybuffer` and `blob` response types,
 //! and `Response.arrayBuffer()`, `blob()` and `clone()` on what `fetch()`
 //! resolves with. Sent: a `FormData`, a `URLSearchParams` and a `Blob` as the
@@ -176,4 +179,44 @@ async fn v8_sends_a_form_params_and_a_blob_as_a_body() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn quickjs_sends_a_form_params_and_a_blob_as_a_body() {
     assert_eq!(send_bodies(JsEngine::QuickJs).await, SENT);
+}
+
+/// A page that reads one fetched body through a reader and another by
+/// iterating the stream, and decodes what each delivered.
+const STREAMING_PAGE: &str = r#"<!doctype html><html><body><script>
+window.out = {};
+function decode(chunks) {
+    var decoder = new TextDecoder();
+    return JSON.parse(chunks.map(function (chunk) { return decoder.decode(chunk, {stream: true}); }).join(''));
+}
+fetch('/api/echo?item=gamma').then(function (response) {
+    var reader = response.body.getReader(), chunks = [];
+    return reader.read().then(function step(result) {
+        if (result.done) return [response, chunks];
+        chunks.push(result.value);
+        return reader.read().then(step);
+    });
+}).then(function (read) {
+    out.reader = [read[1].every(function (chunk) { return chunk instanceof Uint8Array; }),
+                  decode(read[1]).query, read[0].bodyUsed].join(',');
+});
+(async function () {
+    var response = await fetch('/api/echo?item=delta'), chunks = [];
+    for await (var chunk of response.body) chunks.push(chunk);
+    out.iterated = [decode(chunks).query, response.body.locked].join(',');
+})();
+</script></body></html>"#;
+
+#[cfg(feature = "v8")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v8_reads_a_fetched_body_as_a_stream() {
+    assert_eq!(
+        evaluate_on(
+            JsEngine::V8,
+            STREAMING_PAGE,
+            "[out.reader, out.iterated].join('|')"
+        )
+        .await,
+        "true,item=gamma,true|item=delta,false"
+    );
 }

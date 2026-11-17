@@ -23,10 +23,13 @@
 //    (<https://w3c.github.io/FileAPI/#stream-method-algo>) and
 //    `[NewObject] ReadableStream textStream()`
 //    (<https://w3c.github.io/FileAPI/#text-stream-method-algo>) need the
-//    Streams machinery this engine does not have (`d-5a`, the Streams package;
-//    `d-5b` is `Response.body`, which consumes one). `arrayBuffer()` and
-//    `bytes()` are read through the stream in the standard and from the byte
-//    sequence the record holds here; each resolves with a copy.
+//    Streams interfaces, which are not WebIDL in this repository (`d-5a`, the
+//    Streams package; `d-5b` is `Response.body`, which consumes one). On V8
+//    the streams prelude (`crates/tenta-js/src/streams.rs`) defines `stream()`
+//    in script over `bytes()`, so it is not declared here; `textStream()` is
+//    absent. `arrayBuffer()` and `bytes()` are read through the stream in the
+//    standard and from the byte sequence the record holds here; each resolves
+//    with a copy.
 //  - `FileList` (<https://w3c.github.io/FileAPI/#filelist-section>), and with it
 //    the `files` attribute every `HTMLInputElement` would carry: nothing in
 //    this engine can produce one. `HTMLInputElement` in `idl/dom/dom.webidl`

@@ -98,6 +98,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | Wrapper-graph collection at the end of a script run is amortised too (GC2) | Implemented on V8; measured; not independently reviewed; **extends the change of timing GC1 made, which the specification may record as a decision** | A script run ended with a full collection every time, about 0.45 ms on the smallest heap, so every `<script>` and every start-up script paid for one. It now collects under the rule a task end uses; see the section below |
 | Wrapper-graph collection after a settlement and a lifecycle event is amortised too (GC3) | Implemented on V8; measured; not independently reviewed; **the same change of timing as GC1 and GC2** | Fetch settlement, XHR settlement and `DOMContentLoaded`/`load` each ended with a full collection. They now collect under the rule a task end uses; only `trim_memory` collects every time |
 | The host's navigation outranks the page it is replacing (NAV1) | Implemented; focused check passed and mutation-checked; not independently reviewed; **a navigation rule the specification may record** | While a navigation the host asked for has not committed, a navigation the old document asks for is dropped. Before, a page that reloaded itself at that moment cancelled the host's navigation, and the agent was handed the page it had left; see the section below |
+| `ReadableStream`, its default reader and controller, the queuing strategies, `Response.body` and `Blob.stream()` (ST1) | Implemented on V8 as a script built at first use; focused checks passed; measured; not independently reviewed; **Streams as script rather than WebIDL is a choice the specification may record** | A page could not make or read a stream at all. Default streams only: no byte streams or BYOB readers, no `WritableStream`, `TransformStream`, `pipeTo()` or `pipeThrough()`; a body is delivered as one chunk; a stream is not accepted as a body; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
 
 QuickJS runtime implementation alone does not complete its timezone hook,
@@ -3650,23 +3651,114 @@ and 1.6 s after `browser_navigate` had returned (two runs, 2026-11-17).
 No interface the script uses is missing; `Worker` and `crypto.subtle`
 are absent and it does without them.
 
-What is early is the settle. Traced on a local copy of the page with
-`setTimeout`, `fetch` and `requestIdleCallback` wrapped: the script
-starts a `setTimeout(…, 10)` loop when it starts, and the verification
-request is issued from inside that loop once the inputs have arrived.
-A chain of one-shot timers stops being tracked after
-`tracked_timer_depth` (8) links — 80 ms of this loop — so on the real
-site, where the inputs take longer than that, the verification request
-has a background origin, holds nothing open, and `networkidle` is
-reached as soon as the inputs request ends (`settled.busy` false). The
-navigation tool returns the 202 page; the reload starts about 300 ms
-later. The sweep driver reads the page in the same millisecond, an
-agent usually later, and `browser_snapshot` waits for a navigation in
-flight, so an agent that is slower than the script sees the real page
-and one that is faster sees an empty one.
+What is early is the settle, and the first account of why (commit
+`ba783ae` and its message) named one of two causes and not the one that
+decides it. Measured on 2026-11-17 with settle transitions printed from a
+scratch build (depth 64, otherwise `ba783ae`):
 
-The depth is a tunable of the settle rule (`02-architecture.md` §5.1),
-so it was not changed; the options are with the owner.
+- The script polls with a `setTimeout(…, 10)` loop from the moment it
+  starts; the inputs request and the verification request are issued and
+  answered while that loop runs. On amazon.com the verification answer
+  arrived 705 ms into the navigation with no tracked task left, and the
+  machine settled 0.9 ms later. A background task ran 51 ms after that and
+  called `location.reload()`: the script waits about 50 ms on a one-shot
+  timer after the verification, and a one-shot timer longer than
+  `tracked_timer_max` (32 ms) is page activity, not a deferral.
+- The polling chain passes `tracked_timer_depth` (8) after 80 ms. With the
+  depth alone raised to 64 both sites still returned the 202 page, three
+  loads out of three each.
+
+| Build (release CLI, MCP, three loads of each site) | amazon.com | imdb.com |
+|---|---|---|
+| `ba783ae` (32 ms, depth 8) | 202 page, 3 of 3 | 202 page, 3 of 3 |
+| depth 64 | 202 page, 3 of 3 | 202 page, 3 of 3 |
+| 100 ms, depth 8 | real page, 3 of 3 | 202 page, 3 of 3 |
+| 100 ms, depth 64 | real page, 3 of 3 | real page, 3 of 3 |
+
+What 100 ms and depth 64 cost, on seven other sites loaded four times
+with each build, alternating: duckduckgo.com 1.25 to 1.47 s became 1.76
+to 2.15 s and was reported busy four times out of four (none before);
+onet.pl 1.61 to 2.29 s became 2.11 to 2.34 s, busy four of four (one of
+four before). Both run a short timer loop that never ends, which now
+holds the settle until the busy cap (500 ms for MCP). twitter.com,
+developer.mozilla.org, github.com, nytimes.com and react.dev did not
+move outside their own spread. One sweep of the 35 sites with each
+build was also run; single loads of wikipedia.org, svelte.dev and
+ebay.com were about 5 s slower in the unchanged build's sweep than in
+the other two, so the sweep totals (67.5 s unchanged, 51.0 s with depth
+64, 62.2 s with both) are not a comparison of the builds.
+
+Both numbers are tunables of the settle rule (`02-architecture.md`
+§5.1), so neither was changed; the choice is the owner's. A rule bounded
+by the age of a timer chain rather than its depth, which would stop a
+loop that never ends from costing the busy cap on every settle, was not
+built or measured.
+
+### `ReadableStream`, `Response.body` and `Blob.stream()` (ST1)
+
+Three pages of the sweep stopped at `ReadableStream is not defined` and
+one at `.stream is not a function`. The Streams Standard's readable half
+is now there, as script (`crates/tenta-js/src/streams.rs`): a stream is a
+queue between two pieces of page script, its algorithms are promises and
+callbacks at every step and touch neither the document nor the network,
+so there is no engine state to keep in Rust. The algorithms are the
+standard's, under its names.
+
+- **What a page gets.** `ReadableStream` with the default controller
+  (constructor, `locked`, `cancel()`, `getReader()`, `tee()`, `values()`,
+  `[Symbol.asyncIterator]`, the static `from()`),
+  `ReadableStreamDefaultReader`, `ReadableStreamDefaultController`,
+  `CountQueuingStrategy`, `ByteLengthQueuingStrategy`,
+  `Response.prototype.body` and `Blob.prototype.stream()`.
+- **Built at first use.** Run for every page, the script made the
+  preludes of an engine 0.41 ms slower to install (1.52 to 1.93 ms p50,
+  25 interleaved pairs, release) and `S-js-xhr` 8.96 to 9.36 ms. So the
+  engine defines only the names — five lazy data properties of the
+  global, a native getter for `body`, a native `stream()` — and runs the
+  script when a page first uses one
+  (`crates/tenta-js-v8/src/host/streams.rs`), as `customElements` and the
+  observers already are. Measured again the same way: preludes 1.55 to
+  1.58 ms, `S-js-xhr` navigation p50/p95 9.09/9.39 to 9.09/9.43 ms, RSS
+  31.3 to 31.4 MiB, `S-dom-calls` +2.1% and +2.5%; none of it is a
+  difference. The first use on a page pays what every page paid before;
+  that was not timed on its own.
+- **The other preludes cost 1.5 ms a page** (geometry, traversal, fonts
+  and the rejection events together, against 2.5 ms to build the engine
+  under them). That was not known before this measurement and nothing
+  was done about it here.
+- **Deviations.** No byte streams: `type: 'bytes'` and
+  `getReader({ mode: 'byob' })` throw a `TypeError` that says so, and
+  the two body streams are default streams of `Uint8Array` chunks where
+  the standard's are byte streams. No `WritableStream` or
+  `TransformStream`, so `pipeTo()` and `pipeThrough()` are absent rather
+  than present and failing, and so are `TextDecoderStream`,
+  `TextEncoderStream` and the compression streams. A body is one chunk,
+  because the engine holds a body whole; reading that chunk is what uses
+  the body up, and a stream that is only obtained or locked does not
+  stop `text()` from reading the body, where the standard rejects for a
+  locked stream. `Request.prototype.body` is not defined.
+- **A stream is not a body.** The body union has no stream arm, so
+  `new Response(stream)` and a stream given to `fetch()` are converted to
+  the string `[object ReadableStream]`, as any other object is. A page
+  that could not construct a stream never reached that; one that can
+  now does, and gets a wrong body rather than an error. This is the
+  next thing to close.
+- **`bytes()` is read from the prototype when a stream is made**, so a
+  page that replaced `Response.prototype.bytes` or `Blob.prototype.bytes`
+  is asked through its replacement.
+- **QuickJS** has none of it.
+- **Checks:** `crates/tenta-js-v8/tests/dom_streams.rs`, 25 tests: the
+  members, what the constructors refuse, reading, pulling under the two
+  high water marks, errors from `start`, `pull` and the size function,
+  release, cancel, `tee()`, async iteration with and without
+  `preventCancel`, `from()`, the two body streams and each name as the
+  first one a page uses. `body_reads_js.rs
+  v8_reads_a_fetched_body_as_a_stream` reads a fetched body over a
+  socket with a reader and with `for await`. Not run: the Web Platform
+  Tests for streams. The workspace passed 4952 of 4952; fmt, both Clippy
+  runs, `lint-deps`, `idl-manifest` and `cargo deny` were clean. The
+  feature set passed 602 of 603: the `wpt_driver` two-clock test failed
+  in the full run again and passed alone, twice out of twice.
 
 ## Implementation queue and dependencies
 

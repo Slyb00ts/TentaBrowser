@@ -11460,6 +11460,16 @@ fn extract_body(ctx: &SharedContext, body: BodyInit) -> Result<(Vec<u8>, Option<
     }
 }
 
+/// Whether `response` names a `Response` that has a body, which is what
+/// decides between a stream and `null` for `Response.prototype.body`
+/// (`crate::streams`). `None` for a handle that names no `Response`.
+pub fn response_has_body(ctx: &SharedContext, response: Handle<Response>) -> Option<bool> {
+    match host_record_of(&ctx.host_records.borrow(), response.bits()) {
+        Some(HostRecord::Response(record)) => Some(record.body.is_some()),
+        _ => None,
+    }
+}
+
 /// The record handle `bits` name, when they name a host record at all.
 ///
 /// The tag is checked before the key is read: a handle that is not a host

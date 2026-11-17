@@ -114,6 +114,7 @@ pub(crate) mod custom_elements;
 pub(crate) mod history;
 mod message_channel;
 mod observers;
+pub(crate) mod streams;
 mod window_extras;
 mod window_misc;
 guarded_callback!(guarded_location_constructor => location_constructor);
