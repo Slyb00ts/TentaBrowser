@@ -660,15 +660,17 @@ queued as a microtask (never applied where it is handed over), so the drain sets
 
 Deliberate deviations in this slice, each with the slice that removes it:
 
-- `RequestInfo`'s first arm is not implemented: `Request` is not a global, so the
-  argument is always read through the `USVString` arm. That arm's conversion is
-  lossy rather than checked, which makes two inputs *reject* where the standard
-  throws a `TypeError` before the body runs — `fetch()` with no argument
-  (stringified to `"undefined"`) and `fetch({})` (stringified to
-  `"[object Object]"`), both of which then fail URL resolution. The difference is
-  a synchronous throw versus a rejected promise, so a page wrapping the call in
-  `try`/`catch` sees it differently. `Request` arrives with the request-body
-  work.
+- `RequestInfo` is `(Request or USVString)`: a `Request` is taken by brand and
+  fetched as it was made, with `init` applied over it, and anything else is
+  read through the `USVString` arm. That arm's conversion is lossy rather than
+  checked, which makes two inputs *reject* where the standard throws a
+  `TypeError` before the body runs — `fetch()` with no argument (stringified to
+  `"undefined"`) and `fetch({})` (stringified to `"[object Object]"`), both of
+  which then fail URL resolution. The difference is a synchronous throw versus a
+  rejected promise, so a page wrapping the call in `try`/`catch` sees it
+  differently. `Request` itself is described in `idl/fetch/Request.webidl`'s
+  header: its `signal` is the signal it was given rather than one that follows
+  it, and its body is a byte sequence, so `clone()` copies.
 - `RequestInit` (slice b-6.5, widened by CO1 on 2026-11-16) is the Fetch
   Standard's dictionary, declared in full in `idl/fetch/Request.webidl`.
   Served: `method`, `headers`, `body`; `credentials` in all three modes and
@@ -702,8 +704,8 @@ Deliberate deviations in this slice, each with the slice that removes it:
   (`{credentials: "bogus"}`) — WebIDL's order, and what a browser does. (b) Every
   throw on the argument-conversion path is a synchronous throw where a browser
   *rejects*: the standard runs the `Request` constructor inside `fetch()`'s
-  promise and rejects with whatever it throws, and this engine has no `Request`
-  to construct. (c) **Changed by CO1, and a decision to record:** the refusal
+  promise and rejects with whatever it throws, while the hand-written `fetch`
+  converts its two arguments before the promise exists. (c) **Changed by CO1, and a decision to record:** the refusal
   was by presence, so a page that wrote out a default (`{signal: null}`,
   `{cache: "default"}`) or named a mode (`{credentials: "include"}`) was
   refused where a browser proceeds. It is now by value: a member is accepted

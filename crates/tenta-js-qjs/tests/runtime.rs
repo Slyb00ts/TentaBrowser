@@ -312,6 +312,30 @@ fn a_body_is_read_as_a_buffer_bytes_or_a_blob_and_a_response_is_cloned() {
     );
 }
 #[test]
+fn a_request_is_constructed_copied_cloned_and_read() {
+    let mut engine = page();
+    engine
+        .evaluate(
+            "globalThis.out=[];\
+             const r=new Request('http://fixture.test/a?x=1',{method:'post',headers:{'X-A':'1'},body:'one',credentials:'include'});\
+             out.push(r.method,r.url,r.headers.get('x-a'),r.credentials,r.mode,r.bodyUsed,r.signal instanceof AbortSignal,r.signal===r.signal);\
+             const c=r.clone();const d=new Request(r,{method:'PUT'});\
+             out.push(c.method,d.method,r.bodyUsed,d.headers.get('x-a'));\
+             try{new Request(r);out.push('copied')}catch(e){out.push(e instanceof TypeError)}\
+             try{new Request('http://fixture.test/a',{body:'x'});out.push('made')}catch(e){out.push(e instanceof TypeError)}\
+             const s=new AbortController();const g=new Request('http://fixture.test/b',{signal:s.signal});s.abort();\
+             out.push(g.signal===s.signal,g.signal.aborted);\
+             c.text().then(t=>{out.push(t);return d.text()}).then(t=>out.push(t));",
+        )
+        .unwrap();
+    engine.run_microtasks();
+    assert_js(
+        &mut engine,
+        "out.join('|')",
+        "POST|http://fixture.test/a?x=1|1|include|cors|false|true|true|POST|PUT|true|1|true|true|true|true|one|one",
+    );
+}
+#[test]
 fn abort_throws_the_exact_reason() {
     let mut engine = page();
     assert_js(

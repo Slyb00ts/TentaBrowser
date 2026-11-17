@@ -29,7 +29,9 @@ mod forms;
 mod geometry;
 mod media;
 mod mutation_observer;
+mod request;
 mod shadow;
+pub use request::{RequestParts, RequestRecord, RequestSignal, request_parts};
 pub mod storage;
 mod tree_extras;
 
@@ -84,13 +86,14 @@ use super::{
     MouseEventInit, MouseEventOps, NamedNodeMap, NamedNodeMapOps, Node, NodeList, NodeListOps,
     NodeOps, NodeOrDomString, ProcessingInstruction, ProcessingInstructionOps,
     ProgressEventConstructor, ProgressEventInit, ProgressEventOps, Promise, Range,
-    RangeConstructor, RangeOps, Realm, ReferrerPolicy, RequestCache, RequestCredentials,
-    RequestInit, RequestMode, RequestRedirect, Response, ResponseConstructor, ResponseInit,
-    ResponseOps, ResponseType, SVGElementOps, StaticRangeConstructor, StaticRangeInit,
-    StaticRangeOps, Text, TextDecodeOptions, TextDecoderConstructor, TextDecoderOps,
-    TextDecoderOptions, TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor,
-    UIEventInit, UIEventOps, URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor,
-    URLSearchParamsOps, WheelEventConstructor, WheelEventInit, WheelEventOps, Window, WindowProxy,
+    RangeConstructor, RangeOps, Realm, ReferrerPolicy, Request, RequestCache, RequestConstructor,
+    RequestCredentials, RequestDestination, RequestDuplex, RequestInfo, RequestInit, RequestMode,
+    RequestOps, RequestRedirect, Response, ResponseConstructor, ResponseInit, ResponseOps,
+    ResponseType, SVGElementOps, StaticRangeConstructor, StaticRangeInit, StaticRangeOps, Text,
+    TextDecodeOptions, TextDecoderConstructor, TextDecoderOps, TextDecoderOptions,
+    TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
+    URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
+    WheelEventConstructor, WheelEventInit, WheelEventOps, Window, WindowProxy,
     XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps, XMLHttpRequestOps,
     XMLHttpRequestResponseType, XMLSerializerConstructor, XMLSerializerOps,
 };
@@ -293,6 +296,8 @@ pub enum HostRecord {
     Signal(SignalRecord),
     /// A `Response`.
     Response(ResponseRecord),
+    /// A `Request`.
+    Request(RequestRecord),
     /// A `TextDecoder`.
     TextDecoder(TextDecoderRecord),
     /// A `TextEncoder`, which has no state at all.
@@ -461,6 +466,7 @@ impl HostRecord {
             HostRecord::Controller(_) => "AbortController",
             HostRecord::Signal(_) => "AbortSignal",
             HostRecord::Response(_) => "Response",
+            HostRecord::Request(_) => "Request",
             HostRecord::TextDecoder(_) => "TextDecoder",
             HostRecord::TextEncoder => "TextEncoder",
             HostRecord::DomParser => "DOMParser",
@@ -659,8 +665,8 @@ pub struct HeadersRecord {
     pub list: HeaderList,
     /// The guard the list is under.
     pub guard: HeadersGuard,
-    /// The `Response` whose header list this is, while that response's record is
-    /// alive.
+    /// The `Response` or the `Request` whose header list this is, while that
+    /// owner's record is alive.
     ///
     /// The `Response` constructor creates this object eagerly, because
     /// `[SameObject]` makes every read of `response.headers` answer with the same
@@ -3417,16 +3423,6 @@ impl HostObject {
             return f(record);
         }
         default
-    }
-
-    /// Mutates the `Response` this host stands for, if it is a live one. A
-    /// no-op for any other host.
-    fn with_response_mut(&self, f: impl FnOnce(&mut ResponseRecord)) {
-        if let HostObject::Host { ctx, key } = self
-            && let Some(HostRecord::Response(record)) = ctx.host_records.borrow_mut().get_mut(*key)
-        {
-            f(record);
-        }
     }
 
     /// Reads the `AbortController` this host stands for, or returns `default`
@@ -9802,8 +9798,9 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
         HostRecord::EventTarget | HostRecord::Url(_) | HostRecord::Headers(_) => return None,
         // Neither abort record holds a pair list, so neither owns pairs.
         HostRecord::Controller(_) | HostRecord::Signal(_) => return None,
-        // A response holds no pair list of its own; its headers do.
-        HostRecord::Response(_) => return None,
+        // A response and a request hold no pair list of their own; their
+        // headers do.
+        HostRecord::Response(_) | HostRecord::Request(_) => return None,
         // Neither encoding record holds one either, and neither does an
         // `XMLHttpRequest`, a `Blob`, a `File` or a `FormData` — whose entry
         // list is a list of *entries*, not a pair list the URL Standard's form
@@ -9843,6 +9840,7 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
             | HostRecord::Controller(_)
             | HostRecord::Signal(_)
             | HostRecord::Response(_)
+            | HostRecord::Request(_)
             | HostRecord::TextDecoder(_)
             | HostRecord::TextEncoder
             | HostRecord::DomParser
@@ -9953,6 +9951,9 @@ enum HostLink {
     Headers(Option<HostKey>),
     /// The record is an `AbortController` holding its signal's key, always.
     Controller(HostKey),
+    /// The record is a `Request` holding its headers' key, always, and the key
+    /// of the signal it owns, when it owns one.
+    Request(HostKey, Option<HostKey>),
     /// The record is an `AbortSignal` holding its controller's key, while that
     /// controller's record lives.
     Signal(Option<HostKey>),
@@ -10054,6 +10055,13 @@ fn free_record(slab: &mut HostSlab, key: HostKey, out: &mut ReclaimedHost) {
         }
         HostRecord::MutationObserver(observer) => observer.retire(out),
         HostRecord::MutationRecord(record) => record.retire(out),
+        // A request holds one reference to the wrapper of the signal it was
+        // given.
+        HostRecord::Request(request) => {
+            if let Some(bits) = request.stored_value() {
+                out.values.push(bits);
+            }
+        }
         // The `response` value an `XMLHttpRequest` last built is its own.
         HostRecord::Xhr(xhr) => {
             if let Some(value) = xhr.response_value {
@@ -10128,6 +10136,7 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         Some(HostRecord::Controller(record)) => HostLink::Controller(record.signal),
         Some(HostRecord::Signal(record)) => HostLink::Signal(record.controller),
         Some(HostRecord::Response(record)) => HostLink::Response(record.headers),
+        Some(HostRecord::Request(record)) => HostLink::Request(record.headers, record.own_signal()),
         Some(HostRecord::TextDecoder(_)) => HostLink::TextDecoder,
         Some(HostRecord::TextEncoder) => HostLink::TextEncoder,
         Some(HostRecord::DomParser) => HostLink::DomParser,
@@ -10261,6 +10270,32 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
             if matches!(slab.get(headers), Some(HostRecord::Headers(record)) if !record.has_wrapper)
             {
                 free_record(slab, headers, &mut freed);
+            }
+        }
+        // A request's record has no second referent either, so its wrapper's
+        // death is its record's death, and it owns two records the way a
+        // response owns its headers and a controller its signal: each becomes
+        // free with it unless its own wrapper is still alive.
+        HostLink::Request(headers, signal) => {
+            free_record(slab, key, &mut freed);
+            if let Some(HostRecord::Headers(record)) = slab.get_mut(headers) {
+                record.response = None;
+            }
+            if matches!(slab.get(headers), Some(HostRecord::Headers(record)) if !record.has_wrapper)
+            {
+                free_record(slab, headers, &mut freed);
+            }
+            if let Some(signal) = signal {
+                let free_signal = match slab.get_mut(signal) {
+                    Some(HostRecord::Signal(record)) => {
+                        record.controller = None;
+                        !record.has_wrapper
+                    }
+                    _ => false,
+                };
+                if free_signal {
+                    free_record(slab, signal, &mut freed);
+                }
             }
         }
         HostLink::Url(params) => {
@@ -11697,22 +11732,115 @@ impl HostObject {
     /// bytes, so a non-null body is already read and a null one is the empty
     /// byte sequence successSteps is run with.
     fn take_body(&self) -> Result<Vec<u8>, &'static str> {
-        let mut body = None;
-        let mut unusable = false;
-        self.with_response_mut(|record| {
-            if record.is_unusable() {
-                unusable = true;
-                return;
+        self.with_body(Ok(Vec::new()), |body, used| {
+            if body.is_some() && *used {
+                return Err(BODY_UNUSABLE);
             }
-            if record.body.is_some() {
-                record.body_used = true;
+            if body.is_some() {
+                *used = true;
             }
-            body = record.body.clone();
-        });
-        if unusable {
-            return Err(BODY_UNUSABLE);
+            Ok(body.clone().unwrap_or_default())
+        })
+    }
+
+    /// Runs `f` over the body and the *disturbed* flag of the `Response` or the
+    /// `Request` this host stands for, the two objects that include `Body`, or
+    /// returns `default` for any other host.
+    fn with_body<R>(&self, default: R, f: impl FnOnce(&mut Option<Vec<u8>>, &mut bool) -> R) -> R {
+        let HostObject::Host { ctx, key } = self else {
+            return default;
+        };
+        match ctx.host_records.borrow_mut().get_mut(*key) {
+            Some(HostRecord::Response(record)) => f(&mut record.body, &mut record.body_used),
+            Some(HostRecord::Request(record)) => f(&mut record.body, &mut record.body_used),
+            _ => default,
         }
-        Ok(body.unwrap_or_default())
+    }
+
+    /// The header list of the `Response` or the `Request` this host stands for.
+    fn body_headers(&self) -> Option<HostKey> {
+        let HostObject::Host { ctx, key } = self else {
+            return None;
+        };
+        match ctx.host_records.borrow().get(*key) {
+            Some(HostRecord::Response(record)) => Some(record.headers),
+            Some(HostRecord::Request(record)) => Some(record.headers),
+            _ => None,
+        }
+    }
+
+    /// `Body`'s `bodyUsed`: a null body is never disturbed.
+    fn body_is_used(&self) -> bool {
+        self.with_body(false, |body, used| body.is_some() && *used)
+    }
+
+    /// `Body`'s `json()`.
+    fn body_json(&self) -> Result<Promise<AnyValue>, JsError> {
+        // "consume body with this and parse JSON from bytes". The parse is the
+        // *settlement's* work rather than the host's: it needs the isolate, and
+        // its result is an arbitrary object graph, so it is the one conversion
+        // that cannot be expressed as a `HostValue`.
+        self.consume_body(|bytes| Ok(PromiseOutcome::ParseJson(bytes)))
+    }
+
+    /// `Body`'s `text()`.
+    fn body_text(&self) -> Result<Promise<String>, JsError> {
+        // "consume body with this and UTF-8 decode".
+        self.consume_body(|bytes| {
+            Ok(PromiseOutcome::Resolve(HostValue::String(utf8_decode(
+                bytes,
+            ))))
+        })
+    }
+
+    /// `Body`'s `arrayBuffer()`.
+    fn body_array_buffer(&self) -> Result<Promise<Vec<u8>>, JsError> {
+        // "consume body with this and the following step given a byte sequence
+        // bytes: return the result of creating an ArrayBuffer from bytes".
+        self.consume_body(|bytes| {
+            Ok(PromiseOutcome::Resolve(HostValue::ArrayBuffer(
+                bytes.to_vec(),
+            )))
+        })
+    }
+
+    /// `Body`'s `bytes()`: the same bytes as a `Uint8Array`.
+    fn body_bytes(&self) -> Result<Promise<Vec<u8>>, JsError> {
+        self.consume_body(|bytes| {
+            Ok(PromiseOutcome::Resolve(HostValue::Uint8Array(
+                bytes.to_vec(),
+            )))
+        })
+    }
+
+    /// `Body`'s `blob()`.
+    fn body_blob(&self) -> Result<Promise<Handle<Blob>>, JsError> {
+        // "return a Blob whose contents are bytes and whose type attribute is
+        // this's MIME type". The type is read before the body is consumed; the
+        // record is made inside the conversion, so an unusable body, which
+        // never reaches it, leaves no record behind.
+        let HostObject::Host { ctx, .. } = self else {
+            return Err(JsError::type_error("blob: the receiver has no body"));
+        };
+        let blob_type = self
+            .body_headers()
+            .and_then(|headers| match ctx.host_records.borrow().get(headers) {
+                Some(HostRecord::Headers(record)) => body_mime_type(&record.list),
+                _ => None,
+            })
+            .unwrap_or_default();
+        self.consume_body(|bytes| {
+            let key = ctx
+                .host_records
+                .borrow_mut()
+                .insert(HostRecord::Blob(BlobRecord {
+                    bytes: bytes.to_vec(),
+                    blob_type,
+                }));
+            Ok(PromiseOutcome::Resolve(HostValue::Blob(encode_host(
+                ctx.slot, key,
+            ))))
+        })
     }
 
     /// Creates the promise a `Body` member returns and settles it with the
@@ -11791,72 +11919,27 @@ impl ResponseOps for HostObject {
     }
 
     fn body_used(&self) -> bool {
-        self.with_response(false, |record| record.body.is_some() && record.body_used)
+        self.body_is_used()
     }
 
     fn json(&self) -> Result<Promise<AnyValue>, JsError> {
-        // "consume body with this and parse JSON from bytes". The parse is the
-        // *settlement's* work rather than the host's: it needs the isolate, and
-        // its result is an arbitrary object graph, so it is the one conversion
-        // that cannot be expressed as a `HostValue`.
-        self.consume_body(|bytes| Ok(PromiseOutcome::ParseJson(bytes)))
+        self.body_json()
     }
 
     fn text(&self) -> Result<Promise<String>, JsError> {
-        // "consume body with this and UTF-8 decode".
-        self.consume_body(|bytes| {
-            Ok(PromiseOutcome::Resolve(HostValue::String(utf8_decode(
-                bytes,
-            ))))
-        })
+        self.body_text()
     }
 
     fn array_buffer(&self) -> Result<Promise<Vec<u8>>, JsError> {
-        // "consume body with this and the following step given a byte sequence
-        // bytes: return the result of creating an ArrayBuffer from bytes".
-        self.consume_body(|bytes| {
-            Ok(PromiseOutcome::Resolve(HostValue::ArrayBuffer(
-                bytes.to_vec(),
-            )))
-        })
+        self.body_array_buffer()
     }
 
     fn bytes(&self) -> Result<Promise<Vec<u8>>, JsError> {
-        // The same bytes as a `Uint8Array`.
-        self.consume_body(|bytes| {
-            Ok(PromiseOutcome::Resolve(HostValue::Uint8Array(
-                bytes.to_vec(),
-            )))
-        })
+        self.body_bytes()
     }
 
     fn blob(&self) -> Result<Promise<Handle<Blob>>, JsError> {
-        // "return a Blob whose contents are bytes and whose type attribute is
-        // this's MIME type". The type is read before the body is consumed; the
-        // record is made inside the conversion, so an unusable body, which
-        // never reaches it, leaves no record behind.
-        let HostObject::Host { ctx, .. } = self else {
-            return Err(JsError::type_error("blob: the receiver is not a Response"));
-        };
-        let blob_type = self
-            .with_response(None, |record| Some(record.headers))
-            .and_then(|headers| match ctx.host_records.borrow().get(headers) {
-                Some(HostRecord::Headers(record)) => body_mime_type(&record.list),
-                _ => None,
-            })
-            .unwrap_or_default();
-        self.consume_body(|bytes| {
-            let key = ctx
-                .host_records
-                .borrow_mut()
-                .insert(HostRecord::Blob(BlobRecord {
-                    bytes: bytes.to_vec(),
-                    blob_type,
-                }));
-            Ok(PromiseOutcome::Resolve(HostValue::Blob(encode_host(
-                ctx.slot, key,
-            ))))
-        })
+        self.body_blob()
     }
 
     fn clone(&self) -> Result<Handle<Response>, JsError> {
@@ -11917,11 +12000,11 @@ fn body_mime_type(headers: &HeaderList) -> Option<String> {
 
 /// The prefix every message this module builds for a `fetch()` failure carries.
 ///
-/// Fetch's `fetch(input, init)` steps are the ones that run here — there is no
-/// `Request` constructor for a page to call
-/// (`idl/fetch/Request.webidl`) — so the call that failed is named, exactly as
-/// the `fetch` global names it for the throws of its own argument conversion.
-const FETCH_CONTEXT: &str = "Failed to execute 'fetch'";
+/// The steps are the `Request` constructor's, run by `fetch(input, init)`, so
+/// the call that failed is named, exactly as the `fetch` global names it for
+/// the throws of its own argument conversion. The constructor names itself
+/// when a page calls it directly (`request::REQUEST_CONTEXT`).
+pub const FETCH_CONTEXT: &str = "Failed to execute 'fetch'";
 
 /// The `RequestInit` member this engine cannot serve as the page wrote it, or
 /// `None` when it can serve every one the page named.
@@ -12040,10 +12123,10 @@ pub fn forget_fetch_signal(ctx: &SharedContext, resolver: u64) {
     }
 }
 
-/// The request `fetch()` sends, built from the converted `RequestInit`. This is
-/// the Fetch Standard's *Request* constructor reduced to the steps an engine
-/// with no `Request` object, no CORS and no redirect policy of its own has to
-/// run (`<https://fetch.spec.whatwg.org/#dom-request>`).
+/// The request `fetch()` sends for a URL and a converted `RequestInit`: the
+/// Fetch Standard's *Request* constructor over a string input
+/// (`<https://fetch.spec.whatwg.org/#dom-request>`). A `Request` input goes
+/// through [`request_parts`], which runs the same steps.
 ///
 /// The steps are the standard's, in the standard's order, for the three members
 /// that reach them:
@@ -12081,115 +12164,11 @@ pub fn request_from_init(
     initiator: Url,
     origin: Origin,
 ) -> Result<FetchRequest, JsError> {
-    // Step 1's first two clauses. `method_token` is the `method = token`
-    // production of RFC 9110 §5.6.2, which the XHR `open()` steps 2 to 4 also
-    // run: the same standard defines both, so the two share the checker.
-    let method = match &init.method {
-        Some(bytes) => {
-            let Some(mut normalized) = method_token(bytes) else {
-                return Err(JsError::type_error(format!(
-                    "{FETCH_CONTEXT}: the method is not a valid HTTP method token"
-                )));
-            };
-            if FORBIDDEN_METHODS
-                .iter()
-                .any(|forbidden| bytes.eq_ignore_ascii_case(forbidden))
-            {
-                return Err(JsError::type_error(format!(
-                    "{FETCH_CONTEXT}: the method is forbidden"
-                )));
-            }
-            if NORMALIZED_METHODS
-                .iter()
-                .any(|known| bytes.eq_ignore_ascii_case(known))
-            {
-                normalized.make_ascii_uppercase();
-            }
-            // `method_token` admits exactly HTTP's `tchar`s, which `http` also
-            // accepts, so a rejection here is unreachable; it is an `Err` rather
-            // than an `unwrap` because page input may not panic an engine.
-            http::Method::from_bytes(normalized.as_bytes()).map_err(|_| {
-                JsError::type_error(format!(
-                    "{FETCH_CONTEXT}: the method is not a valid HTTP method token"
-                ))
-            })?
-        }
-        None => http::Method::GET,
-    };
-
-    // The modes. Every value `refused_request_init_member` let through has an
-    // arm here, and the ones it refuses fall to the default they never reach.
-    let credentials = match init.credentials {
-        Some(RequestCredentials::Omit) => crate::fetch::Credentials::Omit,
-        Some(RequestCredentials::Include) => crate::fetch::Credentials::Include,
-        Some(RequestCredentials::SameOrigin) | None => crate::fetch::Credentials::SameOrigin,
-    };
-    let mode = match init.mode {
-        Some(RequestMode::SameOrigin) => crate::fetch::Mode::SameOrigin,
-        Some(RequestMode::NoCors) => crate::fetch::Mode::NoCors,
-        _ => crate::fetch::Mode::Cors,
-    };
-    // The *Request* constructor's `no-cors` steps: only a CORS-safelisted
-    // method, and the header list's guard becomes `"request-no-cors"`, under
-    // which a header a form could not have sent is dropped.
-    if mode == crate::fetch::Mode::NoCors
-        && !matches!(
-            method,
-            http::Method::GET | http::Method::HEAD | http::Method::POST
-        )
-    {
-        return Err(JsError::type_error(format!(
-            "{FETCH_CONTEXT}: '{method}' is unsupported in no-cors mode"
-        )));
-    }
-    let redirect = match init.redirect {
-        Some(RequestRedirect::Error) => crate::fetch::Redirect::Error,
-        _ => crate::fetch::Redirect::Follow,
-    };
-    let bypass_cache = matches!(
-        init.cache,
-        Some(RequestCache::NoStore | RequestCache::Reload | RequestCache::NoCache)
-    );
-
-    // Step 2. The list is the request's, so its guard is `"request"` and a
-    // forbidden request-header name is dropped rather than faulted.
-    let mut headers = match init.headers {
-        Some(headers) => fill_header_list(FETCH_CONTEXT, headers, HeadersGuard::Request)?,
-        None => Vec::new(),
-    };
-
-    // Step 3's null test: the outer `None` is an absent member and the inner one
-    // the IDL's nullable `body`.
-    let body = match init.body {
-        Some(Some(body)) => Some(body),
-        Some(None) | None => None,
-    };
-    if body.is_some() && (method == http::Method::GET || method == http::Method::HEAD) {
-        return Err(JsError::type_error(format!(
-            "{FETCH_CONTEXT}: a request with a body cannot be a GET or a HEAD"
-        )));
-    }
-    let body = match body {
-        Some(body) => {
-            let (bytes, body_type) = extract_body(ctx, body)?;
-            set_inferred_content_type(&mut headers, body_type.as_deref());
-            Some(bytes)
-        }
-        None => None,
-    };
-
-    Ok(FetchRequest {
-        url,
-        method,
-        headers: header_pairs(headers),
-        body,
-        initiator,
-        origin,
-        credentials,
-        mode,
-        redirect,
-        bypass_cache,
-    })
+    // The steps are the `Request` constructor's, over a request that starts as
+    // the bare URL (`request::apply_request_init`).
+    let parts =
+        request::apply_request_init(ctx, RequestParts::new(url), None, init, FETCH_CONTEXT)?;
+    Ok(parts.into_fetch_request(initiator, origin))
 }
 
 // ---------------------------------------------------------------------------

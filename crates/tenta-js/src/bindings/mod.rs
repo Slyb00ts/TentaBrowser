@@ -131,6 +131,7 @@ include!(concat!(env!("OUT_DIR"), "/abort_controller_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_decoder_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_encoder_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/response_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/request_ops.rs"));
 include!(concat!(
     env!("OUT_DIR"),
     "/xml_http_request_event_target_ops.rs"
@@ -246,6 +247,7 @@ include!(concat!(env!("OUT_DIR"), "/abort_controller_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_decoder_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_encoder_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/response_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/request_register.rs"));
 include!(concat!(
     env!("OUT_DIR"),
     "/xml_http_request_event_target_register.rs"
@@ -434,6 +436,8 @@ include!(concat!(env!("OUT_DIR"), "/text_decoder_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/text_encoder_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/response_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/request_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(
     env!("OUT_DIR"),
@@ -628,6 +632,7 @@ pub mod quickjs {
     include!(concat!(env!("OUT_DIR"), "/text_encoder_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/response_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/request_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(
         env!("OUT_DIR"),

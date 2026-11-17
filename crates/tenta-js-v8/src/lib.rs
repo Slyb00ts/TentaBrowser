@@ -1244,6 +1244,11 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the Response interface");
+            // `Request` owns a `Headers` the way `Response` does, and its
+            // `signal` answers with an `AbortSignal`, so both are installed
+            // before it.
+            tenta_js::bindings::install_request::<HostObject>(scope, interface_sink, &mut registry)
+                .expect("install the Request interface");
             // `XMLHttpRequest` is an `EventTarget` twice over — its own two-level
             // chain is `XMLHttpRequest -> XMLHttpRequestEventTarget ->
             // EventTarget` — so the event target interface installs first, and

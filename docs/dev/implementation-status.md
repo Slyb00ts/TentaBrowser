@@ -87,6 +87,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | A host navigation starts a new script CPU window (SW1) | Implemented; focused checks passed; changes D-033 with the owner's agreement of 2026-11-17, the decision entry is still to be written | The commit of a navigation the host issued (`Page::goto`, `goto_with_eval`, `begin_goto`) empties the page's script CPU window; a navigation the document asks for (`location`, a form submission, an activated link) goes on spending the window it started in, so a document that reloads itself still has one budget. |
 | Body reads that are not text: `Response.arrayBuffer()/blob()/bytes()/clone()`, `Blob.arrayBuffer()/bytes()`, `XMLHttpRequest.response`, `responseURL` and the `arraybuffer`, `blob`, `json` response types (FB1) | Implemented on both engines; focused checks passed; not independently reviewed | A body was readable only as text. `Response.body`, `formData()`, the `Response` statics, `responseXML` and the `document` response type are still absent; `clone()` copies the bytes. |
 | A `Blob`, a `FormData` or a `URLSearchParams` as the body of `fetch()`, `XMLHttpRequest.send()` and `new Response()` (FB2) | Implemented on both engines; focused checks passed; not independently reviewed | `BodyInit` was `(BufferSource or USVString)`, so each of the three objects was stringified: a `FormData` body was the text `[object FormData]`. The `ReadableStream` arm and `send()`'s `Document` arm are still absent. |
+| `Request` and `fetch(request)` (RQ1) | Implemented on both engines; focused checks passed; not independently reviewed | The constructor from a URL or from another request, the accessors, `clone()`, the `Body` members, and `fetch()` taking a `Request`. `signal` is the signal the initializer named, not one that follows it; `body`, `formData()`, `isReloadNavigation` and `isHistoryNavigation` are absent; QuickJS refuses to fetch a request that has a signal. |
 | Nested flex and grid containers share their answers (LP1) | Implemented; measured; fragment output compared on a real page; not independently reviewed | One layout of a component-built page solved its containers 12 times less often; see the section below. Layout still starts over after every mutation |
 | Wrapper-graph collection at task ends is amortised (GC1) | Implemented on V8; measured; not independently reviewed; **changes when detached wrappers are reclaimed, which the specification may record as a decision** | A task end collects once 1024 wrappers are owed or the last collection is 250 ms old, not every time; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
@@ -3074,6 +3075,56 @@ anywhere as what a page would see.
 - **Not measured:** no benchmark. The string and buffer arms do the work
   they did, plus one `String` allocation for the inferred type of a string
   body; `S-js-xhr` was not re-run.
+
+### `Request` and `fetch(request)` (RQ1)
+
+`Request` was the interface pages named most often in the site sweeps (three
+sites in each of the last two), and `fetch()` could only take a URL:
+`RequestInfo`'s `Request` arm did not exist, so a library that builds a
+`Request` and fetches it failed at `new Request`.
+
+- **What changed:**
+  - `idl/fetch/Request.webidl` declares `Request`, `RequestInfo` and
+    `RequestDestination`. The host half is a module of its own,
+    `crates/tenta-js/src/bindings/host/request.rs`.
+  - The standard defines `fetch(input, init)` as constructing a `Request`
+    and fetching it, so there is one function for the steps:
+    `request_parts` returns the request as plain data, the constructor
+    stores it in a record, and `fetch()` on both engines turns it into the
+    driver's request. `request_from_init`, the old entry for a URL, is now
+    those steps over a request that starts as the bare URL.
+  - A request made from a request copies its URL, method, modes and header
+    list and takes its body, which disturbs the input; `init` is applied
+    over the copy, its headers replacing the list. `clone()` copies the
+    body.
+  - A request owns a `Headers` record under the `"request"` guard, as a
+    response owns its headers, and reclamation treats the pair the same
+    way.
+  - The `Body` members are shared by `Response` and `Request` (`with_body`
+    and the `body_*` methods in `host.rs`).
+  - In V8's `fetch()` an already-aborted signal is now tested after the
+    request is built, which is the standard's order; it used to be tested
+    first.
+- **Deviations, recorded in the IDL header:** `request.signal` is the
+  signal the initializer named (kept alive by one stored reference to its
+  wrapper) or, when none was named, a signal the request owns that nothing
+  can abort — the standard's is a new signal that follows the given one,
+  so `request.signal === init.signal` is `true` here. The body is a byte
+  sequence, so `clone()` copies and there is no `body` attribute.
+  `destination`, `referrer`, `referrerPolicy` and `integrity` always read
+  as their defaults, because an initializer naming anything else is
+  refused. QuickJS has no abort for a fetch, so it refuses to fetch a
+  request that carries a signal, as it refuses `init.signal`.
+- **Checks:** `tenta-js-v8::dom_request` 15 (shape, defaults, the
+  initializer, the refusals, the header guard, copying and overriding,
+  `clone()`, the signal including one whose controller was collected,
+  `fetch(request)` as the driver sees it, a second fetch of a read body,
+  `init` over a request, abort before and after the request starts, and
+  the records freed with the wrapper); `tenta-js-qjs::runtime` 1;
+  `tenta-browser::body_reads_js` extended with a `Request` fetched over a
+  real socket on both engines. The workspace passed 4896 of 4896 and the
+  feature set 599 of 599; fmt, both Clippy runs, `lint-deps`,
+  `idl-manifest` and `cargo deny` were clean.
 
 ## Implementation queue and dependencies
 

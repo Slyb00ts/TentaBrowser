@@ -3,8 +3,8 @@
 //! Read: `XMLHttpRequest`'s `json`, `arraybuffer` and `blob` response types,
 //! and `Response.arrayBuffer()`, `blob()` and `clone()` on what `fetch()`
 //! resolves with. Sent: a `FormData`, a `URLSearchParams` and a `Blob` as the
-//! body of a `fetch()` and of a `send()`, checked against what the server says
-//! it received.
+//! body of a `fetch()` and of a `send()`, and a `Request` object given to
+//! `fetch()`, checked against what the server says it received.
 //!
 //! `crates/tenta-js-v8/tests/dom_xhr.rs` and `dom_response.rs` cover each member
 //! against a recording driver and a constructed response; QuickJS has no such
@@ -71,6 +71,15 @@ xhr.open('POST', '/api/echo');
 xhr.responseType = 'json';
 xhr.onload = function () { out.blob = summary(xhr.response); };
 xhr.send(new Blob(['raw'], {type: 'application/x-test'}));
+var request = new Request('/api/echo?via=request', {
+    method: 'PUT', headers: {'X-Probe': 'yes'}, body: '{"n":1}',
+});
+fetch(request)
+    .then(function (response) { return response.json(); })
+    .then(function (reply) {
+        out.request = [reply.method, reply.query, reply.headers['x-probe'], reply.json.n,
+                       request.bodyUsed].join(',');
+    });
 </script></body></html>"#;
 
 async fn read_bodies(js: JsEngine) -> String {
@@ -86,7 +95,7 @@ async fn send_bodies(js: JsEngine) -> String {
     evaluate_on(
         js,
         SENDING_PAGE,
-        "[out.form, out.params, out.blob].join('|')",
+        "[out.form, out.params, out.blob, out.request].join('|')",
     )
     .await
 }
@@ -149,11 +158,13 @@ async fn quickjs_reads_bodies_as_json_buffers_and_blobs() {
 }
 
 /// The multipart body has three boundary lines for two entries (two openers and
-/// the closer), carries the file's name and its bytes; the other two arrive as
-/// the bytes and the type their arm gives them.
+/// the closer), carries the file's name and its bytes; the next two arrive as
+/// the bytes and the type their arm gives them; the last is a `Request` object
+/// fetched as it was made.
 const SENT: &str = "multipart/form-data,3,true,true|\
                     application/x-www-form-urlencoded;charset=UTF-8,q=a+b|\
-                    application/x-test,raw";
+                    application/x-test,raw|\
+                    PUT,via=request,yes,1,true";
 
 #[cfg(feature = "v8")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

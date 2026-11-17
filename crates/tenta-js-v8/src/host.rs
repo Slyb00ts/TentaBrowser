@@ -26,15 +26,16 @@ use std::sync::Arc;
 
 use tenta_core::{NativeMemoryBudget, Origin};
 use tenta_js::bindings::host::{
-    EventHandlerNonNull, FetchSignal, HostObject, fetch_signal, realm_context,
-    refused_request_init_member, request_from_init, watch_fetch_signal,
+    EventHandlerNonNull, FETCH_CONTEXT, FetchSignal, HostObject, fetch_signal, realm_context,
+    refused_request_init_member, request_parts, watch_fetch_signal,
 };
 use tenta_js::bindings::{
     AddEventListenerOptionsOrBoolean, CSSStyleProperties, Crypto, Element, Event, EventListener,
-    EventListenerOptionsOrBoolean, EventTargetOps, JsError, RequestInit, Storage, handle_to_v8,
-    native_callback_failure, string_from_v8, throw_js_error, throw_type_error,
-    v8_begin_stored_value_lease, v8_end_stored_value_lease, v8_registered_slow_callback_boundary,
-    v8_transfer_stored_value_lease, value_from_v8, value_to_v8, world_realm,
+    EventListenerOptionsOrBoolean, EventTargetOps, Handle, JsError, RequestInfo, RequestInit,
+    Storage, handle_to_v8, native_callback_failure, string_from_v8, throw_js_error,
+    throw_type_error, v8_begin_stored_value_lease, v8_end_stored_value_lease,
+    v8_registered_slow_callback_boundary, v8_transfer_stored_value_lease, value_from_v8,
+    value_to_v8, world_realm,
 };
 use tenta_js::dom::events::{EventHandlerName, HostValue, PromiseOutcome, PromiseRef, ScriptHost};
 use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId};
@@ -1819,20 +1820,20 @@ fn queue_microtask(
 /// native failure or execution termination is never turned into a catchable
 /// rejection. Once conversion succeeds, the shared script host owns the normal
 /// fetch promise and its later settlement.
-fn fetch(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
+fn fetch<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut retval: v8::ReturnValue<'s, v8::Value>,
 ) {
     let Some(state) = host_state(scope) else {
         return;
     };
-    // `RequestInfo` is `(Request or USVString)`; only the second arm is
-    // reachable, because `Request` is not a global this engine installs.
-    let (input, mut init) = {
+    // `RequestInfo` is `(Request or USVString)`: a `Request` wrapper is taken
+    // by brand and anything else is converted to a string.
+    let (input, init) = {
         v8::tc_scope!(let tc, scope);
         let converted = (|| -> Result<_, JsError> {
-            let input = string_from_v8(tc, args.get(0))?;
+            let input = RequestInfo::from_v8(tc, args.get(0))?;
             let init = request_init(tc, args.get(1))?;
             // The dictionary is declared in full, so a named but unsupported
             // member is rejected rather than converted and dropped.
@@ -1914,34 +1915,36 @@ fn fetch(
         return;
     };
 
-    // The promise exists before the URL is resolved so that every step from here
-    // on can reject. The document borrow ends with this block: nothing below may
-    // hold it, because the engine re-enters Rust on the way out of a settlement
+    // The promise exists before the request is built so that every step from
+    // here on can reject. These are the `Request` constructor's steps, which
+    // the standard runs inside `fetch()` and rejects with: an input that is not
+    // a URL, a method that is not a method, a forbidden method, a body on a
+    // `GET` or a `HEAD`, a header list that cannot be filled, and an input
+    // request whose body has already been read. No document borrow is held
+    // past them: the engine re-enters Rust on the way out of a settlement
     // (`tenta_js::engine`, boundary rule 1).
-    let resolved = {
-        let doc = ctx.doc.borrow();
-        doc.resolve_url(&input).map(|url| (url, doc.url().cloned()))
+    let parts = match request_parts(&ctx, input, init, FETCH_CONTEXT) {
+        Ok(parts) => parts,
+        Err(error) => {
+            reject_promise(scope, &mut retval, &script, promise, error.message());
+            return;
+        }
     };
-    let Some((url, document_url)) = resolved else {
-        let message = format!("Failed to parse URL from {input}");
-        reject_promise(scope, &mut retval, &script, promise, &message);
-        return;
-    };
-
     // The document's URL, or the request's when the document has none: a
     // document built without one reports the empty string, and an empty
     // initiator is not a URL a driver could send.
-    let initiator = document_url.unwrap_or_else(|| url.clone());
-    // The `Request` constructor's steps, which the standard runs inside
-    // `fetch()`'s promise and rejects with: a method that is not a method, a
-    // forbidden method, a body on a `GET` or a `HEAD`, and a header list that
-    // cannot be filled.
+    let initiator = ctx
+        .doc
+        .borrow()
+        .url()
+        .cloned()
+        .unwrap_or_else(|| parts.url.clone());
     let origin = state.scheduler.current_origin();
     // The signal is the one member that is the engine's rather than the
-    // request's. An aborted one rejects with its reason before anything is
-    // built, which is where the standard tests it.
-    let signal = match init.signal.take().flatten() {
-        Some(handle) => fetch_signal(&ctx, handle),
+    // request's. An aborted one rejects with its reason once the request
+    // exists, which is where the standard tests it.
+    let signal = match parts.signal {
+        Some(bits) => fetch_signal(&ctx, Handle::from_bits(bits)),
         None => FetchSignal::None,
     };
     if let FetchSignal::Aborted(reason) = signal {
@@ -1949,13 +1952,7 @@ fn fetch(
         return_promise(scope, &mut retval, promise);
         return;
     }
-    let request = match request_from_init(&ctx, init, url, initiator, origin) {
-        Ok(request) => request,
-        Err(error) => {
-            reject_promise(scope, &mut retval, &script, promise, error.message());
-            return;
-        }
-    };
+    let request = parts.into_fetch_request(initiator, origin);
 
     // No driver is a state a page can be in — `fetch` is installed before the
     // page has one — so it is a rejection rather than a panic. Once 4a-1b lands,

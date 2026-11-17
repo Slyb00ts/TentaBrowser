@@ -639,12 +639,15 @@ pub(crate) fn install<'js>(ctx: &Ctx<'js>, state: &Rc<State>) -> rquickjs::Resul
         "fetch",
         Function::new(
             ctx.clone(),
-            move |ctx: Ctx<'js>, input: Coerced<String>, init: Opt<Value<'js>>| {
+            move |ctx: Ctx<'js>, input: Value<'js>, init: Opt<Value<'js>>| {
                 quickjs_callback_boundary(&ctx, "fetch", || {
                     let promise = state_fetch.new_promise().ok_or_else(|| {
                         rquickjs::Exception::throw_type(&ctx, "cannot create fetch promise")
                     })?;
                     let result = (|| {
+                        // `RequestInfo`: a `Request` by brand, anything else
+                        // as a string.
+                        let input = RequestInfo::from_js(&ctx, input)?;
                         let init = RequestInit::from_js(
                             &ctx,
                             init.0.unwrap_or_else(|| Value::new_undefined(ctx.clone())),
@@ -662,22 +665,28 @@ pub(crate) fn install<'js>(ctx: &Ctx<'js>, state: &Rc<State>) -> rquickjs::Resul
                                 &format!("RequestInit member {member} is not implemented"),
                             ));
                         }
-                        let (url, initiator) = {
-                            let doc = state_fetch.world.host.doc.borrow();
-                            let url = doc.resolve_url(&input.0).ok_or_else(|| {
-                                rquickjs::Exception::throw_type(&ctx, "invalid fetch URL")
-                            })?;
-                            let initiator = doc.url().cloned().unwrap_or_else(|| url.clone());
-                            (url, initiator)
-                        };
-                        let request = request_from_init(
-                            &state_fetch.world.host,
-                            init,
-                            url,
-                            initiator,
-                            state_fetch.scheduler.current_origin(),
-                        )
-                        .map_err(|e| throw_quickjs_error(&ctx, &e))?;
+                        // The `Request` constructor's steps, which `fetch()`
+                        // runs first and rejects with.
+                        let parts =
+                            request_parts(&state_fetch.world.host, input, init, FETCH_CONTEXT)
+                                .map_err(|e| throw_quickjs_error(&ctx, &e))?;
+                        // A request made with a signal carries it here.
+                        if parts.signal.is_some() {
+                            return Err(rquickjs::Exception::throw_type(
+                                &ctx,
+                                "RequestInit member signal is not implemented",
+                            ));
+                        }
+                        let initiator = state_fetch
+                            .world
+                            .host
+                            .doc
+                            .borrow()
+                            .url()
+                            .cloned()
+                            .unwrap_or_else(|| parts.url.clone());
+                        let request = parts
+                            .into_fetch_request(initiator, state_fetch.scheduler.current_origin());
                         let driver =
                             state_fetch.fetch_driver.borrow().clone().ok_or_else(|| {
                                 rquickjs::Exception::throw_type(&ctx, "fetch is not available")
@@ -964,6 +973,7 @@ fn install_bindings<'js>(ctx: &Ctx<'js>, global: &Object<'js>) -> rquickjs::Resu
     install_text_encoder::<HostObject>(ctx, global, registry)?;
     install_text_decoder::<HostObject>(ctx, global, registry)?;
     install_response::<HostObject>(ctx, global, registry)?;
+    install_request::<HostObject>(ctx, global, registry)?;
     install_xml_http_request_event_target::<HostObject>(ctx, global, registry)?;
     install_xml_http_request::<HostObject>(ctx, global, registry)?;
     install_blob::<HostObject>(ctx, global, registry)?;
