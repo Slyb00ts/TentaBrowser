@@ -130,8 +130,13 @@ impl HostObject {
 
     pub(super) fn geo_element_from_point(&self, x: f64, y: f64) -> Option<Handle<Element>> {
         let node = self.geometry()?.element_from_point(x, y)?;
-        let (doc, _) = self.anchor();
+        let (doc, id) = self.anchor();
         let doc = doc.borrow();
+        if !doc.is_live(node) {
+            return None;
+        }
+        // The document sees the host of a shadow tree, not what is inside.
+        let node = doc.retarget(node, id);
         doc.is_live(node)
             .then(|| Handle::from_bits(encode_node(self.slot(), doc.node_ref(node))))
     }

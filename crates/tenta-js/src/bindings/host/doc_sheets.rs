@@ -70,7 +70,7 @@ impl HostObject {
     /// The text the sheet of `node` is made of, when it has one.
     fn sheet_text(&self, node: NodeId) -> Option<SheetText> {
         let doc = self.context().doc.try_borrow().ok()?;
-        if !doc.is_connected(node) || doc.namespace(node)? != atoms::NS_HTML {
+        if !doc.is_composed_connected(node) || doc.namespace(node)? != atoms::NS_HTML {
             return None;
         }
         let tag = doc.tag(node)?;

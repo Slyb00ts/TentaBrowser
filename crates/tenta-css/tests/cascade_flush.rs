@@ -32,6 +32,7 @@ fn parse(html: &str) -> Document {
 fn source(text: &str) -> StyleSource {
     StyleSource {
         owner: None,
+        scope: None,
         url: url::Url::parse("https://example.test/a.css").unwrap(),
         text: text.to_owned(),
         media: None,
@@ -282,4 +283,23 @@ fn focus_moves_the_focus_pseudo_classes_in_the_computed_styles() {
     assert_eq!(engine.flush(&doc), StyleDiff::Full);
     assert_eq!(value(&doc, &engine, "f", "color"), "rgb(1, 0, 0)");
     assert_eq!(value(&doc, &engine, "wrap", "color"), "rgb(0, 0, 0)");
+}
+
+/// An element's state flags are kept for one generation of the document: a
+/// mutation that changes them (here an ancestor becoming disabled) is seen by
+/// the next flush.
+#[test]
+fn an_elements_state_is_recomputed_after_a_mutation() {
+    let (mut doc, mut engine) = styled(
+        "<!DOCTYPE html><html><head><style>\
+         input { color: rgb(1, 0, 0) } input:disabled { color: rgb(2, 0, 0) }\
+         </style></head><body><fieldset id=group><input id=field><input id=other></fieldset>\
+         </body></html>",
+    );
+    assert_eq!(value(&doc, &engine, "field", "color"), "rgb(1, 0, 0)");
+    let group = element(&doc, "group");
+    set_attribute(&mut doc, group, "disabled", "");
+    assert_eq!(engine.flush(&doc), StyleDiff::Full);
+    assert_eq!(value(&doc, &engine, "field", "color"), "rgb(2, 0, 0)");
+    assert_eq!(value(&doc, &engine, "other", "color"), "rgb(2, 0, 0)");
 }

@@ -508,6 +508,7 @@ fn author_rules_in_an_imported_sheet_are_detected() {
     let imported = base.join("m.css").unwrap();
     engine.set_sources(vec![StyleSource {
         owner: None,
+        scope: None,
         url: base,
         text: "@import url(m.css);".to_owned(),
         media: None,

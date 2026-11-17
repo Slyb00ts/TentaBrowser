@@ -78,7 +78,8 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `ResizeObserver`, `IntersectionObserver` (OB1) | Implemented on V8, built lazily; focused checks passed; not independently reviewed; records a model decision | Each target is reported once; everything counts as in view because nothing scrolls; see the section below |
 | Media, canvas and SVG interfaces (IF1) | Implemented on both engines (generated); focused checks passed; not independently reviewed | `HTMLMediaElement`/`Video`/`Audio`, `HTMLCanvasElement`, `SVGGraphicsElement`/`SVGSVGElement`/`SVGAElement`; no playback and no canvas context; see the section below |
 | `customElements` (CE1) | Implemented on V8, built lazily; focused checks passed; not independently reviewed | Autonomous custom elements: `define`/`get`/`getName`/`whenDefined`/`upgrade`, the HTML element constructor, upgrade and the connected, disconnected and attribute reactions; no customized built-ins, no shadow DOM yet; see the section below |
-| Shadow trees (SD1) | Script, events and extraction implemented on both engines; focused checks passed; not independently reviewed; **not styled, laid out or painted** | `attachShadow`, `ShadowRoot`, `shadowRoot`, slots, composed event paths with retargeting, flat-tree text and snapshot; a screenshot does not show shadow content; see the section below |
+| Shadow trees (SD1) | Script, events and extraction implemented on both engines; focused checks passed; not independently reviewed | `attachShadow`, `ShadowRoot`, `shadowRoot`, slots, composed event paths with retargeting, flat-tree text and snapshot; see the section below |
+| Shadow trees are styled, laid out and painted (SD2) | Implemented; focused checks passed; not independently reviewed | Sheets inside a shadow root style that tree, `:host` and `::slotted()`; boxes follow the flat tree; a screenshot shows a component; see the section below |
 | `document.domain`, `crypto.randomUUID()`, `<meta>`/`<source>`/`<dialog>` interfaces (WIN2) | Implemented on both engines (generated); focused checks passed; not independently reviewed | What the sweep after CE1 and SD1 named most; a dialog has no top layer, `returnValue` or `close` event; see the section below |
 | Declarative shadow roots (DSD1) | Implemented in the parser and both sinks; focused checks passed; not independently reviewed | `<template shadowrootmode>` in a navigated document attaches a shadow root; `attachShadow()` takes it over; see the section below |
 | Nested flex and grid containers share their answers (LP1) | Implemented; measured; fragment output compared on a real page; not independently reviewed | One layout of a component-built page solved its containers 12 times less often; see the section below. Layout still starts over after every mutation |
@@ -2527,13 +2528,11 @@ elements without it upgraded nothing that such a library defines.
   page, layout that does not start over after every mutation, or a page
   that survives its script budget with the document it has; the last is a
   policy the specification owns.
-- **Open:** styles, layout and paint of the flat tree (`:host`,
-  `::slotted()`, scoped `<style>`, `adoptedStyleSheets`), which is what a
-  screenshot needs; `slotchange`; manual slot assignment and `flatten`; `composedPath()`
-  hiding closed trees; `ShadowRoot.activeElement`; whether scripts and
-  images inside a shadow tree load has not been checked; the CDP DOM domain
+- **Open:** `slotchange`; manual slot assignment and `flatten`;
+  `composedPath()` hiding closed trees; `ShadowRoot.activeElement`; whether
+  scripts inside a shadow tree load has not been checked; the CDP DOM domain
   does not report shadow roots; a ref inside a closed shadow tree cannot be
-  acted on.
+  acted on. Styles, layout and paint are SD2, below.
 
 ## WIN2: members the sweep named after CE1 and SD1 (P2 package)
 
@@ -2562,6 +2561,85 @@ elements without it upgraded nothing that such a library defines.
   `MessageChannel`, `Request`, `getSelection`, `DOMMatrix`,
   `SVGAnimatedString`, `createNodeIterator`, an unsupported CSS rule type in
   `insertRule`.
+
+## SD2: shadow trees are styled, laid out and painted (P3 package)
+
+- **Sheets** (`tenta-css`): a `StyleSource` carries the shadow root its
+  owner is in. The engine builds the document's cascade data from the
+  sources without one and, for each shadow root that has any, a Stylo
+  `AuthorStyles` set of its own. `tenta-page` finds `<style>` and
+  `<link rel=stylesheet>` in shadow trees once the document has one, and the
+  signature that decides when sheets are collected again covers them, so a
+  sheet a script adds to a shadow root applies.
+- **The adapter Stylo walks**: `ShadowRootHandle` is a real node
+  (`TShadowRoot` with its host and style data), `TElement::shadow_root` and
+  `containing_shadow` answer, the traversal and inheritance follow the flat
+  tree (`Document::flat_parent`, the shadow root's children under the host,
+  assigned nodes under their slot), and selector matching stays within one
+  node tree (`parent_element` stops at a shadow root, `assigned_slot` and
+  `containing_shadow_host` answer). With that Stylo does the scoping: a
+  shadow sheet's rules reach only its tree, `:host` its host and
+  `::slotted()` the nodes slotted into it, and document rules do not reach
+  into a shadow tree.
+- **Boxes** (`tenta-layout`): the box builder takes an element's children
+  from `Document::flat_children`. A host child that no slot takes and the
+  fallback of a slot that has assigned nodes are not in the flat tree, are
+  not styled and get no box. `slot` is `display: contents` in the
+  user-agent sheet, so slotted nodes are items of the container their slot
+  is in.
+- **What reads the layout**: images inside shadow trees are planned and
+  loaded; `getBoundingClientRect`, `getComputedStyle`, `offset*` and
+  `innerText` answer for an element in a shadow tree;
+  `document.elementFromPoint` gives the host; the per-element geometry the
+  MCP snapshot uses lists shadow elements (`Document::composed_elements`),
+  so one hidden by its shadow sheet is left out of the snapshot; an MCP
+  click on a ref inside a shadow tree is aimed at its box and the check for
+  a covering element follows the flat tree.
+- **Cost on documents without a shadow tree, and what was done about it.**
+  Every new question is behind `Document::has_shadow_trees`, a flag set when
+  the first shadow root is attached and never cleared, read once per flush
+  view. That was not enough: with a shadow root type that has values Stylo
+  keeps its shadow paths, its style-sharing test asks six more questions per
+  candidate, and the larger functions are inlined differently. `S-style-10k`
+  (initial traversal of 10 000 elements, the scenario most dominated by
+  style sharing) went from 14.5 to 15.8 ms, +7% and +9% in two runs of 25
+  interleaved pairs and 1108 to 1221 million instructions under callgrind;
+  on the copy of a real page from LP1 the style flush moved 1 to 3%.
+  Keeping the flat-tree iterator free of a destructor, and its slot branch
+  out of line, changed nothing measurable. What the same profile showed is
+  that a third of that scenario was `element_state`, recomputed from
+  attributes and ancestors for every sharing candidate; it is now computed
+  once per element per document generation (`StoreEntry::state`).
+- **Measured** (release, `bench/render.py`, 25 interleaved pairs against
+  68e3a5f, final code): `S-style-10k` total p50/p95 14.60/16.49 to
+  12.43/14.02 ms (-14.9%), 873 million instructions. `S-layout-5k`,
+  `S-layout-nested`, `S-screenshot-inproc` and `S-fixtures` inside the 10%
+  floor (one `S-fixtures` group of ten read -10.2% once). A document with
+  shadow trees has not been benchmarked.
+- **Not built or not checked:** `adoptedStyleSheets` and constructable
+  sheets on a shadow root; `shadowRoot.styleSheets`; `::part()` and
+  `exportparts` (the adapter answers `is_part`; nothing tests it);
+  `:host()` and `:host-context()` are Stylo's and untested here; `:defined`;
+  focus inside a shadow tree; `getComputedStyle` of a node outside the flat
+  tree resolves without a parent style; slot assignment is recomputed by a
+  walk of the shadow tree for every question (`assigned_slot`,
+  `containing_shadow_root`), which has not been measured on a page with
+  many components. An element's state is cached per document generation,
+  and `input.checked = …` or a typed value does not move the generation, so
+  as before this package `:checked` and `:placeholder-shown` restyle only
+  with the next mutation.
+- **Checks:** `tenta-css::cascade_shadow` 4 (scoping both ways, `:host`,
+  `::slotted()`, flat-tree inheritance, nothing styled outside the flat
+  tree), `tenta-css::cascade_flush` 1 new (state recomputed after a
+  mutation; with the cache never invalidated it and the focus test fail),
+  `tenta-layout::shadow` 3 (a component's boxes, slotted flex items, no box
+  outside the flat tree), `tenta-browser::geometry_js` 1 new (computed
+  style, rectangles, a sheet added by script, `elementFromPoint`),
+  `tenta-mcp::scenario` shadow scenario extended (the shadow sheet hides a
+  paragraph from the snapshot, the element screenshot is 200 px wide and
+  green, the click reports a point). Workspace 4844 passed; the feature set
+  595 passed; fmt, both Clippy runs, `lint-deps`, `idl-manifest` and
+  `cargo deny` clean.
 
 ## DSD1: declarative shadow roots (P2 package)
 

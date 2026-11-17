@@ -10,8 +10,16 @@ class Counter extends HTMLElement {
     this.count = 0;
     const root = this.attachShadow({mode: 'open'});
     root.innerHTML =
+      '<style>' +
+      ':host { display: block; width: 400px }' +
+      '#add { display: block; width: 200px; height: 40px; border: 0;' +
+      ' background: rgb(0, 128, 0) }' +
+      '.internal { display: none }' +
+      '::slotted(span) { color: rgb(0, 0, 255) }' +
+      '</style>' +
       '<p><slot name="hint">No hint</slot></p>' +
       '<button id="add" type="button">Add one</button>' +
+      '<p class="internal">Internal note</p>' +
       '<output id="total"></output>';
     root.getElementById('add').addEventListener('click', () => {
       this.count += 1;

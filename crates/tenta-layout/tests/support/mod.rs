@@ -38,9 +38,18 @@ pub fn lay_out(html: &str, viewport: (f32, f32)) -> Laid {
 }
 
 impl Laid {
+    /// The element with id `id`, in the document or in a shadow tree.
     pub fn node(&self, id: &str) -> NodeId {
-        self.doc
-            .get_element_by_id(id)
+        let doc = &self.doc;
+        doc.get_element_by_id(id)
+            .or_else(|| {
+                doc.shadow_including_subtree(doc.document_node())
+                    .into_iter()
+                    .find(|&node| {
+                        doc.is_element(node)
+                            && doc.attribute(node, tenta_core::atom::atoms::ID) == Some(id)
+                    })
+            })
             .unwrap_or_else(|| panic!("no element with id {id}"))
     }
 

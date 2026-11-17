@@ -173,8 +173,8 @@ fn inline_style(doc: &Document, node: NodeId) -> Inline {
 }
 
 fn element_indexes(doc: &Document) -> HashMap<NodeId, usize> {
-    doc.descendants(doc.document_node())
-        .filter(|node| doc.is_element(*node))
+    doc.composed_elements()
+        .into_iter()
         .enumerate()
         .map(|(index, node)| (node, index))
         .collect()
@@ -251,9 +251,8 @@ pub fn build(
                         let look = layout[*index];
                         (look.is_some(), look)
                     }
-                    // Not in the document tree: an element of a shadow tree,
-                    // which the layout does not cover. It is shown as far as
-                    // its parent and its own style attribute allow.
+                    // Not an element the layout lists; it is shown as far
+                    // as its parent and its own style attribute allow.
                     None => (parent_visible, None),
                 },
                 None => (true, None),

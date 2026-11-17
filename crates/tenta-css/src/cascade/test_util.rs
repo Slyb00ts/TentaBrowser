@@ -33,12 +33,20 @@ impl FontMetrics for FixedRatioMetrics {
 /// for `env`, using fixed-ratio font metrics.
 ///
 /// The document's `<style>` elements become the engine's author sheets, in
-/// tree order, with their `media` attribute; there is no network, so a test
+/// tree order, with their `media` attribute, and one inside a shadow tree
+/// becomes a sheet of that shadow root. `<template shadowrootmode>` declares
+/// a shadow root, as in a navigated document. There is no network, so a test
 /// that needs `@import` bodies installs its own sources with
 /// [`StyleEngine::set_sources`]. The quirks mode is the document's, as in the
 /// engine: the doctype overrides `env.quirks`.
 pub fn style_html(html: &str, env: StyleEnv) -> (Document, StyleEngine) {
-    let mut parser = Parser::new(Document::new(), ParserOptions::default());
+    let mut parser = Parser::new(
+        Document::new(),
+        ParserOptions {
+            declarative_shadow_roots: true,
+            ..ParserOptions::default()
+        },
+    );
     parser.feed_last(html.as_bytes());
     let doc = parser.finish();
     let mut engine = StyleEngine::new(env, Arc::new(FixedRatioMetrics));
@@ -53,11 +61,14 @@ fn style_sources(doc: &Document) -> Vec<StyleSource> {
         .or_else(|| doc.url())
         .cloned()
         .unwrap_or_else(|| Url::parse("about:blank").expect("about:blank is a valid URL"));
-    doc.get_elements_by_tag_name("style")
+    doc.shadow_including_subtree(doc.document_node())
         .into_iter()
-        .filter(|&style| doc.namespace(style) == Some(atoms::NS_HTML))
+        .filter(|&style| {
+            doc.tag(style) == Some(atoms::STYLE) && doc.namespace(style) == Some(atoms::NS_HTML)
+        })
         .map(|style| StyleSource {
             owner: Some(style),
+            scope: doc.containing_shadow_root(style),
             url: base.clone(),
             text: doc
                 .children(style)

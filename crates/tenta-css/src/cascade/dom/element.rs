@@ -36,6 +36,38 @@ impl<'a> Handle<'a> {
 // of that same element. `ElementDataWrapper` checks that with an atomic
 // borrow flag in debug builds only, so the traversal tests run with debug
 // assertions on.
+impl<'a> Handle<'a> {
+    /// The shadow root this element hosts.
+    #[inline(never)]
+    fn shadow_root_of_host(self) -> Option<ShadowRootHandle<'a>> {
+        let root = self.0.view.doc.shadow_root(self.0.node)?;
+        self.0.slot_of(root).map(ShadowRootHandle)
+    }
+
+    /// The shadow root whose tree this element is in.
+    #[inline(never)]
+    fn shadow_root_around(self) -> Option<ShadowRootHandle<'a>> {
+        let root = self.0.view.doc.containing_shadow_root(self.0.node)?;
+        self.0.slot_of(root).map(ShadowRootHandle)
+    }
+
+    /// Computes the element's state flags and keeps them for this
+    /// generation of the document.
+    #[inline(never)]
+    fn compute_state(self, generation: u64) -> ElementState {
+        let state = state::element_state(self.0.view.doc, self.0.node);
+        self.0.entry.state.set(Some((generation, state.bits())));
+        state
+    }
+
+    /// The slot this element is assigned to.
+    #[inline(never)]
+    pub(super) fn slot_assigned_to(self) -> Option<Self> {
+        let slot = self.0.view.doc.assigned_slot(self.0.node)?;
+        self.0.slot_of(slot).map(Handle)
+    }
+}
+
 impl<'a> TElement for Handle<'a> {
     type ConcreteNode = NodeHandle<'a>;
     type TraversalChildrenIterator = ChildNodes<'a>;
@@ -45,7 +77,14 @@ impl<'a> TElement for Handle<'a> {
     }
 
     fn traversal_children(&self) -> LayoutIterator<ChildNodes<'a>> {
-        LayoutIterator(ChildNodes(self.as_node().first_child()))
+        LayoutIterator(self.as_node().flat_children())
+    }
+
+    // Inheritance follows the flat tree too: a slotted node inherits from its
+    // slot, and the children of a shadow root from the host.
+    #[inline]
+    fn inheritance_parent(&self) -> Option<Self> {
+        self.as_node().traversal_parent()
     }
 
     fn is_html_element(&self) -> bool {
@@ -78,8 +117,15 @@ impl<'a> TElement for Handle<'a> {
         None
     }
 
+    #[inline]
     fn state(&self) -> ElementState {
-        state::element_state(self.0.view.doc, self.0.node)
+        let generation = self.0.view.generation;
+        if let Some((at, bits)) = self.0.entry.state.get()
+            && at == generation
+        {
+            return ElementState::from_bits_retain(bits);
+        }
+        self.compute_state(generation)
     }
 
     fn has_part_attr(&self) -> bool {
@@ -193,12 +239,23 @@ impl<'a> TElement for Handle<'a> {
         false
     }
 
+    // The style-sharing cache asks the next two, and `assigned_slot`, of
+    // every candidate it tests. A document without shadow trees answers from
+    // one flag, inline; the walks are kept out of line.
+    #[inline]
     fn shadow_root(&self) -> Option<ShadowRootHandle<'a>> {
-        None
+        if !self.0.view.shadow_trees {
+            return None;
+        }
+        self.shadow_root_of_host()
     }
 
+    #[inline]
     fn containing_shadow(&self) -> Option<ShadowRootHandle<'a>> {
-        None
+        if !self.0.view.shadow_trees {
+            return None;
+        }
+        self.shadow_root_around()
     }
 
     fn lang_attr(&self) -> Option<AttrValue> {

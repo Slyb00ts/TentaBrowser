@@ -231,7 +231,7 @@ impl StyleEngine {
         if !known {
             return Err(ResolveError::Stale);
         }
-        Ok(doc.is_element(node) && doc.is_connected(node))
+        Ok(doc.is_element(node) && doc.is_composed_connected(node))
     }
 
     /// Runs `run` with a style context for the element `node` of `doc`, on
@@ -245,7 +245,8 @@ impl StyleEngine {
         run: impl for<'d, 'c> FnOnce(&'c mut StyleContext<'_, Handle<'d>>, Handle<'d>) -> R,
     ) -> Result<R, ResolveError> {
         catch_unwind(AssertUnwindSafe(|| {
-            let view = FlushView::new(doc, &self.atoms, &self.lock);
+            let view = FlushView::new(doc, &self.atoms, &self.lock)
+                .with_shadow_sheets(&self.shadow_sheets);
             let slots = view.make_slots(&self.store);
             assert!(view.install_slots(&slots), "a fresh view has no slot table");
             let element = view.handle(node).expect("a resolvable node has a slot");

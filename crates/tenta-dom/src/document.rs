@@ -202,6 +202,8 @@ pub struct Document {
     /// Shadow roots the parser attached for `<template shadowrootmode>` that
     /// script has not yet claimed with `attachShadow()`.
     declarative_shadow_roots: Vec<NodeId>,
+    /// Set once a shadow root has been attached, and never cleared.
+    shadow_trees: bool,
     /// The dirty value of a form control whose value has been set by script or
     /// by the user (`docs/spec/05-javascript.md` §9a). Presence *is* the
     /// standard's "dirty value flag": once set, the `value` content attribute
@@ -308,6 +310,7 @@ impl Document {
             hosts: HashMap::new(),
             closed_shadow_roots: Vec::new(),
             declarative_shadow_roots: Vec::new(),
+            shadow_trees: false,
             dirty_values: HashMap::new(),
             dirty_checkedness: HashMap::new(),
             dirty_selectedness: HashMap::new(),
@@ -1823,6 +1826,7 @@ impl Document {
         let root = self.arena.alloc_container(NodeKind::ShadowRoot);
         self.arena.elements.shadow[data.get()] = root;
         self.hosts.insert(root, host);
+        self.shadow_trees = true;
         if mode == ShadowRootMode::Closed {
             self.closed_shadow_roots.push(root);
         }
@@ -2016,7 +2020,7 @@ impl Document {
     /// The slot name a child of a shadow host asks for: its `slot` attribute,
     /// or the empty name of the default slot. `None` for a node that cannot
     /// be slotted (a comment, a doctype).
-    fn slot_name_of(&self, child: NodeId) -> Option<&str> {
+    pub fn slot_name_of(&self, child: NodeId) -> Option<&str> {
         match self.kind(child) {
             NodeKind::Element => Some(self.attribute(child, atoms::SLOT).unwrap_or("")),
             NodeKind::Text | NodeKind::CData => Some(""),
@@ -2078,6 +2082,52 @@ impl Document {
         self.first_slot_named(root, name)
     }
 
+    /// Whether a shadow root was ever attached in this document. False for
+    /// most documents, which lets a tree walk skip the flat-tree questions.
+    #[inline]
+    pub fn has_shadow_trees(&self) -> bool {
+        self.shadow_trees
+    }
+
+    /// The parent of `node` in the flat tree: the slot it is assigned to, the
+    /// host of the shadow root it is a child of, or else its parent. `None`
+    /// for a node without a parent and for a child of a shadow host that no
+    /// slot takes, which is not rendered.
+    pub fn flat_parent(&self, node: NodeId) -> Option<NodeId> {
+        let parent = self.parent(node);
+        if !parent.is_some() {
+            return None;
+        }
+        if !self.shadow_trees {
+            return Some(parent);
+        }
+        if self.kind(parent) == NodeKind::ShadowRoot {
+            return self.shadow_host(parent);
+        }
+        if self.shadow_root(parent).is_some() {
+            return self.assigned_slot(node);
+        }
+        Some(parent)
+    }
+
+    /// Whether `ancestor` is `node` or contains it in the flat tree: what is
+    /// drawn inside the box of `ancestor`, which for a shadow host includes
+    /// its shadow tree and for an element around a slot the nodes slotted
+    /// into it.
+    pub fn is_flat_tree_inclusive_ancestor(&self, ancestor: NodeId, node: NodeId) -> bool {
+        let mut current = node;
+        for _ in 0..self.slots() {
+            if current == ancestor {
+                return true;
+            }
+            match self.flat_parent(current) {
+                Some(parent) => current = parent,
+                None => return false,
+            }
+        }
+        false
+    }
+
     /// The children of `node` in the flat tree, which is the tree that is
     /// rendered: a shadow host's are its shadow root's, a slot's are the nodes
     /// assigned to it or else its own, and every other node's are its own.
@@ -2102,6 +2152,22 @@ impl Document {
             }
         }
         None
+    }
+
+    /// Every element connected to the document, those of shadow trees
+    /// included, in shadow-including tree order: document order where there
+    /// is no shadow tree. The order per-element render data is listed in.
+    pub fn composed_elements(&self) -> Vec<NodeId> {
+        if self.shadow_trees {
+            self.shadow_including_subtree(self.document_node)
+                .into_iter()
+                .filter(|node| self.is_element(*node))
+                .collect()
+        } else {
+            self.descendants(self.document_node)
+                .filter(|node| self.is_element(*node))
+                .collect()
+        }
     }
 
     /// `root` and its shadow-including descendants, in shadow-including tree

@@ -58,6 +58,7 @@ fn page() -> String {
 fn source() -> StyleSource {
     StyleSource {
         owner: None,
+        scope: None,
         url: url::Url::parse("https://example.test/a.css").unwrap(),
         text: rules(),
         media: None,

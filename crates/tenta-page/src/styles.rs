@@ -112,11 +112,16 @@ impl StyleSignature {
         doc.base_url().map(Url::as_str).hash(&mut hasher);
         doc.encoding().hash(&mut hasher);
         (doc.quirks_mode() as u8).hash(&mut hasher);
-        for id in doc.descendants(doc.document_node()) {
+        for id in style_scan(doc) {
             let Some(kind) = element_kind(doc, id) else {
                 continue;
             };
             doc.node_ref(id).hash(&mut hasher);
+            // A sheet styles the tree it is in, so moving its element across
+            // a shadow boundary changes what it applies to.
+            if doc.has_shadow_trees() {
+                doc.containing_shadow_root(id).hash(&mut hasher);
+            }
             for name in [
                 atoms::HREF,
                 atoms::REL,
@@ -192,14 +197,37 @@ fn key_of(url: &Url) -> Url {
 }
 
 /// One element that contributes a sheet, in tree order.
+/// The nodes that can carry a sheet that applies: the document's, and those
+/// of every shadow tree once the document has one, in shadow-including tree
+/// order.
+fn style_scan(doc: &Document) -> Box<dyn Iterator<Item = NodeId> + '_> {
+    if doc.has_shadow_trees() {
+        Box::new(
+            doc.shadow_including_subtree(doc.document_node())
+                .into_iter(),
+        )
+    } else {
+        Box::new(doc.descendants(doc.document_node()))
+    }
+}
+
+/// The shadow root whose tree `owner` is in, which is what its sheet styles.
+fn scope_of(doc: &Document, owner: NodeId) -> Option<NodeId> {
+    doc.has_shadow_trees()
+        .then(|| doc.containing_shadow_root(owner))
+        .flatten()
+}
+
 enum Candidate {
     Inline {
         owner: NodeId,
+        scope: Option<NodeId>,
         text: String,
         media: Option<String>,
     },
     Link {
         owner: NodeId,
+        scope: Option<NodeId>,
         url: Url,
         media: Option<String>,
         disabled: bool,
@@ -208,7 +236,7 @@ enum Candidate {
 
 fn candidates(doc: &Document, base_url: &Url) -> Vec<Candidate> {
     let mut found = Vec::new();
-    for owner in doc.descendants(doc.document_node()) {
+    for owner in style_scan(doc) {
         let Some(kind) = element_kind(doc, owner) else {
             continue;
         };
@@ -216,9 +244,11 @@ fn candidates(doc: &Document, base_url: &Url) -> Vec<Candidate> {
             continue;
         }
         let media = media_of(doc, owner);
+        let scope = scope_of(doc, owner);
         match kind {
             ElementKind::Style => found.push(Candidate::Inline {
                 owner,
+                scope,
                 text: style_text(doc, owner),
                 media,
             }),
@@ -240,6 +270,7 @@ fn candidates(doc: &Document, base_url: &Url) -> Vec<Candidate> {
                 };
                 found.push(Candidate::Link {
                     owner,
+                    scope,
                     url: key_of(&url),
                     media,
                     disabled: doc.has_attribute(owner, atoms::DISABLED),
@@ -286,57 +317,65 @@ pub(crate) fn sheet_elements(
     viewport: (f32, f32),
 ) -> Vec<SheetElement> {
     let mut found = Vec::new();
-    for tag in ["link", "style"] {
-        for node in doc.get_elements_by_tag_name(tag) {
-            let Some(kind) = element_kind(doc, node) else {
-                continue;
-            };
-            if !type_is_css(doc, node) {
-                continue;
+    // The tag index covers the document tree only; with shadow trees the
+    // sheet-bearing elements inside them are found by walking.
+    let nodes: Vec<NodeId> = if doc.has_shadow_trees() {
+        doc.shadow_including_subtree(doc.document_node())
+    } else {
+        ["link", "style"]
+            .into_iter()
+            .flat_map(|tag| doc.get_elements_by_tag_name(tag))
+            .collect()
+    };
+    for node in nodes {
+        let Some(kind) = element_kind(doc, node) else {
+            continue;
+        };
+        if !type_is_css(doc, node) {
+            continue;
+        }
+        let media_matches = media_matches_viewport(media_of(doc, node).as_deref(), viewport);
+        match kind {
+            ElementKind::Link => {
+                if doc.has_attribute(node, atoms::DISABLED) {
+                    continue;
+                }
+                let Some(href) = doc
+                    .attribute(node, atoms::HREF)
+                    .map(str::trim)
+                    .filter(|href| !href.is_empty())
+                else {
+                    continue;
+                };
+                let Ok(url) = base_url.join(href) else {
+                    continue;
+                };
+                found.push(SheetElement {
+                    node,
+                    source: SheetSource::Link(
+                        key_of(&url),
+                        doc.has_attribute(node, atoms::CROSSORIGIN),
+                    ),
+                    alternate: rel_tokens(doc, node).any(|token| token == "alternate"),
+                    media_matches,
+                    imports: Vec::new(),
+                });
             }
-            let media_matches = media_matches_viewport(media_of(doc, node).as_deref(), viewport);
-            match kind {
-                ElementKind::Link => {
-                    if doc.has_attribute(node, atoms::DISABLED) {
-                        continue;
-                    }
-                    let Some(href) = doc
-                        .attribute(node, atoms::HREF)
-                        .map(str::trim)
-                        .filter(|href| !href.is_empty())
-                    else {
-                        continue;
-                    };
-                    let Ok(url) = base_url.join(href) else {
-                        continue;
-                    };
-                    found.push(SheetElement {
-                        node,
-                        source: SheetSource::Link(
-                            key_of(&url),
-                            doc.has_attribute(node, atoms::CROSSORIGIN),
-                        ),
-                        alternate: rel_tokens(doc, node).any(|token| token == "alternate"),
-                        media_matches,
-                        imports: Vec::new(),
-                    });
+            ElementKind::Style => {
+                let text = style_text(doc, node);
+                let imports = direct_imports(&text, base_url);
+                if imports.is_empty() {
+                    continue;
                 }
-                ElementKind::Style => {
-                    let text = style_text(doc, node);
-                    let imports = direct_imports(&text, base_url);
-                    if imports.is_empty() {
-                        continue;
-                    }
-                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                    text.hash(&mut hasher);
-                    found.push(SheetElement {
-                        node,
-                        source: SheetSource::Style(hasher.finish()),
-                        alternate: false,
-                        media_matches,
-                        imports,
-                    });
-                }
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                text.hash(&mut hasher);
+                found.push(SheetElement {
+                    node,
+                    source: SheetSource::Style(hasher.finish()),
+                    alternate: false,
+                    media_matches,
+                    imports,
+                });
             }
         }
     }
@@ -580,10 +619,16 @@ impl StyleState {
         let mut sources = Vec::new();
         for candidate in candidates(doc, base_url) {
             match candidate {
-                Candidate::Inline { owner, text, media } => {
+                Candidate::Inline {
+                    owner,
+                    scope,
+                    text,
+                    media,
+                } => {
                     let imports = self.gather(&direct_imports(&text, base_url));
                     sources.push(StyleSource {
                         owner: Some(owner),
+                        scope,
                         url: base_url.clone(),
                         text,
                         media,
@@ -593,11 +638,13 @@ impl StyleState {
                 }
                 Candidate::Link {
                     owner,
+                    scope,
                     url,
                     media,
                     disabled: true,
                 } => sources.push(StyleSource {
                     owner: Some(owner),
+                    scope,
                     url,
                     text: String::new(),
                     media,
@@ -605,11 +652,16 @@ impl StyleState {
                     imports: Vec::new(),
                 }),
                 Candidate::Link {
-                    owner, url, media, ..
+                    owner,
+                    scope,
+                    url,
+                    media,
+                    ..
                 } => {
                     if let Some(Some(sheet)) = self.sheets.get(&url) {
                         sources.push(StyleSource {
                             owner: Some(owner),
+                            scope,
                             url: sheet.url.clone(),
                             text: sheet.text.to_string(),
                             media,

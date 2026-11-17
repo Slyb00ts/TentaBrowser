@@ -8,9 +8,11 @@ use std::any::Any;
 use std::panic::resume_unwind;
 use std::sync::Arc;
 
+use style::author_styles::AuthorStyles;
 use style::context::QuirksMode;
 use style::data::ElementData;
 use style::shared_lock::{SharedRwLock, StylesheetGuards};
+use style::stylesheets::CustomMediaMap;
 use style::stylist::Stylist;
 use tenta_core::NodeId;
 use tenta_dom::Document;
@@ -18,7 +20,7 @@ use tenta_dom::Document;
 use super::atoms::AtomMaps;
 use super::device::new_device;
 use super::diff::classify;
-use super::dom::{FlushView, RestyleBits, StyleStore};
+use super::dom::{FlushView, RestyleBits, ShadowSheets, StyleStore};
 use super::traverse::restyle;
 use super::types::{FontMetrics, Style, StyleDiff, StyleEnv, StyleSource};
 use super::ua;
@@ -38,6 +40,9 @@ pub struct StyleEngine {
     /// The cascade data built from the user-agent sheets and `sources` for
     /// `env`; rebuilt before the next flush when `stylist_stale` is set.
     pub(super) stylist: Stylist,
+    /// The sheets and cascade data of each shadow root that has sources of
+    /// its own; rebuilt with `stylist`.
+    pub(super) shadow_sheets: ShadowSheets,
     stylist_stale: bool,
     pub(super) store: StyleStore,
     pub(super) atoms: AtomMaps,
@@ -51,13 +56,14 @@ impl StyleEngine {
     /// An engine for `env` that answers `ex`/`ch` queries through `metrics`.
     pub fn new(env: StyleEnv, metrics: Arc<dyn FontMetrics>) -> Self {
         let lock = SharedRwLock::new();
-        let stylist = build_stylist(&env, &metrics, &[], &lock);
+        let (stylist, shadow_sheets) = build_stylist(&env, &metrics, &[], &lock);
         Self {
             env,
             metrics,
             sources: Vec::new(),
             lock,
             stylist,
+            shadow_sheets,
             stylist_stale: false,
             store: StyleStore::new(),
             atoms: AtomMaps::new(),
@@ -146,7 +152,8 @@ impl StyleEngine {
         // element is cleared whether or not the sheets changed.
         self.discard_styles();
         if self.stylist_stale {
-            self.stylist = build_stylist(&self.env, &self.metrics, &self.sources, &self.lock);
+            (self.stylist, self.shadow_sheets) =
+                build_stylist(&self.env, &self.metrics, &self.sources, &self.lock);
             self.stylist_stale = false;
         }
 
@@ -189,7 +196,8 @@ impl StyleEngine {
     /// Styles the tree under the document element; `None` for a document
     /// without one. The store must have been claimed and refreshed for `doc`.
     fn traverse(&self, doc: &Document) -> Option<Result<(), Box<dyn Any + Send>>> {
-        let view = FlushView::new(doc, &self.atoms, &self.lock);
+        let view =
+            FlushView::new(doc, &self.atoms, &self.lock).with_shadow_sheets(&self.shadow_sheets);
         let slots = view.make_slots(&self.store);
         assert!(view.install_slots(&slots), "a fresh view has no slot table");
         doc.document_element()
@@ -218,13 +226,14 @@ impl StyleEngine {
 }
 
 /// The cascade data for `env`: the user-agent sheets, then each enabled author
-/// source in order, all parsed against `lock`.
+/// source of the document in order, all parsed against `lock`; and, apart
+/// from it, the sheets of each shadow root that has sources.
 fn build_stylist(
     env: &StyleEnv,
     metrics: &Arc<dyn FontMetrics>,
     sources: &[StyleSource],
     lock: &SharedRwLock,
-) -> Stylist {
+) -> (Stylist, ShadowSheets) {
     configure_stylo();
     let quirks = if env.quirks {
         QuirksMode::Quirks
@@ -236,8 +245,16 @@ fn build_stylist(
         .map(|text| sheets::user_agent_sheet(text, lock));
     let author = sources
         .iter()
+        .filter(|source| source.scope.is_none())
         .filter_map(|source| sheets::author_sheet(source, lock, quirks));
     let parsed: Vec<_> = user_agent.chain(author).collect();
+    let scoped: Vec<_> = sources
+        .iter()
+        .filter_map(|source| {
+            let root = source.scope?;
+            Some((root, sheets::author_sheet(source, lock, quirks)?))
+        })
+        .collect();
 
     let mut stylist = Stylist::new(new_device(env, metrics), quirks);
     let guard = lock.read();
@@ -245,5 +262,19 @@ fn build_stylist(
         stylist.append_stylesheet(sheet, &guard);
     }
     stylist.flush(&StylesheetGuards::same(&guard));
-    stylist
+
+    let mut shadow_sheets = ShadowSheets::new();
+    let custom_media = CustomMediaMap::default();
+    for (root, sheet) in scoped {
+        shadow_sheets
+            .entry(root)
+            .or_insert_with(AuthorStyles::new)
+            .stylesheets
+            .append_stylesheet(None, &custom_media, sheet, &guard);
+    }
+    for styles in shadow_sheets.values_mut() {
+        styles.flush(&mut stylist, &guard);
+    }
+    drop(guard);
+    (stylist, shadow_sheets)
 }

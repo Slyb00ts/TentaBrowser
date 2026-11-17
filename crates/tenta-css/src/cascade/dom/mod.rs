@@ -20,6 +20,7 @@ mod style_attr;
 mod test_support;
 
 use std::cell::OnceCell;
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::mem::size_of;
@@ -28,15 +29,21 @@ use selectors::matching::VisitedHandlingMode;
 use selectors::sink::Push;
 use servo_arc::ArcBorrow;
 use style::applicable_declarations::ApplicableDeclarationBlock;
+use style::author_styles::AuthorStyles;
 use style::context::QuirksMode;
 use style::properties::PropertyDeclarationBlock;
 use style::shared_lock::{Locked, SharedRwLock};
+use style::stylesheets::DocumentStyleSheet;
 use tenta_core::NodeId;
 use tenta_dom::Document;
 
 use super::atoms::AtomMaps;
 pub use node::{ChildNodes, DocHandle, NodeHandle, ShadowRootHandle};
 pub use store::{RestyleBits, StoreEntry, StyleAttrSlot, StyleStore};
+
+/// The sheets of each shadow root that has any, with the cascade data built
+/// from them, keyed by the shadow root.
+pub type ShadowSheets = HashMap<NodeId, AuthorStyles<DocumentStyleSheet>>;
 
 /// Everything a traversal reads, borrowed for the duration of one flush.
 pub struct FlushView<'a> {
@@ -48,6 +55,16 @@ pub struct FlushView<'a> {
     pub lock: &'a SharedRwLock,
     /// The document's quirks mode in Stylo's type, for `TDocument::quirks_mode`.
     pub quirks: QuirksMode,
+    /// The style data of the document's shadow roots; `None` where nothing
+    /// is styled through the view (the store's own helpers).
+    shadow_sheets: Option<&'a ShadowSheets>,
+    /// `Document::has_shadow_trees`, read once: the style-sharing cache asks
+    /// several flat-tree questions of every candidate it tests, and without
+    /// shadow trees each is answered from this.
+    shadow_trees: bool,
+    /// `Document::mutation_generation`, which cannot move while the view
+    /// borrows the document: what the per-element caches are stamped with.
+    generation: u64,
     slots: OnceCell<&'a [Slot<'a>]>,
 }
 
@@ -102,8 +119,17 @@ impl<'a> FlushView<'a> {
             atoms,
             lock,
             quirks,
+            shadow_sheets: None,
+            shadow_trees: doc.has_shadow_trees(),
+            generation: doc.mutation_generation(),
             slots: OnceCell::new(),
         }
+    }
+
+    /// The same view, answering `TShadowRoot::style_data` from `sheets`.
+    pub fn with_shadow_sheets(mut self, sheets: &'a ShadowSheets) -> Self {
+        self.shadow_sheets = Some(sheets);
+        self
     }
 
     /// One [`Slot`] per arena slot of the document, backed by `store`.

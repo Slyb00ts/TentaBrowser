@@ -404,9 +404,25 @@ async fn a_shadow_tree_component_is_read_and_clicked() {
     assert!(text.contains("Press the button"), "{text}");
     assert!(text.contains("Clicks: 0"), "{text}");
     assert!(!text.contains("No hint"), "{text}");
+    // The shadow tree's own sheet hides this paragraph.
+    assert!(!text.contains("Internal note"), "{text}");
 
+    // The component is painted: the button is as large and as green as the
+    // sheet inside its shadow tree makes it.
     let add = find_ref(&text, &["button", "Add one"]);
-    client.tool("browser_click", json!({"ref": add})).await.ok();
+    let shot = client.tool("browser_screenshot", json!({"ref": add})).await;
+    shot.ok();
+    let button = decode_png(&shot.images()[0].1);
+    // 40px tall, on a fractional line position: the capture is widened to
+    // whole pixels.
+    assert_eq!(button.width, 200);
+    assert!((40..=41).contains(&button.height), "{}", button.height);
+    assert_eq!(button.pixel(5, 20), [0, 128, 0, 255]);
+
+    // The click is aimed at the button's box and lands on it.
+    let click = client.tool("browser_click", json!({"ref": add})).await;
+    click.ok();
+    assert!(click.text().contains(" at ("), "{}", click.text());
     let after = client.tool("browser_snapshot", json!({})).await.text();
     assert!(after.contains("Clicks: 1"), "{after}");
 }

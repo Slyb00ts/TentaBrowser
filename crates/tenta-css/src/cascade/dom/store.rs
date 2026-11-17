@@ -67,6 +67,11 @@ pub struct StoreEntry {
     pub style_attr: StyleAttrSlot,
     /// The synthesized presentational hints.
     pub hints: HintsSlot,
+    /// The element's state flags and the `Document::mutation_generation` they
+    /// were computed at. Stylo asks for the state of an element once per
+    /// style-sharing candidate it is compared with, and computing it reads
+    /// attributes and walks ancestors.
+    pub state: Cell<Option<(u64, u64)>>,
     /// `Document::mutation_generation` at the last [`StyleStore::refresh`].
     /// The cache readers refuse to run when it is not the document's current
     /// generation, because a skipped refresh would serve stale styles.

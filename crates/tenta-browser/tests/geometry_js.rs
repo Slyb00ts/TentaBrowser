@@ -137,3 +137,53 @@ async fn block_geometry_matches_the_layout() {
     );
     rig.finish();
 }
+
+/// A component with a shadow tree, as script sees it: computed styles come
+/// from the sheet inside the shadow root, the boxes are where the flat tree
+/// puts them, a sheet added later applies, and a point inside the component
+/// is the host's from the document's side.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shadow_tree_has_styles_and_geometry_of_its_own() {
+    let html = doc(
+        "p{color:rgb(1, 0, 0)}",
+        "<div id=host><template shadowrootmode=open>\
+         <style>:host{display:block;width:200px;padding:10px}\
+         #row{display:flex;height:40px}#box{width:60px}\
+         p{color:rgb(0, 2, 0);margin:0;line-height:20px}\
+         ::slotted(span){display:block;width:30px}</style>\
+         <div id=row><div id=box></div><slot></slot></div><p id=note>note</p>\
+         </template><span id=light></span></div><p id=outer>outer</p>",
+    );
+    let rig = Rig::new(vec![("index.html", html)], Tier::Render).await;
+    let page = rig.open("/index.html").await;
+    let rect = "var rect = e => { var r = e.getBoundingClientRect(); \
+                return [r.x, r.y, r.width, r.height].join(','); };";
+    assert_eq!(
+        text(
+            &page,
+            &format!(
+                "{rect} var root = document.getElementById('host').shadowRoot; \
+                 [getComputedStyle(root.getElementById('note')).color, \
+                  getComputedStyle(document.getElementById('outer')).color, \
+                  rect(document.getElementById('host')), \
+                  rect(root.getElementById('box')), \
+                  rect(document.getElementById('light')), \
+                  document.elementFromPoint(20, 20).id].join(' | ')"
+            )
+        )
+        .await,
+        "rgb(0, 2, 0) | rgb(1, 0, 0) | 0,0,220,80 | 10,10,60,40 | 70,10,30,40 | host"
+    );
+    // A sheet script adds to the shadow root afterwards applies there too.
+    assert_eq!(
+        text(
+            &page,
+            "var extra = document.createElement('style'); \
+             extra.textContent = '#box{width:90px}'; root.appendChild(extra); \
+             rect(root.getElementById('box')) + ' | ' + rect(document.getElementById('light'))"
+        )
+        .await,
+        "10,10,90,40 | 100,10,30,40"
+    );
+    rig.finish();
+}

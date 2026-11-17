@@ -25,6 +25,7 @@ fn imported(at: &str, text: &str) -> ImportedSheet {
 fn root(text: &str, imports: Vec<ImportedSheet>) -> StyleSource {
     StyleSource {
         owner: None,
+        scope: None,
         url: url("http://t.test/css/main.css"),
         text: text.to_owned(),
         media: None,

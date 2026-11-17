@@ -56,6 +56,10 @@ pub struct StyleSource {
     /// The `<style>` or `<link>` element; its position in the sources vector
     /// is the document order.
     pub owner: Option<NodeId>,
+    /// The shadow root whose tree the owner is in. Such a sheet styles that
+    /// shadow tree, its host (`:host`) and the nodes slotted into it
+    /// (`::slotted()`), and nothing else; `None` is a sheet of the document.
+    pub scope: Option<NodeId>,
     /// Base URL for `url()` and `@import`.
     pub url: Url,
     /// Stylesheet text.

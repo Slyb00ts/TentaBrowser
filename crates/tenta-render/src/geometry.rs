@@ -90,12 +90,13 @@ pub struct ElementGeometry {
     pub opacity: f32,
 }
 
-/// The geometry of every element of the document, in document order: the
-/// order `querySelectorAll('*')` lists them in. `None` for an element with no
-/// box.
+/// The geometry of every element of the document, in the order of
+/// [`Document::composed_elements`]: document order, the order
+/// `querySelectorAll('*')` lists them in, with the elements of each shadow
+/// tree after their host. `None` for an element with no box.
 pub fn element_geometry(tree: &FragmentTree, doc: &Document) -> Vec<Option<ElementGeometry>> {
-    doc.descendants(doc.document_node())
-        .filter(|node| doc.is_element(*node))
+    doc.composed_elements()
+        .into_iter()
         .map(|node| {
             let fragments = own_fragments(tree, node);
             let first = fragments.first()?;
@@ -224,7 +225,7 @@ pub fn hit_test(tree: &FragmentTree, doc: &Document, x: f32, y: f32) -> Option<N
     // The root's rect is relative to nothing: its parent space is the document.
     hit_fragment(tree, doc, root, (x, y))
         .or_else(|| doc.document_element())
-        .filter(|node| doc.is_connected(*node))
+        .filter(|node| doc.is_composed_connected(*node))
 }
 
 /// `point` is relative to the parent fragment's border box.

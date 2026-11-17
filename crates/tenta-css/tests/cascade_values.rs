@@ -300,6 +300,7 @@ fn a_disabled_source_and_a_mismatched_media_attribute_contribute_nothing() {
     let (doc, mut engine) = styled(&page("", "<p id=p>x</p>"));
     let source = |text: &str, media: Option<&str>, disabled: bool| StyleSource {
         owner: None,
+        scope: None,
         url: url::Url::parse("https://example.test/a.css").unwrap(),
         text: text.to_owned(),
         media: media.map(str::to_owned),

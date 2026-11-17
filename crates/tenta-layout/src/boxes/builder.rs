@@ -676,8 +676,14 @@ impl<'a, 'cx> Builder<'a, 'cx> {
             self.work.push(Task::Pseudo(node, style));
         }
         let start = self.work.len();
-        self.work
-            .extend(self.cx.doc.children(node).map(Task::Visit));
+        // The flat tree is what is rendered: a shadow host's boxes are those
+        // of its shadow tree, and a slot's those of the nodes assigned to it.
+        match self.cx.doc.flat_children(node) {
+            Some(children) => self.work.extend(children.into_iter().map(Task::Visit)),
+            None => self
+                .work
+                .extend(self.cx.doc.children(node).map(Task::Visit)),
+        }
         self.work[start..].reverse();
         if let Some(style) = styles.pseudo_style(node, PseudoKind::Before) {
             self.work.push(Task::Pseudo(node, style));

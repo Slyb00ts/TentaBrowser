@@ -436,7 +436,7 @@ async fn click_point(
     };
     let node = target.node;
     let covered = read_doc(page, move |doc| {
-        if doc.is_inclusive_ancestor(node, hit) {
+        if doc.is_flat_tree_inclusive_ancestor(node, hit) {
             Ok(dom::resolve_node(doc, hit))
         } else {
             Err(dom::describe(doc, hit))

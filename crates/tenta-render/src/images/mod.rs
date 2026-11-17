@@ -291,7 +291,14 @@ impl ImageTable {
     pub(crate) fn refresh_nodes(&mut self, doc: &Document, base: &Url, env: &MediaEnv) {
         let mut nodes = HashMap::new();
         let mut order = Vec::new();
-        for node in doc.descendants(doc.document_node()) {
+        // Images inside shadow trees are rendered too; the walk includes them
+        // once the document has a shadow tree.
+        let scan: Vec<NodeId> = if doc.has_shadow_trees() {
+            doc.shadow_including_subtree(doc.document_node())
+        } else {
+            doc.descendants(doc.document_node()).collect()
+        };
+        for node in scan {
             if !is_image_element(doc, node) {
                 continue;
             }

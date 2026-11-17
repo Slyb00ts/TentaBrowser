@@ -83,7 +83,10 @@ impl RenderSession {
     /// height]` in viewport coordinates, transforms applied. Empty for a node
     /// with no box.
     pub fn element_rects(&mut self, doc: &Document, node: NodeId) -> Vec<[f64; 4]> {
-        if !doc.is_element(node) || !doc.is_connected(node) || doc.document_element().is_none() {
+        if !doc.is_element(node)
+            || !doc.is_composed_connected(node)
+            || doc.document_element().is_none()
+        {
             return Vec::new();
         }
         let tree = self.layout(doc);
@@ -98,7 +101,10 @@ impl RenderSession {
 
     /// `offset*`, `client*` and `scroll*` of `node`; `None` when it has no box.
     pub fn element_metrics(&mut self, doc: &Document, node: NodeId) -> Option<ElementMetrics> {
-        if !doc.is_element(node) || !doc.is_connected(node) || doc.document_element().is_none() {
+        if !doc.is_element(node)
+            || !doc.is_composed_connected(node)
+            || doc.document_element().is_none()
+        {
             return None;
         }
         self.layout(doc);

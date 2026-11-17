@@ -7801,7 +7801,7 @@ impl HTMLElementOps for HostObject {
         let doc = doc.borrow();
         // An element that is not rendered reads as its text content; one in
         // the document reads as the text extractor lays it out.
-        if doc.is_connected(id) {
+        if doc.is_composed_connected(id) {
             // Line breaks at either end are not part of the rendered text.
             Ok(tenta_dom::extract::text(&doc, id)
                 .trim_matches('\n')

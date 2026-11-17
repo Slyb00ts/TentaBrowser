@@ -5,7 +5,7 @@ use selectors::attr::{AttrSelectorOperation, CaseSensitivity, NamespaceConstrain
 use selectors::bloom::BloomFilter;
 use selectors::context::MatchingContext;
 use selectors::matching::ElementSelectorFlags;
-use style::dom::{TElement, TNode};
+use style::dom::{TElement, TNode, TShadowRoot};
 use style::selector_parser::{AttrValue, NonTSPseudoClass, PseudoElement, SelectorImpl};
 use style::values::AtomIdent;
 use style::{LocalName, Namespace};
@@ -26,16 +26,28 @@ impl<'a> selectors::Element for Handle<'a> {
         OpaqueElement::new(&self.0.entry.data)
     }
 
+    // Selectors match within one node tree: the parent of a shadow root's
+    // child is the shadow root, which is not an element.
     fn parent_element(&self) -> Option<Self> {
-        self.as_node().traversal_parent()
+        self.as_node().parent_node()?.as_element()
     }
 
     fn parent_node_is_shadow_root(&self) -> bool {
-        false
+        let doc = self.0.view.doc;
+        let parent = doc.parent(self.0.node);
+        parent.is_some() && doc.kind(parent) == NodeKind::ShadowRoot
     }
 
     fn containing_shadow_host(&self) -> Option<Self> {
-        None
+        self.containing_shadow().map(|root| root.host())
+    }
+
+    #[inline]
+    fn assigned_slot(&self) -> Option<Self> {
+        if !self.0.view.shadow_trees {
+            return None;
+        }
+        self.slot_assigned_to()
     }
 
     fn is_pseudo_element(&self) -> bool {
@@ -65,7 +77,14 @@ impl<'a> selectors::Element for Handle<'a> {
     }
 
     fn first_element_child(&self) -> Option<Self> {
-        self.traversal_children().find_map(|node| node.as_element())
+        let mut child = self.as_node().first_child();
+        while let Some(node) = child {
+            if let Some(element) = node.as_element() {
+                return Some(element);
+            }
+            child = node.next_sibling();
+        }
+        None
     }
 
     fn is_html_element_in_html_document(&self) -> bool {

@@ -295,12 +295,6 @@ pub enum Placement {
 #[cfg(feature = "render")]
 pub async fn place(page: &Page, node: NodeId) -> Result<Placement, ToolError> {
     use tenta_core::Error;
-    // The layout covers the document tree only. An element of a shadow tree
-    // has no box to aim at yet, which says nothing about whether it is
-    // shown, so it is acted on without a point, as on a page with no layout.
-    if read_doc(page, move |doc| doc.containing_shadow_root(node).is_some()).await? {
-        return Ok(Placement::Unavailable);
-    }
     match page.node_boxes(node).await {
         Ok(boxes) => Ok(boxes
             .first()
