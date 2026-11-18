@@ -412,7 +412,7 @@ impl Engine {
             };
             let _release = FiringRelease::new(&scheduler, firing);
             let terminated = scheduler.with_origin(ready.origin, || {
-                scheduler.with_nesting(ready.nesting, || {
+                scheduler.with_timer_scope(ready.scope, || {
                     let result = self.entry(self.script_timeout, |ctx| ready.call(ctx));
                     if matches!(
                         result,

@@ -98,6 +98,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | Wrapper-graph collection at the end of a script run is amortised too (GC2) | Implemented on V8; measured; not independently reviewed; **extends the change of timing GC1 made, which the specification may record as a decision** | A script run ended with a full collection every time, about 0.45 ms on the smallest heap, so every `<script>` and every start-up script paid for one. It now collects under the rule a task end uses; see the section below |
 | Wrapper-graph collection after a settlement and a lifecycle event is amortised too (GC3) | Implemented on V8; measured; not independently reviewed; **the same change of timing as GC1 and GC2** | Fetch settlement, XHR settlement and `DOMContentLoaded`/`load` each ended with a full collection. They now collect under the rule a task end uses; only `trim_memory` collects every time |
 | The host's navigation outranks the page it is replacing (NAV1) | Implemented; focused check passed and mutation-checked; not independently reviewed; **a navigation rule the specification may record** | While a navigation the host asked for has not committed, a navigation the old document asks for is dropped. Before, a page that reloaded itself at that moment cancelled the host's navigation, and the agent was handed the page it had left; see the section below |
+| A timer chain is a deferral while the sum of its delays is small (SET1) | Implemented; unit, page and V8 checks passed, the V8 one mutation-checked; measured on real sites; not independently reviewed; **changes two normative tunables of the settle rule, which the specification must record** | A one-shot timer of up to 64 ms (32 ms before) continues the load chain, and a chain of timers does for as long as its delays add up to at most 256 ms (8 links before). amazon.com and imdb.com, whose interstitial polls and waits 50 ms before it loads the page, now return the page; see the section below |
 | `ReadableStream`, its default reader and controller, the queuing strategies, `Response.body` and `Blob.stream()` (ST1) | Implemented on V8 as a script built at first use; focused checks passed; measured; not independently reviewed; **Streams as script rather than WebIDL is a choice the specification may record** | A page could not make or read a stream at all. Default streams only: no byte streams or BYOB readers, no `WritableStream`, `TransformStream`, `pipeTo()` or `pipeThrough()`; a body is delivered as one chunk; a stream is not accepted as a body; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
 
@@ -3699,10 +3700,130 @@ the other two, so the sweep totals (67.5 s unchanged, 51.0 s with depth
 64, 62.2 s with both) are not a comparison of the builds.
 
 Both numbers are tunables of the settle rule (`02-architecture.md`
-§5.1), so neither was changed; the choice is the owner's. A rule bounded
-by the age of a timer chain rather than its depth, which would stop a
-loop that never ends from costing the busy cap on every settle, was not
-built or measured.
+§5.1), so neither was changed in that commit. The owner then asked for a
+rule bounded by how long a chain goes on rather than by its depth to be
+built and measured; that is SET1, the next section. The comparison above
+was made against `ba783ae`, which is older than ST1; on the pages ST1
+changed (the Next.js sites) it does not describe the current tree.
+
+### A timer chain is a deferral while it has waited little (SET1)
+
+The settle rule decided whether a timer continues the load chain from two
+numbers: a one-shot delay of at most 32 ms (`tracked_timer_max`) and a
+chain of timers at most 8 deep (`tracked_timer_depth`). The depth is
+replaced by `tracked_timer_chain`: the **sum of the delays** of a chain's
+timers, at most 256 ms, and `tracked_timer_max` is 64 ms.
+
+- **What a chain is:** it begins with a timer scheduled from a task that
+  is not a timer callback, and every timer scheduled from a callback of
+  the chain belongs to it. The event loop carries what the chain has
+  waited next to the nesting level (`TimerScope`,
+  `crates/tenta-js/src/event_loop/driver.rs`), and both backends hand it
+  back around the deferred call, as they did the nesting level. The delay
+  counted is the one the timer really waits, so a `setTimeout(f, 0)` loop
+  is charged the 4 ms the nesting clamp gives it from the sixth level on
+  and ends too (five free hops, then 64).
+- **Why the delays and not the clock:** the first version built measured
+  the chain's age on the loop clock. It gave the same results on the two
+  sites, but the time a callback takes to run counted against the chain,
+  so the same page would be classified differently on a slower machine,
+  and a chain of a few heavy callbacks, which the old rule tracked, could
+  fall out. With the sum of delays the classification depends on the page
+  alone, and because 8 × 32 ms is 256 ms every timer the old rule tracked
+  is still tracked: nothing that held a settle open stops holding it.
+- **What it is for:** the script-run interstitial of amazon.com and
+  imdb.com (previous section). Thresholds, three loads of each site per
+  cell, release CLI over MCP, 2026-11-18:
+
+  | `tracked_timer_max` / chain | amazon.com | imdb.com |
+  |---|---|---|
+  | 32 ms / 256 ms | 202 page, 3 of 3 | 202 page, 3 of 3 |
+  | 64 ms / 64 ms | 202 page, 2 of 2 challenged loads | 202 page, 3 of 3 |
+  | 64 ms / 128 ms | not challenged often enough to say | 202 page, 3 of 3 |
+  | 64 ms / 192 ms | not challenged often enough to say | real page, 3 of 3 |
+  | 50 ms / 256 ms | real page, 2 of 2 challenged loads | real page, 3 of 3 |
+  | 64 ms / 256 ms | real page, 3 of 3 | real page, 3 of 3 |
+
+  The upper rows are the clock-based build; the imdb.com column was
+  repeated with the sum of delays at 128, 192 and 256 ms with the same
+  outcome. The page waits about 50 ms on one timer, which is why 32 ms
+  is not enough whatever the chain allows, and its 10 ms polling needs
+  between 128 and 192 ms. amazon.com answered some loads, with every
+  build, with a 0.2 s page that holds one `iframe` and no challenge;
+  those loads say nothing about the rule and are not counted.
+- **Measured against `636160b`** (release CLI over MCP, builds
+  alternating, 2026-11-18; the candidate is the working tree with the two
+  numbers readable from the environment):
+
+  | | `636160b` | SET1 (64 ms / 256 ms) |
+  |---|---|---|
+  | amazon.com, three sweeps | 202 page twice, the `iframe` page once | real page, 3 of 3 |
+  | imdb.com, three sweeps | 202 page, 3 of 3 | real page, 3 of 3 |
+  | 35-site sweep, navigation total, three runs | 61.9, 55.1, 57.3 s | 67.1, 62.6, 59.4 s |
+  | sum of the per-site medians | 57.6 s | 61.8 s |
+  | of which imdb.com and amazon.com (the real pages) | 1.02 s, 0.79 s | 3.47 s, 1.95 s |
+  | ebay.com (a 403 page that polls) | 541, 533, 507 ms | 790, 808, 756 ms |
+  | seven control sites, four loads each, sum of medians | 12.84 s | 13.08 s |
+  | duckduckgo.com, seven loads, median | 1.42 s | 1.56 s |
+  | sites reported busy that were not before | | none |
+  | `S-js-xhr` navigation p50/p95, 25 pairs | 8.84/9.50 ms | 8.93/9.55 ms |
+  | `S-js-xhr` process RSS p50/p95 | 31.4/32.0 MiB | 31.4/32.0 MiB |
+  | `S-dom-calls` `get` p50/p95 | 81.84/87.74 ns | 81.69/85.62 ns |
+
+  Outside the two sites the sweep moved by ebay.com: its 403 page polls
+  on a short timer that never stops, and it now holds the settle for the
+  256 ms a chain may wait - the most this rule can cost a page, where the
+  old rule's most was 8 links. duckduckgo.com's 10% is at the noise
+  floor and is not a claim; the other differences are inside the spread
+  of single loads (one load of npmjs.com in the baseline was a 403 that
+  returned in 0.2 s, and single loads of several sites differ by seconds
+  between runs of the same build). The option the owner was also offered,
+  100 ms with depth 64, had been measured against `ba783ae` at 0.5 s more
+  on duckduckgo.com and onet.pl with both reported busy; it was not
+  measured again on the current tree.
+- **Checks:** unit tests on the virtual clock in `driver.rs` (ten 10 ms
+  hops tracked and the eleventh not; three 30 ms hops; a callback that
+  runs for a second is not charged for it; a zero-delay loop ends after
+  30 hops under a 100 ms rule; a new chain starts from nothing; a handler
+  called outside its timer's task stays in its chain); the stub-engine
+  page tests in `crates/tenta-page/tests/runtime_settle.rs` (a chain that
+  never ends is busy at the cap under a long rule, and stops holding the
+  settle after three hops under a 60 ms rule); and
+  `crates/tenta-browser/tests/navigation_js.rs
+  an_interstitial_that_polls_and_then_loads_the_page_is_not_reported_as_the_page`
+  on V8, which polls twelve times, fetches, waits 50 ms and replaces
+  itself. It fails with `tracked_timer_max` back at 32 ms and, separately,
+  with the chain at 20 ms. The workspace passed 4958 of 4958 and the
+  feature set 604 of 604; fmt, both Clippy runs, `lint-deps`,
+  `idl-manifest` and `cargo deny` were clean.
+- **Found on the way, not changed:**
+  - youtube.com answers about one request in eight with a different page
+    (its scripts are `m=base` and `m=late,app` instead of the `kevlar_*`
+    modules; 2 of 16 fetches of the HTML alone with `636160b`). The
+    engine renders nothing of that variant - an empty snapshot and no
+    console error, with `636160b` as with this tree. It looked like a
+    regression of this package for a while because the variant came up
+    in several loads with the candidate builds before it came up with
+    the baseline; the HTML is chosen before any script runs, and the
+    baseline, handed the same variant in a later load, gave the same
+    empty result.
+  - `MessagePort.postMessage`, `window.postMessage`, `requestIdleCallback`
+    and the history and observer tasks are queued as zero-delay timers
+    (`queue_task` in `crates/tenta-js-v8/src/host.rs`). A message loop is
+    therefore clamped to 4 ms a hop from the sixth one, which
+    `MessageChannel` exists to avoid, and an idle callback scheduled from
+    tracked work is tracked, where `tenta-core`'s own account of
+    provenance calls idle callbacks background. nextjs.org, which could
+    not run far without streams, went from 0.6 to 0.9 s before ST1 (five
+    loads of `ba783ae`) to 1.7 to 3.6 s after it (nine loads of
+    `636160b`), under the old rule in both. In one traced load of the clock-based
+    candidate some twenty `fetch()` calls for `?_rsc=` route payloads
+    were issued from tracked tasks between 1.0 and 1.8 s and the settle
+    ended at 2.2 s; which kind of timer-queued task issues them was not
+    traced.
+- **Not decided here:** the two numbers are normative in
+  `02-architecture.md` §5.1, which is not in this checkout; the entry
+  that changes them is the owner's.
 
 ### `ReadableStream`, `Response.body` and `Blob.stream()` (ST1)
 

@@ -12,7 +12,7 @@ use tenta_js::bindings::*;
 use tenta_js::dom::events::{
     CallbackRef, EventHandlerName, HostValue, PromiseOutcome, PromiseRef, ScriptHost,
 };
-use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId};
+use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId, TimerScope};
 use tenta_js::fetch::{FetchDriver, FetchStartError};
 use tenta_js::geometry::{GeometryHost, ViewportMetrics, WindowMetric};
 use tenta_js::location::LocationPart;
@@ -33,7 +33,7 @@ pub(crate) struct Handler {
 pub(crate) struct Ready {
     handler: Handler,
     pub timer: TimerId,
-    pub nesting: u32,
+    pub scope: TimerScope,
     pub origin: Origin,
 }
 impl Ready {
@@ -503,7 +503,7 @@ pub(crate) fn install<'js>(ctx: &Ctx<'js>, state: &Rc<State>) -> rquickjs::Resul
                             ready.borrow_mut().push_back(Ready {
                                 handler: handler.clone(),
                                 timer,
-                                nesting: scheduler.current_nesting(),
+                                scope: scheduler.timer_scope(),
                                 origin: scheduler.current_origin(),
                             });
                         }

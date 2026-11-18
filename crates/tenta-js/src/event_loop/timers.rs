@@ -17,6 +17,17 @@ const CLAMP_NESTING_LEVEL: u32 = 5;
 /// The floor a clamped timeout is raised to.
 const CLAMP_MIN_MS: u64 = 4;
 
+/// The delay a timer asked for at `nesting_level` actually waits: the Chromium
+/// nesting clamp raises a short delay to 4 ms once timers are nested more than
+/// five deep.
+pub fn effective_delay_ms(delay_ms: u64, nesting_level: u32) -> u64 {
+    if nesting_level > CLAMP_NESTING_LEVEL {
+        delay_ms.max(CLAMP_MIN_MS)
+    } else {
+        delay_ms
+    }
+}
+
 /// Identifies a scheduled timer. Also the value `setTimeout` returns to script.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct TimerId(u64);
@@ -101,11 +112,7 @@ impl TimerQueue {
     /// clamp, and returns its id. `nesting_level` is the current timer nesting
     /// level (1 for a timer scheduled from a top-level task).
     pub fn schedule(&mut self, now: MonoTime, delay_ms: u64, nesting_level: u32) -> TimerId {
-        let effective_ms = if nesting_level > CLAMP_NESTING_LEVEL {
-            delay_ms.max(CLAMP_MIN_MS)
-        } else {
-            delay_ms
-        };
+        let effective_ms = effective_delay_ms(delay_ms, nesting_level);
         let deadline = now.saturating_add(std::time::Duration::from_millis(effective_ms));
 
         let id = TimerId(self.next_id);
@@ -124,11 +131,7 @@ impl TimerQueue {
     /// valid across firings; the caller passes the id [`TimerQueue::take_expired`]
     /// just returned, whose previous heap slot is already gone.
     pub fn reschedule(&mut self, id: TimerId, now: MonoTime, delay_ms: u64, nesting_level: u32) {
-        let effective_ms = if nesting_level > CLAMP_NESTING_LEVEL {
-            delay_ms.max(CLAMP_MIN_MS)
-        } else {
-            delay_ms
-        };
+        let effective_ms = effective_delay_ms(delay_ms, nesting_level);
         let deadline = now.saturating_add(std::time::Duration::from_millis(effective_ms));
         let seq = self.next_seq;
         self.next_seq += 1;

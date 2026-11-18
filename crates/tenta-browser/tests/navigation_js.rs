@@ -24,6 +24,19 @@ const SECOND: &str = "<!doctype html><title>Second</title><body><p id=p>second p
 const REDIRECT: &str = "<!doctype html><title>Redirecting</title><body>\
     <script>location.replace('/second.html?from=script');</script><p>never shown for long</p></body>";
 
+/// An interstitial the way a script-run challenge page is built: it polls on
+/// short timers for longer than a handful of links, asks the origin something,
+/// waits a moment and then loads the page that was asked for.
+const INTERSTITIAL: &str = "<!doctype html><title>Checking</title><body><script>\
+    var polls = 0;\
+    (function poll() {\
+        if (++polls <= 12) { setTimeout(poll, 1); return; }\
+        fetch('/second.html').then(function () {\
+            setTimeout(function () { location.replace('/second.html?from=interstitial'); }, 50);\
+        });\
+    })();\
+    </script><p>checking</p></body>";
+
 struct World {
     /// Kept so the fixture files outlive the server that serves them.
     _fixtures: tenta_testutil::TempDir,
@@ -38,6 +51,7 @@ async fn world() -> World {
     fixtures.write("first.html", FIRST);
     fixtures.write("second.html", SECOND);
     fixtures.write("redirect.html", REDIRECT);
+    fixtures.write("interstitial.html", INTERSTITIAL);
     let server = FixtureServer::start(FixtureServerConfig::new(fixtures.path()))
         .await
         .expect("fixture server");
@@ -157,6 +171,43 @@ async fn a_script_that_redirects_while_loading_replaces_the_navigation_that_load
             .final_url
             .as_str(),
         world.server.url("/second.html?from=script")
+    );
+    world.close().await;
+}
+
+/// The polling, the request and the short wait are all the load chain of the
+/// interstitial, so the settle the host is waiting in is still open when the
+/// page replaces itself: the host is told its navigation was replaced, and
+/// finds the page it asked for. A settle that ended while the page was still
+/// polling would hand the host the interstitial as the finished page.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_interstitial_that_polls_and_then_loads_the_page_is_not_reported_as_the_page() {
+    let world = world().await;
+    let outcome = world
+        .page
+        .goto(
+            &world.server.url("/interstitial.html"),
+            Goto::default()
+                .wait_until(Settle::NetworkIdle)
+                .timeout(Duration::from_secs(10)),
+        )
+        .await;
+    assert!(
+        outcome.is_err(),
+        "the settle ended before the interstitial was done: {outcome:?}"
+    );
+    tokio::time::timeout(Duration::from_secs(10), world.page.navigation_settled())
+        .await
+        .expect("the page the interstitial loads arrived");
+    assert_eq!(world.page.title().as_deref(), Some("Second"));
+    assert_eq!(
+        world
+            .page
+            .navigation()
+            .expect("a navigation")
+            .final_url
+            .as_str(),
+        world.server.url("/second.html?from=interstitial")
     );
     world.close().await;
 }

@@ -94,7 +94,7 @@ async fn an_animation_frame_loop_does_not_hold_the_settle_open() {
 /// the settle call waits for it, and the page it left behind shows it ran.
 ///
 /// This is also what proves the page applies *its* timer rule to the engine:
-/// under the engine's own default (32 ms) a 100 ms timer would be background,
+/// under the engine's own default (64 ms) a 100 ms timer would be background,
 /// the settle would end at once, and the marker would never be appended.
 #[tokio::test(flavor = "current_thread")]
 async fn a_tracked_deferral_from_inline_script_holds_the_settle_until_it_runs() {
@@ -214,15 +214,15 @@ async fn an_animation_frame_due_while_a_deferral_is_pending_runs() {
 /// A chain that reschedules itself forever finally *is* the page's work, so
 /// the settle call ends at the busy cap instead of waiting for it.
 ///
-/// The depth the chain is allowed to keep inheriting `Tracked` comes from the
-/// page's `SettleConfig` too: under the library depth of 8 the chain would
-/// become background after eight hops and the settle would end by itself.
+/// How long the chain may wait and keep inheriting `Tracked` comes from the
+/// page's `SettleConfig` too: under the library's `tracked_timer_chain` the
+/// chain would become background by itself and the settle would end without
+/// reaching the cap.
 #[tokio::test(flavor = "current_thread")]
 async fn a_tracked_chain_that_never_ends_settles_busy_at_the_cap() {
     let settle = SettleConfig {
-        busy_cap: Duration::from_millis(200),
-        tracked_timer_max: Duration::from_millis(200),
-        tracked_timer_depth: 64,
+        busy_cap: Duration::from_millis(400),
+        tracked_timer_chain: Duration::from_secs(60),
         ..SettleConfig::library()
     };
     let harness = Harness::builder(&body(
@@ -244,6 +244,40 @@ async fn a_tracked_chain_that_never_ends_settles_busy_at_the_cap() {
     assert!(
         record.hops >= 2,
         "the engine was pumped during the settle: {} hops",
+        record.hops
+    );
+}
+
+/// The same chain under a rule it outlasts: once it has waited for longer
+/// than `tracked_timer_chain` it is the page's own activity, the load chain
+/// has ended by itself, and the settle call ends without calling the page
+/// busy - with the chain still hopping.
+#[tokio::test(flavor = "current_thread")]
+async fn a_chain_that_has_waited_too_long_stops_holding_the_settle_open() {
+    let settle = SettleConfig {
+        busy_cap: Duration::from_secs(10),
+        tracked_timer_chain: Duration::from_millis(60),
+        ..SettleConfig::library()
+    };
+    let harness = Harness::builder(&body(
+        "<script>loop-forever hop 20</script><p id=tail>after</p>",
+    ))
+    .settle(settle)
+    .build();
+    let navigation = harness
+        .settle(Settle::NetworkIdle)
+        .await
+        .expect("navigation");
+
+    assert_eq!(
+        navigation.settle,
+        settled(false),
+        "a chain that became activity is not the load chain refusing to end"
+    );
+    let record = harness.record.lock().unwrap();
+    assert!(
+        record.hops >= 3,
+        "the settle waited for the three hops that were deferrals: {} hops",
         record.hops
     );
 }

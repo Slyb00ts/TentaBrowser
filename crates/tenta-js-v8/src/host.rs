@@ -38,7 +38,7 @@ use tenta_js::bindings::{
     value_to_v8, world_realm,
 };
 use tenta_js::dom::events::{EventHandlerName, HostValue, PromiseOutcome, PromiseRef, ScriptHost};
-use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId};
+use tenta_js::event_loop::{AnimationFrameId, Scheduler, TimerId, TimerScope};
 use tenta_js::fetch::FetchDriver;
 use tenta_js::geometry::{GeometryHost, ViewportMetrics, WindowMetric};
 use tenta_js::location::LocationPart;
@@ -133,13 +133,15 @@ guarded_callback!(guarded_window_location_getter => window_location_getter);
 /// install around the call.
 ///
 /// The JS call happens *outside* the task that dequeued the timer - the task
-/// only moves the handle onto this queue - so the nesting depth and the
-/// provenance have to travel with the handler. Without them a `setTimeout`
-/// made from inside a handler would be scheduled at depth 1 from a top-level
-/// task, which silently defeats both the nesting clamp and the settle rule.
+/// only moves the handle onto this queue - so the timer scope (the nesting
+/// depth and the start of the timer chain) and the provenance have to travel
+/// with the handler. Without them a `setTimeout` made from inside a handler
+/// would be scheduled at depth 1, as the first timer of a new chain, from a
+/// top-level task, which silently defeats both the nesting clamp and the
+/// settle rule.
 pub struct ReadyHandler {
     pub handler: v8::Global<v8::Function>,
-    pub nesting: u32,
+    pub scope: TimerScope,
     pub origin: Origin,
     /// The timer this handler came from. The push is what *defers* the call,
     /// so it is recorded as such on the loop; the id is handed back before the
@@ -1691,7 +1693,7 @@ fn queue_task(scope: &mut v8::PinScope, task: v8::Local<v8::Function>) -> Option
         Box::new(move || {
             ready.borrow_mut().push_back(ReadyHandler {
                 handler,
-                nesting: scheduler.current_nesting(),
+                scope: scheduler.timer_scope(),
                 origin: scheduler.current_origin(),
                 timer: scheduler.defer_firing(),
             });
@@ -1722,7 +1724,7 @@ fn set_timeout(
         Box::new(move || {
             ready.borrow_mut().push_back(ReadyHandler {
                 handler,
-                nesting: scheduler.current_nesting(),
+                scope: scheduler.timer_scope(),
                 origin: scheduler.current_origin(),
                 timer: scheduler.defer_firing(),
             });
@@ -1773,7 +1775,7 @@ fn set_interval(
         Box::new(move || {
             ready.borrow_mut().push_back(ReadyHandler {
                 handler: handler.clone(),
-                nesting: scheduler.current_nesting(),
+                scope: scheduler.timer_scope(),
                 origin: scheduler.current_origin(),
                 timer: scheduler.defer_firing(),
             });

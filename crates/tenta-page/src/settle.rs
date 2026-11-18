@@ -31,6 +31,7 @@ use crate::clock::Clock;
 // classifying the requests it issues - can name them without depending on
 // `tenta-page`. They are re-exported here because the settle machine is what
 // gives them meaning.
+use tenta_core::provenance;
 pub use tenta_core::provenance::{Origin, RequestClass, TimerRule};
 
 /// The tunables of the machine. The library and MCP differ only in patience.
@@ -44,8 +45,9 @@ pub struct SettleConfig {
     pub foreground_request_max: Duration,
     /// Longest one-shot timer delay that still inherits `Tracked`.
     pub tracked_timer_max: Duration,
-    /// Deepest chain of one-shot timers that still inherits `Tracked`.
-    pub tracked_timer_depth: u32,
+    /// How much waiting - the sum of its timers' delays - a chain of one-shot
+    /// timers may add up and still inherit `Tracked`.
+    pub tracked_timer_chain: Duration,
     /// How often `Quiet` may fall back to `Draining` before the machine gives
     /// up and reports `busy`.
     pub max_reentries: u32,
@@ -68,7 +70,7 @@ impl SettleConfig {
     pub const fn timer_rule(&self) -> TimerRule {
         TimerRule {
             max_delay: self.tracked_timer_max,
-            max_depth: self.tracked_timer_depth,
+            max_chain: self.tracked_timer_chain,
         }
     }
 
@@ -77,8 +79,8 @@ impl SettleConfig {
         Self {
             busy_cap: Duration::from_secs(1),
             foreground_request_max: Duration::from_secs(5),
-            tracked_timer_max: Duration::from_millis(32),
-            tracked_timer_depth: 8,
+            tracked_timer_max: Duration::from_millis(provenance::DEFAULT_MAX_DELAY_MS),
+            tracked_timer_chain: Duration::from_millis(provenance::DEFAULT_MAX_CHAIN_MS),
             max_reentries: 16,
             network_idle_window: Duration::from_millis(500),
             network_almost_idle_max: 2,
@@ -189,19 +191,21 @@ impl SettleState {
 /// The provenance a timer scheduled from `parent` inherits
 /// (`docs/spec/02-architecture.md` §5.1).
 ///
-/// A timer is a deferral (tracked) only if it is one-shot, short and not too
-/// deep in a chain of timers; otherwise it is activity (background). Used by
-/// the Tier 2 event loop; exposed here because the rule belongs to settle.
+/// A timer is a deferral (tracked) only if it is one-shot, short and the
+/// chain of timers it belongs to has not waited for too long; otherwise it is
+/// activity (background). `chain_waited` is the sum of the delays of the
+/// chain's timers before this one. Used by the Tier 2 event loop; exposed
+/// here because the rule belongs to settle.
 pub fn timer_origin(
     parent: Origin,
     repeating: bool,
     delay: Duration,
-    depth: u32,
+    chain_waited: Duration,
     config: &SettleConfig,
 ) -> Origin {
     config
         .timer_rule()
-        .origin_for(parent, repeating, delay, depth)
+        .origin_for(parent, repeating, delay, chain_waited)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1307,12 +1311,12 @@ mod tests {
         let config = SettleConfig::library();
         let short = Duration::from_millis(4);
         assert_eq!(
-            timer_origin(Origin::Tracked, false, short, 0, &config),
+            timer_origin(Origin::Tracked, false, short, Duration::ZERO, &config),
             Origin::Tracked,
             "setTimeout(f, 4) from the load chain is a deferral"
         );
         assert_eq!(
-            timer_origin(Origin::Tracked, true, short, 0, &config),
+            timer_origin(Origin::Tracked, true, short, Duration::ZERO, &config),
             Origin::Background,
             "setInterval is activity"
         );
@@ -1321,19 +1325,31 @@ mod tests {
                 Origin::Tracked,
                 false,
                 Duration::from_millis(100),
-                0,
+                Duration::ZERO,
                 &config
             ),
             Origin::Background,
             "a long timer is activity"
         );
+        let chain = config.tracked_timer_chain;
         assert_eq!(
-            timer_origin(Origin::Tracked, false, short, 9, &config),
-            Origin::Background,
-            "a chain deeper than tracked_timer_depth is activity"
+            timer_origin(Origin::Tracked, false, short, chain - short, &config),
+            Origin::Tracked,
+            "a timer that uses the last of tracked_timer_chain is still a deferral"
         );
         assert_eq!(
-            timer_origin(Origin::Background, false, short, 0, &config),
+            timer_origin(
+                Origin::Tracked,
+                false,
+                short,
+                chain - short + Duration::from_millis(1),
+                &config
+            ),
+            Origin::Background,
+            "a chain that has waited for longer than tracked_timer_chain is activity"
+        );
+        assert_eq!(
+            timer_origin(Origin::Background, false, short, Duration::ZERO, &config),
             Origin::Background,
             "provenance is inherited, never promoted"
         );

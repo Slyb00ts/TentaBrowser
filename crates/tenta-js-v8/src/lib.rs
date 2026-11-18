@@ -3049,7 +3049,7 @@ impl Engine {
 
     /// Calls one fired timer handler with the loop state it was queued under.
     ///
-    /// The nesting depth and provenance are reinstalled here, around the JS
+    /// The timer scope and provenance are reinstalled here, around the JS
     /// call itself, because the task that dequeued the timer only moved the
     /// handle onto the ready queue and has already restored them. Without this
     /// a `setTimeout(f, 0)` chain would be scheduled from depth 1 every time
@@ -3079,9 +3079,9 @@ impl Engine {
         }
         let _release = firing.map(|firing| FiringRelease::new(&scheduler, firing));
         let origin = ready.origin;
-        let nesting = ready.nesting;
+        let scope = ready.scope;
         let handler = &ready.handler;
-        scheduler.with_nesting(nesting, || {
+        scheduler.with_timer_scope(scope, || {
             scheduler.with_origin(origin, || self.invoke_handler(handler, None))
         })
     }

@@ -12,7 +12,7 @@ pub mod time;
 pub mod timers;
 
 pub use driver::{
-    AnimationFrameId, EventLoop, FRAME_INTERVAL, FiredFiring, FiringRelease, Scheduler,
+    AnimationFrameId, EventLoop, FRAME_INTERVAL, FiredFiring, FiringRelease, Scheduler, TimerScope,
 };
 pub use tasks::{ProvenanceSink, TaskRunner, TaskSink};
 pub use time::{Clock, MonoTime, SharedClock};

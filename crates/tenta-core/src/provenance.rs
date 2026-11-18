@@ -82,37 +82,54 @@ impl RequestClass {
 pub struct TimerRule {
     /// The longest one-shot delay that still counts as a deferral.
     pub max_delay: core::time::Duration,
-    /// How deep a chain of timers may go before it is activity, not deferral.
-    pub max_depth: u32,
+    /// How much waiting a chain of timers may add up before it is activity,
+    /// not deferral: the sum of the delays of its timers.
+    pub max_chain: core::time::Duration,
 }
 
 impl Default for TimerRule {
     fn default() -> Self {
         Self {
-            max_delay: core::time::Duration::from_millis(32),
-            max_depth: 8,
+            max_delay: core::time::Duration::from_millis(DEFAULT_MAX_DELAY_MS),
+            max_chain: core::time::Duration::from_millis(DEFAULT_MAX_CHAIN_MS),
         }
     }
 }
 
+/// The defaults of [`TimerRule`], which `tenta-page` repeats in its
+/// `SettleConfig`.
+pub const DEFAULT_MAX_DELAY_MS: u64 = 64;
+pub const DEFAULT_MAX_CHAIN_MS: u64 = 256;
+
 impl TimerRule {
     /// The provenance a timer scheduled from a `parent` task inherits.
     ///
-    /// A timer is tracked only if its parent was tracked and it is one-shot,
-    /// short and not too deep in a chain of timers. Everything else - an
-    /// interval, a long delay, a deep chain - is what a live page does on its
-    /// own, and must never hold a settle open.
+    /// A timer is tracked only if its parent was tracked, it is one-shot and
+    /// short, and with it the chain of timers it belongs to has waited no
+    /// more than `max_chain`. `chain_waited` is the sum of the delays of the
+    /// chain's timers so far: zero for a timer scheduled from a task that is
+    /// not a timer callback, which begins a chain. Everything else - an
+    /// interval, a long delay, a chain that has waited for too long - is what
+    /// a live page does on its own, and must never hold a settle open.
+    ///
+    /// The bound is on the waiting, not on the number of links, because what
+    /// it has to cap is how long a chain can keep a settle open with nothing
+    /// happening: a count of links lets eight slow timers hold it for longer
+    /// than eighty fast ones. And it is on the delays the page asked for, not
+    /// on the clock, because the time a callback takes to run is work the
+    /// settle waits for anyway, and counting it would end a slow page's load
+    /// chain sooner than a fast page's.
     pub fn origin_for(
         self,
         parent: Origin,
         repeating: bool,
         delay: core::time::Duration,
-        depth: u32,
+        chain_waited: core::time::Duration,
     ) -> Origin {
         if parent == Origin::Tracked
             && !repeating
             && delay <= self.max_delay
-            && depth <= self.max_depth
+            && chain_waited.saturating_add(delay) <= self.max_chain
         {
             Origin::Tracked
         } else {

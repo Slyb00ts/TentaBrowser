@@ -18,7 +18,7 @@ use tenta_core::{Origin, TimerRule};
 
 use super::tasks::{TaskRunner, TaskSink};
 use super::time::{Clock, MonoTime, SharedClock};
-use super::timers::{TimerId, TimerQueue};
+use super::timers::{TimerId, TimerQueue, effective_delay_ms};
 
 /// One rendering opportunity at 60 Hz, the cadence a virtual clock steps for
 /// `requestAnimationFrame` (`docs/spec/05` §5). 1/60 s rounded to the nearest
@@ -44,13 +44,41 @@ impl AnimationFrameId {
     }
 }
 
+/// Where in a chain of timers a callback runs: how deeply nested it is, which
+/// the Chromium clamp is defined over, and how long its chain has waited,
+/// which the settle rule is defined over ([`TimerRule::max_chain`]).
+///
+/// A chain begins with a timer scheduled from a task that is not itself a
+/// timer callback, and every timer scheduled from a callback of the chain
+/// belongs to it. What a chain has waited is the sum of the delays of its
+/// timers down to the one whose callback is running - the time the page chose
+/// to let pass, not the time its callbacks took to run, so the same page is
+/// classified the same on a fast machine, a slow one and a virtual clock. A
+/// backend that calls a handler outside the task that dequeued its timer reads
+/// the scope there ([`Scheduler::timer_scope`]) and reinstalls it around the
+/// call ([`Scheduler::with_timer_scope`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TimerScope {
+    nesting: u32,
+    chain_waited: Duration,
+}
+
+impl TimerScope {
+    /// The nesting level of the running timer callback; 0 outside one.
+    pub fn nesting(self) -> u32 {
+        self.nesting
+    }
+}
+
 /// A scheduled timer's callback, the nesting level to install while it runs so
-/// a timer it schedules is clamped one level deeper, and the provenance the
+/// a timer it schedules is clamped one level deeper, how long the chain of
+/// timers it belongs to has waited once it fires, and the provenance the
 /// firing carries (decided once, at schedule time, by [`TimerRule`]).
 enum TimerCallback {
     /// A `setTimeout` callback: runs once, then its slot is dropped.
     OneShot {
         nesting: u32,
+        chain_waited: Duration,
         origin: Origin,
         run: Box<dyn FnOnce()>,
     },
@@ -59,6 +87,7 @@ enum TimerCallback {
     /// an `FnMut` moved back into the timer map between firings.
     Interval {
         nesting: u32,
+        chain_waited: Duration,
         origin: Origin,
         period_ms: u64,
         run: Box<dyn FnMut()>,
@@ -74,41 +103,37 @@ struct FrameCallback {
     run: Option<Box<dyn FnOnce(f64)>>,
 }
 
-/// Restores the previous timer nesting depth and firing id on scope exit,
-/// *including on unwind*: a page thread survives a panicking callback, and a
-/// leaked depth would clamp unrelated timers that were never nested at all.
+/// Restores the previous timer scope and firing id on scope exit, *including
+/// on unwind*: a page thread survives a panicking callback, and a leaked scope
+/// would clamp unrelated timers that were never nested at all and charge
+/// chains that had not begun for waiting they never did.
 struct NestingGuard {
     shared: Rc<RefCell<Shared>>,
-    previous: u32,
+    previous: TimerScope,
     previous_firing: Option<TimerId>,
 }
 
 impl Drop for NestingGuard {
     fn drop(&mut self) {
         let mut shared = self.shared.borrow_mut();
-        shared.current_nesting = self.previous;
+        shared.current_scope = self.previous;
         shared.current_firing = self.previous_firing;
     }
 }
 
-/// Runs `body` with `nesting` installed as the current timer depth.
-fn with_nesting_on<R>(shared: &Rc<RefCell<Shared>>, nesting: u32, body: impl FnOnce() -> R) -> R {
-    with_firing_timer(shared, None, nesting, body)
-}
-
-/// Runs `body` with `nesting` as the current timer depth and `firing` as the
+/// Runs `body` with `scope` as the current timer scope and `firing` as the
 /// timer whose callback is running. A backend that defers the actual JS call
 /// past this callback reads both here and reinstalls them around the call.
 fn with_firing_timer<R>(
     shared: &Rc<RefCell<Shared>>,
     firing: Option<TimerId>,
-    nesting: u32,
+    scope: TimerScope,
     body: impl FnOnce() -> R,
 ) -> R {
     let (previous, previous_firing) = {
         let mut shared = shared.borrow_mut();
         (
-            std::mem::replace(&mut shared.current_nesting, nesting),
+            std::mem::replace(&mut shared.current_scope, scope),
             std::mem::replace(&mut shared.current_firing, firing),
         )
     };
@@ -182,8 +207,9 @@ struct Shared {
     clock: SharedClock,
     timers: TimerQueue,
     timer_callbacks: HashMap<TimerId, TimerCallback>,
-    /// Nesting level of the timer callback currently running; 0 at top level.
-    current_nesting: u32,
+    /// The scope of the timer callback currently running; the default (level
+    /// 0, no chain) at top level.
+    current_scope: TimerScope,
     /// The timer whose callback is running, if any.
     current_firing: Option<TimerId>,
     /// Set by [`Scheduler::defer_firing`] when the backend hands a firing off,
@@ -253,15 +279,20 @@ impl Scheduler {
     /// Schedules `callback` to run after `delay_ms` (`setTimeout`). The Chromium
     /// nesting clamp is applied relative to the timer currently running.
     pub fn set_timeout(&self, delay_ms: u64, callback: Box<dyn FnOnce()>) -> TimerId {
-        let origin = self.timer_origin(false, delay_ms);
         let mut shared = self.shared.borrow_mut();
-        let nesting = shared.current_nesting + 1;
+        let nesting = shared.current_scope.nesting + 1;
         let now = shared.clock.now();
+        let delay = Duration::from_millis(effective_delay_ms(delay_ms, nesting));
+        let waited = shared.current_scope.chain_waited;
+        let origin = shared
+            .timer_rule
+            .origin_for(self.sink.current_origin(), false, delay, waited);
         let id = shared.timers.schedule(now, delay_ms, nesting);
         shared.timer_callbacks.insert(
             id,
             TimerCallback::OneShot {
                 nesting,
+                chain_waited: waited.saturating_add(delay),
                 origin,
                 run: callback,
             },
@@ -296,13 +327,16 @@ impl Scheduler {
     /// a timer this callback schedules is clamped relative to it either way.
     pub fn set_background_timeout(&self, delay_ms: u64, callback: Box<dyn FnOnce()>) -> TimerId {
         let mut shared = self.shared.borrow_mut();
-        let nesting = shared.current_nesting + 1;
+        let nesting = shared.current_scope.nesting + 1;
         let now = shared.clock.now();
+        let delay = Duration::from_millis(effective_delay_ms(delay_ms, nesting));
+        let chain_waited = shared.current_scope.chain_waited.saturating_add(delay);
         let id = shared.timers.schedule(now, delay_ms, nesting);
         shared.timer_callbacks.insert(
             id,
             TimerCallback::OneShot {
                 nesting,
+                chain_waited,
                 origin: Origin::Background,
                 run: callback,
             },
@@ -313,24 +347,16 @@ impl Scheduler {
         id
     }
 
-    /// The provenance a timer scheduled right now would carry. Decided once,
-    /// here, because the rule is about the *scheduling* task: by the time the
-    /// timer fires that task is long gone.
-    fn timer_origin(&self, repeating: bool, delay_ms: u64) -> Origin {
-        let shared = self.shared.borrow();
-        shared.timer_rule.origin_for(
-            self.sink.current_origin(),
-            repeating,
-            Duration::from_millis(delay_ms),
-            shared.current_nesting + 1,
-        )
+    /// The nesting level of the timer callback that is running; 0 outside one.
+    pub fn current_nesting(&self) -> u32 {
+        self.shared.borrow().current_scope.nesting
     }
 
-    /// The nesting level a timer scheduled right now would get. The engine
-    /// reads this when it defers the actual callback invocation past the task
-    /// that dequeued the timer.
-    pub fn current_nesting(&self) -> u32 {
-        self.shared.borrow().current_nesting
+    /// The scope of the timer callback that is running. The engine reads this
+    /// when it defers the actual callback invocation past the task that
+    /// dequeued the timer, and hands it back to [`Self::with_timer_scope`].
+    pub fn timer_scope(&self) -> TimerScope {
+        self.shared.borrow().current_scope
     }
 
     /// Declares that the firing currently running will be called later rather
@@ -394,11 +420,12 @@ impl Scheduler {
         }
     }
 
-    /// Runs `body` with `nesting` installed as the current timer depth, so a
+    /// Runs `body` with `scope` installed as the current timer scope, so a
     /// `setTimeout` made from inside a timer handler is clamped one level
-    /// deeper even when the handler runs outside the queued task.
-    pub fn with_nesting<R>(&self, nesting: u32, body: impl FnOnce() -> R) -> R {
-        with_nesting_on(&self.shared, nesting, body)
+    /// deeper and belongs to the handler's chain even when the handler runs
+    /// outside the queued task.
+    pub fn with_timer_scope<R>(&self, scope: TimerScope, body: impl FnOnce() -> R) -> R {
+        with_firing_timer(&self.shared, None, scope, body)
     }
 
     /// The provenance work queued right now inherits.
@@ -449,15 +476,20 @@ impl Scheduler {
     /// `setInterval(f, 0)` is clamped like a nested `setTimeout` rather than
     /// busy-looping. The loop re-arms the timer, never script.
     pub fn set_interval(&self, delay_ms: u64, callback: Box<dyn FnMut()>) -> TimerId {
-        let origin = self.timer_origin(true, delay_ms);
         let mut shared = self.shared.borrow_mut();
-        let nesting = shared.current_nesting + 1;
+        let nesting = shared.current_scope.nesting + 1;
         let now = shared.clock.now();
+        let delay = Duration::from_millis(effective_delay_ms(delay_ms, nesting));
+        let waited = shared.current_scope.chain_waited;
+        let origin = shared
+            .timer_rule
+            .origin_for(self.sink.current_origin(), true, delay, waited);
         let id = shared.timers.schedule(now, delay_ms, nesting);
         shared.timer_callbacks.insert(
             id,
             TimerCallback::Interval {
                 nesting,
+                chain_waited: waited.saturating_add(delay),
                 origin,
                 period_ms: delay_ms,
                 run: callback,
@@ -523,7 +555,7 @@ impl EventLoop {
             clock: SharedClock::new(clock),
             timers: TimerQueue::new(),
             timer_callbacks: HashMap::new(),
-            current_nesting: 0,
+            current_scope: TimerScope::default(),
             current_firing: None,
             firing_taken: Cell::new(false),
             fired_pending: HashMap::new(),
@@ -701,10 +733,15 @@ impl EventLoop {
             match callback {
                 TimerCallback::OneShot {
                     nesting,
+                    chain_waited,
                     origin,
                     run,
                 } => {
                     let shared = self.shared.clone();
+                    let scope = TimerScope {
+                        nesting,
+                        chain_waited,
+                    };
                     // Install this timer's nesting level so a timer it
                     // schedules is clamped one level deeper; the guard restores
                     // the top level even if the callback panics.
@@ -725,18 +762,19 @@ impl EventLoop {
                                 sink: &sink,
                                 origin,
                             };
-                            with_firing_timer(&shared, Some(id), nesting, run);
+                            with_firing_timer(&shared, Some(id), scope, run);
                         };
                         self.scheduler.sink.queue_task_prearmed(origin, task);
                     } else {
                         // Never counted before it fired: this task is its whole
                         // queued/finished pair.
-                        let task = move || with_firing_timer(&shared, Some(id), nesting, run);
+                        let task = move || with_firing_timer(&shared, Some(id), scope, run);
                         self.scheduler.sink.queue_task_from(origin, task);
                     }
                 }
                 TimerCallback::Interval {
                     nesting,
+                    chain_waited,
                     origin,
                     period_ms,
                     mut run,
@@ -751,8 +789,12 @@ impl EventLoop {
                         shared.timers.reschedule(id, now, period_ms, next_nesting);
                     }
                     let shared = self.shared.clone();
+                    let scope = TimerScope {
+                        nesting: next_nesting,
+                        chain_waited,
+                    };
                     self.scheduler.sink.queue_task_from(origin, move || {
-                        with_firing_timer(&shared, Some(id), next_nesting, &mut run);
+                        with_firing_timer(&shared, Some(id), scope, &mut run);
                         let mut shared = shared.borrow_mut();
                         // Put the callback back under its id for the re-armed
                         // firing — unless `clearInterval` cancelled it meanwhile,
@@ -762,6 +804,7 @@ impl EventLoop {
                                 id,
                                 TimerCallback::Interval {
                                     nesting: next_nesting,
+                                    chain_waited,
                                     origin,
                                     period_ms,
                                     run,
@@ -1106,8 +1149,9 @@ mod tests {
 
     #[test]
     fn a_short_one_shot_timer_from_tracked_work_stays_tracked() {
+        let max = TimerRule::default().max_delay.as_millis() as u64;
         assert_eq!(timer_origin_for(false, 0), Origin::Tracked);
-        assert_eq!(timer_origin_for(false, 32), Origin::Tracked);
+        assert_eq!(timer_origin_for(false, max), Origin::Tracked);
     }
 
     #[test]
@@ -1115,7 +1159,8 @@ mod tests {
         // Past `tracked_timer_max` a one-shot timer is no longer a deferral of
         // the load chain, and a repeating timer never is: both must be unable
         // to hold a settle open.
-        assert_eq!(timer_origin_for(false, 33), Origin::Background);
+        let max = TimerRule::default().max_delay.as_millis() as u64;
+        assert_eq!(timer_origin_for(false, max + 1), Origin::Background);
         assert_eq!(timer_origin_for(true, 0), Origin::Background);
     }
 
@@ -1133,42 +1178,172 @@ mod tests {
         assert_eq!(*log.finished.borrow(), vec![Origin::Background]);
     }
 
-    #[test]
-    fn a_chain_of_timers_falls_out_of_tracked_once_it_is_deep_enough() {
+    /// Runs a chain of `hops` timers, each scheduling the next `delay_ms`
+    /// later after `work` of callback time, begun from tracked work under
+    /// `rule`, and reports the provenance each firing ran under.
+    fn chain_origins(rule: TimerRule, delay_ms: u64, hops: u32, work: Duration) -> Vec<Origin> {
         let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
         let scheduler = loop_.scheduler();
+        scheduler.set_timer_rule(rule);
         let log = Rc::new(OriginLog::default());
         scheduler.sink.set_provenance_sink(log.clone());
 
-        // Each firing schedules the next, so the chain deepens by one level a
-        // hop; the default rule allows depth 8.
+        fn hop(scheduler: Scheduler, delay_ms: u64, left: u32, work: Duration) {
+            if left == 0 {
+                return;
+            }
+            // The callback "runs" for `work` before it schedules the next hop.
+            scheduler.clock().advance(work);
+            let next = scheduler.clone();
+            scheduler.set_timeout(
+                delay_ms,
+                Box::new(move || hop(next, delay_ms, left - 1, work)),
+            );
+        }
+        scheduler.with_origin(Origin::Tracked, || {
+            hop(scheduler.clone(), delay_ms, hops, work)
+        });
+        while loop_.advance_to_next_timer() {}
+
+        log.finished.borrow().clone()
+    }
+
+    /// A rule whose numbers the chain tests below can count against.
+    fn short_rule() -> TimerRule {
+        TimerRule {
+            max_delay: Duration::from_millis(32),
+            max_chain: Duration::from_millis(100),
+        }
+    }
+
+    /// `tracked` deferrals followed by `background` firings of page activity.
+    fn split(tracked: usize, background: usize) -> Vec<Origin> {
+        let mut origins = vec![Origin::Tracked; tracked];
+        origins.extend(vec![Origin::Background; background]);
+        origins
+    }
+
+    #[test]
+    fn a_chain_of_timers_is_tracked_until_it_has_waited_for_too_long() {
+        // Ten hops of 10 ms have waited 100 ms between them and are deferrals -
+        // however many links that is; with the eleventh the chain has waited
+        // 110 ms and is page activity, as is everything it schedules.
+        assert_eq!(
+            chain_origins(short_rule(), 10, 15, Duration::ZERO),
+            split(10, 5)
+        );
+    }
+
+    #[test]
+    fn slow_links_use_a_chain_up_in_fewer_hops() {
+        // The bound is on how long the chain waits, not on its links: at 30 ms
+        // a hop three of them fit and the fourth does not.
+        assert_eq!(
+            chain_origins(short_rule(), 30, 5, Duration::ZERO),
+            split(3, 2)
+        );
+    }
+
+    #[test]
+    fn the_time_a_callback_takes_is_not_waiting() {
+        // Each callback runs for a second before it schedules the next hop,
+        // which is work the settle waits for anyway. The chain is charged for
+        // the 80 ms it asked to wait, so a slow page is classified exactly as
+        // a fast one.
+        assert_eq!(
+            chain_origins(short_rule(), 10, 8, Duration::from_secs(1)),
+            split(8, 0)
+        );
+    }
+
+    #[test]
+    fn a_chain_of_zero_delay_timers_ends_too() {
+        // A `setTimeout(f, 0)` loop asks for no delay, but from the sixth level
+        // of nesting on the clamp makes each hop wait 4 ms, and that is what
+        // the chain is charged: five free hops, twenty-five that add up to
+        // 100 ms, and then it is page activity.
+        assert_eq!(
+            chain_origins(short_rule(), 0, 40, Duration::ZERO),
+            split(30, 10)
+        );
+    }
+
+    #[test]
+    fn a_timer_from_a_task_that_is_not_a_timer_callback_begins_a_chain() {
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let scheduler = loop_.scheduler();
+        scheduler.set_timer_rule(short_rule());
+        let log = Rc::new(OriginLog::default());
+        scheduler.sink.set_provenance_sink(log.clone());
+
+        // One chain waits until it is page activity...
         fn hop(scheduler: Scheduler, left: u32) {
             if left == 0 {
                 return;
             }
             let next = scheduler.clone();
-            scheduler.set_timeout(0, Box::new(move || hop(next, left - 1)));
+            scheduler.set_timeout(30, Box::new(move || hop(next, left - 1)));
         }
-        scheduler.with_origin(Origin::Tracked, || hop(scheduler.clone(), 12));
+        scheduler.with_origin(Origin::Tracked, || hop(scheduler.clone(), 4));
         while loop_.advance_to_next_timer() {}
+        assert_eq!(*log.finished.borrow(), split(3, 1));
 
-        let finished = log.finished.borrow();
-        assert!(
-            finished.len() >= 10,
-            "the chain ran, got {} firings",
-            finished.len()
-        );
-        assert_eq!(finished[0], Origin::Tracked, "the first hop is a deferral");
+        // ...and what it waited is its own: a timer scheduled afterwards from
+        // a task that is not a timer callback has waited nothing yet.
+        scheduler.with_origin(Origin::Tracked, || {
+            scheduler.set_timeout(30, Box::new(|| {}));
+        });
+        loop_.advance_to_next_timer();
+        assert_eq!(log.finished.borrow().last(), Some(&Origin::Tracked));
+    }
+
+    #[test]
+    fn a_handler_called_outside_its_timers_task_stays_in_its_chain() {
+        // What a backend that defers the JS call does: it reads the scope
+        // inside the timer's task and reinstalls it around the call, so a
+        // timer the handler schedules adds to what its chain has waited.
+        let loop_ = EventLoop::new(Clock::virtual_at(MonoTime::ZERO));
+        let scheduler = loop_.scheduler();
+        scheduler.set_timer_rule(TimerRule {
+            max_delay: Duration::from_millis(100),
+            max_chain: Duration::from_millis(100),
+        });
+        let log = Rc::new(EventLog::default());
+
+        let taken = Rc::new(Cell::new(TimerScope::default()));
+        let seen = taken.clone();
+        let inner = scheduler.clone();
+        scheduler.with_origin(Origin::Tracked, || {
+            scheduler.set_timeout(10, Box::new(move || seen.set(inner.timer_scope())));
+        });
+        loop_.advance_to_next_timer();
+        let scope = taken.get();
+        assert_eq!(scope.nesting(), 1);
         assert_eq!(
-            finished[7],
-            Origin::Tracked,
-            "depth 8 is the last tracked level"
+            scheduler.timer_scope(),
+            TimerScope::default(),
+            "the scope ends with the callback"
         );
-        assert_eq!(
-            finished[8],
-            Origin::Background,
-            "past the depth limit the chain is page activity"
-        );
+
+        scheduler.sink.set_provenance_sink(log.clone());
+        let tracked = |delay_ms: u64, in_chain: bool| {
+            let before = log.events.borrow().len();
+            scheduler.with_origin(Origin::Tracked, || {
+                if in_chain {
+                    scheduler.with_timer_scope(scope, || {
+                        scheduler.set_timeout(delay_ms, Box::new(|| {}));
+                    });
+                } else {
+                    scheduler.set_timeout(delay_ms, Box::new(|| {}));
+                }
+            });
+            // A tracked one-shot is pending from the moment it is scheduled; a
+            // background one reports nothing until it fires.
+            log.events.borrow().len() > before
+        };
+        assert!(tracked(90, true), "10 ms and 90 ms are 100 ms of waiting");
+        assert!(!tracked(91, true), "10 ms and 91 ms are more");
+        assert!(tracked(91, false), "a new chain has waited nothing");
     }
 
     type Log = Rc<RefCell<Vec<String>>>;
