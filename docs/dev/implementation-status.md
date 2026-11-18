@@ -100,6 +100,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | The host's navigation outranks the page it is replacing (NAV1) | Implemented; focused check passed and mutation-checked; not independently reviewed; **a navigation rule the specification may record** | While a navigation the host asked for has not committed, a navigation the old document asks for is dropped. Before, a page that reloaded itself at that moment cancelled the host's navigation, and the agent was handed the page it had left; see the section below |
 | A timer chain is a deferral while the sum of its delays is small (SET1) | Implemented; unit, page and V8 checks passed, the V8 one mutation-checked; measured on real sites; not independently reviewed; **changes two normative tunables of the settle rule, which the specification must record** | A one-shot timer of up to 64 ms (32 ms before) continues the load chain, and a chain of timers does for as long as its delays add up to at most 256 ms (8 links before). amazon.com and imdb.com, whose interstitial polls and waits 50 ms before it loads the page, now return the page; see the section below |
 | `<a>` and `<area>` take their `href` apart: `protocol`, `host`, `pathname`, `search`, `hash` and the rest (HL1) | Implemented on V8; focused checks passed; seen to fix two real pages; not independently reviewed | An anchor had `href` only, so the `a.href = url; a.pathname` idiom threw. imdb.com's client-side exception and a logger error on nytimes.com came from it; see the section below |
+| `Selection`, `window.getSelection()` and `document.getSelection()` (SEL1) | Implemented on V8 as a script built at first use; focused checks passed; measured; not independently reviewed | A page that asked for the selection threw. No `modify()` or `deleteFromDocument()`; nothing a host does moves the selection; see the section below |
 | An idle callback is page activity (IDLE1) | Corrected on V8; focused check passed and mutation-checked; measured, no difference outside noise | `requestIdleCallback` from tracked script was a tracked zero-delay timer and held the settle open; it is background now, as the provenance definition says; see the section below |
 | `ReadableStream`, its default reader and controller, the queuing strategies, `Response.body` and `Blob.stream()` (ST1) | Implemented on V8 as a script built at first use; focused checks passed; measured; not independently reviewed; **Streams as script rather than WebIDL is a choice the specification may record** | A page could not make or read a stream at all. Default streams only: no byte streams or BYOB readers, no `WritableStream`, `TransformStream`, `pipeTo()` or `pipeThrough()`; a body is delivered as one chunk; a stream is not accepted as a body; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
@@ -3896,6 +3897,46 @@ page that does it threw while it was starting.
   (`crypto.subtle` is absent); nytimes.com
   `Cannot read properties of undefined (reading 'document')`, cause not
   looked at.
+
+### `Selection` and `getSelection()` (SEL1)
+
+crates.io stopped at `getSelection is not defined`. The Selection API is
+there now, as a script over the engine's own `Range`
+(`crates/tenta-js/src/selection.rs`), built the first time a page asks for
+`Selection` or calls `getSelection()` - the way streams are (ST1), and for
+the same reason: most pages never ask.
+
+- **What is there:** one `Selection` per document with a window, from
+  `window.getSelection()` and `document.getSelection()`: `anchorNode`,
+  `anchorOffset`, `focusNode`, `focusOffset`, `isCollapsed`, `rangeCount`,
+  `type`, `direction`, `getRangeAt()`, `addRange()`, `removeRange()`,
+  `removeAllRanges()`, `empty()`, `collapse()`, `setPosition()`,
+  `collapseToStart()`, `collapseToEnd()`, `extend()`, `setBaseAndExtent()`,
+  `selectAllChildren()`, `containsNode()`, `getComposedRanges()` and the
+  stringifier. The range handed to `addRange()` is the selection's range,
+  so it stays live. `selectionchange` is fired at the document, once for
+  the changes of one task.
+- **Not there:** `modify()` (needs layout to know a word or a line) and
+  `deleteFromDocument()` (needs `Range.deleteContents()`, which the engine
+  does not have) are absent rather than present and failing. The
+  stringifier is the range's text, not the rendered text. Nothing a host
+  does - a click, a key, `select()` on a text control - moves the
+  selection, and `selectstart` is never fired. The methods' `length` is
+  their parameter count, not WebIDL's count of required arguments. V8
+  only.
+- **Checks:** `crates/tenta-js-v8/tests/dom_selection.rs`, nine tests.
+  The workspace passed 4977 of 4977 and the feature set 604 of 604; fmt,
+  both Clippy runs, `lint-deps`, `idl-manifest` and `cargo deny` were
+  clean.
+- **Measured** (release, interleaved): building an engine's preludes
+  1.540 ms to 1.547 ms p50 (15 runs of 70 engines each); `S-js-xhr`
+  navigation p50/p95 8.99/9.59 ms to 9.21/10.00 ms and process RSS
+  31.4/32.0 MiB to 31.6/32.3 MiB (25 pairs); `S-dom-calls` `get`
+  81.96/84.93 ns to 85.27/89.02 ns. All inside the noise floor: no
+  difference is claimed.
+- **On the site that showed it:** crates.io/crates/serde no longer reports
+  the `ReferenceError`; what is left there is the chart, which needs a
+  canvas context.
 
 ### `ReadableStream`, `Response.body` and `Blob.stream()` (ST1)
 

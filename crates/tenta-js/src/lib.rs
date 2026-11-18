@@ -18,6 +18,7 @@ pub mod inspect;
 pub mod location;
 pub mod modules;
 pub mod rejection;
+pub mod selection;
 pub mod storage;
 pub mod streams;
 pub mod structured_clone;
