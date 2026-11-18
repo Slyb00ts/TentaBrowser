@@ -1684,21 +1684,40 @@ pub(crate) fn host_state(scope: &mut v8::PinScope) -> Option<Rc<HostState>> {
 /// does, for a host algorithm that has to continue after the running script,
 /// and returns the timer's id.
 fn queue_task(scope: &mut v8::PinScope, task: v8::Local<v8::Function>) -> Option<u64> {
+    queue_task_as(scope, task, false)
+}
+
+/// Queues `task` as [`queue_task`] does, but as page activity whatever the
+/// provenance of the script that asked for it. An idle callback is the case:
+/// it is work the page put off until nothing else is waiting, which is what
+/// the settle is waiting to see, so it cannot be part of the load chain
+/// (`tenta_core::provenance::Origin`).
+fn queue_background_task(scope: &mut v8::PinScope, task: v8::Local<v8::Function>) -> Option<u64> {
+    queue_task_as(scope, task, true)
+}
+
+fn queue_task_as(
+    scope: &mut v8::PinScope,
+    task: v8::Local<v8::Function>,
+    background: bool,
+) -> Option<u64> {
     let state = host_state(scope)?;
     let handler = v8::Global::new(scope, task);
     let ready = state.ready.clone();
     let scheduler = state.scheduler.clone();
-    let id = state.scheduler.set_timeout(
-        0,
-        Box::new(move || {
-            ready.borrow_mut().push_back(ReadyHandler {
-                handler,
-                scope: scheduler.timer_scope(),
-                origin: scheduler.current_origin(),
-                timer: scheduler.defer_firing(),
-            });
-        }),
-    );
+    let push = Box::new(move || {
+        ready.borrow_mut().push_back(ReadyHandler {
+            handler,
+            scope: scheduler.timer_scope(),
+            origin: scheduler.current_origin(),
+            timer: scheduler.defer_firing(),
+        });
+    });
+    let id = if background {
+        state.scheduler.set_background_timeout(0, push)
+    } else {
+        state.scheduler.set_timeout(0, push)
+    };
     Some(id.as_u64())
 }
 

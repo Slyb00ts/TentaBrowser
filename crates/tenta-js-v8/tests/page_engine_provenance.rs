@@ -139,6 +139,26 @@ fn an_interval_is_never_a_deferral_even_from_a_tracked_script() {
 }
 
 #[test]
+fn an_idle_callback_is_never_a_deferral_even_from_a_tracked_script() {
+    // An idle callback is work the page put off until nothing else is
+    // waiting, and "nothing else is waiting" is what a settle call is waiting
+    // to see: if the callback held the settle open, the settle would wait for
+    // the page to be idle before it could call the page idle. It is page
+    // activity whoever asked for it (`tenta_core::Origin`).
+    let recorded = Rc::new(Recording::default());
+    let mut engine = page_engine(&recorded);
+
+    engine
+        .run_script("requestIdleCallback(function () {});", ScriptKind::Classic)
+        .expect("a one-statement script runs");
+
+    assert!(
+        recorded.deferrals().is_empty(),
+        "an idle callback is activity, not a deferral, so the settle must not wait for it"
+    );
+}
+
+#[test]
 fn work_started_outside_a_page_script_is_not_a_deferral() {
     // `evaluate` is the harness entry point, not a script the page handed out:
     // it runs after the page has loaded, so anything it starts is the page's

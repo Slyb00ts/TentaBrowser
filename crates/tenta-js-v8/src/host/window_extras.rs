@@ -389,7 +389,7 @@ fn request_idle_callback<'s>(
     else {
         return;
     };
-    if let Some(id) = super::queue_task(scope, task) {
+    if let Some(id) = super::queue_background_task(scope, task) {
         rv.set_double(id as f64);
     }
 }

@@ -99,6 +99,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | Wrapper-graph collection after a settlement and a lifecycle event is amortised too (GC3) | Implemented on V8; measured; not independently reviewed; **the same change of timing as GC1 and GC2** | Fetch settlement, XHR settlement and `DOMContentLoaded`/`load` each ended with a full collection. They now collect under the rule a task end uses; only `trim_memory` collects every time |
 | The host's navigation outranks the page it is replacing (NAV1) | Implemented; focused check passed and mutation-checked; not independently reviewed; **a navigation rule the specification may record** | While a navigation the host asked for has not committed, a navigation the old document asks for is dropped. Before, a page that reloaded itself at that moment cancelled the host's navigation, and the agent was handed the page it had left; see the section below |
 | A timer chain is a deferral while the sum of its delays is small (SET1) | Implemented; unit, page and V8 checks passed, the V8 one mutation-checked; measured on real sites; not independently reviewed; **changes two normative tunables of the settle rule, which the specification must record** | A one-shot timer of up to 64 ms (32 ms before) continues the load chain, and a chain of timers does for as long as its delays add up to at most 256 ms (8 links before). amazon.com and imdb.com, whose interstitial polls and waits 50 ms before it loads the page, now return the page; see the section below |
+| An idle callback is page activity (IDLE1) | Corrected on V8; focused check passed and mutation-checked; measured, no difference outside noise | `requestIdleCallback` from tracked script was a tracked zero-delay timer and held the settle open; it is background now, as the provenance definition says; see the section below |
 | `ReadableStream`, its default reader and controller, the queuing strategies, `Response.body` and `Blob.stream()` (ST1) | Implemented on V8 as a script built at first use; focused checks passed; measured; not independently reviewed; **Streams as script rather than WebIDL is a choice the specification may record** | A page could not make or read a stream at all. Default streams only: no byte streams or BYOB readers, no `WritableStream`, `TransformStream`, `pipeTo()` or `pipeThrough()`; a body is delivered as one chunk; a stream is not accepted as a body; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
 
@@ -3812,8 +3813,9 @@ timers, at most 256 ms, and `tracked_timer_max` is 64 ms.
     (`queue_task` in `crates/tenta-js-v8/src/host.rs`). A message loop is
     therefore clamped to 4 ms a hop from the sixth one, which
     `MessageChannel` exists to avoid, and an idle callback scheduled from
-    tracked work is tracked, where `tenta-core`'s own account of
-    provenance calls idle callbacks background. nextjs.org, which could
+    tracked work was tracked, where `tenta-core`'s own account of
+    provenance calls idle callbacks background (corrected in IDLE1,
+    the next section). nextjs.org, which could
     not run far without streams, went from 0.6 to 0.9 s before ST1 (five
     loads of `ba783ae`) to 1.7 to 3.6 s after it (nine loads of
     `636160b`), under the old rule in both. In one traced load of the clock-based
@@ -3824,6 +3826,37 @@ timers, at most 256 ms, and `tracked_timer_max` is 64 ms.
 - **Not decided here:** the two numbers are normative in
   `02-architecture.md` §5.1, which is not in this checkout; the entry
   that changes them is the owner's.
+
+### An idle callback is page activity (IDLE1)
+
+`requestIdleCallback` was queued as a zero-delay timer from the calling
+task, so one asked for by tracked script was tracked and held the settle
+open - a settle that waits for the page to be idle before it can call the
+page idle. `tenta-core`'s account of provenance lists idle callbacks as
+background. They are now queued with `Scheduler::set_background_timeout`
+(`queue_background_task` in `crates/tenta-js-v8/src/host.rs`); the task
+still runs at the same point and `cancelIdleCallback` still cancels it.
+
+- **Check:** `crates/tenta-js-v8/tests/page_engine_provenance.rs
+  an_idle_callback_is_never_a_deferral_even_from_a_tracked_script`, which
+  fails when the helper queues a tracked timer. The workspace passed 4959
+  of 4959 and the feature set 604 of 604; fmt, both Clippy runs,
+  `lint-deps`, `idl-manifest` and `cargo deny` were clean.
+- **Measured** (release CLI over MCP against `91cd0bf`, three loads of
+  each site, alternating, 2026-11-18): nextjs.org 1.80, 1.93, 3.77 s
+  became 2.08, 2.10, 2.17 s; tailwindcss.com 2.10 to 2.19 s became 1.93 to
+  2.02 s; vuejs.org 1.24 to 1.53 s became 1.15 to 1.22 s; react.dev and
+  apple.com inside their own spread. None of it is outside the noise
+  floor, so this is a correction of provenance and not a speed claim.
+- **What it showed about nextjs.org:** in a traced load the 23 `fetch()`
+  calls (20 for route payloads, three for API routes) were all still
+  issued from tracked work, so idle callbacks are not where they come from.
+  Nine started while no tracked task was pending, which is what a
+  continuation of an earlier request's completion looks like - and a
+  completion of a tracked request is tracked by definition; where the
+  other fourteen start was not traced. The settle ended at 1.9 s, after
+  the last of them. `postMessage` and the observer tasks are still
+  queued as timers (previous section).
 
 ### `ReadableStream`, `Response.body` and `Blob.stream()` (ST1)
 
