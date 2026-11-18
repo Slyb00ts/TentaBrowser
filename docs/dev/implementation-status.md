@@ -99,6 +99,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | Wrapper-graph collection after a settlement and a lifecycle event is amortised too (GC3) | Implemented on V8; measured; not independently reviewed; **the same change of timing as GC1 and GC2** | Fetch settlement, XHR settlement and `DOMContentLoaded`/`load` each ended with a full collection. They now collect under the rule a task end uses; only `trim_memory` collects every time |
 | The host's navigation outranks the page it is replacing (NAV1) | Implemented; focused check passed and mutation-checked; not independently reviewed; **a navigation rule the specification may record** | While a navigation the host asked for has not committed, a navigation the old document asks for is dropped. Before, a page that reloaded itself at that moment cancelled the host's navigation, and the agent was handed the page it had left; see the section below |
 | A timer chain is a deferral while the sum of its delays is small (SET1) | Implemented; unit, page and V8 checks passed, the V8 one mutation-checked; measured on real sites; not independently reviewed; **changes two normative tunables of the settle rule, which the specification must record** | A one-shot timer of up to 64 ms (32 ms before) continues the load chain, and a chain of timers does for as long as its delays add up to at most 256 ms (8 links before). amazon.com and imdb.com, whose interstitial polls and waits 50 ms before it loads the page, now return the page; see the section below |
+| `<a>` and `<area>` take their `href` apart: `protocol`, `host`, `pathname`, `search`, `hash` and the rest (HL1) | Implemented on V8; focused checks passed; seen to fix two real pages; not independently reviewed | An anchor had `href` only, so the `a.href = url; a.pathname` idiom threw. imdb.com's client-side exception and a logger error on nytimes.com came from it; see the section below |
 | An idle callback is page activity (IDLE1) | Corrected on V8; focused check passed and mutation-checked; measured, no difference outside noise | `requestIdleCallback` from tracked script was a tracked zero-delay timer and held the settle open; it is background now, as the provenance definition says; see the section below |
 | `ReadableStream`, its default reader and controller, the queuing strategies, `Response.body` and `Blob.stream()` (ST1) | Implemented on V8 as a script built at first use; focused checks passed; measured; not independently reviewed; **Streams as script rather than WebIDL is a choice the specification may record** | A page could not make or read a stream at all. Default streams only: no byte streams or BYOB readers, no `WritableStream`, `TransformStream`, `pipeTo()` or `pipeThrough()`; a body is delivered as one chunk; a stream is not accepted as a body; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
@@ -3857,6 +3858,44 @@ still runs at the same point and `cancelIdleCallback` still cancels it.
   other fourteen start was not traced. The settle ended at 1.9 s, after
   the last of them. `postMessage` and the observer tasks are still
   queued as timers (previous section).
+
+### An `<a>` takes its `href` apart (HL1)
+
+`HTMLAnchorElement` declared `href` and nothing else, so `a.pathname`,
+`a.protocol`, `a.host` and the rest were `undefined`. Script has used an
+anchor as a URL parser since before `URL` existed - axios 0.x resolves
+every request URL that way to decide whether it is same-origin - and a
+page that does it threw while it was starting.
+
+- **What is there:** HTML's `HTMLHyperlinkElementUtils` on
+  `HTMLAnchorElement` and `HTMLAreaElement` (`idl/dom/dom.webidl`): `href`
+  as the stringifier, `origin`, and `protocol`, `username`, `password`,
+  `host`, `hostname`, `port`, `pathname`, `search` and `hash` as getters
+  and setters. The URL is the `href` content attribute resolved against
+  the document each time (HTML's "reinitialize url"); a setter writes the
+  changed URL back to the attribute through the URL Standard's own
+  setters (`LocationPart::write`). An element whose `href` is missing or
+  does not parse answers "" for every part but `protocol`, which is ":",
+  and ignores setters. On the anchor also `target`, `download`, `rel`,
+  `hreflang`, `type` (reflected strings) and `text` (`textContent`).
+- **Not there:** `relList`, `ping` and `referrerPolicy` on the anchor; the
+  image-map members of `<area>` (`alt`, `coords`, `shape`, `target`,
+  `download`, `rel`); `SVGAElement.href`, which is an `SVGAnimatedString`.
+  QuickJS is not wired.
+- **Checks:** `crates/tenta-js-v8/tests/dom_hyperlink.rs`, nine tests,
+  one of them the axios idiom as it is written. The workspace passed 4968
+  of 4968 and the feature set 604 of 604; fmt, both Clippy runs,
+  `lint-deps`, `idl-manifest` and `cargo deny` were clean.
+- **On the sites that showed it** (release CLI over MCP, one load each
+  before and after, 2026-11-18): imdb.com no longer reports
+  `Cannot read properties of undefined (reading 'charAt')` and Next.js's
+  "A client-side exception has occurred"; its snapshot went from 344 to
+  443 lines. nytimes.com no longer reports the same `charAt` from its
+  logger. What each page reaches next: imdb.com
+  `Cannot read properties of undefined (reading 'digest')`, twelve times
+  (`crypto.subtle` is absent); nytimes.com
+  `Cannot read properties of undefined (reading 'document')`, cause not
+  looked at.
 
 ### `ReadableStream`, `Response.body` and `Blob.stream()` (ST1)
 

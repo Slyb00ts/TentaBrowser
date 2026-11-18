@@ -809,8 +809,11 @@ interface HTMLTrackElement : HTMLElement {};
 [Exposed=Window]
 interface HTMLMapElement : HTMLElement {};
 
+// The image-map members other than the hyperlink ones (`alt`, `coords`,
+// `shape`, `target`, `download`, `rel`) are not declared.
 [Exposed=Window]
 interface HTMLAreaElement : HTMLElement {};
+HTMLAreaElement includes HTMLHyperlinkElementUtils;
 
 [Exposed=Window]
 interface HTMLTableElement : HTMLElement {};
@@ -952,10 +955,39 @@ interface SVGSVGElement : SVGGraphicsElement {};
 [Exposed=Window]
 interface SVGAElement : SVGGraphicsElement {};
 
+// HTML's HTMLHyperlinkElementUtils: the element's `href`, resolved against
+// the document and taken apart the way `URL` takes a URL apart. Script uses
+// an `<a>` as a URL parser - `a.href = value; a.pathname` - and has done since
+// before `URL` existed, so these are read on pages that never show a link.
+// An element whose `href` is missing or does not parse answers the empty
+// string for every part except `protocol`, which answers ":"; a setter on
+// such an element does nothing. `href` is the stringifier, so `String(a)` is
+// the resolved URL.
+interface mixin HTMLHyperlinkElementUtils {
+  stringifier attribute USVString href;
+  readonly attribute USVString origin;
+  attribute USVString protocol;
+  attribute USVString username;
+  attribute USVString password;
+  attribute USVString host;
+  attribute USVString hostname;
+  attribute USVString port;
+  attribute USVString pathname;
+  attribute USVString search;
+  attribute USVString hash;
+};
+
+// `relList`, `ping` and `referrerPolicy` are not declared.
 [Exposed=Window]
 interface HTMLAnchorElement : HTMLElement {
-  attribute USVString href;
+  attribute DOMString target;
+  attribute DOMString download;
+  attribute DOMString rel;
+  attribute DOMString hreflang;
+  attribute DOMString type;
+  attribute DOMString text;
 };
+HTMLAnchorElement includes HTMLHyperlinkElementUtils;
 
 // IM4: the members script reads to follow an image's loading. The state behind
 // `complete`, `naturalWidth`, `naturalHeight` and `currentSrc` belongs to the

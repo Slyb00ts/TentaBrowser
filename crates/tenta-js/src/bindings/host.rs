@@ -8036,7 +8036,127 @@ impl super::HTMLEmbedElementOps for HostObject {}
 impl super::HTMLObjectElementOps for HostObject {}
 impl super::HTMLTrackElementOps for HostObject {}
 impl super::HTMLMapElementOps for HostObject {}
-impl super::HTMLAreaElementOps for HostObject {}
+/// HTML's `HTMLHyperlinkElementUtils`: the element's `href` content attribute,
+/// resolved against the document and read or written one URL component at a
+/// time. The URL is not kept: HTML's "reinitialize url" runs before every
+/// getter and setter, so parsing the attribute each time is the same thing.
+impl HostObject {
+    /// The element's URL, or `None` when `href` is missing or does not parse.
+    fn hyperlink_url(&self) -> Option<url::Url> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        doc.resolve_url(doc.attribute_str(id, "href")?)
+    }
+
+    /// One component of the element's URL. An element with no URL answers the
+    /// empty string for every component but `protocol`, which is ":".
+    fn hyperlink_part(&self, part: LocationPart) -> String {
+        match self.hyperlink_url() {
+            Some(url) => part.read(&url),
+            None if part == LocationPart::Protocol => ":".to_owned(),
+            None => String::new(),
+        }
+    }
+
+    /// Changes the element's URL and writes it back to `href`. An element
+    /// with no URL is left alone, and so is `href` when `edit` changed
+    /// nothing, which is what a value the URL setter refuses comes to.
+    fn update_hyperlink(&self, edit: impl FnOnce(&mut url::Url)) {
+        let Some(mut url) = self.hyperlink_url() else {
+            return;
+        };
+        let before = url.clone();
+        edit(&mut url);
+        if url != before {
+            self.reflect_attribute("href", url.as_str());
+        }
+    }
+}
+
+/// The members `HTMLHyperlinkElementUtils` gives each interface that includes
+/// it; the generated traits declare them once per interface.
+macro_rules! hyperlink_utils {
+    () => {
+        fn href(&self) -> Result<String, JsError> {
+            Ok(self.reflect_url("href"))
+        }
+        fn set_href(&self, value: &str) {
+            self.reflect_attribute("href", value);
+        }
+        fn origin(&self) -> Result<String, JsError> {
+            Ok(self.hyperlink_part(LocationPart::Origin))
+        }
+        fn protocol(&self) -> Result<String, JsError> {
+            Ok(self.hyperlink_part(LocationPart::Protocol))
+        }
+        fn set_protocol(&self, value: &str) {
+            self.update_hyperlink(|url| LocationPart::Protocol.write(url, value));
+        }
+        fn username(&self) -> Result<String, JsError> {
+            Ok(self
+                .hyperlink_url()
+                .map_or(String::new(), |url| url.username().to_owned()))
+        }
+        fn set_username(&self, value: &str) {
+            self.update_hyperlink(|url| {
+                let _ = url.set_username(value);
+            });
+        }
+        fn password(&self) -> Result<String, JsError> {
+            Ok(self
+                .hyperlink_url()
+                .map_or(String::new(), |url| url.password().unwrap_or("").to_owned()))
+        }
+        fn set_password(&self, value: &str) {
+            self.update_hyperlink(|url| {
+                let _ = url.set_password(Some(value));
+            });
+        }
+        fn host(&self) -> Result<String, JsError> {
+            Ok(self.hyperlink_part(LocationPart::Host))
+        }
+        fn set_host(&self, value: &str) {
+            self.update_hyperlink(|url| LocationPart::Host.write(url, value));
+        }
+        fn hostname(&self) -> Result<String, JsError> {
+            Ok(self.hyperlink_part(LocationPart::Hostname))
+        }
+        fn set_hostname(&self, value: &str) {
+            self.update_hyperlink(|url| LocationPart::Hostname.write(url, value));
+        }
+        fn port(&self) -> Result<String, JsError> {
+            Ok(self.hyperlink_part(LocationPart::Port))
+        }
+        fn set_port(&self, value: &str) {
+            self.update_hyperlink(|url| LocationPart::Port.write(url, value));
+        }
+        fn pathname(&self) -> Result<String, JsError> {
+            Ok(self.hyperlink_part(LocationPart::Pathname))
+        }
+        fn set_pathname(&self, value: &str) {
+            self.update_hyperlink(|url| LocationPart::Pathname.write(url, value));
+        }
+        fn search(&self) -> Result<String, JsError> {
+            Ok(self.hyperlink_part(LocationPart::Search))
+        }
+        fn set_search(&self, value: &str) {
+            self.update_hyperlink(|url| LocationPart::Search.write(url, value));
+        }
+        fn hash(&self) -> Result<String, JsError> {
+            Ok(self.hyperlink_part(LocationPart::Hash))
+        }
+        fn set_hash(&self, value: &str) {
+            self.update_hyperlink(|url| LocationPart::Hash.write(url, value));
+        }
+        fn to_string(&self) -> Result<String, JsError> {
+            Ok(self.reflect_url("href"))
+        }
+    };
+}
+
+impl super::HTMLAreaElementOps for HostObject {
+    hyperlink_utils!();
+}
 impl super::HTMLTableElementOps for HostObject {}
 impl super::HTMLTableCaptionElementOps for HostObject {}
 impl super::HTMLTableColElementOps for HostObject {}
@@ -8060,11 +8180,44 @@ impl super::HTMLMarqueeElementOps for HostObject {}
 impl super::HTMLUnknownElementOps for HostObject {}
 
 impl HTMLAnchorElementOps for HostObject {
-    fn href(&self) -> Result<String, JsError> {
-        Ok(self.reflect_url("href"))
+    hyperlink_utils!();
+
+    fn target(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("target"))
     }
-    fn set_href(&self, value: &str) {
-        self.reflect_attribute("href", value);
+    fn set_target(&self, value: &str) {
+        self.reflect_attribute("target", value);
+    }
+    fn download(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("download"))
+    }
+    fn set_download(&self, value: &str) {
+        self.reflect_attribute("download", value);
+    }
+    fn rel(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("rel"))
+    }
+    fn set_rel(&self, value: &str) {
+        self.reflect_attribute("rel", value);
+    }
+    fn hreflang(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("hreflang"))
+    }
+    fn set_hreflang(&self, value: &str) {
+        self.reflect_attribute("hreflang", value);
+    }
+    fn r#type(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("type"))
+    }
+    fn set_type(&self, value: &str) {
+        self.reflect_attribute("type", value);
+    }
+    fn text(&self) -> Result<String, JsError> {
+        Ok(NodeOps::text_content(self)?.unwrap_or_default())
+    }
+    fn set_text(&self, value: &str) {
+        // Replacing an element's children with one text node cannot fail.
+        let _ = NodeOps::set_text_content(self, Some(value));
     }
 }
 
