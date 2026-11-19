@@ -249,6 +249,9 @@ pub struct Document {
     /// The custom element lifecycle log, or `None` while no wrapper world has
     /// asked for one; see [`LifecycleRecord`].
     lifecycle: Option<Vec<LifecycleRecord>>,
+    /// Script elements that something other than a parser made ready to run,
+    /// oldest first; see [`Self::take_ready_scripts`].
+    ready_scripts: Vec<NodeRef>,
     /// Stable native registration nodes for every independent wrapper world
     /// using this Document. Native-only Documents need no header. Once
     /// attached, it retains retired pin ledgers until mutable maintenance.
@@ -327,6 +330,7 @@ impl Document {
             mutations_since_sweep: 0,
             observer: Box::new(NoopObserverSink),
             lifecycle: None,
+            ready_scripts: Vec::new(),
             observer_registry: None,
             document_id,
             live_ranges: ranges::LiveRanges::default(),
@@ -678,6 +682,60 @@ impl Document {
             .as_mut()
             .map(std::mem::take)
             .unwrap_or_default()
+    }
+
+    /// Whether `node` is a script element HTML would prepare when it becomes
+    /// connected, gets a child or gets a `src`: one in a document that runs
+    /// script, that no parser made and that has not started.
+    fn is_ready_script_candidate(&self, node: NodeId) -> bool {
+        if !self.scripting_enabled || self.tag(node) != Some(atoms::SCRIPT) {
+            return false;
+        }
+        let flags = self.flags(node);
+        !flags.contains(NodeFlags::SCRIPT_STARTED)
+            && !flags.contains(NodeFlags::SCRIPT_PARSER_INSERTED)
+            && matches!(self.namespace(node), Some(ns) if ns == atoms::NS_HTML || ns == atoms::NS_SVG)
+    }
+
+    fn note_ready_script(&mut self, node: NodeId) {
+        let script = self.node_ref(node);
+        self.ready_scripts.push(script);
+    }
+
+    /// Whether [`Self::take_ready_scripts`] would return anything.
+    #[inline]
+    pub fn has_ready_scripts(&self) -> bool {
+        !self.ready_scripts.is_empty()
+    }
+
+    /// The script elements that, since the last call, became ready to be
+    /// prepared as HTML has it for a script no parser inserted: the element
+    /// became connected, a node was inserted into it while it was connected,
+    /// or it was given a `src` while it was connected. Oldest first, and an
+    /// element may be listed more than once; whether it runs is the caller's
+    /// to decide from its type, its source and whether it has started.
+    ///
+    /// Only a document that runs script records these, and never for an
+    /// element a parser created or one that has already started.
+    pub fn take_ready_scripts(&mut self) -> Vec<NodeRef> {
+        std::mem::take(&mut self.ready_scripts)
+    }
+
+    /// Marks a `<script>` as created by a parser, which then runs it itself.
+    pub fn set_script_parser_inserted(&mut self, id: NodeId, parser_inserted: bool) {
+        self.set_flag(id, NodeFlags::SCRIPT_PARSER_INSERTED, parser_inserted);
+    }
+
+    /// HTML's "force async" of a script element; see
+    /// [`NodeFlags::SCRIPT_FORCE_ASYNC`].
+    pub fn set_script_force_async(&mut self, id: NodeId, force: bool) {
+        self.set_flag(id, NodeFlags::SCRIPT_FORCE_ASYNC, force);
+    }
+
+    /// Whether the script element's "force async" is set.
+    #[inline]
+    pub fn script_force_async(&self, id: NodeId) -> bool {
+        self.flags(id).contains(NodeFlags::SCRIPT_FORCE_ASYNC)
     }
 
     /// Whether `element` is one whose attribute changes the lifecycle log
@@ -1698,6 +1756,11 @@ impl Document {
             self.arena.nodes.flags[slot].insert(NodeFlags::MATHML_INTEGRATION_POINT);
         }
         self.mark_detached_root(element);
+        // A script element starts out "force async"; a parser that creates
+        // one clears it (`crate::sink`).
+        if name.local == atoms::SCRIPT {
+            self.arena.nodes.flags[slot].insert(NodeFlags::SCRIPT_FORCE_ASYNC);
+        }
         if self.lifecycle.is_some()
             && name.ns == atoms::NS_HTML
             && name.local.as_str().contains('-')
@@ -2220,7 +2283,14 @@ impl Document {
                         .flags(node)
                         .contains(NodeFlags::MATHML_INTEGRATION_POINT),
                 };
-                self.create_element(name, attrs, flags)?
+                let clone = self.create_element(name, attrs, flags)?;
+                // HTML's cloning steps for a script: the copy has started
+                // when the original has, so cloning a script that ran does
+                // not run it again.
+                if self.flags(node).contains(NodeFlags::SCRIPT_STARTED) {
+                    self.set_flag(clone, NodeFlags::SCRIPT_STARTED, true);
+                }
+                clone
             }
             NodeKind::Text | NodeKind::CData => {
                 // A promoted node owns a mutable buffer that cannot be shared;
@@ -3419,6 +3489,20 @@ impl Document {
                 }
             }
         } else {
+            // Into a shadow tree whose host is connected, a script is as
+            // connected as HTML needs it to be to run.
+            if self.scripting_enabled
+                && self.has_shadow_trees()
+                && self.is_composed_connected(parent)
+            {
+                let scripts: Vec<NodeId> = self
+                    .descendants_inclusive(child)
+                    .filter(|node| self.is_ready_script_candidate(*node))
+                    .collect();
+                for script in scripts {
+                    self.note_ready_script(script);
+                }
+            }
             self.invalidate_keep(child);
             // Into a shadow tree whose host is connected: connected in the
             // standard's sense, though not in the document tree.
@@ -3431,6 +3515,11 @@ impl Document {
                     log.push(LifecycleRecord::Connected(connected));
                 }
             }
+        }
+        // A script that was connected while it was empty runs when it is
+        // given something to run.
+        if self.is_ready_script_candidate(parent) && self.is_composed_connected(parent) {
+            self.note_ready_script(parent);
         }
         self.observer.record(MutationRecord::Inserted {
             parent,
@@ -3460,6 +3549,9 @@ impl Document {
             if connected {
                 self.arena.nodes.flags[slot].remove(NodeFlags::KEEP_VALID);
                 self.arena.nodes.flags[slot].remove(NodeFlags::KEEP);
+                if self.is_ready_script_candidate(node) {
+                    self.note_ready_script(node);
+                }
             }
             node = self.next_in_subtree(node, root);
         }
@@ -3557,6 +3649,14 @@ impl Document {
             None => {
                 let new_value = self.arena.push_attr_value(value);
                 self.arena.append_element_attr(data, stored_name, new_value);
+                // A connected script that had no `src` runs when it gets one.
+                if stored_name.ns == atoms::EMPTY
+                    && stored_name.local == atoms::SRC
+                    && self.is_ready_script_candidate(element)
+                    && self.is_composed_connected(element)
+                {
+                    self.note_ready_script(element);
+                }
             }
         }
         if stored_name.ns == atoms::EMPTY {

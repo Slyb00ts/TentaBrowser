@@ -37,6 +37,8 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use hashbrown::HashMap;
+use std::collections::VecDeque;
+
 use tenta_core::atom::atoms;
 use tenta_core::{Error, NativeMemoryBudget, NativeMemoryFailure, NodeRef, Origin, PageId, Result};
 use tenta_dom::{SharedDocument, SharedSink};
@@ -47,10 +49,12 @@ use tenta_js::engine::{
 use tenta_js::event_loop::ProvenanceSink;
 use tenta_js::fetch::{FetchCompletions, FetchDriver};
 use tenta_js::geometry::ViewportMetrics;
+use tenta_js::image::{ImageEvent, ImageEventKind};
 use tenta_js::inspect::{
     self, BindingCall, Completion, ConsoleCall, ExceptionEvent, InspectError, InspectorSink,
 };
 use tenta_js::modules::{DynamicImport, is_javascript_mime_type};
+use tenta_js::scripts::{InsertedScript, InsertedSource, ScriptType};
 use tenta_js::xhr::{XhrCompletions, XhrDriver};
 use tenta_net::policy::cookies::Site;
 use tenta_net::request::same_origin;
@@ -199,6 +203,12 @@ pub(crate) trait ScriptBudget: Send + Sync {
     /// returned; each import is answered through
     /// [`PageRuntime::finish_dynamic_import`].
     fn request_imports(&self, _imports: Vec<DynamicImport>, _context: ImportContext) {}
+    /// Loads the script elements the document's script inserted that are not
+    /// inline classic scripts (`tenta_js::scripts`). Called on the page
+    /// thread, after the engine entry that inserted them has returned; each is
+    /// answered through [`PageRuntime::finish_inserted_classic`] or
+    /// [`PageRuntime::finish_inserted_module`].
+    fn request_inserted_scripts(&self, _scripts: Vec<InsertedScript>, _context: ImportContext) {}
     /// Whether anything is subscribed to page events, so events whose payload
     /// costs something to build can be skipped when nobody would read them.
     fn has_subscribers(&self) -> bool {
@@ -253,6 +263,10 @@ pub(crate) struct PageRuntime {
     /// that and read what it imports. A failure is kept too, so a module that
     /// could not be loaded is not asked for again by this document.
     module_loads: HashMap<String, ModuleLoad>,
+    /// The external classic scripts script inserted with `async` set to false,
+    /// in insertion order: each runs when its text is here and every one
+    /// before it has run or failed.
+    ordered_scripts: VecDeque<OrderedScript>,
     /// Whether a `tenta_html::Parser` is still writing into `document`.
     ///
     /// Page-loop reclamation stays deferred until parsing finishes. Engine
@@ -344,11 +358,153 @@ impl PageRuntime {
             self.script_budget.request_navigation(request);
         }
         self.forward_dynamic_imports();
+        self.forward_inserted_scripts();
     }
 
     /// Hands the page the `import()` calls the entry that just returned made.
     /// It rides with [`Self::forward_navigation_request`] because both are
     /// "what did script ask the page for", collected at the same moment.
+    /// Hands the page the script elements the entry that just returned
+    /// inserted and did not run itself.
+    fn forward_inserted_scripts(&mut self) {
+        if self.script_budget.crash_reason().is_some() {
+            return;
+        }
+        let scripts = self.engine.take_inserted_scripts();
+        if scripts.is_empty() {
+            return;
+        }
+        // An ordered script takes its place in the queue now, in the order
+        // the engine met them, whenever its fetch finishes.
+        for script in &scripts {
+            if script.ordered
+                && script.kind == ScriptType::Classic
+                && matches!(script.source, InsertedSource::External(_))
+            {
+                self.ordered_scripts.push_back(OrderedScript {
+                    element: script.element,
+                    origin: script.origin,
+                    text: None,
+                });
+            }
+        }
+        let context = ImportContext {
+            document: Rc::downgrade(&self.document),
+            tracker: Rc::clone(&self.tracker),
+            document_url: self.document.borrow().url().cloned(),
+        };
+        self.script_budget
+            .request_inserted_scripts(scripts, context);
+    }
+
+    /// The fetch of an inserted external classic script ended: `source` is
+    /// its text, or `None` when there is none to run.
+    ///
+    /// A script that is not ordered runs here. An ordered one is noted, and
+    /// every script at the head of the queue whose text is known runs, so a
+    /// late first script holds back the ones inserted after it and nothing
+    /// else.
+    pub(crate) fn finish_inserted_classic(
+        &mut self,
+        element: NodeRef,
+        ordered: bool,
+        origin: Origin,
+        source: Option<String>,
+    ) {
+        if !ordered {
+            self.run_inserted(element, origin, source);
+            return;
+        }
+        if let Some(entry) = self
+            .ordered_scripts
+            .iter_mut()
+            .find(|entry| entry.element == element && entry.text.is_none())
+        {
+            entry.text = Some(source);
+        }
+        while self
+            .ordered_scripts
+            .front()
+            .is_some_and(|entry| entry.text.is_some())
+        {
+            let entry = self.ordered_scripts.pop_front().expect("a head was seen");
+            self.run_inserted(entry.element, entry.origin, entry.text.flatten());
+        }
+    }
+
+    /// Runs the text of an inserted external classic script with its element
+    /// as the current script, and then fires `load` at the element; without a
+    /// text, fires `error`.
+    fn run_inserted(&mut self, element: NodeRef, origin: Origin, source: Option<String>) {
+        let Some(source) = source else {
+            self.fire_script_event(element, ImageEventKind::Error);
+            return;
+        };
+        if self.script_budget.crash_reason().is_some() {
+            return;
+        }
+        self.document.borrow_mut().set_current_script(Some(element));
+        let started = Instant::now();
+        if let Err(error) = self.engine.run_inserted_script(&source, origin) {
+            tracing::warn!(
+                page = ?self.page,
+                kind = ?error.kind,
+                message = %error.message,
+                "an inserted script did not run to completion"
+            );
+        }
+        self.document.borrow_mut().set_current_script(None);
+        self.check_engine_failure();
+        self.forward_navigation_request();
+        self.script_budget.charge(started.elapsed());
+        if self.script_budget.crash_reason().is_some() {
+            return;
+        }
+        self.bounded("microtasks", |engine| engine.run_microtasks());
+        self.fire_script_event(element, ImageEventKind::Load);
+    }
+
+    /// The graph of an inserted module script loaded, or did not: it runs and
+    /// `load` is fired at its element, or `error` is.
+    pub(crate) fn finish_inserted_module(
+        &mut self,
+        element: NodeRef,
+        key: std::result::Result<String, String>,
+    ) {
+        match key {
+            Ok(key) => {
+                self.run_module(&key);
+                self.fire_script_event(element, ImageEventKind::Load);
+            }
+            Err(reason) => {
+                tracing::warn!(page = ?self.page, %reason, "an inserted module script did not load");
+                self.fire_script_event(element, ImageEventKind::Error);
+            }
+        }
+    }
+
+    /// Fires `load` or `error` at a script element, as its own task.
+    pub(crate) fn fire_script_event(&mut self, element: NodeRef, kind: ImageEventKind) {
+        if self.script_budget.crash_reason().is_some() {
+            return;
+        }
+        let events = vec![ImageEvent {
+            node: element,
+            kind,
+        }];
+        self.bounded("script-event", |engine| {
+            engine.settle_images(events, &mut |_, _| true)
+        });
+        self.tracker.borrow().notify_handle().notify_one();
+    }
+
+    /// The key the next inline module script of this document gets in the
+    /// engine's module map.
+    pub(crate) fn next_inline_module_key(&mut self) -> String {
+        self.inline_modules += 1;
+        format!("inline-module:{}", self.inline_modules)
+    }
+
     fn forward_dynamic_imports(&mut self) {
         if !self.engine.supports_modules() || self.script_budget.crash_reason().is_some() {
             return;
@@ -570,6 +726,7 @@ impl PageRuntime {
             // created for post-settle evaluation is marked parse-finished
             // before its first engine entry.
             inline_modules: 0,
+            ordered_scripts: VecDeque::new(),
             module_loads: HashMap::new(),
             parse_in_flight: true,
             tracker,
@@ -1246,6 +1403,15 @@ pub(crate) enum ModuleRoot {
     External(Url),
 }
 
+/// An inserted external classic script that runs in insertion order.
+struct OrderedScript {
+    element: NodeRef,
+    origin: Origin,
+    /// `None` while the fetch is running; then its outcome, which is `None`
+    /// again when there is no text to run.
+    text: Option<Option<String>>,
+}
+
 /// The shared load of one module: what it imports once it is fetched and
 /// compiled, or why it could not be.
 pub(crate) type ModuleLoad = Rc<tokio::sync::OnceCell<std::result::Result<Vec<Url>, String>>>;
@@ -1499,7 +1665,9 @@ pub(crate) async fn run_pending_script(
     };
     let Some(body) = fetch_script(config, meta, &url, tracker).await else {
         // A script that could not be fetched is a page-level fact, not a failed
-        // navigation: the parse goes on without it, exactly as a browser's does.
+        // navigation: the parse goes on without it, exactly as a browser's
+        // does, and the element is told `error`.
+        fire_script_event(page, document, element, ImageEventKind::Error);
         return Ok(PendingScript::Done);
     };
     let Some(source) = decode_script(&body, parser.encoding()) else {
@@ -1510,15 +1678,31 @@ pub(crate) async fn run_pending_script(
         );
         return Ok(PendingScript::Done);
     };
-    Ok(PendingScript::Ready(source, element))
+    Ok(PendingScript::Fetched(source, element))
+}
+
+/// Fires `load` or `error` at a script element of `document`, if this page's
+/// engine is still bound to that tree.
+pub(crate) fn fire_script_event(
+    page: PageId,
+    document: &SharedDocument,
+    element: NodeRef,
+    kind: ImageEventKind,
+) {
+    with_runtime_for(page, document, |runtime| {
+        runtime.fire_script_event(element, kind)
+    });
 }
 
 /// What the page does with the script its parse is paused on.
 pub(crate) enum PendingScript {
     /// Nothing: the script was skipped or could not be fetched.
     Done,
-    /// The script's text, still to run, and its element.
+    /// An inline script's text, still to run, and its element.
     Ready(String, NodeRef),
+    /// The text of an external script, still to run, and its element, which
+    /// is told `load` once it has.
+    Fetched(String, NodeRef),
     /// A parallel script to start.
     Deferred(DeferredTiming),
 }
@@ -1563,6 +1747,30 @@ pub(crate) async fn fetch_script(
     url: &Url,
     tracker: &Rc<RefCell<SettleTracker>>,
 ) -> Option<Bytes> {
+    fetch_script_as(config, meta, url, tracker, None).await
+}
+
+/// [`fetch_script`] for a script element that script inserted: the request
+/// has the provenance of the task that inserted the element, and can be
+/// reclassified as any request script starts can, where a parser's script is
+/// always the document's own.
+pub(crate) async fn fetch_inserted_script(
+    config: &PageConfig,
+    meta: &ScriptMeta,
+    url: &Url,
+    tracker: &Rc<RefCell<SettleTracker>>,
+    origin: Origin,
+) -> Option<Bytes> {
+    fetch_script_as(config, meta, url, tracker, Some(origin)).await
+}
+
+async fn fetch_script_as(
+    config: &PageConfig,
+    meta: &ScriptMeta,
+    url: &Url,
+    tracker: &Rc<RefCell<SettleTracker>>,
+    inserted_by: Option<Origin>,
+) -> Option<Bytes> {
     // A fetch that cannot finish inside the navigation's deadline is not issued
     // at all: the parse would be sitting in it when the deadline expired, and
     // the body loop is what turns an expired deadline into the navigation's
@@ -1588,9 +1796,16 @@ pub(crate) async fn fetch_script(
             return None;
         }
     };
-    tracker
-        .borrow_mut()
-        .note_parser_request_started(request_id, RequestClass::Script);
+    match inserted_by {
+        Some(origin) => {
+            tracker
+                .borrow_mut()
+                .note_request_started(request_id, RequestClass::Script, origin)
+        }
+        None => tracker
+            .borrow_mut()
+            .note_parser_request_started(request_id, RequestClass::Script),
+    }
     // One place ends the request, whatever the fetch did. A request left in the
     // settle machine's table would hold the settle open for a fetch that is
     // over — the failure mode this fetch is most likely to cause.
@@ -2196,6 +2411,7 @@ mod tests {
                 engine: Box::new(engine),
                 document,
                 inline_modules: 0,
+                ordered_scripts: VecDeque::new(),
                 module_loads: HashMap::new(),
                 parse_in_flight,
                 tracker: Rc::new(RefCell::new(SettleTracker::new(

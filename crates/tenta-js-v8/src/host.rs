@@ -116,6 +116,7 @@ mod lazy;
 pub(crate) mod matrix;
 mod message_channel;
 mod observers;
+pub(crate) mod scripts;
 pub(crate) mod selection;
 pub(crate) mod sheet_replace;
 pub(crate) mod streams;
@@ -258,6 +259,8 @@ pub struct HostState {
     pub(crate) modules: crate::modules::ModuleState,
     /// The custom element registry's root and the upgrades in progress.
     pub(crate) custom_elements: custom_elements::State,
+    /// The scripts script inserted that the page has to load.
+    pub(crate) scripts: scripts::State,
 }
 
 impl HostState {
@@ -289,6 +292,7 @@ impl HostState {
             inspector: crate::inspector::InspectorState::new(),
             modules: crate::modules::ModuleState::default(),
             custom_elements: custom_elements::State::new(),
+            scripts: scripts::State::default(),
         })
     }
 

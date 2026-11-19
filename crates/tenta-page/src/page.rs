@@ -19,6 +19,7 @@ use tenta_core::{
 use tenta_dom::{Document as DomDocument, SharedDocument, SharedSink};
 use tenta_html::{Encoding, ParseStatus, Parser, ParserOptions, PreloadHint};
 use tenta_js::engine::{LifecycleEvent, PageEngineFactory};
+use tenta_js::image::ImageEventKind;
 use tenta_js::storage::PageStorage;
 use tenta_net::policy::cookies::{CookieJar, Site};
 use tenta_net::policy::error_names::ErrorName;
@@ -633,6 +634,16 @@ impl ScriptBudget for PageInner {
     ) {
         if let Some(inner) = self.this.upgrade() {
             start_dynamic_imports(inner, imports, context);
+        }
+    }
+
+    fn request_inserted_scripts(
+        &self,
+        scripts: Vec<tenta_js::scripts::InsertedScript>,
+        context: runtime::ImportContext,
+    ) {
+        if let Some(inner) = self.this.upgrade() {
+            start_inserted_scripts(inner, scripts, context);
         }
     }
 
@@ -2132,6 +2143,9 @@ enum DeferredScript {
     },
     /// A module script whose graph is loaded, by its key in the module map.
     Module { key: String },
+    /// A classic script whose text could not be fetched: nothing runs, and
+    /// its element is told `error` when its turn comes.
+    Failed { element: tenta_core::NodeRef },
 }
 
 /// How long an `import()` made after the navigation is over may take to load
@@ -2183,11 +2197,15 @@ fn start_deferred_script(
                 let fetched = catch_unwind_future(async {
                     let source =
                         fetch_deferred_script(&inner, &tracker, &meta, &url, encoding).await;
-                    if let Some(source) = source {
-                        run_fetched_script(page, &document, &url, &source, element);
-                        // What it inserted is script's, never the parser's.
-                        #[cfg(feature = "render")]
-                        sweep_script_sheets(&inner, &tracker, &document, meta.navigation);
+                    match source {
+                        Some(source) => {
+                            run_fetched_script(page, &document, &url, &source, element);
+                            fire_script_event(page, &document, element, ImageEventKind::Load);
+                            // What it inserted is script's, never the parser's.
+                            #[cfg(feature = "render")]
+                            sweep_script_sheets(&inner, &tracker, &document, meta.navigation);
+                        }
+                        None => fire_script_event(page, &document, element, ImageEventKind::Error),
                     }
                 })
                 .await;
@@ -2218,8 +2236,10 @@ fn start_deferred_script(
                             .await;
                     // A receiver that is gone means the navigation ended before
                     // the drain reached this script; the text has nowhere to go.
-                    let _ = sender
-                        .send(source.map(|source| DeferredScript::Classic { source, element }));
+                    let _ = sender.send(Some(match source {
+                        Some(source) => DeferredScript::Classic { source, element },
+                        None => DeferredScript::Failed { element },
+                    }));
                 })
                 .await;
                 if let Err(payload) = fetched {
@@ -2302,6 +2322,19 @@ fn start_deferred_script(
     }
 }
 
+/// Fires `load` or `error` at a parser's external script, if this
+/// navigation's engine is still bound to the tree.
+fn fire_script_event(
+    page: PageId,
+    document: &Weak<RefCell<DomDocument>>,
+    element: tenta_core::NodeRef,
+    kind: ImageEventKind,
+) {
+    if let Some(document) = document.upgrade() {
+        runtime::fire_script_event(page, &document, element, kind);
+    }
+}
+
 /// Runs a module whose graph is loaded, if this navigation's engine is still
 /// bound to the tree. See [`run_fetched_script`] for why the tree is named
 /// weakly.
@@ -2376,6 +2409,144 @@ fn start_dynamic_imports(
             drop(pending);
         });
     }
+}
+
+/// Loads the script elements the page's script inserted and answers each when
+/// it is loaded: an external classic script by its text, a module script by
+/// the key of its graph, and one whose `src` cannot be used by nothing, which
+/// is what makes the runtime fire `error` at it.
+///
+/// Each is its own task on the page thread. One that the document's own load
+/// inserted holds the settle while it loads, as a dynamic import does: it is
+/// how a page built from script-loaded chunks gets its code. One that a
+/// background task inserted (a timer long after the load) does not.
+fn start_inserted_scripts(
+    inner: Arc<PageInner>,
+    scripts: Vec<tenta_js::scripts::InsertedScript>,
+    context: runtime::ImportContext,
+) {
+    use tenta_js::scripts::{InsertedSource, ScriptType};
+
+    let page = inner.config.id;
+    let navigation = inner.state.lock().navigation_generation;
+    for script in scripts {
+        let inner = Arc::clone(&inner);
+        let tracker = Rc::clone(&context.tracker);
+        let document = context.document.clone();
+        let Some(document_url) = context
+            .document_url
+            .clone()
+            .or_else(|| match &script.source {
+                InsertedSource::External(url) => Some(url.clone()),
+                InsertedSource::Inline(_) | InsertedSource::Unusable => None,
+            })
+        else {
+            continue;
+        };
+        // Held from here rather than from inside the task, for the reason a
+        // dynamic import's is.
+        let pending = (script.origin == Origin::Tracked).then(|| PendingScripts::hold(&tracker));
+        tokio::task::spawn_local(async move {
+            let (base, encoding) = match document.upgrade() {
+                Some(document) => {
+                    let document = document.borrow();
+                    (
+                        document
+                            .base_url()
+                            .or(document.url())
+                            .cloned()
+                            .unwrap_or_else(|| document_url.clone()),
+                        Encoding::for_label(document.encoding().as_bytes()),
+                    )
+                }
+                None => return,
+            };
+            let meta = runtime::ScriptMeta {
+                base: base.clone(),
+                document_url,
+                deadline: inner.config.clock.now() + IMPORT_TIMEOUT,
+                navigation,
+            };
+            let element = script.element;
+            let loaded = catch_unwind_future(async {
+                match (script.kind, script.source) {
+                    (_, InsertedSource::Unusable) => Loaded::Classic(None),
+                    (ScriptType::Classic, InsertedSource::External(url)) => Loaded::Classic(
+                        runtime::fetch_inserted_script(
+                            &inner.config,
+                            &meta,
+                            &url,
+                            &tracker,
+                            script.origin,
+                        )
+                        .await
+                        .and_then(|body| runtime::decode_script(&body, encoding)),
+                    ),
+                    // Not reached: the engine runs an inline classic script
+                    // itself. Nothing to load, and nothing ran.
+                    (ScriptType::Classic, InsertedSource::Inline(_)) => Loaded::Classic(None),
+                    (ScriptType::Module, source) => {
+                        let root = match source {
+                            InsertedSource::External(url) => runtime::ModuleRoot::External(url),
+                            InsertedSource::Inline(source) => {
+                                let key = document.upgrade().and_then(|document| {
+                                    runtime::with_runtime_for(page, &document, |runtime| {
+                                        runtime.next_inline_module_key()
+                                    })
+                                });
+                                match key {
+                                    Some(key) => runtime::ModuleRoot::Inline { key, source, base },
+                                    None => return Loaded::Gone,
+                                }
+                            }
+                            InsertedSource::Unusable => return Loaded::Classic(None),
+                        };
+                        Loaded::Module(
+                            modules::load_graph(&inner, &tracker, &meta, &document, root).await,
+                        )
+                    }
+                }
+            })
+            .await;
+            let loaded = match loaded {
+                Ok(loaded) => loaded,
+                Err(payload) => {
+                    tracing::error!(
+                        ?page,
+                        reason = %panic_message(&payload),
+                        "the load of an inserted script panicked"
+                    );
+                    Loaded::Classic(None)
+                }
+            };
+            if let Some(document) = document.upgrade() {
+                runtime::with_runtime_for(page, &document, |runtime| match loaded {
+                    Loaded::Classic(source) => runtime.finish_inserted_classic(
+                        element,
+                        script.ordered,
+                        script.origin,
+                        source,
+                    ),
+                    Loaded::Module(key) => runtime.finish_inserted_module(element, key),
+                    Loaded::Gone => {}
+                });
+                // What it inserted is script's, never the parser's.
+                #[cfg(feature = "render")]
+                sweep_script_sheets(&inner, &tracker, &Rc::downgrade(&document), navigation);
+            }
+            drop(pending);
+        });
+    }
+}
+
+/// What loading an inserted script came to.
+enum Loaded {
+    /// The text of a classic script, or `None` when there is none to run.
+    Classic(Option<String>),
+    /// The key of a module script's graph, or why it did not load.
+    Module(std::result::Result<String, String>),
+    /// The document the script belongs to has no engine any more.
+    Gone,
 }
 
 /// Fetches one `defer`/`async` external classic script and decodes it with the
@@ -2519,8 +2690,12 @@ async fn drain_deferred(
         match received {
             Ok(Some(DeferredScript::Classic { source, element })) => {
                 run_fetched_script(page, &document, &url, &source, element);
+                fire_script_event(page, &document, element, ImageEventKind::Load);
                 #[cfg(feature = "render")]
                 sweep_script_sheets(inner, &tracker, &document, generation);
+            }
+            Ok(Some(DeferredScript::Failed { element })) => {
+                fire_script_event(page, &document, element, ImageEventKind::Error);
             }
             Ok(Some(DeferredScript::Module { key })) => {
                 run_loaded_module(page, &document, &key);
@@ -2610,7 +2785,12 @@ async fn drive_parse(
         )
         .await?;
         let deferred = match pending_script {
-            runtime::PendingScript::Ready(source, element) => {
+            runtime::PendingScript::Ready(..) | runtime::PendingScript::Fetched(..) => {
+                let (source, element, external) = match pending_script {
+                    runtime::PendingScript::Ready(source, element) => (source, element, false),
+                    runtime::PendingScript::Fetched(source, element) => (source, element, true),
+                    _ => unreachable!("matched as a script to run"),
+                };
                 #[cfg(feature = "render")]
                 sheet_loader::wait_for_blocking_sheets(
                     inner,
@@ -2621,6 +2801,14 @@ async fn drive_parse(
                 )
                 .await;
                 runtime::run_script_source(config.id, document, &source, Some(element));
+                if external {
+                    runtime::fire_script_event(
+                        config.id,
+                        document,
+                        element,
+                        tenta_js::image::ImageEventKind::Load,
+                    );
+                }
                 // What the script inserted is its own, not the parser's: it
                 // does not block the scripts after it.
                 #[cfg(feature = "render")]

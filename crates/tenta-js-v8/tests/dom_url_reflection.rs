@@ -264,7 +264,11 @@ fn script_boolean_members_reflect_their_content_attributes() {
             [initial, set, cleared].join('|');
         "#,
         ),
-        "false,false,false\
+        // `async` is the one that is more than its attribute: a script
+        // element that script created reads as async until it is assigned
+        // (HTML's "force async"), which is what makes an inserted script run
+        // as soon as it is fetched.
+        "true,false,false\
          |true,true,true,true,true,true,\
          |false,false"
     );

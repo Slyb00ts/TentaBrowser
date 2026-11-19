@@ -93,6 +93,14 @@ impl NodeFlags {
     /// The slot holds a live node. Cleared by [`DomArena::free`], so a
     /// recycled slot is distinguishable from a live one.
     pub const ALIVE: NodeFlags = NodeFlags(1 << 12);
+    /// The script element was created by a parser, which runs it itself; a
+    /// script without this flag runs when it becomes connected.
+    pub const SCRIPT_PARSER_INSERTED: NodeFlags = NodeFlags(1 << 13);
+    /// HTML's "force async" of a script element: set on one script creates,
+    /// cleared when its `async` IDL attribute is assigned. While it is set the
+    /// script runs as soon as it is fetched, with or without an `async`
+    /// attribute.
+    pub const SCRIPT_FORCE_ASYNC: NodeFlags = NodeFlags(1 << 14);
 
     #[inline]
     pub const fn contains(self, other: NodeFlags) -> bool {

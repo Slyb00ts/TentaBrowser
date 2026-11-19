@@ -1990,6 +1990,17 @@ impl Engine {
         })
     }
 
+    /// The script elements script has inserted since the last call that the
+    /// page has to load and run (`tenta_js::scripts`). An inline classic
+    /// script is not among them: it ran when it was inserted.
+    pub fn take_inserted_scripts(&mut self) -> Vec<tenta_js::scripts::InsertedScript> {
+        // Asked after every entry, and almost always there is nothing.
+        if !self.host.scripts.has_requests() {
+            return Vec::new();
+        }
+        self.host.scripts.take()
+    }
+
     /// The `import()` calls script has made since the last call, each with the
     /// URL to load. One whose specifier does not resolve is rejected here.
     pub fn take_dynamic_imports(&mut self) -> Vec<tenta_js::modules::DynamicImport> {

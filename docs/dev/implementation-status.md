@@ -104,7 +104,8 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
 | `DOMMatrix`, `DOMMatrixReadOnly`, `DOMPoint`, `DOMPointReadOnly`, `DOMQuad` (MAT1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `new DOMMatrix(getComputedStyle(el).transform)` threw. The transform list is parsed in the script: no `calc()`, no percentages; not serializable; see the section below |
 | `SVGAnimatedString`, SVG `className` and SVG `<a>` `href` (SVG1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `x.href instanceof SVGAnimatedString` threw, and an SVG element's `className` was a string. Nothing animates; `href` on SVG `<a>` only; see the section below |
-| `Range` tree operations, `createContextualFragment()`, `Text.splitText()` and `wholeText` (RNG2) | Implemented in `tenta-dom` and declared for both engines; DOM checks passed with trees worked out by hand, V8 checks passed; measured; seen to fix one error on a real page; **the `dom/ranges` WPT rows for these operations have not been run**; not independently reviewed | `deleteContents()`, `extractContents()`, `cloneContents()`, `insertNode()` and `surroundContents()` were deliberately undeclared, so the usual "empty this, put that in" sequence threw. They follow the DOM Standard's steps, walked as paths so a deep range does not recurse. A script in a contextual fragment is left unstarted but does not run when inserted, because no script a script inserts runs yet; see the section below |
+| Scripts that script inserts run; script elements are told `load` and `error` (DS1) | Implemented on V8; DOM, engine and page checks passed; measured; seen to change real pages; not independently reviewed | **Only the parser's scripts ran.** `document.createElement('script')` followed by `appendChild` did nothing: no inline script executed, no `src` was fetched, no `onload` fired. That is how a bundler loads its chunks, how JSONP works and how most widgets arrive. HTML's "prepare the script element" now runs when an element becomes connected, or, connected, gets a child or a `src`. QuickJS does not have it; see the section below |
+| `Range` tree operations, `createContextualFragment()`, `Text.splitText()` and `wholeText` (RNG2) | Implemented in `tenta-dom` and declared for both engines; DOM checks passed with trees worked out by hand, V8 checks passed; measured; seen to fix one error on a real page; **the `dom/ranges` WPT rows for these operations have not been run**; not independently reviewed | `deleteContents()`, `extractContents()`, `cloneContents()`, `insertNode()` and `surroundContents()` were deliberately undeclared, so the usual "empty this, put that in" sequence threw. They follow the DOM Standard's steps, walked as paths so a deep range does not recurse. A script in a contextual fragment runs when the fragment is inserted (DS1); see the section below |
 | What script does to a stylesheet reaches layout; `adoptedStyleSheets`; `CSSStyleSheet.replace()` (S1) | Implemented (`adoptedStyleSheets` on V8 and QuickJS, layout on V8 with `render`, `replace()` on V8); focused checks passed; measured; seen to change two real pages from unstyled to styled; not independently reviewed | A rule a script inserted, a property it set on a rule, `sheet.disabled` and a constructed sheet were visible to script and to nothing else: `getComputedStyle`, geometry, the snapshot and a screenshot used the element's source text. A page styled by a CSS-in-JS library was laid out unstyled. The page now reads an edited sheet from the script side when it assembles styles. An edit re-parses every sheet and restyles the tree; see the section below |
 | Every CSS rule kind in CSSOM; lists with an index iterate (CSSOM2) | Implemented on V8 and QuickJS; focused checks passed on both; measured; seen to fix one real page; not independently reviewed | `cssRules[i]` threw for every rule that was not a style rule, and `insertRule()`/`replaceSync()` refused every at-rule. Each rule is now an object of its own interface, group rules take and give up child rules, `@keyframes` exposes its keyframes, and `for…of` works on `cssRules`, `styleSheets`, a declaration and a media list. No `@import` or `@container` rule exists to read; see the section below |
 | MCP `browser_network_requests` lists every request of the page (NETLOG1) | Implemented; focused checks passed; measured on real sites; not independently reviewed | The tool listed the document and nothing else. It reads the page's network hub now: scripts, sheets, images, `fetch`, XHR, each hop of a redirect, failures by name. Frames inside the page are not listed; see the section below |
@@ -4110,6 +4111,110 @@ at `SVGAnimatedString is not defined`.
   in both loads before and nothing in either after. The snapshot is the
   same.
 
+### Scripts that script inserts (DS1)
+
+The page ran the scripts its parser met and no others. A script element
+made with `createElement('script')` and put into the document was a node
+like any other: an inline one did not execute, one with a `src` was never
+requested, `onload` and `onerror` never fired. Nothing reported it: the
+page simply went on without the code. That is how webpack and its kin
+load a chunk, how JSONP gets its answer, how an analytics or consent
+snippet arrives, and what `createContextualFragment()` relies on.
+
+- **When a script is prepared.** The document records the script elements
+  that become ready outside a parser (`Document::take_ready_scripts`,
+  `crates/tenta-dom/src/document.rs`): an element that becomes connected,
+  including into a shadow tree of a connected host; a connected element
+  that is given a child; a connected element that is given a `src` it did
+  not have. Never one a parser created (a new flag,
+  `SCRIPT_PARSER_INSERTED`, set where every parser's elements are made),
+  never one that has started, and never in a document that runs no script
+  (one made by `DOMParser`). A clone has started when its original has.
+- **The decision** is HTML's "prepare the script element" for an element
+  no parser inserted (`tenta_js::scripts::prepare`): no source and no
+  text, or not connected, or a `type` that is not a script, and nothing
+  happens and the element can be prepared again; otherwise it is marked
+  started and runs once. `nomodule` keeps a classic script out.
+- **An inline classic script runs inside the DOM call** that made it
+  ready, before that call returns, with the element as
+  `document.currentScript`
+  (`crates/tenta-js-v8/src/host/scripts.rs`, entered from the hook the
+  generated glue calls after every binding call). What it throws is
+  reported as an uncaught error and does not fail the call. Scripts nest.
+- **Everything else is the page's to load.** The engine hands over an
+  `InsertedScript` (`PageEngine::take_inserted_scripts`) and the runtime
+  starts a task for it (`start_inserted_scripts`,
+  `crates/tenta-page/src/page.rs`): an external classic script is fetched
+  through `tenta-net` and run with its element as the current script; a
+  module script, external or inline, has its graph loaded and is run.
+  A script runs as soon as it is loaded unless script set its `async` to
+  false, in which case it runs in the order it was inserted
+  (`PageRuntime::finish_inserted_classic`).
+- **`async`** reads as true on a script element that script created,
+  until it is assigned (HTML's "force async"); it used to read as the
+  attribute alone. `HTMLScriptElement.text` exists.
+- **`load` and `error`** are fired at a script element when its external
+  script has run or could not be fetched (an empty or unresolvable `src`
+  included). That now holds for the parser's external classic scripts as
+  well, blocking, `defer` and `async`, which were never told either.
+- **Provenance.** An inserted script's fetch and its run have the
+  provenance of the task that inserted the element. One the document's
+  own load inserted holds the settle while it loads, as an `import()`
+  does; one a background timer inserted later does not.
+- **Not there.** QuickJS: the hook that runs an inline script is the V8
+  world's, and the trait default has no inserted scripts, so on QuickJS
+  nothing changed. `document.write()` of a script. `integrity`,
+  `crossorigin` and `referrerpolicy` on an inserted script are not
+  applied to its request. A parser's *module* script is not told `load`
+  or `error` (its element does not travel with its graph). A dynamic
+  import map. A script inserted while a stylesheet that blocks scripts is
+  loading does not wait for it. No Content Security Policy is consulted,
+  for these or for any script.
+- **Checks:** `crates/tenta-dom/tests/ready_scripts.rs` (6: which
+  elements are recorded and which never are);
+  `crates/tenta-js/src/scripts.rs` `the_type_of_a_script_element`;
+  `crates/tenta-js-v8/tests/dom_inserted_scripts.rs` (9: the order of an
+  inline script against the code around its insertion,
+  `document.currentScript`, once only, the types that do not run,
+  `innerHTML`, an empty script given text, nesting, a throwing script, a
+  contextual fragment, a script that touches 20,000 nodes, `async`, and
+  exactly what is handed to the page);
+  `crates/tenta-browser/tests/inserted_scripts.rs` (6, against the
+  fixture server: fetch, run and `load`; four ways to earn `error`; three
+  ordered scripts behind a slow first one while an unordered one runs
+  ahead; a chain of scripts inserting scripts; module scripts, external,
+  inline and missing; the parser's blocking, deferred and async scripts,
+  present and missing). The workspace passed 5096 of 5096 and the feature set 620 of 620; fmt, both Clippy runs, `lint-deps`,
+  `idl-manifest` and `cargo deny` were clean.
+- **Measured** (release, against `72572fc`, interleaved, 2026-11-19).
+  Every insertion now asks whether its parent is a script, every node
+  that becomes connected whether it is one, and every binding call
+  whether the document recorded any. `S-dom-mutation` (V8): detached
+  42.60/44.31 -> 43.75/45.22 ms p50/p95, connected 40.44/41.25 ->
+  41.86/42.42 ms, peak RSS 35.3 -> 35.2 MiB; both about 3% and inside
+  the noise floor, so no cost is claimed and none is ruled out. Building
+  an engine 2.57 ms -> 2.66 ms p50 and its preludes 1.57 ms -> 1.63 ms;
+  `S-dom-calls` `has` 26.36 -> 26.47 ns and `get` 84.03 -> 85.36 ns, RSS
+  35.3 -> 35.2 MiB; `S-js-xhr` navigation 9.15/9.77 -> 9.12/9.49 ms
+  p50/p95, RSS 31.6 -> 31.9 MiB.
+- **On real pages** (release CLI over MCP, one load of each of the 35
+  sweep sites with each build, 2026-11-19; pages differ between loads, so
+  single sites are indications). duckduckgo.com's result page went from
+  303 elements and 546 characters of text to 1,266 and 6,787: its results
+  arrive through an inserted script. imdb.com went from 5,353 elements to
+  8,903 and nytimes.com from 6,561 to 8,085; twitter.com made 32 requests
+  where it made 4. Across the 35 sites the requests listed went from 599
+  to 671 and the sum of the navigation times from 66.7 s to 78.3 s: the
+  pages do more. Console errors went from 8 to 18, all of them in code
+  that did not run before: an ad stack on onet.pl (7), Cloudflare
+  Turnstile on a challenge page, a requirejs load on bbc.com. One is the
+  engine's own: wp.pl reported `RangeError: native wrapper allocation
+  limit exceeded`. It is not this package's (a script inserted at the top
+  level touches 20,000 nodes without it, which is a check above) and it
+  is open: a listener called from `dispatchEvent()` or `click()` that
+  touches more than 4,096 nodes gets it, with this change and without,
+  because no collector checkpoint can run inside a nested binding call.
+
 ### `Range` operations that change the tree (RNG2)
 
 `Range` had its boundary setters and comparisons and none of the five
@@ -4149,10 +4254,8 @@ contents, delete them, parse markup in their place, append it".
   `<script>`, which is what would let it run on insertion.
 - **Not there.** A node of another document is refused
   (`NotSupportedError`): the engine does not adopt across documents
-  anywhere yet. **No script that a script inserts runs**, whether through
-  a contextual fragment or through `appendChild(document.createElement(
-  'script'))`: only the parser's scripts execute. That is the next
-  package, and until it lands the fragment's scripts are inert. The
+  anywhere yet. At this commit no script that a script inserted ran,
+  so a fragment's scripts were inert; DS1, above, runs them. The
   `dom/ranges` rows for the five operations (63 each) have not been run:
   there is no WPT checkout on this workstation.
 - **Checks:** `crates/tenta-dom/tests/range_contents.rs` (19: one case

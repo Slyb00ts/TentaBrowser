@@ -8461,11 +8461,30 @@ impl HTMLScriptElementOps for HostObject {
     fn set_integrity(&self, value: &str) {
         self.reflect_attribute("integrity", value);
     }
+    // HTML: a script element that script created is "force async" until its
+    // `async` is assigned, and reads as async for as long as it is. Assigning
+    // false is how a loader asks for its scripts to run in insertion order.
     fn r#async(&self) -> bool {
-        self.reflect_bool("async")
+        let (doc, id) = self.anchor();
+        doc.borrow().script_force_async(id) || self.reflect_bool("async")
     }
     fn set_async(&self, value: bool) {
+        let (doc, id) = self.anchor();
+        doc.borrow_mut().set_script_force_async(id, false);
         self.set_reflect_bool("async", value);
+    }
+    fn text(&self) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        Ok(doc
+            .children(id)
+            .filter(|child| matches!(doc.kind(*child), NodeKind::Text | NodeKind::CData))
+            .filter_map(|child| doc.text_data(child))
+            .collect())
+    }
+    fn set_text(&self, value: &str) {
+        // Replacing the children of an element cannot fail.
+        let _ = <HostObject as NodeOps>::set_text_content(self, Some(value));
     }
     fn defer(&self) -> bool {
         self.reflect_bool("defer")

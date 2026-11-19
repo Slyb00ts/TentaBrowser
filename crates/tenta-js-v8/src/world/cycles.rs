@@ -130,6 +130,9 @@ impl tenta_js::bindings::V8CallbackAdmission for Admission {
         if self.context.documents.custom_elements_used() {
             crate::host::custom_elements::after_callback(scope, &self.context);
         }
+        // A script element this call connected, filled or gave a source runs
+        // before the call returns to the page.
+        crate::host::scripts::after_callback(scope, &self.context);
     }
 
     fn html_constructor<'s>(

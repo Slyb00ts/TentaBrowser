@@ -357,6 +357,21 @@ impl PageEngine for Engine {
         Engine::take_dynamic_imports(self)
     }
 
+    fn take_inserted_scripts(&mut self) -> Vec<tenta_js::scripts::InsertedScript> {
+        Engine::take_inserted_scripts(self)
+    }
+
+    fn run_inserted_script(&mut self, source: &str, origin: Origin) -> Result<(), ScriptError> {
+        let timeout = self.script_timeout;
+        let scheduler = self.host.scheduler.clone();
+        scheduler
+            .with_origin(origin, || self.run_classified(source, timeout))
+            .map_err(|failure| ScriptError {
+                kind: failure.kind,
+                message: failure.message,
+            })
+    }
+
     fn finish_dynamic_import(&mut self, id: u64, outcome: Result<&str, &str>) {
         let scheduler = self.host.scheduler.clone();
         scheduler.with_origin(Origin::Tracked, || {

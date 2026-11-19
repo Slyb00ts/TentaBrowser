@@ -542,7 +542,10 @@ impl Document {
             })
             .collect();
         for script in scripts {
+            // Neither started nor the parser's: the script is as one that
+            // script created, and runs when the fragment goes into a document.
             self.set_script_started(script, false);
+            self.set_script_parser_inserted(script, false);
         }
         Ok(fragment)
     }

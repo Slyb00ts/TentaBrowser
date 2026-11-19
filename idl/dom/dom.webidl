@@ -1161,6 +1161,8 @@ interface HTMLOptionElement : HTMLElement {
 // queue's business.
 [Exposed=Window]
 interface HTMLScriptElement : HTMLElement {
+  // The element's own text: its Text children, without its descendants'.
+  attribute DOMString text;
   attribute USVString src;
   attribute DOMString type;
   attribute DOMString charset;

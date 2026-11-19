@@ -19,6 +19,7 @@ pub mod location;
 pub mod matrix;
 pub mod modules;
 pub mod rejection;
+pub mod scripts;
 pub mod selection;
 pub mod storage;
 pub mod streams;

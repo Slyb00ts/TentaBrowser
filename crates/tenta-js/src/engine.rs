@@ -456,6 +456,32 @@ pub trait PageEngine {
         Vec::new()
     }
 
+    /// The script elements script has inserted since the last call that the
+    /// page has to load and run: external classic scripts and module scripts
+    /// ([`crate::scripts`]). An inline classic script is never here; the
+    /// engine ran it inside the DOM call that inserted it.
+    ///
+    /// The page runs a classic one with [`Self::run_script`] once it has the
+    /// text, with the element as the document's current script, and fires
+    /// `load` or `error` at the element through [`Self::settle_images`],
+    /// which is how every element's load ends. The default has none, which is
+    /// an engine in which a script that script inserts does not run.
+    fn take_inserted_scripts(&mut self) -> Vec<crate::scripts::InsertedScript> {
+        Vec::new()
+    }
+
+    /// [`Self::run_script`] for the text of a classic script that script
+    /// inserted, entered under the provenance of the task that inserted it
+    /// rather than as part of the document's own load.
+    fn run_inserted_script(
+        &mut self,
+        source: &str,
+        origin: tenta_core::provenance::Origin,
+    ) -> Result<(), ScriptError> {
+        let _ = origin;
+        self.run_script(source, ScriptKind::Classic)
+    }
+
     /// Settles the promise of the `import()` named `id`: `Ok` is the key of
     /// the module, whose graph is in the module map; `Err` is why it could not
     /// be loaded, which rejects the promise with a `TypeError`. The caller

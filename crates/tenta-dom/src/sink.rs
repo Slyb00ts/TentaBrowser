@@ -63,8 +63,17 @@ impl TreeSink for Document {
         attrs: Vec<Attribute>,
         flags: ElementFlags,
     ) -> NodeId {
+        let is_script = name.local == atoms::SCRIPT;
         match Document::create_element(self, name, attrs, flags) {
-            Ok(element) => element,
+            Ok(element) => {
+                // Every parser's elements come through here. A script one of
+                // them made is the parser's to run, or, in a fragment, nobody's.
+                if is_script {
+                    self.set_script_parser_inserted(element, true);
+                    self.set_script_force_async(element, false);
+                }
+                element
+            }
             Err(error) => {
                 self.parse_error(Cow::Owned(format!("element creation refused: {error}")));
                 // Return a placeholder; the parser will continue with undefined behavior
