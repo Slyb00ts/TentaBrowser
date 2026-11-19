@@ -103,6 +103,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `Selection`, `window.getSelection()` and `document.getSelection()` (SEL1) | Implemented on V8 as a script built at first use; focused checks passed; measured; not independently reviewed | A page that asked for the selection threw. No `modify()` or `deleteFromDocument()`; nothing a host does moves the selection; see the section below |
 | `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
 | `DOMMatrix`, `DOMMatrixReadOnly`, `DOMPoint`, `DOMPointReadOnly`, `DOMQuad` (MAT1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `new DOMMatrix(getComputedStyle(el).transform)` threw. The transform list is parsed in the script: no `calc()`, no percentages; not serializable; see the section below |
+| `SVGAnimatedString`, SVG `className` and SVG `<a>` `href` (SVG1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `x.href instanceof SVGAnimatedString` threw, and an SVG element's `className` was a string. Nothing animates; `href` on SVG `<a>` only; see the section below |
 | An idle callback is page activity (IDLE1) | Corrected on V8; focused check passed and mutation-checked; measured, no difference outside noise | `requestIdleCallback` from tracked script was a tracked zero-delay timer and held the settle open; it is background now, as the provenance definition says; see the section below |
 | `ReadableStream`, its default reader and controller, the queuing strategies, `Response.body` and `Blob.stream()` (ST1) | Implemented on V8 as a script built at first use; focused checks passed; measured; not independently reviewed; **Streams as script rather than WebIDL is a choice the specification may record** | A page could not make or read a stream at all. Default streams only: no byte streams or BYOB readers, no `WritableStream`, `TransformStream`, `pipeTo()` or `pipeThrough()`; a body is delivered as one chunk; a stream is not accepted as a body; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
@@ -4064,6 +4065,46 @@ apple.com's galleries read an element's transform with
   with the galleries running, the first tab of each is `[selected]` and
   the tab panels of the other slides are hidden, as the page means them
   to be; before, all nine slides of both galleries were listed.
+
+### `SVGAnimatedString`, SVG `className` and `href` (SVG1)
+
+vuejs.org (VitePress) walks every link of the page with
+`a.href instanceof SVGAnimatedString ? a.href.animVal : a.href` and stopped
+at `SVGAnimatedString is not defined`.
+
+- **What is there:** `SVGAnimatedString` with `baseVal` (reads and writes
+  the attribute) and `animVal` (reads it); `SVGElement.prototype.className`
+  reflecting `class`, and `SVGAElement.prototype.href` reflecting `href`
+  or, on an element that has only it, the deprecated `xlink:href`. Each
+  element answers the same object every time. A script built at first
+  use (`crates/tenta-js/src/svg_animated.rs`), the two accessors native
+  with a check of the receiver
+  (`crates/tenta-js-v8/src/host/svg_animated.rs`).
+- **A change of behaviour, toward the browsers'.** An SVG element's
+  `className` was the string `Element` declares. It is the object now and
+  has no setter, as in a browser: `svg.className = 'x'` does nothing (and
+  throws in strict code), and script that wants the string reads
+  `getAttribute('class')` or `className.baseVal`. HTML elements are not
+  touched.
+- **Not there:** animation, so `animVal` is always `baseVal`; `href` on
+  the other `SVGURIReference` elements (`<use>`, `<image>`, the
+  gradients), which have no interface of their own here; every other
+  animated type (`SVGAnimatedLength` and the rest). V8 only.
+- **Checks:** `crates/tenta-js-v8/tests/dom_svg_animated.rs`, four tests,
+  one of them VitePress's expression over a page with HTML and SVG links.
+  The workspace passed 5008 of 5008 and the feature set 604 of 604;
+  fmt, both Clippy runs, `lint-deps`, `idl-manifest` and `cargo deny`
+  were clean.
+- **Measured** (release, interleaved against `4ed1780`): building an
+  engine's preludes 1.620 ms to 1.664 ms p50 (15 runs of 70 engines each);
+  `S-js-xhr` navigation p50/p95 9.10/9.49 ms to 9.07/9.57 ms and process
+  RSS 31.4/31.8 MiB to 31.5/31.9 MiB (25 pairs); `S-dom-calls` `get`
+  83.66/88.60 ns to 86.03/90.12 ns. All inside the noise floor: no
+  difference is claimed.
+- **On the site that showed it** (release CLI over MCP, two loads of each
+  build alternating, 2026-11-19): vuejs.org reported the `ReferenceError`
+  in both loads before and nothing in either after. The snapshot is the
+  same.
 
 ### `ReadableStream`, `Response.body` and `Blob.stream()` (ST1)
 

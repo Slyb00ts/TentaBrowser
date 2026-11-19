@@ -119,6 +119,7 @@ mod observers;
 pub(crate) mod selection;
 pub(crate) mod streams;
 pub(crate) mod subtle;
+pub(crate) mod svg_animated;
 mod window_extras;
 mod window_misc;
 guarded_callback!(guarded_location_constructor => location_constructor);

@@ -2690,9 +2690,10 @@ impl Engine {
     /// Defines `ReadableStream` and what reads one, `Response.prototype.body`
     /// and `Blob.prototype.stream()` (`tenta_js::streams`), `Selection` with
     /// the two `getSelection()` (`tenta_js::selection`), `SubtleCrypto` with
-    /// `crypto.subtle` (`tenta_js::subtle`), and `DOMMatrix`, `DOMPoint` and
-    /// `DOMQuad` (`tenta_js::matrix`). Only the names are defined here; the
-    /// script behind them runs when a page first uses one.
+    /// `crypto.subtle` (`tenta_js::subtle`), `DOMMatrix`, `DOMPoint` and
+    /// `DOMQuad` (`tenta_js::matrix`), and `SVGAnimatedString` with the SVG
+    /// `className` and `href` (`tenta_js::svg_animated`). Only the names are
+    /// defined here; the script behind them runs when a page first uses one.
     fn install_streams(&mut self) {
         if self.native_failure().is_some() {
             return;
@@ -2707,6 +2708,7 @@ impl Engine {
         host::selection::install(scope, global);
         host::subtle::install(scope, global);
         host::matrix::install(scope, global);
+        host::svg_animated::install(scope, global);
     }
 
     /// Installs the page's image state for the document this engine is bound

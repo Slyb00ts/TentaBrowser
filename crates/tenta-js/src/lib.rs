@@ -25,5 +25,6 @@ pub mod streams;
 pub mod structured_clone;
 pub mod stylesheets;
 pub mod subtle;
+pub mod svg_animated;
 pub mod traversal;
 pub mod xhr;
