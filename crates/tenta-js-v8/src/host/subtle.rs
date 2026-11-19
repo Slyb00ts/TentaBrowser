@@ -16,7 +16,8 @@ use tenta_js::bindings::{
 };
 use tenta_net::digest::{Digest, DigestAlgorithm};
 
-use super::observers::{get, get_private, key, set_private};
+use super::lazy;
+use super::observers::{get, key};
 use super::streams::prototype_of;
 use super::{guarded_queue_task_function, host_state};
 
@@ -34,16 +35,7 @@ const DIGEST_PIECE: usize = 1 << 20;
 /// interfaces have to be installed already.
 pub(crate) fn install(scope: &mut v8::PinScope, global: v8::Local<v8::Object>) {
     let undefined = v8::undefined(scope);
-    let name = key(scope, "SubtleCrypto");
-    global.set_lazy_data_property_with_data(
-        scope,
-        name.into(),
-        lazy_interface,
-        undefined.into(),
-        v8::PropertyAttribute::DONT_ENUM,
-        v8::SideEffectType::HasSideEffect,
-        v8::SideEffectType::HasSideEffect,
-    );
+    lazy::define_interface(scope, global, "SubtleCrypto", lazy_interface);
     if let Some(prototype) = prototype_of(scope, global, "Crypto")
         && let Some(getter) = v8::Function::builder(guarded_subtle).length(0).build(scope)
     {
@@ -61,38 +53,16 @@ pub(crate) fn install(scope: &mut v8::PinScope, global: v8::Local<v8::Object>) {
 /// The script's exports, built on first use. `None` in a realm where the
 /// script failed, now or earlier.
 fn exports<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    if let Some(known) = get_private(scope, global, EXPORTS) {
-        return v8::Local::<v8::Object>::try_from(known).ok();
-    }
-    let built = {
-        v8::tc_scope!(let tc, scope);
-        let built = v8::String::new(tc, tenta_js::subtle::SUBTLE_PRELUDE_SOURCE)
-            .and_then(|source| v8::Script::compile(tc, source, None))
-            .and_then(|script| script.run(tc))
-            .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-            .and_then(|build| {
-                let digest = v8::Function::builder(guarded_digest_bytes).build(tc)?;
-                let queue = v8::Function::builder(guarded_queue_task_function).build(tc)?;
-                let receiver = v8::undefined(tc).into();
-                build.call(tc, receiver, &[digest.into(), queue.into()])
-            })
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            .map(|object| v8::Global::new(tc, object));
-        // A termination is the page's to see; anything else the script threw
-        // is this realm going without `subtle`.
-        if !tc.has_terminated() {
-            tc.reset();
-        }
-        built
-    };
-    let built = built.map(|object| v8::Local::new(scope, object));
-    let stored: v8::Local<v8::Value> = match built {
-        Some(object) => object.into(),
-        None => v8::Boolean::new(scope, false).into(),
-    };
-    set_private(scope, global, EXPORTS, stored);
-    built
+    lazy::exports(
+        scope,
+        EXPORTS,
+        tenta_js::subtle::SUBTLE_PRELUDE_SOURCE,
+        |scope| {
+            let digest = v8::Function::builder(guarded_digest_bytes).build(scope)?;
+            let queue = v8::Function::builder(guarded_queue_task_function).build(scope)?;
+            Some(vec![digest.into(), queue.into()])
+        },
+    )
 }
 
 fn lazy_interface<'s>(

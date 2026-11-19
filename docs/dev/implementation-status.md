@@ -102,6 +102,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `<a>` and `<area>` take their `href` apart: `protocol`, `host`, `pathname`, `search`, `hash` and the rest (HL1) | Implemented on V8; focused checks passed; seen to fix two real pages; not independently reviewed | An anchor had `href` only, so the `a.href = url; a.pathname` idiom threw. imdb.com's client-side exception and a logger error on nytimes.com came from it; see the section below |
 | `Selection`, `window.getSelection()` and `document.getSelection()` (SEL1) | Implemented on V8 as a script built at first use; focused checks passed; measured; not independently reviewed | A page that asked for the selection threw. No `modify()` or `deleteFromDocument()`; nothing a host does moves the selection; see the section below |
 | `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
+| `DOMMatrix`, `DOMMatrixReadOnly`, `DOMPoint`, `DOMPointReadOnly`, `DOMQuad` (MAT1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `new DOMMatrix(getComputedStyle(el).transform)` threw. The transform list is parsed in the script: no `calc()`, no percentages; not serializable; see the section below |
 | An idle callback is page activity (IDLE1) | Corrected on V8; focused check passed and mutation-checked; measured, no difference outside noise | `requestIdleCallback` from tracked script was a tracked zero-delay timer and held the settle open; it is background now, as the provenance definition says; see the section below |
 | `ReadableStream`, its default reader and controller, the queuing strategies, `Response.body` and `Blob.stream()` (ST1) | Implemented on V8 as a script built at first use; focused checks passed; measured; not independently reviewed; **Streams as script rather than WebIDL is a choice the specification may record** | A page could not make or read a stream at all. Default streams only: no byte streams or BYOB readers, no `WritableStream`, `TransformStream`, `pipeTo()` or `pipeThrough()`; a body is delivered as one chunk; a stream is not accepted as a body; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
@@ -4011,6 +4012,58 @@ about twenty times while it starts, and each read threw.
   load, taken while a build was running on the machine, stopped at 3,886
   elements and did not grow. Which of the page's tasks the settle does
   not count as tracked was not traced.
+
+### `DOMMatrix`, `DOMPoint` and `DOMQuad` (MAT1)
+
+apple.com's galleries read an element's transform with
+`new DOMMatrix(getComputedStyle(el).transform)` and stopped at
+`DOMMatrix is not a constructor`.
+
+- **What is there:** the matrix, point and quad interfaces of Geometry
+  Interfaces Level 1, as a script (`crates/tenta-js/src/matrix.rs`) built
+  the first time a page reads one of the names: `DOMMatrixReadOnly` and
+  `DOMMatrix` with every member of the standard (the constructor from
+  nothing, six or sixteen numbers, or a transform list; `fromMatrix()`
+  with the standard's validation; the element accessors; the read-only
+  methods and their `…Self()` forms; `inverse()`, `transformPoint()`,
+  the typed-array conversions, `toJSON()`, the stringifier and
+  `setMatrixValue()`), `DOMPointReadOnly`, `DOMPoint` and `DOMQuad`, and
+  the legacy aliases `WebKitCSSMatrix`, `SVGMatrix` and `SVGPoint`. `is2D`
+  follows the standard's rules member by member. A computed `transform`
+  is already answered as `matrix(…)` by the style engine, which is what
+  the constructor is given.
+- **Not there, and what differs:** the transform list is parsed by the
+  script, not by the CSS parser: the transform functions with numbers,
+  absolute lengths and angles. `calc()` and a percentage in `scale()`
+  are a `SyntaxError` where a browser takes them. The interfaces are not
+  serializable (`structuredClone()`, `postMessage()`). Nothing of the
+  engine answers with one: no `getCTM()`, no `getBoxQuads()`. V8 only.
+- **One home for what the lazy scripts share.** Streams, the selection,
+  `subtle` and this each carried a copy of "build the script's exports
+  once and keep them on the global"; it is `crates/tenta-js-v8/src/host/
+  lazy.rs` now, with no change of behaviour.
+- **Checks:** `crates/tenta-js-v8/tests/dom_matrix.rs`, fourteen tests,
+  the expected numbers worked out by hand from the CSS definitions of the
+  functions: construction, 22 two-dimensional and 11 three-dimensional
+  transform lists, 15 things that are not one, the methods, products in
+  both orders (four tests fail when the order is swapped), inverses
+  including a matrix with none, the 22 cases of `is2D`, dictionary
+  validation, serialization, points and quads. The workspace passed 5004
+  of 5004 and the feature set 604 of 604; fmt, both Clippy runs,
+  `lint-deps`, `idl-manifest` and `cargo deny` were clean.
+- **Measured** (release, interleaved against `d9e8a5d`): building an
+  engine's preludes 1.570 ms to 1.592 ms p50 (15 runs of 70 engines each);
+  `S-js-xhr` navigation p50/p95 8.95/9.44 ms to 9.17/9.71 ms and process
+  RSS 31.4/31.9 MiB to 31.6/32.0 MiB (25 pairs); `S-dom-calls` `get`
+  82.44/84.81 ns to 83.70/87.47 ns. All inside the noise floor: no
+  difference is claimed.
+- **On the site that showed it** (release CLI over MCP, two loads of each
+  build alternating, 2026-11-19): apple.com reported
+  `DOMMatrix is not a constructor` in both loads before and in neither
+  after, and no other error. Its snapshot went from 436 lines to 398:
+  with the galleries running, the first tab of each is `[selected]` and
+  the tab panels of the other slides are hidden, as the page means them
+  to be; before, all nine slides of both galleries were listed.
 
 ### `ReadableStream`, `Response.body` and `Blob.stream()` (ST1)
 

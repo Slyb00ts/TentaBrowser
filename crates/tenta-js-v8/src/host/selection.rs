@@ -13,8 +13,8 @@ use tenta_js::bindings::{
     v8_begin_stored_value_lease, v8_end_stored_value_lease, v8_registered_slow_callback_boundary,
 };
 
-use super::observers::{get, get_private, key, set_private};
-use super::{define, guarded_queue_task_function};
+use super::observers::get;
+use super::{define, guarded_queue_task_function, lazy};
 
 guarded_callback!(guarded_window_selection => window_selection);
 guarded_callback!(guarded_document_selection => document_selection);
@@ -26,17 +26,7 @@ const EXPORTS: &str = "tenta.selection";
 /// Defines the names. `Document` is looked up on `global`, so the generated
 /// interfaces have to be installed already.
 pub(crate) fn install(scope: &mut v8::PinScope, global: v8::Local<v8::Object>) {
-    let undefined = v8::undefined(scope);
-    let name = key(scope, "Selection");
-    global.set_lazy_data_property_with_data(
-        scope,
-        name.into(),
-        lazy_interface,
-        undefined.into(),
-        v8::PropertyAttribute::DONT_ENUM,
-        v8::SideEffectType::HasSideEffect,
-        v8::SideEffectType::HasSideEffect,
-    );
+    lazy::define_interface(scope, global, "Selection", lazy_interface);
     define(scope, global, "getSelection", guarded_window_selection);
     let prototype = get(scope, global, "Document")
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
@@ -50,37 +40,15 @@ pub(crate) fn install(scope: &mut v8::PinScope, global: v8::Local<v8::Object>) {
 /// The script's exports, built on first use. `None` in a realm where the
 /// script failed, now or earlier.
 fn exports<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    if let Some(known) = get_private(scope, global, EXPORTS) {
-        return v8::Local::<v8::Object>::try_from(known).ok();
-    }
-    let built = {
-        v8::tc_scope!(let tc, scope);
-        let built = v8::String::new(tc, tenta_js::selection::SELECTION_PRELUDE_SOURCE)
-            .and_then(|source| v8::Script::compile(tc, source, None))
-            .and_then(|script| script.run(tc))
-            .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-            .and_then(|build| {
-                let queue = v8::Function::builder(guarded_queue_task_function).build(tc)?;
-                let receiver = v8::undefined(tc).into();
-                build.call(tc, receiver, &[queue.into()])
-            })
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            .map(|object| v8::Global::new(tc, object));
-        // A termination is the page's to see; anything else the script threw
-        // is this realm going without a selection.
-        if !tc.has_terminated() {
-            tc.reset();
-        }
-        built
-    };
-    let built = built.map(|object| v8::Local::new(scope, object));
-    let stored: v8::Local<v8::Value> = match built {
-        Some(object) => object.into(),
-        None => v8::Boolean::new(scope, false).into(),
-    };
-    set_private(scope, global, EXPORTS, stored);
-    built
+    lazy::exports(
+        scope,
+        EXPORTS,
+        tenta_js::selection::SELECTION_PRELUDE_SOURCE,
+        |scope| {
+            let queue = v8::Function::builder(guarded_queue_task_function).build(scope)?;
+            Some(vec![queue.into()])
+        },
+    )
 }
 
 fn lazy_interface<'s>(

@@ -16,6 +16,7 @@ pub mod history;
 pub mod image;
 pub mod inspect;
 pub mod location;
+pub mod matrix;
 pub mod modules;
 pub mod rejection;
 pub mod selection;
