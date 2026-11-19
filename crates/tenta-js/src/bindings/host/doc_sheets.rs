@@ -11,9 +11,8 @@
 //!
 //! What it does not do yet is feed script's edits back to layout: a rule added
 //! with `insertRule` changes this object and not what the render session
-//! applies (S1 in `docs/dev/p3-plan.md`), and `cssRules.item()` of a rule that is
-//! not a style rule throws `NotSupportedError`, as it does for constructed
-//! sheets.
+//! applies (S1 in `docs/dev/p3-plan.md`). An `@import` is not among a sheet's
+//! `cssRules`: the sheet is parsed without a loader, which leaves it out.
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};

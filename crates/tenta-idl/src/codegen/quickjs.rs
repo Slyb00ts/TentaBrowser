@@ -56,6 +56,10 @@ pub fn interface_quickjs(model: &Model, interface: &Interface) -> String {
             out.push_str("    for method in [\"entries\", \"keys\", \"values\", \"forEach\"] { let array: rquickjs::Object = ctx.globals().get(\"Array\")?; let array_prototype: rquickjs::Object = array.get(\"prototype\")?; prototype.set(method, array_prototype.get::<_, rquickjs::Value>(method)?)?; }\n    prototype.set(rquickjs::atom::PredefinedAtom::SymbolIterator, prototype.get::<_, rquickjs::Value>(\"values\")?)?;\n");
         }
     }
+    if super::legacy::has_indexed_iterator(model, interface) {
+        // An indexed getter and an integer `length` iterate as an array does.
+        out.push_str("    { let array: rquickjs::Object = ctx.globals().get(\"Array\")?; let array_prototype: rquickjs::Object = array.get(\"prototype\")?; prototype.prop(rquickjs::atom::PredefinedAtom::SymbolIterator, rquickjs::object::Property::from(array_prototype.get::<_, rquickjs::Value>(\"values\")?).writable().configurable())?; }\n");
+    }
     let _ = writeln!(
         out,
         "    prototype.prop(rquickjs::atom::PredefinedAtom::SymbolToStringTag, rquickjs::object::Property::from({name:?}).configurable())?;"
@@ -498,9 +502,13 @@ pub(super) fn to_value(ty: &Type, ctx: &str, value: &str) -> String {
                 "match {value} {{ Some(inner) => {inner}, None => Ok(rquickjs::Value::new_null({ctx_clone})) }}"
             )
         }
-        Type::Sequence(inner) | Type::FrozenArray(inner) | Type::ObservableArray(inner) => {
+        Type::Sequence(inner) | Type::ObservableArray(inner) => {
             let inner = to_value(inner, ctx, "item");
             format!("quickjs_sequence_value({ctx}, {value}, |item| {inner})")
+        }
+        Type::FrozenArray(inner) => {
+            let inner = to_value(inner, ctx, "item");
+            format!("quickjs_frozen_array_value({ctx}, {value}, |item| {inner})")
         }
         Type::Record(key, val) => {
             let key = to_value(key, ctx, "key");

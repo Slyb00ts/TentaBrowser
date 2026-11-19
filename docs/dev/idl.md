@@ -397,6 +397,15 @@ Notes on the shape of the generated code:
   All five are `DONT_ENUM`, and a member the interface declares itself wins.
   The members read the receiver through `length` and the indexed getter on
   every call, so they are live rather than snapshots.
+- An interface that declares no `iterable<>` but has an indexed getter and an
+  integer `length` attribute gets `@@iterator`, and only that, as
+  `v8::Intrinsic::ArrayProtoValues` (WebIDL's rule for interfaces that support
+  indexed properties). This is what makes `for (const rule of sheet.cssRules)`
+  and `[...document.styleSheets]` work; `CSSRuleList`, `StyleSheetList`,
+  `CSSStyleDeclaration`, `MediaList`, `DOMRectList` and `CSSKeyframesRule` are
+  the interfaces it applies to today. The property goes on the interface that declares the
+  getter, and a `[Global]` interface is left out. QuickJS defines the same
+  property from the realm's `Array.prototype.values`.
 - A pair iterator (`iterable<K, V>`) has no `length` and no indexed getter to
   drive an iterator from, so it cannot use the intrinsics. Instead the `*Ops`
   trait gains one hook, `fn iterable_entries(&self) -> Result<IterableEntries<K,
@@ -1658,8 +1667,11 @@ generated code:
   own block and a generated second function would merely behave alike. No
   interface in the corpus declares `entries`, `keys` or `values`, so this is
   latent.
-- `FrozenArray` and `ObservableArray` are lowered like `sequence`; neither the
-  freezing nor the change-notification semantics are generated.
+- A returned `FrozenArray` is a frozen JavaScript array (V8 sets the integrity
+  level; QuickJS calls the realm's `Object.freeze`, which a page could have
+  replaced). It is a new array on every read: the "same object until it
+  changes" half of the type is not generated. `ObservableArray` is lowered
+  like `sequence`, without its change notifications.
 - The generator installs native indexed and named property hooks for interfaces
   that declare special operations. `NamedNodeMap` and `HTMLCollection` declare
   named getters, with focused tests for case rules, supported-name ordering,

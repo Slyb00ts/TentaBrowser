@@ -349,12 +349,19 @@ pub enum HostRecord {
     /// A live top-level or child rule list for one constructed sheet.
     #[cfg(any(feature = "v8", feature = "quickjs"))]
     CssRuleList(cssom::CssRuleListRecord),
-    /// A concrete CSSStyleRule in a constructed sheet.
+    /// A rule of a sheet, of whatever kind; its interface follows the kind.
     #[cfg(any(feature = "v8", feature = "quickjs"))]
-    CssStyleRule(cssom::CssRuleRecord),
-    /// The live declaration block of a concrete CSSStyleRule.
+    CssRule(cssom::CssRuleRecord),
+    /// One keyframe of an `@keyframes` rule.
     #[cfg(any(feature = "v8", feature = "quickjs"))]
-    CssRuleStyle(cssom::CssRuleRecord),
+    CssKeyframe(cssom::CssKeyframeRecord),
+    /// The live declaration block of a rule or keyframe, or the descriptors of
+    /// an `@font-face` rule.
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    CssRuleStyle(cssom::CssStyleRecord),
+    /// The live media query list of an `@media` rule.
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    CssMediaList(cssom::CssRuleRecord),
     /// The result of `getComputedStyle()`: a live, read-only declaration.
     #[cfg(any(feature = "v8", feature = "quickjs"))]
     ComputedStyle(computed_style::ComputedStyleRecord),
@@ -487,9 +494,13 @@ impl HostRecord {
             #[cfg(any(feature = "v8", feature = "quickjs"))]
             HostRecord::CssRuleList(_) => "CSSRuleList",
             #[cfg(any(feature = "v8", feature = "quickjs"))]
-            HostRecord::CssStyleRule(_) => "CSSStyleRule",
+            HostRecord::CssRule(rule) => rule.interface_name(),
             #[cfg(any(feature = "v8", feature = "quickjs"))]
-            HostRecord::CssRuleStyle(_) => "CSSStyleProperties",
+            HostRecord::CssKeyframe(_) => "CSSKeyframeRule",
+            #[cfg(any(feature = "v8", feature = "quickjs"))]
+            HostRecord::CssRuleStyle(style) => style.interface_name(),
+            #[cfg(any(feature = "v8", feature = "quickjs"))]
+            HostRecord::CssMediaList(_) => "MediaList",
             #[cfg(any(feature = "v8", feature = "quickjs"))]
             HostRecord::ComputedStyle(_) => "CSSStyleProperties",
             HostRecord::StyleSheetList => "StyleSheetList",
@@ -10106,8 +10117,10 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
         #[cfg(any(feature = "v8", feature = "quickjs"))]
         HostRecord::CssSheet(_)
         | HostRecord::CssRuleList(_)
-        | HostRecord::CssStyleRule(_)
+        | HostRecord::CssRule(_)
+        | HostRecord::CssKeyframe(_)
         | HostRecord::CssRuleStyle(_)
+        | HostRecord::CssMediaList(_)
         | HostRecord::ComputedStyle(_) => return None,
     };
     match params.url {
@@ -10142,8 +10155,10 @@ fn host_pairs(slab: &HostSlab, key: HostKey) -> Option<Vec<(String, String)>> {
             #[cfg(any(feature = "v8", feature = "quickjs"))]
             HostRecord::CssSheet(_)
             | HostRecord::CssRuleList(_)
-            | HostRecord::CssStyleRule(_)
+            | HostRecord::CssRule(_)
+            | HostRecord::CssKeyframe(_)
             | HostRecord::CssRuleStyle(_)
+            | HostRecord::CssMediaList(_)
             | HostRecord::ComputedStyle(_) => None,
         },
         None => Some(params.list.clone()),
@@ -10284,9 +10299,13 @@ enum HostLink {
     #[cfg(any(feature = "v8", feature = "quickjs"))]
     CssRuleList,
     #[cfg(any(feature = "v8", feature = "quickjs"))]
-    CssStyleRule,
+    CssRule,
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    CssKeyframe,
     #[cfg(any(feature = "v8", feature = "quickjs"))]
     CssRuleStyle,
+    #[cfg(any(feature = "v8", feature = "quickjs"))]
+    CssMediaList,
     /// A computed-style declaration names a node by generational reference.
     #[cfg(any(feature = "v8", feature = "quickjs"))]
     ComputedStyle,
@@ -10440,9 +10459,13 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         #[cfg(any(feature = "v8", feature = "quickjs"))]
         Some(HostRecord::CssRuleList(_)) => HostLink::CssRuleList,
         #[cfg(any(feature = "v8", feature = "quickjs"))]
-        Some(HostRecord::CssStyleRule(_)) => HostLink::CssStyleRule,
+        Some(HostRecord::CssRule(_)) => HostLink::CssRule,
+        #[cfg(any(feature = "v8", feature = "quickjs"))]
+        Some(HostRecord::CssKeyframe(_)) => HostLink::CssKeyframe,
         #[cfg(any(feature = "v8", feature = "quickjs"))]
         Some(HostRecord::CssRuleStyle(_)) => HostLink::CssRuleStyle,
+        #[cfg(any(feature = "v8", feature = "quickjs"))]
+        Some(HostRecord::CssMediaList(_)) => HostLink::CssMediaList,
         #[cfg(any(feature = "v8", feature = "quickjs"))]
         Some(HostRecord::ComputedStyle(_)) => HostLink::ComputedStyle,
         None => return freed,
@@ -10483,8 +10506,10 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
         #[cfg(any(feature = "v8", feature = "quickjs"))]
         HostLink::CssSheet
         | HostLink::CssRuleList
-        | HostLink::CssStyleRule
+        | HostLink::CssRule
+        | HostLink::CssKeyframe
         | HostLink::CssRuleStyle
+        | HostLink::CssMediaList
         | HostLink::ComputedStyle => {
             free_record(slab, key, &mut freed);
         }

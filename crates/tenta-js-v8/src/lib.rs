@@ -1372,6 +1372,102 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the CSSStyleRule interface");
+            tenta_js::bindings::install_css_condition_rule::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the CSSConditionRule interface");
+            tenta_js::bindings::install_css_media_rule::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the CSSMediaRule interface");
+            tenta_js::bindings::install_media_list::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the MediaList interface");
+            tenta_js::bindings::install_css_supports_rule::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the CSSSupportsRule interface");
+            tenta_js::bindings::install_css_layer_block_rule::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the CSSLayerBlockRule interface");
+            tenta_js::bindings::install_css_layer_statement_rule::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the CSSLayerStatementRule interface");
+            tenta_js::bindings::install_css_scope_rule::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the CSSScopeRule interface");
+            tenta_js::bindings::install_css_namespace_rule::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the CSSNamespaceRule interface");
+            tenta_js::bindings::install_css_property_rule::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the CSSPropertyRule interface");
+            tenta_js::bindings::install_css_keyframes_rule::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the CSSKeyframesRule interface");
+            tenta_js::bindings::install_css_keyframe_rule::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the CSSKeyframeRule interface");
+            tenta_js::bindings::install_css_font_face_rule::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the CSSFontFaceRule interface");
+            tenta_js::bindings::install_css_font_feature_values_rule::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the CSSFontFeatureValuesRule interface");
+            tenta_js::bindings::install_css_nested_declarations::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the CSSNestedDeclarations interface");
+            tenta_js::bindings::install_css_import_rule::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the CSSImportRule interface");
+            tenta_js::bindings::install_css_page_rule::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the CSSPageRule interface");
             tenta_js::bindings::install_css_rule_list::<HostObject>(
                 scope,
                 interface_sink,

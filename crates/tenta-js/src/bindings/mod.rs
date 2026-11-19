@@ -85,6 +85,25 @@ include!(concat!(env!("OUT_DIR"), "/css_style_sheet_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_rule_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_grouping_rule_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_style_rule_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_condition_rule_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_media_rule_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/media_list_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_supports_rule_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_layer_block_rule_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_layer_statement_rule_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_scope_rule_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_namespace_rule_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_property_rule_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_keyframes_rule_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_keyframe_rule_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_font_face_rule_ops.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/css_font_feature_values_rule_ops.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/css_nested_declarations_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_import_rule_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_page_rule_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_rule_list_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_style_declaration_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_style_properties_ops.rs"));
@@ -232,6 +251,34 @@ include!(concat!(env!("OUT_DIR"), "/css_style_sheet_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_rule_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_grouping_rule_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_style_rule_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_condition_rule_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_media_rule_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/media_list_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_supports_rule_register.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/css_layer_block_rule_register.rs"
+));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/css_layer_statement_rule_register.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/css_scope_rule_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_namespace_rule_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_property_rule_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_keyframes_rule_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_keyframe_rule_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_font_face_rule_register.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/css_font_feature_values_rule_register.rs"
+));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/css_nested_declarations_register.rs"
+));
+include!(concat!(env!("OUT_DIR"), "/css_import_rule_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/css_page_rule_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_rule_list_register.rs"));
 include!(concat!(
     env!("OUT_DIR"),
@@ -478,6 +525,41 @@ include!(concat!(env!("OUT_DIR"), "/css_rule_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_grouping_rule_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/css_style_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_condition_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_media_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/media_list_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_supports_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_layer_block_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_layer_statement_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_scope_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_namespace_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_property_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_keyframes_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_keyframe_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_font_face_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(
+    env!("OUT_DIR"),
+    "/css_font_feature_values_rule_v8.rs"
+));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_nested_declarations_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_import_rule_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/css_page_rule_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/css_rule_list_v8.rs"));
 #[cfg(feature = "v8")]
@@ -771,6 +853,41 @@ pub mod quickjs {
     include!(concat!(env!("OUT_DIR"), "/css_grouping_rule_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/css_style_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_condition_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_media_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/media_list_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_supports_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_layer_block_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_layer_statement_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_scope_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_namespace_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_property_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_keyframes_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_keyframe_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_font_face_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/css_font_feature_values_rule_qjs.rs"
+    ));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_nested_declarations_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_import_rule_qjs.rs"));
+    #[cfg(feature = "quickjs")]
+    include!(concat!(env!("OUT_DIR"), "/css_page_rule_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/css_rule_list_qjs.rs"));
     #[cfg(feature = "quickjs")]

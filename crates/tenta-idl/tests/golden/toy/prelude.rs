@@ -2058,6 +2058,26 @@ where
     Ok(v8::Array::new_with_elements(scope, &elements).into())
 }
 
+/// Converts a `FrozenArray<T>` to a JavaScript array that cannot be changed:
+/// the elements are fixed and no property can be added, as WebIDL has it.
+#[cfg(feature = "v8")]
+pub fn frozen_array_to_v8<'s, T, F>(
+    scope: &mut v8::PinScope<'s, '_>,
+    items: Vec<T>,
+    convert: F,
+) -> Result<v8::Local<'s, v8::Value>, JsError>
+where
+    F: FnMut(&mut v8::PinScope<'s, '_>, T) -> Result<v8::Local<'s, v8::Value>, JsError>,
+{
+    let array = sequence_to_v8(scope, items, convert)?;
+    if let Ok(object) = v8::Local::<v8::Object>::try_from(array) {
+        object
+            .set_integrity_level(scope, v8::IntegrityLevel::Frozen)
+            .ok_or_else(pending_js_exception_error)?;
+    }
+    Ok(array)
+}
+
 /// Converts a record to a JavaScript object with own data properties.
 ///
 /// `key` is the *declared* key type's conversion and `convert` the value
@@ -3866,6 +3886,16 @@ pub fn quickjs_sequence_value<'js,T>(ctx:&rquickjs::Ctx<'js>, values:Vec<T>, mut
     let array=rquickjs::Array::new(ctx.clone())?;
     for (index,value) in values.into_iter().enumerate() { quickjs_array_data_property(&array,index,convert(value)?)?; }
     Ok(array.into_value())
+}
+/// A `FrozenArray<T>` as a JavaScript array that cannot be changed. rquickjs
+/// has no call for an object's integrity level, so this asks the realm's
+/// `Object.freeze`, as script would.
+#[cfg(feature = "quickjs")]
+pub fn quickjs_frozen_array_value<'js,T>(ctx:&rquickjs::Ctx<'js>, values:Vec<T>, convert:impl FnMut(T)->rquickjs::Result<rquickjs::Value<'js>>) -> rquickjs::Result<rquickjs::Value<'js>> {
+    let array=quickjs_sequence_value(ctx, values, convert)?;
+    let object: rquickjs::Object = ctx.globals().get("Object")?;
+    let freeze: rquickjs::Function = object.get("freeze")?;
+    freeze.call((array,))
 }
 #[cfg(feature = "quickjs")]
 pub fn quickjs_record_value<'js,K,V>(ctx:&rquickjs::Ctx<'js>, values:Vec<(K,V)>, mut key:impl FnMut(K)->rquickjs::Result<rquickjs::Value<'js>>, mut item:impl FnMut(V)->rquickjs::Result<rquickjs::Value<'js>>) -> rquickjs::Result<rquickjs::Value<'js>> {

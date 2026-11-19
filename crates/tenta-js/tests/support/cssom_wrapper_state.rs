@@ -79,6 +79,57 @@ fn held_rule_keeps_same_object_style_and_child_list_state() {
 }
 
 #[test]
+fn held_sheet_keeps_state_of_at_rules_and_what_hangs_off_them() {
+    assert_retained(
+        "globalThis.sheet=new CSSStyleSheet();\
+         sheet.replaceSync('@media print{a{color:red}} @keyframes k{to{opacity:0}}');\
+         {const media=sheet.cssRules[0];media.note='media';media.media.note='list';\
+         media.cssRules.note='children';media.cssRules[0].note='nested';\
+         sheet.cssRules[1].note='keyframes';}",
+        "[sheet.cssRules[0].note,sheet.cssRules[0].media.note,\
+         sheet.cssRules[0].cssRules.note,sheet.cssRules[0].cssRules[0].note,\
+         sheet.cssRules[1].note].join('|')",
+        "media|list|children|nested|keyframes",
+    );
+}
+
+#[test]
+fn held_sheet_keeps_state_of_keyframes_and_their_styles() {
+    assert_retained(
+        "globalThis.sheet=new CSSStyleSheet();\
+         sheet.replaceSync('@keyframes k{from{opacity:0}to{opacity:1}} @font-face{font-family:X}');\
+         {const rule=sheet.cssRules[0];rule.cssRules.note='list';rule[0].note='frame';\
+         rule[1].style.note='style';sheet.cssRules[1].style.note='descriptors';}",
+        "[sheet.cssRules[0].cssRules.note,sheet.cssRules[0][0].note,\
+         sheet.cssRules[0].cssRules[1].style.note,sheet.cssRules[1].style.note].join('|')",
+        "list|frame|style|descriptors",
+    );
+}
+
+#[test]
+fn held_keyframe_keeps_its_rule_and_sheet_state() {
+    assert_retained(
+        "globalThis.frame=(()=>{const sheet=new CSSStyleSheet();\
+         sheet.replaceSync('@keyframes k{from{opacity:0}}');sheet.note='sheet';\
+         const rule=sheet.cssRules[0];rule.note='rule';return rule[0]})();",
+        "[frame.parentRule.note,frame.parentStyleSheet.note,frame.keyText].join('|')",
+        "rule|sheet|0%",
+    );
+}
+
+#[test]
+fn held_media_list_keeps_the_rule_it_writes_to() {
+    assert_retained(
+        "globalThis.media=(()=>{const sheet=new CSSStyleSheet();\
+         sheet.replaceSync('@media print{a{color:red}}');return sheet.cssRules[0].media})();\
+         media.note='list';",
+        "(()=>{media.appendMedium('screen');const text=media.mediaText;\
+         media.deleteMedium('screen');return [media.note,text,media.mediaText].join('|')})()",
+        "list|print, screen|print",
+    );
+}
+
+#[test]
 fn held_style_keeps_parent_rule_state() {
     assert_retained(
         "globalThis.style=(()=>{const sheet=new CSSStyleSheet();\

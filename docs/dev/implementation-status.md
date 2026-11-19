@@ -104,6 +104,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
 | `DOMMatrix`, `DOMMatrixReadOnly`, `DOMPoint`, `DOMPointReadOnly`, `DOMQuad` (MAT1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `new DOMMatrix(getComputedStyle(el).transform)` threw. The transform list is parsed in the script: no `calc()`, no percentages; not serializable; see the section below |
 | `SVGAnimatedString`, SVG `className` and SVG `<a>` `href` (SVG1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `x.href instanceof SVGAnimatedString` threw, and an SVG element's `className` was a string. Nothing animates; `href` on SVG `<a>` only; see the section below |
+| Every CSS rule kind in CSSOM; lists with an index iterate (CSSOM2) | Implemented on V8 and QuickJS; focused checks passed on both; measured; seen to fix one real page; not independently reviewed | `cssRules[i]` threw for every rule that was not a style rule, and `insertRule()`/`replaceSync()` refused every at-rule. Each rule is now an object of its own interface, group rules take and give up child rules, `@keyframes` exposes its keyframes, and `for…of` works on `cssRules`, `styleSheets`, a declaration and a media list. No `@import` or `@container` rule exists to read; an edit still does not reach layout; see the section below |
 | MCP `browser_network_requests` lists every request of the page (NETLOG1) | Implemented; focused checks passed; measured on real sites; not independently reviewed | The tool listed the document and nothing else. It reads the page's network hub now: scripts, sheets, images, `fetch`, XHR, each hop of a redirect, failures by name. Frames inside the page are not listed; see the section below |
 | An idle callback is page activity (IDLE1) | Corrected on V8; focused check passed and mutation-checked; measured, no difference outside noise | `requestIdleCallback` from tracked script was a tracked zero-delay timer and held the settle open; it is background now, as the provenance definition says; see the section below |
 | `ReadableStream`, its default reader and controller, the queuing strategies, `Response.body` and `Blob.stream()` (ST1) | Implemented on V8 as a script built at first use; focused checks passed; measured; not independently reviewed; **Streams as script rather than WebIDL is a choice the specification may record** | A page could not make or read a stream at all. Default streams only: no byte streams or BYOB readers, no `WritableStream`, `TransformStream`, `pipeTo()` or `pipeThrough()`; a body is delivered as one chunk; a stream is not accepted as a body; see the section below |
@@ -4106,6 +4107,108 @@ at `SVGAnimatedString is not defined`.
   build alternating, 2026-11-19): vuejs.org reported the `ReferenceError`
   in both loads before and nothing in either after. The snapshot is the
   same.
+
+### Every CSS rule kind in CSSOM, and lists that iterate (CSSOM2)
+
+The script view of a stylesheet stopped at style rules. Reading any other
+rule from `cssRules` threw `NotSupportedError`, so a loop over a sheet
+ended at its first `@media`; `insertRule()` and `replaceSync()` refused
+every at-rule with the same error, which is how a CSS-in-JS library or
+Angular CDK's `MediaMatcher` adds `@media`, `@keyframes` and `@font-face`.
+And none of the lists could be walked with `for…of` or spread: `cssRules`
+and `document.styleSheets` had no iterator.
+
+- **Every rule is an object of its kind**, on V8 and QuickJS alike
+  (`idl/cssom/`, `crates/tenta-js/src/bindings/host/cssom.rs`):
+  `CSSStyleRule`, `CSSMediaRule` (`conditionText`, a live `media`),
+  `CSSSupportsRule` (`conditionText`, `matches`), `CSSLayerBlockRule`
+  (`name`), `CSSLayerStatementRule` (`nameList`), `CSSScopeRule` (`start`,
+  `end`), `CSSKeyframesRule`, `CSSKeyframeRule`, `CSSFontFaceRule`,
+  `CSSFontFeatureValuesRule` (`fontFamily`), `CSSNamespaceRule`,
+  `CSSPropertyRule` and `CSSNestedDeclarations` (`style`), with
+  `CSSConditionRule` and `MediaList` behind them. `type` is the legacy
+  number where CSSOM froze one and 0 otherwise. The interface is chosen
+  from the Stylo rule when the wrapper is made; a kind with no interface
+  here would be a plain `CSSRule`, not an exception.
+- **Rules go in and out anywhere a rule list is.** `insertRule()` on a
+  sheet takes any rule Stylo parses; on a group rule (a style rule,
+  `@media`, `@supports`, `@layer`, `@scope`) it parses the rule as it
+  would be parsed in that place, told the kinds of every ancestor, so
+  `& .child {}` is valid under a style rule however many `@media` lie
+  between (`CssStyleSheet::insert_nested_rule`, `delete_nested_rule` in
+  `crates/tenta-css/src/cssom.rs`). A refused rule publishes nothing.
+  `selectorText` of a rule nested in an at-rule is assignable, which it
+  was not.
+- **Keyframes.** `CSSKeyframesRule` has `name` (assignable), `cssRules`,
+  `length`, an indexed getter, `appendRule()`, `deleteRule()` and
+  `findRule()`; a keyframe has `keyText` (assigning text that is not a
+  selector list throws `SyntaxError`) and a live `style`, in which no
+  declaration can be important. A keyframe is not a rule in Stylo's tree,
+  so it has a handle of its own (`CssKeyframeHandle`).
+- **`@font-face` descriptors** read through `rule.style`
+  (`getPropertyValue('src')`, `length`, `item()`, `cssText`), from the
+  rule's serialization. They are read only: assigning changes nothing.
+- **`MediaList`** reads and rewrites the rule's query list
+  (`mediaText`, `length`, `item()`, `appendMedium()`, `deleteMedium()`).
+  Text that is not exactly one query is not appended; Stylo's own
+  `append_medium` stops at the first query it can read.
+- **Lists iterate.** The generator now follows WebIDL's rule that an
+  interface with an indexed getter and an integer `length` has
+  `@@iterator` even without `iterable<>`
+  (`crates/tenta-idl/src/codegen/legacy.rs`, `has_indexed_iterator`):
+  `CSSRuleList`, `StyleSheetList`, `CSSStyleDeclaration`, `MediaList`,
+  `DOMRectList` and `CSSKeyframesRule`. A returned `FrozenArray` is
+  frozen, which `nameList` is the first to need.
+- **Not there.** `@import` is not among `cssRules` (the sheets script
+  sees are parsed without a loader) and cannot be inserted; `@namespace`
+  cannot be inserted. Stylo's Servo configuration does not parse
+  `@container`, `@page`, `@counter-style` or `@starting-style` at all, so
+  inserting one is a `SyntaxError` and none is listed; `CSSImportRule`
+  and `CSSPageRule` exist as interface objects only, and
+  `CSSContainerRule` is deliberately absent. `CSSMediaRule.matches` is
+  missing (it takes the page's device). `StyleSheet.media` is missing.
+  **An edit still does not reach layout**: a rule inserted by script is
+  read back by script and not applied by the render session, so a page
+  styled through `insertRule()` is unstyled in a screenshot and in
+  `getComputedStyle()`; `document.adoptedStyleSheets` does not exist.
+  That is the next package.
+- **Checks:** `crates/tenta-css/tests/cssom.rs` and
+  `constructed_sheet.rs` (insertion and deletion at every level, the
+  attributes of each kind, media lists, keyframes, descriptors, the depth
+  limit); `crates/tenta-js/tests/support/cssom_sheet.rs` and
+  `cssom_wrapper_state.rs`, which both engines run (interfaces and
+  `type`, each attribute, group mutation, keyframes, descriptors,
+  receiver checks across kinds, and that an expando on a media list, a
+  keyframe or its style survives collection while the sheet is held);
+  `crates/tenta-js-v8/tests/dom_iteration.rs`
+  `lists_with_an_indexed_getter_iterate_without_declaring_it`;
+  `crates/tenta-idl/tests/codegen.rs`
+  `an_indexed_getter_with_a_length_iterates_without_an_iterable_declaration`.
+  The workspace passed 5045 of 5045 and the feature set 606 of 606; fmt, both Clippy runs, `lint-deps`, `idl-manifest` and
+  `cargo deny` were clean.
+- **Measured** (release, against `c0b7fe6`, interleaved, 2026-11-19).
+  The table that gives a rule its one object was a list searched from
+  the start; it is a hash table by the rule's address now. Reading
+  `selectorText` and `style.length` of every rule of a sheet once:
+  2,000 rules 19.2 ms -> 13.0 ms p50 (19.7 -> 13.3 p95), 10,000 rules
+  360 ms -> 155 ms p50 (371 -> 162 p95). Reading rules that already have
+  an object is linear now (16,000 rules: 152 ms -> 3.6 ms); making the
+  objects the first time is still more than linear (16,000 rules: 326 ms
+  -> 130 ms). The suspected cause, the wrapper checkpoint that walks every
+  provisional root, was not measured. Unrelated paths
+  did not move: building an engine 2.64 ms -> 2.55 ms p50 and its
+  preludes 1.63 ms -> 1.57 ms; `S-dom-calls` `has` 26.08 -> 25.95 ns and
+  `get` 80.95 -> 81.47 ns, RSS 35.0 -> 35.1 MiB; `S-js-xhr` navigation
+  8.88/9.26 -> 8.92/9.80 ms p50/p95, RSS 31.6 -> 32.0 MiB.
+- **On real pages** (release CLI over MCP, two loads of each build
+  alternating, 2026-11-19): angular.dev reported two
+  `NotSupportedError: UnsupportedRuleType` errors in both loads before
+  (Angular CDK inserting an `@media` rule) and none after. A script that
+  walks every rule of every sheet could not start before
+  (`document.styleSheets is not iterable`); after, it reads 865 rules on
+  angular.dev (81 `@media`, 9 `@keyframes` with 18 keyframes, 5
+  `@property`) and 5,643 on nytimes.com (802 `@media`, 227 `@font-face`
+  with their families, 7 `@keyframes`).
 
 ### MCP lists every request of the page (NETLOG1)
 

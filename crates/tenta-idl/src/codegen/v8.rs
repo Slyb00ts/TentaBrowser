@@ -397,6 +397,12 @@ fn install_function(model: &Model, interface: &Interface, bound: &str, out: &mut
         }
     }
 
+    if crate::codegen::legacy::has_indexed_iterator(model, interface) {
+        out.push_str(
+            "    {\n        // An indexed getter and an integer `length` iterate as an array does.\n        let key = v8::Symbol::get_iterator(scope);\n        prototype.set_intrinsic_data_property(\n            key.into(),\n            v8::Intrinsic::ArrayProtoValues,\n            v8::PropertyAttribute::DONT_ENUM,\n        );\n    }\n",
+        );
+    }
+
     let _ = write!(
         out,
         "    {{\n        \

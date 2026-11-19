@@ -1,7 +1,7 @@
-// Constructed sheets and live top-level style rules. The CSSStyleSheetInit
-// dictionary, asynchronous replace(), and attached-sheet loading follow in a
-// separate CSSOM package. Valid unsupported rule kinds are rejected before a
-// mutation rather than exposed through an incorrect generic CSSRule wrapper.
+// Constructed sheets and the sheets of `<style>` and `<link>`. The
+// CSSStyleSheetInit dictionary and asynchronous replace() are not here yet.
+// insertRule() takes any rule Stylo parses, except `@import` (the sheet has
+// no loader to fetch one with) and `@namespace`.
 [Exposed=Window]
 interface CSSStyleSheet : StyleSheet {
   constructor();

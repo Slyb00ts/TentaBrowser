@@ -351,3 +351,42 @@ fn the_iterator_is_the_shared_array_values_intrinsic() {
         "true|true|true|false"
     );
 }
+
+/// An interface with an indexed getter and a `length` iterates as an array
+/// does even though it declares no `iterable<>`; it gets `@@iterator` and none
+/// of `forEach`, `keys`, `values` or `entries`.
+#[test]
+fn lists_with_an_indexed_getter_iterate_without_declaring_it() {
+    assert_eq!(
+        eval(
+            r#"
+            document.body.innerHTML =
+                '<style>a { color: red } @media print { b { color: blue } }</style>' +
+                '<style>c { float: left }</style><p style="color: red; float: left"></p>';
+            const sheets = [...document.styleSheets];
+            const kinds = [];
+            for (const sheet of document.styleSheets) {
+                for (const rule of sheet.cssRules) kinds.push(rule.constructor.name);
+            }
+            const [first] = sheets[0].cssRules;
+            const media = sheets[0].cssRules[1].media;
+            const style = document.querySelector('p').style;
+            [
+                sheets.length,
+                kinds.join(','),
+                first.selectorText,
+                [...media].join(','),
+                [...style].join(','),
+                [...first.style].join(','),
+                CSSRuleList.prototype[Symbol.iterator] === Array.prototype.values,
+                Object.getOwnPropertyDescriptor(CSSRuleList.prototype, Symbol.iterator).enumerable,
+                typeof document.styleSheets.forEach,
+                typeof sheets[0].cssRules.entries,
+                Array.from(sheets[1].cssRules, (rule) => rule.cssText).join(''),
+            ].join('|');
+        "#
+        ),
+        "2|CSSStyleRule,CSSMediaRule,CSSStyleRule|a|print|color,float|color|true|false|\
+         undefined|undefined|c { float: left; }"
+    );
+}

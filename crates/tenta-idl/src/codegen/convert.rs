@@ -232,9 +232,13 @@ pub fn to_v8(ty: &Type, scope: &str, value: &str) -> String {
         Type::Callback(_) | Type::CallbackInterface(_) | Type::Promise(_) => {
             format!("value_to_v8({scope}, {value}.bits())")
         }
-        Type::Sequence(inner) | Type::FrozenArray(inner) | Type::ObservableArray(inner) => {
+        Type::Sequence(inner) | Type::ObservableArray(inner) => {
             let element = to_v8(inner, "scope", "item");
             format!("sequence_to_v8({scope}, {value}, |scope, item| {element})")
+        }
+        Type::FrozenArray(inner) => {
+            let element = to_v8(inner, "scope", "item");
+            format!("frozen_array_to_v8({scope}, {value}, |scope, item| {element})")
         }
         Type::Record(key, inner) => {
             let key = record_key_to_v8(key);

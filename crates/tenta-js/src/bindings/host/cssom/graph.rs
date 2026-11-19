@@ -24,8 +24,10 @@ pub fn is_css_host(host: &HostObject) -> bool {
         Some(
             HostRecord::CssSheet(_)
                 | HostRecord::CssRuleList(_)
-                | HostRecord::CssStyleRule(_)
+                | HostRecord::CssRule(_)
+                | HostRecord::CssKeyframe(_)
                 | HostRecord::CssRuleStyle(_)
+                | HostRecord::CssMediaList(_)
         )
     )
 }
@@ -45,8 +47,9 @@ pub struct CssWrapperGraph {
 enum RecordKind {
     Sheet,
     List(Option<CssRuleHandle>),
+    /// A rule, or an object that belongs to one rule and is reached from it
+    /// alone: its declaration block or its media list.
     Rule(CssRuleHandle),
-    Style(CssRuleHandle),
 }
 
 struct Record {
@@ -178,11 +181,14 @@ pub fn snapshot_wrapper_graph(
                 Rc::clone(&list.sheet),
                 RecordKind::List(list.parent.clone()),
             ),
-            Some(HostRecord::CssStyleRule(rule)) => {
-                (Rc::clone(&rule.sheet), RecordKind::Rule(rule.rule.clone()))
+            Some(HostRecord::CssRule(rule) | HostRecord::CssMediaList(rule)) => {
+                (rule.sheet(), RecordKind::Rule(rule.graph_rule()))
             }
-            Some(HostRecord::CssRuleStyle(rule)) => {
-                (Rc::clone(&rule.sheet), RecordKind::Style(rule.rule.clone()))
+            Some(HostRecord::CssKeyframe(keyframe)) => {
+                (keyframe.sheet(), RecordKind::Rule(keyframe.graph_rule()))
+            }
+            Some(HostRecord::CssRuleStyle(style)) => {
+                (style.sheet(), RecordKind::Rule(style.graph_rule()))
             }
             _ => continue,
         };
@@ -220,7 +226,7 @@ pub fn snapshot_wrapper_graph(
                     empty
                 }
                 RecordKind::List(None) => current,
-                RecordKind::List(Some(parent)) if parent.child_count() == 0 => {
+                RecordKind::List(Some(parent)) if super::list_length(&parent) == 0 => {
                     let owner = builder.group(component(&parent, &top_rules));
                     let empty = builder.group(Component::EmptyList(record.bits));
                     builder.groups[owner].targets.insert(empty);
@@ -235,7 +241,7 @@ pub fn snapshot_wrapper_graph(
                     }
                     owner
                 }
-                RecordKind::Rule(rule) | RecordKind::Style(rule) => {
+                RecordKind::Rule(rule) => {
                     let owner = builder.group(component(&rule, &top_rules));
                     if owner != current && checked_sheet_links.insert(owner) {
                         builder.groups[owner].reaches_sheet = rule

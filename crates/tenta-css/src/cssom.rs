@@ -12,15 +12,15 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc as StdArc, Mutex, Once};
 
 use cssparser::{
-    AtRuleParser, CowRcStr, ParseError, Parser, ParserInput, ParserState, QualifiedRuleParser,
-    ToCss, parse_one_rule,
+    AtRuleParser, CowRcStr, DeclarationParser, ParseError, Parser, ParserInput, ParserState,
+    QualifiedRuleParser, RuleBodyItemParser, RuleBodyParser, ToCss, parse_one_rule,
 };
 use selectors::parser::{ParseRelative, SelectorList};
 use servo_arc::Arc;
 use style::context::QuirksMode;
 use style::device::Device;
 use style::invalidation::stylesheets::RuleChangeKind;
-use style::media_queries::MediaList;
+use style::media_queries::{MediaList, MediaQuery};
 use style::parser::ParserContext;
 use style::properties::declaration_block::{
     SourcePropertyDeclarationUpdate, parse_one_declaration_into,
@@ -30,13 +30,16 @@ use style::properties::{
     SourcePropertyDeclaration, parse_style_attribute,
 };
 use style::selector_parser::{SelectorImpl, SelectorParser};
-use style::shared_lock::{SharedRwLock, SharedRwLockReadGuard, ToCssWithGuard};
+use style::shared_lock::{Locked, SharedRwLock, SharedRwLockReadGuard, ToCssWithGuard};
 use style::stylesheet_set::DocumentStylesheetSet;
+use style::stylesheets::KeyframesRule;
+use style::stylesheets::keyframes_rule::{Keyframe, KeyframeSelectors};
 use style::stylesheets::supports_rule::parse_condition_or_declaration;
 use style::stylesheets::{
     AllowImportRules, CssRule, CssRuleTypes, CssRules, CustomMediaMap, DocumentStyleSheet, Origin,
     OriginSet, RulesMutateError, Stylesheet, StylesheetContents, StylesheetLoader, UrlExtraData,
 };
+use style::values::KeyframesName;
 use style_traits::ParsingMode;
 use url::Url;
 
@@ -53,10 +56,10 @@ pub enum CssomError {
     HierarchyRequest,
     /// The rule cannot be removed in the sheet's current state.
     InvalidState,
-    /// This native API does not model the rule's non-style nested context.
+    /// What was to be removed is not there.
+    NotFound,
+    /// The rule has no child rule list of its own to change.
     UnsupportedRuleContext,
-    /// The constructed-sheet JS bridge has no concrete interface for this rule.
-    UnsupportedRuleType,
     /// A rule tree is too deep to serialize safely into a nested snapshot.
     DepthLimit,
 }
@@ -267,7 +270,14 @@ impl CssDeclarationBlock {
     /// value removes a property before the priority is checked, per CSSOM.
     /// Returns whether the effective declaration block changed.
     pub fn set_property(&mut self, name: &str, value: &str, priority: &str) -> bool {
-        set_property_in_block(&mut self.block, &self.url_data, name, value, priority)
+        set_property_in_block(
+            &mut self.block,
+            &self.url_data,
+            CssRuleType::Style,
+            name,
+            value,
+            priority,
+        )
     }
 
     /// Remove a property, returning its CSSOM value before removal.
@@ -290,6 +300,7 @@ fn property_value_in_block(block: &PropertyDeclarationBlock, name: &str) -> Stri
 fn set_property_in_block(
     block: &mut PropertyDeclarationBlock,
     url_data: &UrlExtraData,
+    kind: CssRuleType,
     name: &str,
     value: &str,
     priority: &str,
@@ -306,7 +317,13 @@ fn set_property_in_block(
     }
     let importance = match priority {
         "" => Importance::Normal,
-        priority if priority.eq_ignore_ascii_case("important") => Importance::Important,
+        // A keyframe's declarations cannot be important.
+        priority
+            if priority.eq_ignore_ascii_case("important")
+                && !CssRuleTypes::IMPORTANT_FORBIDDEN.contains(kind) =>
+        {
+            Importance::Important
+        }
         _ => return false,
     };
     let mut source = SourcePropertyDeclaration::default();
@@ -319,7 +336,7 @@ fn set_property_in_block(
         None,
         ParsingMode::DEFAULT,
         QuirksMode::NoQuirks,
-        CssRuleType::Style,
+        kind,
     )
     .is_err()
     {
@@ -341,6 +358,79 @@ fn remove_property_from_block(block: &mut PropertyDeclarationBlock, name: &str) 
     let value = property_value_in_block(block, name);
     block.remove_property(&id, index);
     Some(value)
+}
+
+/// The descriptors of an `@property` rule, each as it serializes. A
+/// descriptor the rule leaves out is `None`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CssPropertyRegistration {
+    /// The custom property's name, with its `--`.
+    pub name: String,
+    pub syntax: Option<String>,
+    /// `true` or `false`.
+    pub inherits: Option<String>,
+    pub initial_value: Option<String>,
+}
+
+/// Reads `name: value;` pairs out of a serialized descriptor block. The text
+/// is Stylo's own serialization, so every declaration is well formed; this
+/// only has to find where each value ends, which cssparser's tokenizer knows
+/// (a `;` inside a string or a `url()` is not one).
+fn descriptor_list(body: &str) -> Vec<(String, String)> {
+    struct Descriptors;
+    impl<'i> DeclarationParser<'i> for Descriptors {
+        type Declaration = (String, String);
+        type Error = ();
+        fn parse_value<'t>(
+            &mut self,
+            name: CowRcStr<'i>,
+            input: &mut Parser<'i, 't>,
+            _start: &ParserState,
+        ) -> Result<Self::Declaration, ParseError<'i, ()>> {
+            let start = input.position();
+            consume_generic_tokens(input);
+            Ok((name.to_string(), input.slice_from(start).trim().to_owned()))
+        }
+    }
+    impl<'i> AtRuleParser<'i> for Descriptors {
+        type Prelude = ();
+        type AtRule = (String, String);
+        type Error = ();
+    }
+    impl<'i> QualifiedRuleParser<'i> for Descriptors {
+        type Prelude = ();
+        type QualifiedRule = (String, String);
+        type Error = ();
+    }
+    impl<'i> RuleBodyItemParser<'i, (String, String), ()> for Descriptors {
+        fn parse_declarations(&self) -> bool {
+            true
+        }
+        fn parse_qualified(&self) -> bool {
+            false
+        }
+    }
+    let mut input = ParserInput::new(body);
+    let mut input = Parser::new(&mut input);
+    RuleBodyParser::new(&mut input, &mut Descriptors)
+        .flatten()
+        .collect()
+}
+
+/// One media query, when `text` is exactly one. Stylo's own
+/// `MediaList::append_medium` stops at the first query it can read and
+/// ignores what follows, which would take `print and nonsense` as `print`.
+fn parse_one_medium(context: &ParserContext<'_>, text: &str) -> Option<MediaQuery> {
+    let mut input = ParserInput::new(text);
+    let mut input = Parser::new(&mut input);
+    input
+        .parse_entirely(|input| MediaQuery::parse(context, input))
+        .ok()
+}
+
+/// The serialization of a value that is written without a lock guard.
+fn serialized<T: style_traits::ToCss>(value: &T) -> String {
+    style_traits::ToCss::to_css_string(value)
 }
 
 /// A read snapshot of one Stylo rule. Child rules preserve CSSOM nesting.
@@ -406,9 +496,10 @@ fn check_rule_depth(
     Ok(())
 }
 
-// The JavaScript bridge exposes concrete CSSStyleRule wrappers only. Inspect
-// the entire candidate before publishing any part of it into a live rule list.
-fn check_supported_style_tree(
+// A rule that script inserts is checked the same way before any part of it is
+// published into a live rule list, so that the list never holds a tree that
+// cannot be read back.
+fn check_inserted_depth(
     rules: &[CssRule],
     guard: &SharedRwLockReadGuard<'_>,
     initial_depth: usize,
@@ -417,9 +508,6 @@ fn check_supported_style_tree(
     while let Some((rule, depth)) = pending.pop() {
         if depth > MAX_RULE_SNAPSHOT_DEPTH {
             return Err(CssomError::DepthLimit);
-        }
-        if !matches!(rule, CssRule::Style(_)) {
-            return Err(CssomError::UnsupportedRuleType);
         }
         pending.extend(rule.children(guard).iter().map(|child| (child, depth + 1)));
     }
@@ -463,6 +551,78 @@ fn rule_identity(rule: &CssRule) -> (CssRuleType, NonNull<()>) {
 
 fn rule_address(rule: &CssRule) -> usize {
     rule_identity(rule).1.as_ptr() as usize
+}
+
+/// Whether this `CssRule` is the last reference to its allocation.
+fn rule_is_unique(rule: &CssRule) -> bool {
+    match rule {
+        CssRule::Style(rule) => rule.is_unique(),
+        CssRule::Namespace(rule) => rule.is_unique(),
+        CssRule::Import(rule) => rule.is_unique(),
+        CssRule::Media(rule) => rule.is_unique(),
+        CssRule::CustomMedia(rule) => rule.is_unique(),
+        CssRule::Container(rule) => rule.is_unique(),
+        CssRule::FontFace(rule) => rule.is_unique(),
+        CssRule::FontFeatureValues(rule) => rule.is_unique(),
+        CssRule::FontPaletteValues(rule) => rule.is_unique(),
+        CssRule::CounterStyle(rule) => rule.is_unique(),
+        CssRule::Keyframes(rule) => rule.is_unique(),
+        CssRule::Margin(rule) => rule.is_unique(),
+        CssRule::Supports(rule) => rule.is_unique(),
+        CssRule::Page(rule) => rule.is_unique(),
+        CssRule::Property(rule) => rule.is_unique(),
+        CssRule::Document(rule) => rule.is_unique(),
+        CssRule::LayerBlock(rule) => rule.is_unique(),
+        CssRule::LayerStatement(rule) => rule.is_unique(),
+        CssRule::Scope(rule) => rule.is_unique(),
+        CssRule::StartingStyle(rule) => rule.is_unique(),
+        CssRule::AppearanceBase(rule) => rule.is_unique(),
+        CssRule::PositionTry(rule) => rule.is_unique(),
+        CssRule::NestedDeclarations(rule) => rule.is_unique(),
+        CssRule::ViewTransition(rule) => rule.is_unique(),
+    }
+}
+
+/// The declaration block of a rule that is made of one: a style rule, or the
+/// declarations that follow a nested rule inside one.
+fn declaration_block(
+    rule: &CssRule,
+    guard: &SharedRwLockReadGuard<'_>,
+) -> Option<Arc<Locked<PropertyDeclarationBlock>>> {
+    match rule {
+        CssRule::Style(rule) => Some(Arc::clone(&rule.read_with(guard).block)),
+        CssRule::NestedDeclarations(rule) => Some(Arc::clone(&rule.read_with(guard).block)),
+        _ => None,
+    }
+}
+
+/// The child rule list a rule keeps, which is what `insertRule()` and
+/// `deleteRule()` on it change.
+enum ChildList {
+    /// The rule has no list of child rules: it is not a grouping rule.
+    NotGrouping,
+    /// A style rule that has had no nested rule so far.
+    Absent,
+    List(Arc<Locked<CssRules>>),
+}
+
+fn child_list(rule: &CssRule, guard: &SharedRwLockReadGuard<'_>) -> ChildList {
+    let list = match rule {
+        CssRule::Style(rule) => match &rule.read_with(guard).rules {
+            Some(rules) => rules,
+            None => return ChildList::Absent,
+        },
+        CssRule::Media(rule) => &rule.rules,
+        CssRule::Supports(rule) => &rule.rules,
+        CssRule::Container(rule) => &rule.rules,
+        CssRule::LayerBlock(rule) => &rule.rules,
+        CssRule::Scope(rule) => &rule.rules,
+        CssRule::StartingStyle(rule) => &rule.rules,
+        CssRule::Document(rule) => &rule.rules,
+        CssRule::Page(rule) => &rule.read_with(guard).rules,
+        _ => return ChildList::NotGrouping,
+    };
+    ChildList::List(Arc::clone(list))
 }
 
 /// CSSOM parent-sheet links are distinct from membership in Stylo's current
@@ -510,7 +670,7 @@ impl SheetLinks {
         // Removing a parent can make its previously marked children unique.
         loop {
             let previous_len = markers.len();
-            markers.retain(|_, rule| !matches!(rule, CssRule::Style(style) if style.is_unique()));
+            markers.retain(|_, rule| !rule_is_unique(rule));
             if markers.len() == previous_len {
                 break;
             }
@@ -561,7 +721,43 @@ struct RuleParent {
     parent: Option<Arc<RuleParent>>,
 }
 
+impl RuleParent {
+    /// What a rule parsed under this one is told about where it is: the kinds
+    /// of this rule and all its ancestors, and the nearest of them that makes
+    /// selectors relative (a style rule or an `@scope`).
+    fn nesting_context(&self) -> (CssRuleTypes, Option<CssRuleType>) {
+        let mut containing = CssRuleTypes::default();
+        let mut relative = None;
+        let mut ancestor = Some(self);
+        while let Some(parent) = ancestor {
+            let kind = parent.rule.rule_type();
+            containing.insert(kind);
+            if relative.is_none() && matches!(kind, CssRuleType::Style | CssRuleType::Scope) {
+                relative = Some(kind);
+            }
+            ancestor = parent.parent.as_deref();
+        }
+        (containing, relative)
+    }
+}
+
 impl CssRuleHandle {
+    /// The nesting context of a child of this rule; see
+    /// [`RuleParent::nesting_context`].
+    fn nesting_context(&self) -> (CssRuleTypes, Option<CssRuleType>) {
+        let kind = self.rule.rule_type();
+        let (mut containing, mut relative) = self
+            .parent
+            .as_deref()
+            .map(RuleParent::nesting_context)
+            .unwrap_or_default();
+        containing.insert(kind);
+        if matches!(kind, CssRuleType::Style | CssRuleType::Scope) {
+            relative = Some(kind);
+        }
+        (containing, relative)
+    }
+
     /// The highest rule still joined to this rule by live `parentRule` links.
     /// A directly deleted child becomes its own component, while deleting an
     /// ancestor leaves the descendants in that ancestor's component.
@@ -646,44 +842,223 @@ impl CssRuleHandle {
         Some(rule.read_with(&guard).selectors.to_css_string())
     }
 
-    /// Read the effective declarations of a style rule from its live Stylo block.
+    /// Whether this rule has a declaration block: a style rule, or the
+    /// declarations that follow a nested rule inside one.
+    pub fn has_style(&self) -> bool {
+        matches!(
+            self.rule,
+            CssRule::Style(_) | CssRule::NestedDeclarations(_)
+        )
+    }
+
+    /// Read the effective declarations of a rule from its live Stylo block.
     pub fn style_declarations(&self) -> Option<CssDeclarationSnapshot> {
-        let CssRule::Style(rule) = &self.rule else {
-            return None;
-        };
         let guard = self.links.0.sheet.shared_lock.read();
-        let rule = rule.read_with(&guard);
-        Some(CssDeclarationSnapshot::from_block(
-            rule.block.read_with(&guard),
-        ))
+        let block = declaration_block(&self.rule, &guard)?;
+        Some(CssDeclarationSnapshot::from_block(block.read_with(&guard)))
     }
 
-    /// Return a CSSOM property value from a style rule's live declarations.
+    /// Return a CSSOM property value from a rule's live declarations.
     pub fn style_property_value(&self, name: &str) -> Option<String> {
-        let CssRule::Style(rule) = &self.rule else {
-            return None;
-        };
         let guard = self.links.0.sheet.shared_lock.read();
-        let rule = rule.read_with(&guard);
-        Some(property_value_in_block(rule.block.read_with(&guard), name))
+        let block = declaration_block(&self.rule, &guard)?;
+        Some(property_value_in_block(block.read_with(&guard), name))
     }
 
-    /// Return a CSSOM property's important flag for a style rule.
+    /// Return a CSSOM property's important flag for a rule's declarations.
     pub fn style_property_is_important(&self, name: &str) -> Option<bool> {
-        let CssRule::Style(rule) = &self.rule else {
-            return None;
-        };
+        let guard = self.links.0.sheet.shared_lock.read();
+        let block = declaration_block(&self.rule, &guard)?;
         let Ok(id) = PropertyId::parse_enabled_for_all_content(name) else {
             return Some(false);
         };
+        Some(block.read_with(&guard).property_priority(&id).important())
+    }
+
+    /// The address of this rule's Stylo allocation: equal for two handles
+    /// exactly when [`Self::same_rule`] holds within one sheet, and not reused
+    /// while any handle to the rule lives.
+    pub fn identity(&self) -> usize {
+        rule_address(&self.rule)
+    }
+
+    /// The font families an `@font-feature-values` rule is for, serialized as
+    /// the rule's prelude.
+    pub fn font_feature_family(&self) -> Option<String> {
+        let CssRule::FontFeatureValues(rule) = &self.rule else {
+            return None;
+        };
+        let names: Vec<String> = rule.family_names.iter().map(serialized).collect();
+        Some(names.join(", "))
+    }
+
+    /// Whether this rule keeps a list of child rules that `insertRule()` and
+    /// `deleteRule()` can change: the kinds CSSOM gives `CSSGroupingRule`.
+    pub fn is_grouping(&self) -> bool {
         let guard = self.links.0.sheet.shared_lock.read();
-        let rule = rule.read_with(&guard);
+        !matches!(child_list(&self.rule, &guard), ChildList::NotGrouping)
+    }
+
+    /// The condition of a conditional group rule as CSSOM's `conditionText`
+    /// has it: the media query list of `@media` and the condition of
+    /// `@supports`. (Stylo's Servo configuration parses no `@container`.)
+    pub fn condition_text(&self) -> Option<String> {
+        match &self.rule {
+            CssRule::Media(_) => self.media_text(),
+            CssRule::Supports(rule) => Some(serialized(&rule.condition)),
+            _ => None,
+        }
+    }
+
+    /// The media query list of an `@media` rule, serialized.
+    pub fn media_text(&self) -> Option<String> {
+        let CssRule::Media(rule) = &self.rule else {
+            return None;
+        };
+        let guard = self.links.0.sheet.shared_lock.read();
+        Some(serialized(rule.media_queries.read_with(&guard)))
+    }
+
+    /// Each media query of an `@media` rule, serialized on its own.
+    pub fn media_queries(&self) -> Option<Vec<String>> {
+        let CssRule::Media(rule) = &self.rule else {
+            return None;
+        };
+        let guard = self.links.0.sheet.shared_lock.read();
         Some(
-            rule.block
+            rule.media_queries
                 .read_with(&guard)
-                .property_priority(&id)
-                .important(),
+                .media_queries
+                .iter()
+                .map(serialized)
+                .collect(),
         )
+    }
+
+    /// Whether the condition of an `@supports` rule held when it was parsed.
+    pub fn supports_matches(&self) -> Option<bool> {
+        match &self.rule {
+            CssRule::Supports(rule) => Some(rule.enabled),
+            _ => None,
+        }
+    }
+
+    /// The name of an `@layer` block; empty for an anonymous layer.
+    pub fn layer_name(&self) -> Option<String> {
+        match &self.rule {
+            CssRule::LayerBlock(rule) => {
+                Some(rule.name.as_ref().map(serialized).unwrap_or_default())
+            }
+            _ => None,
+        }
+    }
+
+    /// The names an `@layer` statement declares, in order.
+    pub fn layer_names(&self) -> Option<Vec<String>> {
+        match &self.rule {
+            CssRule::LayerStatement(rule) => Some(rule.names.iter().map(serialized).collect()),
+            _ => None,
+        }
+    }
+
+    /// The `(start, end)` selector lists of an `@scope` rule; a bound the
+    /// rule does not give is `None`.
+    pub fn scope_bounds(&self) -> Option<(Option<String>, Option<String>)> {
+        let CssRule::Scope(rule) = &self.rule else {
+            return None;
+        };
+        let text = |list: &Option<SelectorList<SelectorImpl>>| {
+            list.as_ref().map(|list| list.to_css_string())
+        };
+        Some((text(&rule.bounds.start), text(&rule.bounds.end)))
+    }
+
+    /// The `(prefix, namespace URL)` of an `@namespace` rule; the default
+    /// namespace has the empty prefix.
+    pub fn namespace(&self) -> Option<(String, String)> {
+        let CssRule::Namespace(rule) = &self.rule else {
+            return None;
+        };
+        let prefix = rule
+            .prefix
+            .as_ref()
+            .map(|prefix| prefix.to_string())
+            .unwrap_or_default();
+        Some((prefix, rule.url.to_string()))
+    }
+
+    /// The name of an `@keyframes` rule: the name itself, whether the rule
+    /// spells it as an identifier or as a string.
+    pub fn keyframes_name(&self) -> Option<String> {
+        let CssRule::Keyframes(rule) = &self.rule else {
+            return None;
+        };
+        let guard = self.links.0.sheet.shared_lock.read();
+        Some(rule.read_with(&guard).name.as_atom().to_string())
+    }
+
+    /// How many keyframes an `@keyframes` rule has.
+    pub fn keyframe_count(&self) -> Option<usize> {
+        let CssRule::Keyframes(rule) = &self.rule else {
+            return None;
+        };
+        let guard = self.links.0.sheet.shared_lock.read();
+        Some(rule.read_with(&guard).keyframes.len())
+    }
+
+    /// The keyframe at `index` of an `@keyframes` rule.
+    pub fn keyframe_at(&self, index: usize) -> Option<CssKeyframeHandle> {
+        let CssRule::Keyframes(rule) = &self.rule else {
+            return None;
+        };
+        let guard = self.links.0.sheet.shared_lock.read();
+        let keyframe = Arc::clone(rule.read_with(&guard).keyframes.get(index)?);
+        Some(CssKeyframeHandle {
+            parent: self.clone(),
+            keyframe,
+        })
+    }
+
+    /// `CSSKeyframesRule.findRule()`: the last keyframe whose selector is
+    /// `selector`, compared as parsed (`from` finds `0%`).
+    pub fn find_keyframe(&self, selector: &str) -> Option<CssKeyframeHandle> {
+        let CssRule::Keyframes(rule) = &self.rule else {
+            return None;
+        };
+        let index = {
+            let guard = self.links.0.sheet.shared_lock.read();
+            rule.read_with(&guard).find_rule(&guard, selector)?
+        };
+        self.keyframe_at(index)
+    }
+
+    /// The descriptors of an `@font-face` rule, each as it serializes, in the
+    /// order the rule serializes them.
+    pub fn font_face_descriptors(&self) -> Option<Vec<(String, String)>> {
+        if !matches!(self.rule, CssRule::FontFace(_)) {
+            return None;
+        }
+        let text = self.css_text().ok()?;
+        let body = text.strip_prefix("@font-face")?.trim();
+        let body = body.strip_prefix('{')?.strip_suffix('}')?;
+        Some(descriptor_list(body))
+    }
+
+    /// What an `@property` rule registers.
+    pub fn property_registration(&self) -> Option<CssPropertyRegistration> {
+        let CssRule::Property(rule) = &self.rule else {
+            return None;
+        };
+        let descriptors = &rule.descriptors;
+        Some(CssPropertyRegistration {
+            name: serialized(&rule.name),
+            syntax: descriptors.syntax.as_ref().map(serialized),
+            inherits: descriptors.inherits.as_ref().map(serialized),
+            initial_value: descriptors
+                .initial_value
+                .as_ref()
+                .map(|value| serialized(&**value)),
+        })
     }
 
     /// Read this rule from its retained Stylo allocation, even if removed.
@@ -814,6 +1189,133 @@ impl CssRuleHandle {
             }
         }
         false
+    }
+}
+
+/// One keyframe of an `@keyframes` rule: what `CSSKeyframeRule` is backed by.
+///
+/// A keyframe is not a rule in Stylo's rule tree, so it has a handle of its
+/// own. Like a rule handle it retains its allocation after it leaves the
+/// rule's list, and stays readable and writable there.
+#[derive(Clone)]
+pub struct CssKeyframeHandle {
+    parent: CssRuleHandle,
+    keyframe: Arc<Locked<Keyframe>>,
+}
+
+impl CssKeyframeHandle {
+    /// The address of the keyframe's allocation; see
+    /// [`CssRuleHandle::identity`].
+    pub fn identity(&self) -> usize {
+        self.keyframe.raw_ptr().as_ptr() as usize
+    }
+
+    /// The `@keyframes` rule this keyframe was read from, whether or not the
+    /// keyframe is still in it.
+    pub fn keyframes_rule(&self) -> &CssRuleHandle {
+        &self.parent
+    }
+
+    fn is_listed(&self) -> bool {
+        let CssRule::Keyframes(rule) = &self.parent.rule else {
+            return false;
+        };
+        let guard = self.parent.links.0.sheet.shared_lock.read();
+        rule.read_with(&guard)
+            .keyframes
+            .iter()
+            .any(|listed| Arc::ptr_eq(listed, &self.keyframe))
+    }
+
+    /// `parentRule`: the `@keyframes` rule while the keyframe is in its list.
+    pub fn parent_rule(&self) -> Option<CssRuleHandle> {
+        self.is_listed().then(|| self.parent.clone())
+    }
+
+    /// `parentStyleSheet`: the sheet of the `@keyframes` rule the keyframe is
+    /// listed in.
+    pub fn has_parent_style_sheet(&self) -> bool {
+        self.is_listed() && self.parent.has_parent_style_sheet()
+    }
+
+    /// Whether the keyframe takes part in the sheet's current rule tree.
+    pub fn is_attached(&self) -> bool {
+        self.is_listed() && self.parent.is_attached()
+    }
+
+    /// `keyText`: the keyframe's selectors, as percentages.
+    pub fn key_text(&self) -> String {
+        let guard = self.parent.links.0.sheet.shared_lock.read();
+        serialized(&self.keyframe.read_with(&guard).selector)
+    }
+
+    pub fn css_text(&self) -> String {
+        let guard = self.parent.links.0.sheet.shared_lock.read();
+        let mut text = String::new();
+        self.keyframe
+            .read_with(&guard)
+            .to_css(&guard, &mut text)
+            .expect("serializing CSS into a String cannot fail");
+        text
+    }
+
+    /// Read the keyframe's declarations from its live Stylo block.
+    pub fn style_declarations(&self) -> CssDeclarationSnapshot {
+        let guard = self.parent.links.0.sheet.shared_lock.read();
+        let keyframe = self.keyframe.read_with(&guard);
+        CssDeclarationSnapshot::from_block(keyframe.block.read_with(&guard))
+    }
+
+    pub fn style_property_value(&self, name: &str) -> String {
+        let guard = self.parent.links.0.sheet.shared_lock.read();
+        let keyframe = self.keyframe.read_with(&guard);
+        property_value_in_block(keyframe.block.read_with(&guard), name)
+    }
+}
+
+/// Something with a declaration block the sheet can rewrite: a rule or a
+/// keyframe.
+trait BlockOwner {
+    /// The kind of rule the declarations are parsed for.
+    const KIND: CssRuleType;
+    fn sheet(&self) -> &Arc<Stylesheet>;
+    fn block(
+        &self,
+        guard: &SharedRwLockReadGuard<'_>,
+    ) -> Option<Arc<Locked<PropertyDeclarationBlock>>>;
+    /// What the sheet's document has to be told after the block changed.
+    fn declarations_changed(&self, sheet: &mut CssStyleSheet) -> Option<SheetChange>;
+}
+
+impl BlockOwner for CssRuleHandle {
+    const KIND: CssRuleType = CssRuleType::Style;
+    fn sheet(&self) -> &Arc<Stylesheet> {
+        &self.links.0.sheet
+    }
+    fn block(
+        &self,
+        guard: &SharedRwLockReadGuard<'_>,
+    ) -> Option<Arc<Locked<PropertyDeclarationBlock>>> {
+        declaration_block(&self.rule, guard)
+    }
+    fn declarations_changed(&self, sheet: &mut CssStyleSheet) -> Option<SheetChange> {
+        sheet.change_after_style_declarations(self)
+    }
+}
+
+impl BlockOwner for CssKeyframeHandle {
+    const KIND: CssRuleType = CssRuleType::Keyframe;
+    fn sheet(&self) -> &Arc<Stylesheet> {
+        &self.parent.links.0.sheet
+    }
+    fn block(
+        &self,
+        guard: &SharedRwLockReadGuard<'_>,
+    ) -> Option<Arc<Locked<PropertyDeclarationBlock>>> {
+        Some(Arc::clone(&self.keyframe.read_with(guard).block))
+    }
+    fn declarations_changed(&self, sheet: &mut CssStyleSheet) -> Option<SheetChange> {
+        self.is_attached().then(|| sheet.full_change())
     }
 }
 
@@ -1020,7 +1522,8 @@ impl CssStyleSheet {
     /// Change the selector list on the existing Stylo style-rule allocation.
     /// CSSOM ignores an invalid selector list instead of throwing. A detached
     /// top-level rule remains mutable, but it cannot invalidate its former
-    /// sheet. Nested style rules use Stylo's relative selector context.
+    /// sheet. A rule under a style rule or an `@scope` is parsed with that
+    /// ancestor's relative selector syntax.
     pub fn set_rule_selector_text(
         &mut self,
         rule: &CssRuleHandle,
@@ -1032,14 +1535,16 @@ impl CssStyleSheet {
         let CssRule::Style(style_rule) = &rule.rule else {
             return Err(CssomError::InvalidState);
         };
-        if rule.parent.is_some()
-            && !rule
-                .parent
-                .as_ref()
-                .is_some_and(|parent| matches!(&parent.rule, CssRule::Style(_)))
+        let relative = match rule
+            .parent
+            .as_deref()
+            .map(RuleParent::nesting_context)
+            .and_then(|(_, relative)| relative)
         {
-            return Err(CssomError::UnsupportedRuleContext);
-        }
+            Some(CssRuleType::Scope) => ParseRelative::ForScope,
+            Some(_) => ParseRelative::ForNesting,
+            None => ParseRelative::No,
+        };
         let parsed = {
             let guard = self.sheet.shared_lock.read();
             let contents = self.sheet.contents.read_with(&guard);
@@ -1051,11 +1556,6 @@ impl CssStyleSheet {
             };
             let mut input = ParserInput::new(selectors);
             let mut input = Parser::new(&mut input);
-            let relative = if rule.parent.is_some() {
-                ParseRelative::ForNesting
-            } else {
-                ParseRelative::No
-            };
             SelectorList::<SelectorImpl>::parse(&parser, &mut input, relative)
         };
         let Ok(parsed) = parsed else {
@@ -1077,31 +1577,175 @@ impl CssStyleSheet {
         Ok(rule.is_attached().then(|| self.full_change()))
     }
 
-    /// Replace a style rule's declaration block without changing rule identity.
+    /// Replace the media query list of an `@media` rule, as assigning
+    /// `mediaText` does. A query that does not parse becomes `not all`.
+    pub fn set_rule_media_text(
+        &mut self,
+        rule: &CssRuleHandle,
+        text: &str,
+    ) -> Result<Option<SheetChange>, CssomError> {
+        self.change_rule_media(rule, |list, context| {
+            let mut input = ParserInput::new(text);
+            let mut input = Parser::new(&mut input);
+            *list = MediaList::parse(context, &mut input);
+            true
+        })
+    }
+
+    /// `MediaList.appendMedium()`: add one query, moving it to the end when it
+    /// is already listed. Text that is not one media query changes nothing.
+    pub fn append_rule_medium(
+        &mut self,
+        rule: &CssRuleHandle,
+        medium: &str,
+    ) -> Result<Option<SheetChange>, CssomError> {
+        self.change_rule_media(rule, |list, context| {
+            let Some(query) = parse_one_medium(context, medium) else {
+                return false;
+            };
+            list.media_queries.retain(|listed| listed != &query);
+            list.media_queries.push(query);
+            true
+        })
+    }
+
+    /// `MediaList.deleteMedium()`: remove one query. `NotFound` when the list
+    /// does not have it.
+    pub fn delete_rule_medium(
+        &mut self,
+        rule: &CssRuleHandle,
+        medium: &str,
+    ) -> Result<Option<SheetChange>, CssomError> {
+        let mut found = false;
+        let change = self.change_rule_media(rule, |list, context| {
+            let Some(query) = parse_one_medium(context, medium) else {
+                return false;
+            };
+            let before = list.media_queries.len();
+            list.media_queries.retain(|listed| listed != &query);
+            found = list.media_queries.len() != before;
+            found
+        })?;
+        if found {
+            Ok(change)
+        } else {
+            Err(CssomError::NotFound)
+        }
+    }
+
+    fn change_rule_media(
+        &mut self,
+        rule: &CssRuleHandle,
+        change: impl FnOnce(&mut MediaList, &mut ParserContext<'_>) -> bool,
+    ) -> Result<Option<SheetChange>, CssomError> {
+        if !Arc::ptr_eq(&self.sheet, &rule.links.0.sheet) {
+            return Err(CssomError::InvalidState);
+        }
+        let CssRule::Media(media_rule) = &rule.rule else {
+            return Err(CssomError::InvalidState);
+        };
+        let url_data = UrlExtraData::from(self.base_url.clone());
+        let mut context = ParserContext::new(
+            Origin::Author,
+            &url_data,
+            Some(CssRuleType::Media),
+            ParsingMode::DEFAULT,
+            QuirksMode::NoQuirks,
+            Default::default(),
+            None,
+            None,
+            Default::default(),
+        );
+        let changed = {
+            let mut guard = self.sheet.shared_lock.write();
+            change(
+                media_rule.media_queries.write_with(&mut guard),
+                &mut context,
+            )
+        };
+        Ok((changed && rule.is_attached()).then(|| self.full_change()))
+    }
+
+    /// Replace a rule's declaration block without changing rule identity.
     /// Invalid declarations are discarded by Stylo, as in CSSOM's cssText setter.
     pub fn set_rule_style_css_text(
         &mut self,
         rule: &CssRuleHandle,
         css: &str,
     ) -> Result<Option<SheetChange>, CssomError> {
-        if !Arc::ptr_eq(&self.sheet, &rule.links.0.sheet) {
+        self.set_style_css_text(rule, css)
+    }
+
+    /// Apply CSSOM setProperty to a rule's live Stylo declaration block.
+    /// Invalid names, values and priorities leave the rule unchanged.
+    pub fn set_rule_style_property(
+        &mut self,
+        rule: &CssRuleHandle,
+        name: &str,
+        value: &str,
+        priority: &str,
+    ) -> Result<Option<SheetChange>, CssomError> {
+        self.set_style_property(rule, name, value, priority)
+    }
+
+    /// Apply CSSOM removeProperty and return its previous serialized value.
+    pub fn remove_rule_style_property(
+        &mut self,
+        rule: &CssRuleHandle,
+        name: &str,
+    ) -> Result<(String, Option<SheetChange>), CssomError> {
+        self.remove_style_property(rule, name)
+    }
+
+    /// [`Self::set_rule_style_css_text`] for the declarations of a keyframe.
+    pub fn set_keyframe_style_css_text(
+        &mut self,
+        keyframe: &CssKeyframeHandle,
+        css: &str,
+    ) -> Result<Option<SheetChange>, CssomError> {
+        self.set_style_css_text(keyframe, css)
+    }
+
+    /// [`Self::set_rule_style_property`] for the declarations of a keyframe,
+    /// where no declaration can be important.
+    pub fn set_keyframe_style_property(
+        &mut self,
+        keyframe: &CssKeyframeHandle,
+        name: &str,
+        value: &str,
+        priority: &str,
+    ) -> Result<Option<SheetChange>, CssomError> {
+        self.set_style_property(keyframe, name, value, priority)
+    }
+
+    /// [`Self::remove_rule_style_property`] for the declarations of a keyframe.
+    pub fn remove_keyframe_style_property(
+        &mut self,
+        keyframe: &CssKeyframeHandle,
+        name: &str,
+    ) -> Result<(String, Option<SheetChange>), CssomError> {
+        self.remove_style_property(keyframe, name)
+    }
+
+    fn owned_block<O: BlockOwner>(
+        &self,
+        owner: &O,
+    ) -> Result<Arc<Locked<PropertyDeclarationBlock>>, CssomError> {
+        if !Arc::ptr_eq(&self.sheet, owner.sheet()) {
             return Err(CssomError::InvalidState);
         }
-        let CssRule::Style(style_rule) = &rule.rule else {
-            return Err(CssomError::InvalidState);
-        };
+        let guard = self.sheet.shared_lock.read();
+        owner.block(&guard).ok_or(CssomError::InvalidState)
+    }
+
+    fn set_style_css_text<O: BlockOwner>(
+        &mut self,
+        owner: &O,
+        css: &str,
+    ) -> Result<Option<SheetChange>, CssomError> {
+        let block = self.owned_block(owner)?;
         let url_data = UrlExtraData::from(self.base_url.clone());
-        let parsed = parse_style_attribute(
-            css,
-            &url_data,
-            None,
-            QuirksMode::NoQuirks,
-            CssRuleType::Style,
-        );
-        let block = {
-            let guard = self.sheet.shared_lock.read();
-            Arc::clone(&style_rule.read_with(&guard).block)
-        };
+        let parsed = parse_style_attribute(css, &url_data, None, QuirksMode::NoQuirks, O::KIND);
         {
             let guard = self.sheet.shared_lock.read();
             if CssDeclarationSnapshot::from_block(block.read_with(&guard)).css_text
@@ -1114,67 +1758,136 @@ impl CssStyleSheet {
             let mut guard = self.sheet.shared_lock.write();
             *block.write_with(&mut guard) = parsed;
         }
-        Ok(self.change_after_style_declarations(rule))
+        Ok(owner.declarations_changed(self))
     }
 
-    /// Apply CSSOM setProperty to a style rule's live Stylo declaration block.
-    /// Invalid names, values and priorities leave the rule unchanged.
-    pub fn set_rule_style_property(
+    fn set_style_property<O: BlockOwner>(
         &mut self,
-        rule: &CssRuleHandle,
+        owner: &O,
         name: &str,
         value: &str,
         priority: &str,
     ) -> Result<Option<SheetChange>, CssomError> {
-        if !Arc::ptr_eq(&self.sheet, &rule.links.0.sheet) {
-            return Err(CssomError::InvalidState);
-        }
-        let CssRule::Style(style_rule) = &rule.rule else {
-            return Err(CssomError::InvalidState);
-        };
-        let block = {
-            let guard = self.sheet.shared_lock.read();
-            Arc::clone(&style_rule.read_with(&guard).block)
-        };
+        let block = self.owned_block(owner)?;
         let url_data = UrlExtraData::from(self.base_url.clone());
         let changed = {
             let mut guard = self.sheet.shared_lock.write();
             set_property_in_block(
                 block.write_with(&mut guard),
                 &url_data,
+                O::KIND,
                 name,
                 value,
                 priority,
             )
         };
-        Ok(changed
-            .then(|| self.change_after_style_declarations(rule))
-            .flatten())
+        Ok(changed.then(|| owner.declarations_changed(self)).flatten())
     }
 
-    /// Apply CSSOM removeProperty and return its previous serialized value.
-    pub fn remove_rule_style_property(
+    fn remove_style_property<O: BlockOwner>(
         &mut self,
-        rule: &CssRuleHandle,
+        owner: &O,
         name: &str,
     ) -> Result<(String, Option<SheetChange>), CssomError> {
-        if !Arc::ptr_eq(&self.sheet, &rule.links.0.sheet) {
-            return Err(CssomError::InvalidState);
-        }
-        let CssRule::Style(style_rule) = &rule.rule else {
-            return Err(CssomError::InvalidState);
-        };
-        let block = {
-            let guard = self.sheet.shared_lock.read();
-            Arc::clone(&style_rule.read_with(&guard).block)
-        };
+        let block = self.owned_block(owner)?;
         let removed = {
             let mut guard = self.sheet.shared_lock.write();
             remove_property_from_block(block.write_with(&mut guard), name)
         };
         match removed {
-            Some(value) => Ok((value, self.change_after_style_declarations(rule))),
+            Some(value) => Ok((value, owner.declarations_changed(self))),
             None => Ok((String::new(), None)),
+        }
+    }
+
+    /// Rename an `@keyframes` rule. Any text is a name: one that is not an
+    /// identifier serializes as a string.
+    pub fn set_keyframes_name(
+        &mut self,
+        rule: &CssRuleHandle,
+        name: &str,
+    ) -> Result<Option<SheetChange>, CssomError> {
+        let keyframes = self.keyframes_of(rule)?;
+        {
+            let mut guard = self.sheet.shared_lock.write();
+            keyframes.write_with(&mut guard).name = KeyframesName::from_ident(name);
+        }
+        Ok(rule.is_attached().then(|| self.full_change()))
+    }
+
+    /// `CSSKeyframesRule.appendRule()`: add one keyframe at the end. Text that
+    /// is not one keyframe changes nothing, as CSS Animations has it.
+    pub fn append_keyframe(
+        &mut self,
+        rule: &CssRuleHandle,
+        css: &str,
+    ) -> Result<Option<SheetChange>, CssomError> {
+        let keyframes = self.keyframes_of(rule)?;
+        let parsed = {
+            let guard = self.sheet.shared_lock.read();
+            let contents = self.sheet.contents.read_with(&guard);
+            Keyframe::parse(css, contents, &self.sheet.shared_lock).ok()
+        };
+        let Some(keyframe) = parsed else {
+            return Ok(None);
+        };
+        {
+            let mut guard = self.sheet.shared_lock.write();
+            keyframes.write_with(&mut guard).keyframes.push(keyframe);
+        }
+        Ok(rule.is_attached().then(|| self.full_change()))
+    }
+
+    /// `CSSKeyframesRule.deleteRule()`: remove the last keyframe whose
+    /// selector is `selector`. No such keyframe changes nothing.
+    pub fn delete_keyframe(
+        &mut self,
+        rule: &CssRuleHandle,
+        selector: &str,
+    ) -> Result<Option<SheetChange>, CssomError> {
+        let keyframes = self.keyframes_of(rule)?;
+        let found = {
+            let guard = self.sheet.shared_lock.read();
+            keyframes.read_with(&guard).find_rule(&guard, selector)
+        };
+        let Some(index) = found else {
+            return Ok(None);
+        };
+        {
+            let mut guard = self.sheet.shared_lock.write();
+            keyframes.write_with(&mut guard).keyframes.remove(index);
+        }
+        Ok(rule.is_attached().then(|| self.full_change()))
+    }
+
+    /// Assign `CSSKeyframeRule.keyText`. `Syntax` when `text` is not a list
+    /// of keyframe selectors.
+    pub fn set_keyframe_key_text(
+        &mut self,
+        keyframe: &CssKeyframeHandle,
+        text: &str,
+    ) -> Result<Option<SheetChange>, CssomError> {
+        if !Arc::ptr_eq(&self.sheet, &keyframe.parent.links.0.sheet) {
+            return Err(CssomError::InvalidState);
+        }
+        let mut input = ParserInput::new(text);
+        let selector = Parser::new(&mut input)
+            .parse_entirely(KeyframeSelectors::parse)
+            .map_err(|_| CssomError::Syntax)?;
+        {
+            let mut guard = self.sheet.shared_lock.write();
+            keyframe.keyframe.write_with(&mut guard).selector = selector;
+        }
+        Ok(keyframe.is_attached().then(|| self.full_change()))
+    }
+
+    fn keyframes_of(&self, rule: &CssRuleHandle) -> Result<Arc<Locked<KeyframesRule>>, CssomError> {
+        if !Arc::ptr_eq(&self.sheet, &rule.links.0.sheet) {
+            return Err(CssomError::InvalidState);
+        }
+        match &rule.rule {
+            CssRule::Keyframes(keyframes) => Ok(Arc::clone(keyframes)),
+            _ => Err(CssomError::InvalidState),
         }
     }
 
@@ -1207,57 +1920,14 @@ impl CssStyleSheet {
         })
     }
 
-    /// Insert exactly one rule using Stylo's CSSOM parser and ordering checks.
+    /// Insert exactly one rule at the top level of the sheet.
+    ///
+    /// CSS Syntax's generic single-rule parse runs first, as CSSOM orders it,
+    /// so malformed text is `Syntax` whatever the index; an `@import` is
+    /// `Syntax` too, because a sheet without a loader cannot fetch one. Stylo
+    /// then parses the grammar and checks the index and the rule's position.
+    /// Nothing is published when any of these refuse.
     pub fn insert_rule(&mut self, css: &str, index: usize) -> Result<SheetChange, CssomError> {
-        let (rules_lock, rule) = {
-            let guard = self.sheet.shared_lock.read();
-            let contents = self.sheet.contents.read_with(&guard);
-            let rules_lock = Arc::clone(&contents.rules);
-            let rule = rules_lock.read_with(&guard).parse_rule_for_insert(
-                &self.sheet.shared_lock,
-                css,
-                contents,
-                index,
-                CssRuleTypes::default(),
-                None,
-                None,
-                AllowImportRules::No,
-            )?;
-            (rules_lock, rule)
-        };
-        // Namespace mutations need a corresponding update to the sheet's
-        // namespace map. Defer those until the sheet can preserve live rule
-        // identities across that update.
-        if matches!(rule, CssRule::Namespace(_)) {
-            return Err(CssomError::InvalidState);
-        }
-        {
-            let mut guard = self.sheet.shared_lock.write();
-            rules_lock
-                .write_with(&mut guard)
-                .0
-                .insert(index, rule.clone());
-        }
-        self.revision = self.revision.saturating_add(1);
-        Ok(SheetChange {
-            kind: SheetChangeKind::Insertion,
-            index: Some(index),
-            revision: self.revision,
-            rule: Some(rule),
-            sheet: Arc::clone(&self.sheet),
-            _prune_on_drop: LinkPruneOnDrop(StdArc::clone(&self.links)),
-        })
-    }
-
-    /// Insert a style-only rule tree for the constructed-sheet JS subset.
-    /// CSS Syntax checks the generic rule and constructed import
-    /// first; Stylo then parses CSS grammar and checks hierarchy. The
-    /// supported-kind gate runs before mutation, leaving rejected rules atomic.
-    pub fn insert_supported_style_rule(
-        &mut self,
-        css: &str,
-        index: usize,
-    ) -> Result<SheetChange, CssomError> {
         if generic_rule_kind(css)? == GenericRuleKind::Import {
             return Err(CssomError::Syntax);
         }
@@ -1275,7 +1945,13 @@ impl CssStyleSheet {
                 None,
                 AllowImportRules::No,
             )?;
-            check_supported_style_tree(std::slice::from_ref(&rule), &guard, 1)?;
+            // Namespace mutations need a corresponding update to the sheet's
+            // namespace map. Defer those until the sheet can preserve live
+            // rule identities across that update.
+            if matches!(rule, CssRule::Namespace(_)) {
+                return Err(CssomError::InvalidState);
+            }
+            check_inserted_depth(std::slice::from_ref(&rule), &guard, 1)?;
             (rules_lock, rule)
         };
         {
@@ -1296,10 +1972,14 @@ impl CssStyleSheet {
         })
     }
 
-    /// Insert a nested style rule into a CSSStyleRule's live child list.
-    /// Stylo parses relative selectors and checks the insertion index before
-    /// the supported-kind preflight; rejection never publishes a partial tree.
-    pub fn insert_supported_nested_style_rule(
+    /// Insert one rule into the child list of a grouping rule: a style rule,
+    /// `@media`, `@supports`, `@container`, `@layer`, `@scope`,
+    /// `@starting-style`, `@document` or `@page`.
+    ///
+    /// The rule is parsed as it would be where it is going: Stylo is told the
+    /// kinds of every ancestor, and whether a style rule or an `@scope` among
+    /// them makes selectors relative. A rejected rule publishes nothing.
+    pub fn insert_nested_rule(
         &mut self,
         parent: &CssRuleHandle,
         css: &str,
@@ -1308,28 +1988,27 @@ impl CssStyleSheet {
         if !Arc::ptr_eq(&self.sheet, &parent.links.0.sheet) {
             return Err(CssomError::InvalidState);
         }
-        let CssRule::Style(style_rule) = &parent.rule else {
-            return Err(CssomError::UnsupportedRuleContext);
-        };
         let parent_has_sheet = parent.has_parent_style_sheet();
         let (rules_lock, needs_install, rule) = {
             let guard = self.sheet.shared_lock.read();
             let contents = self.sheet.contents.read_with(&guard);
-            let existing = style_rule.read_with(&guard).rules.clone();
-            let needs_install = existing.is_none();
-            let rules_lock =
-                existing.unwrap_or_else(|| CssRules::new(Vec::new(), &self.sheet.shared_lock));
+            let (rules_lock, needs_install) = match child_list(&parent.rule, &guard) {
+                ChildList::NotGrouping => return Err(CssomError::UnsupportedRuleContext),
+                ChildList::Absent => (CssRules::new(Vec::new(), &self.sheet.shared_lock), true),
+                ChildList::List(list) => (list, false),
+            };
+            let (containing, relative) = parent.nesting_context();
             let rule = rules_lock.read_with(&guard).parse_rule_for_insert(
                 &self.sheet.shared_lock,
                 css,
                 contents,
                 index,
-                CssRuleTypes::from(CssRuleType::Style),
-                Some(CssRuleType::Style),
+                containing,
+                relative,
                 None,
                 AllowImportRules::No,
             )?;
-            check_supported_style_tree(
+            check_inserted_depth(
                 std::slice::from_ref(&rule),
                 &guard,
                 parent.lineage_depth() + 1,
@@ -1342,16 +2021,16 @@ impl CssStyleSheet {
         {
             let mut guard = self.sheet.shared_lock.write();
             rules_lock.write_with(&mut guard).0.insert(index, rule);
-            if needs_install {
+            if needs_install && let CssRule::Style(style_rule) = &parent.rule {
                 style_rule.write_with(&mut guard).rules = Some(rules_lock);
             }
         }
         Ok(parent.is_attached().then(|| self.full_change()))
     }
 
-    /// Remove one child from a style rule, retaining the removed rule's Arc
-    /// for any JavaScript wrapper that already references it.
-    pub fn delete_supported_nested_style_rule(
+    /// Remove one child from a grouping rule, retaining the removed rule's
+    /// Arc for any JavaScript wrapper that already references it.
+    pub fn delete_nested_rule(
         &mut self,
         parent: &CssRuleHandle,
         index: usize,
@@ -1359,16 +2038,13 @@ impl CssStyleSheet {
         if !Arc::ptr_eq(&self.sheet, &parent.links.0.sheet) {
             return Err(CssomError::InvalidState);
         }
-        let CssRule::Style(style_rule) = &parent.rule else {
-            return Err(CssomError::UnsupportedRuleContext);
-        };
         let rules_lock = {
             let guard = self.sheet.shared_lock.read();
-            style_rule
-                .read_with(&guard)
-                .rules
-                .clone()
-                .ok_or(CssomError::IndexSize)?
+            match child_list(&parent.rule, &guard) {
+                ChildList::NotGrouping => return Err(CssomError::UnsupportedRuleContext),
+                ChildList::Absent => return Err(CssomError::IndexSize),
+                ChildList::List(list) => list,
+            }
         };
         {
             let mut guard = self.sheet.shared_lock.write();
@@ -1413,34 +2089,10 @@ impl CssStyleSheet {
     }
 
     /// Replace the sheet synchronously, as constructed stylesheets do. Stylo
-    /// parses the replacement before the old contents are swapped out.
-    pub fn replace_sync(&mut self, css: &str) -> SheetChange {
-        let contents = StylesheetContents::from_str(
-            css,
-            UrlExtraData::from(self.base_url.clone()),
-            Origin::Author,
-            &self.sheet.shared_lock,
-            None,
-            None,
-            QuirksMode::NoQuirks,
-            AllowImportRules::No,
-            None,
-        );
-        {
-            let mut guard = self.sheet.shared_lock.write();
-            *self.sheet.contents.write_with(&mut guard) = contents;
-        }
-        self.links.replaced();
-        self.full_change()
-    }
-
-    /// Replace a constructed sheet while keeping unsupported concrete rule
-    /// kinds out of the first JS bridge. `AllowImportRules::No` implements
-    /// replaceSync's import removal before the supported-kind preflight.
-    pub fn replace_sync_supported_style_rules(
-        &mut self,
-        css: &str,
-    ) -> Result<SheetChange, CssomError> {
+    /// parses the replacement before the old contents are swapped out;
+    /// `AllowImportRules::No` is `replaceSync()`'s removal of `@import`. A
+    /// replacement nested too deeply to be read back is refused whole.
+    pub fn replace_sync(&mut self, css: &str) -> Result<SheetChange, CssomError> {
         let contents = StylesheetContents::from_str(
             css,
             UrlExtraData::from(self.base_url.clone()),
@@ -1454,7 +2106,7 @@ impl CssStyleSheet {
         );
         {
             let guard = self.sheet.shared_lock.read();
-            check_supported_style_tree(contents.rules(&guard), &guard, 1)?;
+            check_inserted_depth(contents.rules(&guard), &guard, 1)?;
         }
         {
             let mut guard = self.sheet.shared_lock.write();
@@ -1574,26 +2226,22 @@ mod sheet_link_tests {
         sheet.delete_rule(0).unwrap();
 
         sheet
-            .insert_supported_nested_style_rule(&parent, "& .child { color: blue }", 0)
+            .insert_nested_rule(&parent, "& .child { color: blue }", 0)
             .unwrap();
         let child = parent.child_at(0).unwrap();
         assert!(!child.has_parent_style_sheet());
         assert_eq!(sheet.links.marker_count.load(Ordering::Acquire), 1);
 
-        sheet
-            .delete_supported_nested_style_rule(&parent, 0)
-            .unwrap();
+        sheet.delete_nested_rule(&parent, 0).unwrap();
         assert_eq!(sheet.links.marker_count.load(Ordering::Acquire), 1);
         drop(child);
         assert_eq!(sheet.links.marker_count.load(Ordering::Acquire), 0);
 
         sheet
-            .insert_supported_nested_style_rule(&parent, "& .unobserved { color: green }", 0)
+            .insert_nested_rule(&parent, "& .unobserved { color: green }", 0)
             .unwrap();
         assert_eq!(sheet.links.marker_count.load(Ordering::Acquire), 1);
-        sheet
-            .delete_supported_nested_style_rule(&parent, 0)
-            .unwrap();
+        sheet.delete_nested_rule(&parent, 0).unwrap();
         assert_eq!(sheet.links.marker_count.load(Ordering::Acquire), 0);
     }
 }

@@ -315,6 +315,42 @@ fn the_quickjs_glue_names_the_engine_items_it_uses() {
     }
 }
 
+/// WebIDL gives `@@iterator`, and nothing else, to an interface that has an
+/// indexed getter and an integer `length` but declares no `iterable<>`.
+#[test]
+fn an_indexed_getter_with_a_length_iterates_without_an_iterable_declaration() {
+    let source = "interface Rows { getter DOMString? item(unsigned long index); \
+                  readonly attribute unsigned long length; }; \
+                  interface Named { getter DOMString? item(DOMString name); \
+                  readonly attribute unsigned long length; }; \
+                  interface Unsized { getter DOMString? item(unsigned long index); }; \
+                  interface Derived : Rows { };";
+    let model = tenta_idl::parse_webidl(source).expect("the interfaces parse");
+    for (file, expected) in [
+        ("rows", true),
+        ("named", false),
+        ("unsized", false),
+        ("derived", false),
+    ] {
+        let v8 = generated_file(&model, &format!("{file}_v8.rs"));
+        assert_eq!(
+            v8.contents.contains("v8::Symbol::get_iterator(scope)"),
+            expected,
+            "{file}_v8.rs"
+        );
+        assert!(
+            !v8.contents.contains("v8_string(scope, \"forEach\")"),
+            "{file}_v8.rs has the members only `iterable<>` brings"
+        );
+        let qjs = generated_file(&model, &format!("{file}_qjs.rs"));
+        assert_eq!(
+            qjs.contents.contains("PredefinedAtom::SymbolIterator"),
+            expected,
+            "{file}_qjs.rs"
+        );
+    }
+}
+
 /// The generator's own view of a value iterator: `%Array.prototype%` provides
 /// all four members, and `@@iterator` is the same intrinsic as `values`.
 #[test]

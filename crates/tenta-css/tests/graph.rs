@@ -25,9 +25,7 @@ fn graph_components_follow_live_parent_rule_membership() {
     );
     assert!(parent.graph_reaches_parent_style_sheet());
 
-    sheet
-        .delete_supported_nested_style_rule(&parent, 0)
-        .unwrap();
+    sheet.delete_nested_rule(&parent, 0).unwrap();
     assert_ne!(
         child.graph_component_identity(),
         parent.graph_component_identity()
@@ -44,9 +42,7 @@ fn graph_sheet_links_end_at_replacement_epoch() {
     sheet.delete_rule(0).unwrap();
     assert!(parent.graph_reaches_parent_style_sheet());
 
-    sheet
-        .replace_sync_supported_style_rules("c { color: blue }")
-        .unwrap();
+    sheet.replace_sync("c { color: blue }").unwrap();
     assert!(!parent.graph_reaches_parent_style_sheet());
     assert_eq!(
         child.graph_component_identity(),

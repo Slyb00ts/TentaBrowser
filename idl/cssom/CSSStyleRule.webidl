@@ -1,5 +1,5 @@
-// Top-level, childless style rules in constructed sheets. The declaration
-// block remains mutable through the same Stylo rule allocation.
+// A style rule at any depth. The declaration block stays mutable through the
+// same Stylo rule allocation.
 [Exposed=Window]
 interface CSSStyleRule : CSSGroupingRule {
   attribute DOMString selectorText;

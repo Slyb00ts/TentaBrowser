@@ -34,10 +34,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         let started = Instant::now();
         for index in 0..size {
             let css = format!("& .child{index} {{ color: blue }}");
-            if sheet
-                .insert_supported_nested_style_rule(&parent, &css, index)?
-                .is_some()
-            {
+            if sheet.insert_nested_rule(&parent, &css, index)?.is_some() {
                 return Err("detached insertion invalidated a sheet".into());
             }
         }
@@ -48,10 +45,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             return Err("detached child unexpectedly has a sheet link".into());
         }
         for _ in 0..size {
-            if sheet
-                .delete_supported_nested_style_rule(&parent, 0)?
-                .is_some()
-            {
+            if sheet.delete_nested_rule(&parent, 0)?.is_some() {
                 return Err("detached deletion invalidated a sheet".into());
             }
         }

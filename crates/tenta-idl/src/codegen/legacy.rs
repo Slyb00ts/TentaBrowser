@@ -62,6 +62,53 @@ impl<'a> LegacyProperties<'a> {
     }
 }
 
+/// Whether WebIDL gives this interface an `@@iterator` it does not declare.
+///
+/// An interface with an indexed property getter and an integer-typed `length`
+/// attribute iterates the way an array does: its `@@iterator` is
+/// `%Array.prototype.values%` (<https://webidl.spec.whatwg.org/#js-iterator>),
+/// and unlike `iterable<>` nothing else comes with it. That is what makes
+/// `for (const rule of sheet.cssRules)` work. The property belongs to the
+/// interface that declares the getter; one that inherits it reaches the
+/// property through its prototype chain. A `[Global]` interface is left as it
+/// was: no page has been seen to iterate `window`, and its members are not
+/// installed the way a prototype's are.
+pub(super) fn has_indexed_iterator(model: &Model, interface: &Interface) -> bool {
+    if interface.iterable.is_some() || interface.attrs.has("Global") {
+        return false;
+    }
+    let declares_getter = declared_specials(interface).any(|operation| {
+        operation.special == Some(Special::Getter)
+            && matches!(
+                operation.arguments.first().map(|argument| &argument.ty),
+                Some(Type::UnsignedLong)
+            )
+    });
+    if !declares_getter {
+        return false;
+    }
+    let mut current = Some(interface);
+    let mut seen = Vec::new();
+    while let Some(interface) = current {
+        if seen.contains(&interface.name.as_str()) {
+            break;
+        }
+        seen.push(interface.name.as_str());
+        let integer_length = interface.members.iter().any(|member| {
+            matches!(member, Member::Attribute(attribute)
+                if attribute.name == "length" && !attribute.is_static && attribute.ty.is_integer())
+        });
+        if integer_length {
+            return true;
+        }
+        current = interface
+            .parent
+            .as_deref()
+            .and_then(|name| model.interface(name));
+    }
+    false
+}
+
 pub(super) fn declared_specials(interface: &Interface) -> impl Iterator<Item = &Operation> {
     interface
         .members

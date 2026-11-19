@@ -3,8 +3,8 @@
 use style::stylesheet_set::DocumentStylesheetSet;
 use style::stylesheets::{CustomMediaMap, DocumentStyleSheet};
 use tenta_css::{
-    CssDeclarationBlock, CssRuleType, CssStyleSheet, CssomError, SheetChangeKind,
-    supported_property_names, supports_condition, supports_property,
+    CssDeclarationBlock, CssPropertyRegistration, CssRuleType, CssStyleSheet, CssomError,
+    SheetChangeKind, supported_property_names, supports_condition, supports_property,
 };
 use url::Url;
 
@@ -102,7 +102,8 @@ fn cssom_insert_delete_checks_syntax_index_and_hierarchy() {
     );
     assert_eq!(
         sheet.insert_rule("@import url(other.css);", 1).err(),
-        Some(CssomError::HierarchyRequest)
+        Some(CssomError::Syntax),
+        "a sheet without a loader refuses every @import before looking at its position"
     );
     assert_eq!(sheet.rule_count(), 1);
     assert_eq!(sheet.revision(), 0);
@@ -190,7 +191,7 @@ fn replacing_sheet_detaches_old_rules_without_reusing_identity() {
     let old = sheet.rule_at(0).unwrap();
     let old_text = old.css_text().unwrap();
 
-    sheet.replace_sync(".same { color: red }");
+    sheet.replace_sync(".same { color: red }").unwrap();
     let replacement = sheet.rule_at(0).unwrap();
     assert!(!old.same_rule(&replacement));
     assert!(!old.is_attached());
@@ -341,11 +342,14 @@ fn detached_rule_stays_mutable_without_invalidating_its_former_sheet() {
             .unwrap()
             .is_none()
     );
-    assert_eq!(
-        sheet.set_rule_selector_text(&nested, ".detached").err(),
-        Some(CssomError::UnsupportedRuleContext)
+    assert!(
+        sheet
+            .set_rule_selector_text(&nested, ".detached")
+            .unwrap()
+            .is_none(),
+        "a rule under a detached @media changes without invalidating the sheet"
     );
-    assert_eq!(nested.selector_text().as_deref(), Some(".nested"));
+    assert_eq!(nested.selector_text().as_deref(), Some(".detached"));
     assert_eq!(
         nested.style_property_value("color").as_deref(),
         Some("green")
@@ -397,7 +401,7 @@ fn replace_and_disable_notify_the_native_stylo_document_set() {
     set.flush_without_invalidation();
     assert!(!set.has_changed());
 
-    let replaced = sheet.replace_sync(".new { color: green }");
+    let replaced = sheet.replace_sync(".new { color: green }").unwrap();
     assert_eq!(replaced.kind, SheetChangeKind::Full);
     replaced.notify(&mut set, None, &custom_media);
     assert!(set.has_changed());
@@ -451,7 +455,7 @@ fn nested_style_children_keep_parent_identity_through_edits_and_detachment() {
     assert_eq!(parent.child_count(), 0);
 
     let change = sheet
-        .insert_supported_nested_style_rule(&parent, "& .first { color: blue }", 0)
+        .insert_nested_rule(&parent, "& .first { color: blue }", 0)
         .unwrap()
         .unwrap();
     assert_eq!(change.kind, SheetChangeKind::Full);
@@ -462,7 +466,7 @@ fn nested_style_children_keep_parent_identity_through_edits_and_detachment() {
     assert!(first.has_parent_style_sheet());
 
     sheet
-        .insert_supported_nested_style_rule(&parent, "& .before { color: green }", 0)
+        .insert_nested_rule(&parent, "& .before { color: green }", 0)
         .unwrap();
     assert!(parent.child_at(1).unwrap().same_rule(&first));
     let before = parent.child_at(0).unwrap();
@@ -475,9 +479,7 @@ fn nested_style_children_keep_parent_identity_through_edits_and_detachment() {
     );
     assert!(first.selector_text().unwrap().contains(".changed"));
 
-    sheet
-        .delete_supported_nested_style_rule(&parent, 1)
-        .unwrap();
+    sheet.delete_nested_rule(&parent, 1).unwrap();
     assert!(!first.is_attached());
     assert!(first.parent_rule().is_none());
     assert!(!first.has_parent_style_sheet());
@@ -491,7 +493,7 @@ fn nested_style_children_keep_parent_identity_through_edits_and_detachment() {
     assert!(before.has_parent_style_sheet());
     assert!(before.parent_rule().unwrap().same_rule(&parent));
     sheet
-        .insert_supported_nested_style_rule(&parent, "& .late { & .inside { color: red } }", 1)
+        .insert_nested_rule(&parent, "& .late { & .inside { color: red } }", 1)
         .unwrap();
     let late = parent.child_at(1).unwrap();
     let inside = late.child_at(0).unwrap();
@@ -512,58 +514,404 @@ fn nested_style_children_keep_parent_identity_through_edits_and_detachment() {
 }
 
 #[test]
-fn nested_style_mutation_rejects_unsupported_rules_atomically() {
+fn nested_mutation_takes_any_rule_valid_there_and_refuses_atomically() {
     let mut sheet = CssStyleSheet::parse(".outer { color: red }", base_url());
     let parent = sheet.rule_at(0).unwrap();
     assert_eq!(
         sheet
-            .insert_supported_nested_style_rule(&parent, "& .child { color: red }", 1)
+            .insert_nested_rule(&parent, "& .child { color: red }", 1)
             .err(),
         Some(CssomError::IndexSize)
     );
     assert_eq!(
-        sheet
-            .insert_supported_nested_style_rule(&parent, "@media all { & .child {} }", 0)
-            .err(),
-        Some(CssomError::UnsupportedRuleType)
-    );
-    assert_eq!(
-        sheet
-            .insert_supported_nested_style_rule(
-                &parent,
-                "& .child { @media all { & .grandchild {} } }",
-                0,
-            )
-            .err(),
-        Some(CssomError::UnsupportedRuleType)
-    );
-    assert_eq!(
-        sheet.delete_supported_nested_style_rule(&parent, 0).err(),
+        sheet.delete_nested_rule(&parent, 0).err(),
         Some(CssomError::IndexSize)
+    );
+    assert_eq!(
+        sheet
+            .insert_nested_rule(&parent, "@font-face { font-family: X }", 0)
+            .err(),
+        Some(CssomError::HierarchyRequest),
+        "a rule that cannot nest in a style rule is refused"
     );
     assert_eq!(parent.child_count(), 0);
     assert_eq!(sheet.revision(), 0);
 
-    let first = sheet.rule_at(0).unwrap();
+    sheet
+        .insert_nested_rule(&parent, "@media all { & .child { color: blue } }", 0)
+        .unwrap();
+    let media = parent.child_at(0).unwrap();
+    assert_eq!(media.rule_type(), CssRuleType::Media);
+    assert!(media.parent_rule().unwrap().same_rule(&parent));
+
+    // The @media is a grouping rule in its own right, and a rule put in it
+    // still sees the style rule above: `&` and a bare declaration are valid.
+    sheet
+        .insert_nested_rule(&media, "& .grandchild { color: green }", 1)
+        .unwrap();
+    let grandchild = media.child_at(1).unwrap();
+    assert_eq!(grandchild.selector_text().as_deref(), Some("& .grandchild"));
+    assert!(grandchild.parent_rule().unwrap().same_rule(&media));
+    assert!(grandchild.has_parent_style_sheet());
+    sheet
+        .set_rule_selector_text(&grandchild, "& > .renamed")
+        .unwrap();
+    assert_eq!(grandchild.selector_text().as_deref(), Some("& > .renamed"));
+
+    sheet.delete_nested_rule(&media, 0).unwrap();
+    assert!(media.child_at(0).unwrap().same_rule(&grandchild));
+    assert_eq!(media.child_count(), 1);
+
+    let leaf = sheet.rule_at(0).unwrap().child_at(0).unwrap();
+    assert_eq!(
+        CssStyleSheet::parse("@font-face { font-family: X }", base_url())
+            .rule_at(0)
+            .map(|rule| rule.is_grouping()),
+        Some(false)
+    );
+    assert!(leaf.is_grouping());
+}
+
+#[test]
+fn a_top_level_group_takes_rules_parsed_without_a_style_ancestor() {
+    let mut sheet = CssStyleSheet::parse(
+        "@media (min-width: 10px) { .a { color: red } } @layer base { }",
+        base_url(),
+    );
+    let media = sheet.rule_at(0).unwrap();
     assert_eq!(
         sheet
-            .replace_sync_supported_style_rules(
-                ".outer { @supports (display:grid) { & .child {} } }"
-            )
+            .insert_nested_rule(&media, "& { color: red } junk", 0)
             .err(),
-        Some(CssomError::UnsupportedRuleType)
+        Some(CssomError::Syntax)
     );
-    assert!(sheet.rule_at(0).unwrap().same_rule(&first));
-    assert_eq!(sheet.revision(), 0);
+    sheet
+        .insert_nested_rule(
+            &media,
+            "@supports (display: grid) { .b { display: grid } }",
+            1,
+        )
+        .unwrap();
+    sheet
+        .insert_nested_rule(&media, ".c { color: blue }", 0)
+        .unwrap();
+    assert_eq!(media.child_count(), 3);
+    assert_eq!(
+        media.child_at(0).unwrap().selector_text().as_deref(),
+        Some(".c")
+    );
+    assert_eq!(
+        media.child_at(2).unwrap().condition_text().as_deref(),
+        Some("(display: grid)")
+    );
+    assert_eq!(
+        sheet
+            .insert_nested_rule(&media, "@namespace svg url(x);", 0)
+            .err(),
+        Some(CssomError::HierarchyRequest)
+    );
+
+    let layer = sheet.rule_at(1).unwrap();
+    assert_eq!(layer.layer_name().as_deref(), Some("base"));
+    sheet
+        .insert_nested_rule(&layer, ".d { color: red }", 0)
+        .unwrap();
+    assert_eq!(layer.child_count(), 1);
+    assert!(layer.css_text().unwrap().contains(".d"));
+}
+
+#[test]
+fn at_rules_report_what_cssom_reads_from_them() {
+    let sheet = CssStyleSheet::parse(
+        "@namespace svg url(http://www.w3.org/2000/svg); \
+         @layer reset, base.widgets; \
+         @media screen and (min-width: 600px), print { a { color: red } } \
+         @scope (.card) to (.content) { a { color: red } } \
+         @scope { a { color: red } } \
+         @keyframes spin { to { rotate: 1turn } } \
+         @keyframes \"quoted name\" { to { rotate: 1turn } } \
+         @layer { a { color: red } } \
+         @property --gap { syntax: '<length>'; inherits: false; initial-value: 4px } \
+         @supports (display: nonsense) { a { color: red } }",
+        base_url(),
+    );
+    let rule = |index| sheet.rule_at(index).unwrap();
+    assert_eq!(
+        rule(0).namespace(),
+        Some(("svg".to_owned(), "http://www.w3.org/2000/svg".to_owned()))
+    );
+    assert_eq!(
+        rule(1).layer_names(),
+        Some(vec!["reset".to_owned(), "base.widgets".to_owned()])
+    );
+    assert_eq!(
+        rule(2).media_text().as_deref(),
+        Some("screen and (min-width: 600px), print")
+    );
+    assert_eq!(
+        rule(2).media_queries(),
+        Some(vec![
+            "screen and (min-width: 600px)".to_owned(),
+            "print".to_owned()
+        ])
+    );
+    assert_eq!(rule(2).condition_text(), rule(2).media_text());
+    assert_eq!(
+        rule(3).scope_bounds(),
+        Some((Some(".card".to_owned()), Some(".content".to_owned())))
+    );
+    assert_eq!(rule(4).scope_bounds(), Some((None, None)));
+    assert_eq!(rule(5).keyframes_name().as_deref(), Some("spin"));
+    assert_eq!(rule(6).keyframes_name().as_deref(), Some("quoted name"));
+    assert_eq!(rule(7).layer_name().as_deref(), Some(""));
+    assert_eq!(
+        rule(8).property_registration(),
+        Some(CssPropertyRegistration {
+            name: "--gap".to_owned(),
+            syntax: Some("\"<length>\"".to_owned()),
+            inherits: Some("false".to_owned()),
+            initial_value: Some("4px".to_owned()),
+        })
+    );
+    assert_eq!(rule(9).supports_matches(), Some(false));
+    assert_eq!(
+        rule(9).condition_text().as_deref(),
+        Some("(display: nonsense)")
+    );
+    // Each getter answers for its own kind of rule only.
+    assert_eq!(rule(2).layer_name(), None);
+    assert_eq!(rule(5).condition_text(), None);
+}
+
+#[test]
+fn a_media_list_is_rewritten_appended_to_and_deleted_from() {
+    let mut sheet = CssStyleSheet::parse("@media screen { a { color: red } }", base_url());
+    let media = sheet.rule_at(0).unwrap();
+    let style = media.child_at(0).unwrap();
+    assert_eq!(
+        sheet.set_rule_media_text(&style, "print").err(),
+        Some(CssomError::InvalidState)
+    );
+
+    let changed = sheet
+        .set_rule_media_text(&media, "print, (width > 1px)")
+        .unwrap();
+    assert_eq!(
+        changed.map(|change| change.kind),
+        Some(SheetChangeKind::Full)
+    );
+    assert_eq!(media.media_text().as_deref(), Some("print, (width > 1px)"));
+
+    sheet.append_rule_medium(&media, "print").unwrap();
+    assert_eq!(media.media_text().as_deref(), Some("(width > 1px), print"));
+    let revision = sheet.revision();
+    assert!(
+        sheet
+            .append_rule_medium(&media, "and and")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(sheet.revision(), revision);
+
+    sheet.delete_rule_medium(&media, "(width > 1px)").unwrap();
+    assert_eq!(media.media_text().as_deref(), Some("print"));
+    assert_eq!(
+        sheet.delete_rule_medium(&media, "screen").err(),
+        Some(CssomError::NotFound)
+    );
+
+    sheet
+        .set_rule_media_text(&media, "nonsense query here")
+        .unwrap();
+    assert_eq!(media.media_text().as_deref(), Some("not all"));
+    assert!(media.css_text().unwrap().starts_with("@media not all {"));
+}
+
+#[test]
+fn keyframes_are_read_found_appended_and_deleted() {
+    let mut sheet = CssStyleSheet::parse(
+        "@keyframes fade { from { opacity: 0 } 50%, 75% { opacity: .5 } to { opacity: 1 } } \
+         a { color: red }",
+        base_url(),
+    );
+    let rule = sheet.rule_at(0).unwrap();
+    assert_eq!(rule.keyframe_count(), Some(3));
+    assert_eq!(sheet.rule_at(1).unwrap().keyframe_count(), None);
+    assert!(sheet.rule_at(1).unwrap().keyframe_at(0).is_none());
+
+    let first = rule.keyframe_at(0).unwrap();
+    let middle = rule.keyframe_at(1).unwrap();
+    assert_eq!(first.key_text(), "0%");
+    assert_eq!(middle.key_text(), "50%, 75%");
+    assert_eq!(middle.css_text(), "50%, 75% { opacity: 0.5; }");
+    assert_eq!(middle.style_property_value("opacity"), "0.5");
+    assert!(first.parent_rule().unwrap().same_rule(&rule));
+    assert!(first.has_parent_style_sheet());
+    assert!(rule.keyframe_at(3).is_none());
+
+    // The same keyframe is the same allocation however it is reached.
+    assert_eq!(
+        rule.find_keyframe("from").unwrap().identity(),
+        first.identity()
+    );
+    assert_eq!(
+        rule.find_keyframe(" 75% , 50% ").map(|k| k.identity()),
+        None
+    );
+    assert_eq!(
+        rule.find_keyframe("50%,75%").unwrap().identity(),
+        middle.identity()
+    );
+    assert!(rule.find_keyframe("nonsense").is_none());
+
+    let appended = sheet.append_keyframe(&rule, "to { opacity: .9 }").unwrap();
+    assert_eq!(
+        appended.map(|change| change.kind),
+        Some(SheetChangeKind::Full)
+    );
+    assert_eq!(rule.keyframe_count(), Some(4));
+    let revision = sheet.revision();
+    assert!(
+        sheet
+            .append_keyframe(&rule, "not a keyframe")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        sheet
+            .append_keyframe(&rule, "to {} to {}")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(sheet.revision(), revision);
+
+    // findRule and deleteRule take the last keyframe with the selector.
+    let last = rule.find_keyframe("100%").unwrap();
+    assert_eq!(last.style_property_value("opacity"), "0.9");
+    sheet.delete_keyframe(&rule, "to").unwrap();
+    assert_eq!(rule.keyframe_count(), Some(3));
+    assert!(last.parent_rule().is_none());
+    assert!(!last.has_parent_style_sheet());
+    assert_eq!(last.css_text(), "100% { opacity: 0.9; }");
+    assert_eq!(
+        rule.find_keyframe("to")
+            .unwrap()
+            .style_property_value("opacity"),
+        "1"
+    );
+    assert!(sheet.delete_keyframe(&rule, "33%").unwrap().is_none());
+
+    assert_eq!(
+        sheet
+            .append_keyframe(&sheet.rule_at(1).unwrap(), "to {}")
+            .err(),
+        Some(CssomError::InvalidState)
+    );
+}
+
+#[test]
+fn a_keyframe_is_renamed_rekeyed_and_restyled_in_place() {
+    let mut sheet = CssStyleSheet::parse(
+        "@keyframes fade { from { opacity: 0 } to { opacity: 1 } }",
+        base_url(),
+    );
+    let rule = sheet.rule_at(0).unwrap();
+    sheet.set_keyframes_name(&rule, "grow").unwrap();
+    assert_eq!(rule.keyframes_name().as_deref(), Some("grow"));
+    sheet.set_keyframes_name(&rule, "two words").unwrap();
+    assert_eq!(rule.keyframes_name().as_deref(), Some("two words"));
+    // A name that is not an identifier serializes escaped.
+    assert!(
+        rule.css_text()
+            .unwrap()
+            .starts_with("@keyframes two\\ words {")
+    );
+
+    let from = rule.keyframe_at(0).unwrap();
+    sheet.set_keyframe_key_text(&from, "10%, 20%").unwrap();
+    assert_eq!(from.key_text(), "10%, 20%");
+    assert_eq!(
+        sheet.set_keyframe_key_text(&from, "soon").err(),
+        Some(CssomError::Syntax)
+    );
+    assert_eq!(from.key_text(), "10%, 20%");
+
+    sheet
+        .set_keyframe_style_property(&from, "opacity", "0.25", "")
+        .unwrap();
+    assert!(
+        sheet
+            .set_keyframe_style_property(&from, "color", "red", "important")
+            .unwrap()
+            .is_none(),
+        "a keyframe's declaration cannot be important"
+    );
+    sheet
+        .set_keyframe_style_property(&from, "color", "red", "")
+        .unwrap();
+    assert_eq!(
+        from.style_declarations().css_text,
+        "opacity: 0.25; color: red;"
+    );
+    let (removed, _) = sheet
+        .remove_keyframe_style_property(&from, "opacity")
+        .unwrap();
+    assert_eq!(removed, "0.25");
+    sheet
+        .set_keyframe_style_css_text(&from, "top: 1px; left: 2px !important")
+        .unwrap();
+    assert_eq!(from.style_declarations().css_text, "top: 1px;");
+    assert_eq!(
+        rule.css_text().unwrap(),
+        "@keyframes two\\ words {\n10%, 20% { top: 1px; }\n100% { opacity: 1; }\n}"
+    );
+
+    // A keyframe that left its rule is still its own to change.
+    sheet.delete_keyframe(&rule, "10%, 20%").unwrap();
+    let revision = sheet.revision();
+    assert!(
+        sheet
+            .set_keyframe_style_property(&from, "top", "3px", "")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(sheet.revision(), revision);
+    assert_eq!(from.style_property_value("top"), "3px");
+}
+
+#[test]
+fn font_face_descriptors_read_back_as_name_and_value() {
+    let sheet = CssStyleSheet::parse(
+        "@font-face { font-family: \"Semi; Colon\"; \
+           src: url(\"a;b.woff2\") format(\"woff2\"), local(Arial); \
+           font-weight: 400 700; font-display: swap; unicode-range: U+0-7F } \
+         a { color: red }",
+        base_url(),
+    );
+    let descriptors = sheet.rule_at(0).unwrap().font_face_descriptors().unwrap();
+    let get = |name: &str| {
+        descriptors
+            .iter()
+            .find(|(known, _)| known == name)
+            .map(|(_, value)| value.as_str())
+    };
+    assert_eq!(get("font-family"), Some("\"Semi; Colon\""));
+    assert_eq!(
+        get("src"),
+        Some("url(\"a;b.woff2\") format(\"woff2\"), local(Arial)")
+    );
+    assert_eq!(get("font-weight"), Some("400 700"));
+    assert_eq!(get("font-display"), Some("swap"));
+    assert_eq!(get("unicode-range"), Some("U+0-7F"));
+    assert_eq!(descriptors.len(), 5);
+    assert_eq!(sheet.rule_at(1).unwrap().font_face_descriptors(), None);
 }
 
 #[test]
 fn parsed_nested_style_tree_is_exposed_with_live_lineage() {
     let mut sheet = CssStyleSheet::parse("", base_url());
     sheet
-        .replace_sync_supported_style_rules(
-            ".outer { color: red; & .middle { color: blue; & .leaf { color: green } } }",
-        )
+        .replace_sync(".outer { color: red; & .middle { color: blue; & .leaf { color: green } } }")
         .unwrap();
     let parent = sheet.rule_at(0).unwrap();
     let middle = parent.child_at(0).unwrap();
@@ -583,9 +931,7 @@ fn parsed_nested_style_tree_is_exposed_with_live_lineage() {
     assert!(leaf.parent_rule().unwrap().same_rule(&middle));
     assert!(middle.parent_rule().unwrap().same_rule(&parent));
 
-    sheet
-        .replace_sync_supported_style_rules(".replacement { color: black }")
-        .unwrap();
+    sheet.replace_sync(".replacement { color: black }").unwrap();
     assert!(!middle.has_parent_style_sheet());
     assert!(!leaf.has_parent_style_sheet());
     assert!(sheet.rule_at(0).unwrap().has_parent_style_sheet());
@@ -596,7 +942,7 @@ fn retained_parent_lineage_does_not_cycle_with_the_sheet() {
     let mut sheet = CssStyleSheet::parse(".outer { color: red }", base_url());
     let parent = sheet.rule_at(0).unwrap();
     sheet
-        .insert_supported_nested_style_rule(&parent, "& .child { color: blue }", 0)
+        .insert_nested_rule(&parent, "& .child { color: blue }", 0)
         .unwrap();
     let child = parent.child_at(0).unwrap();
     let retained = sheet.document_sheet();
