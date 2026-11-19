@@ -84,7 +84,7 @@ pub(crate) fn install(scope: &mut v8::PinScope, global: v8::Local<v8::Object>) {
 }
 
 /// `global[interface].prototype`, when the interface is installed.
-fn prototype_of<'s>(
+pub(super) fn prototype_of<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<v8::Object>,
     interface: &str,

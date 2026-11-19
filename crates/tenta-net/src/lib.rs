@@ -6,6 +6,7 @@
 
 pub mod body;
 pub mod client;
+pub mod digest;
 pub mod dns;
 pub mod error;
 pub mod h1;

@@ -1838,4 +1838,7 @@ Optional, nested, named concrete-buffer and direct nullable forms fail model
 lowering. A `Promise<ArrayBuffer>` return stays an opaque Promise as before; it
 is not converted into a buffer reference. The separate Promise rejection policy
 is required before a WebCrypto `digest()` binding can be installed. No Crypto
-interface is exposed by this annotation package.
+interface is exposed by this annotation package. (`digest()` has since been
+installed without a generated binding: `crates/tenta-js/src/subtle.rs` is a
+script method, which rejects where generated glue would throw. The generator
+still has no rejection policy.)

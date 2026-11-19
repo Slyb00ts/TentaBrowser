@@ -101,6 +101,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | A timer chain is a deferral while the sum of its delays is small (SET1) | Implemented; unit, page and V8 checks passed, the V8 one mutation-checked; measured on real sites; not independently reviewed; **changes two normative tunables of the settle rule, which the specification must record** | A one-shot timer of up to 64 ms (32 ms before) continues the load chain, and a chain of timers does for as long as its delays add up to at most 256 ms (8 links before). amazon.com and imdb.com, whose interstitial polls and waits 50 ms before it loads the page, now return the page; see the section below |
 | `<a>` and `<area>` take their `href` apart: `protocol`, `host`, `pathname`, `search`, `hash` and the rest (HL1) | Implemented on V8; focused checks passed; seen to fix two real pages; not independently reviewed | An anchor had `href` only, so the `a.href = url; a.pathname` idiom threw. imdb.com's client-side exception and a logger error on nytimes.com came from it; see the section below |
 | `Selection`, `window.getSelection()` and `document.getSelection()` (SEL1) | Implemented on V8 as a script built at first use; focused checks passed; measured; not independently reviewed | A page that asked for the selection threw. No `modify()` or `deleteFromDocument()`; nothing a host does moves the selection; see the section below |
+| `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
 | An idle callback is page activity (IDLE1) | Corrected on V8; focused check passed and mutation-checked; measured, no difference outside noise | `requestIdleCallback` from tracked script was a tracked zero-delay timer and held the settle open; it is background now, as the provenance definition says; see the section below |
 | `ReadableStream`, its default reader and controller, the queuing strategies, `Response.body` and `Blob.stream()` (ST1) | Implemented on V8 as a script built at first use; focused checks passed; measured; not independently reviewed; **Streams as script rather than WebIDL is a choice the specification may record** | A page could not make or read a stream at all. Default streams only: no byte streams or BYOB readers, no `WritableStream`, `TransformStream`, `pipeTo()` or `pipeThrough()`; a body is delivered as one chunk; a stream is not accepted as a body; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
@@ -3937,6 +3938,79 @@ the same reason: most pages never ask.
 - **On the site that showed it:** crates.io/crates/serde no longer reports
   the `ReferenceError`; what is left there is the chart, which needs a
   canvas context.
+
+### `crypto.subtle` and `digest()` (SUB1)
+
+`crypto.subtle` was `undefined`. imdb.com reads `crypto.subtle.digest`
+about twenty times while it starts, and each read threw.
+
+- **What is there:** `crypto.subtle`, one `SubtleCrypto` per realm, with
+  `digest(algorithm, data)` for `SHA-1`, `SHA-256`, `SHA-384` and
+  `SHA-512`. The algorithm is a name or an object with a `name`, matched
+  ASCII case-insensitively. The digest comes from BoringSSL, the one
+  libcrypto of the process, through a new `tenta_net::digest`
+  (`crates/tenta-net/src/digest.rs`), so no second hashing implementation
+  is linked. The promise is resolved from a task, with an `ArrayBuffer`.
+- **Why a script and not a generated binding.** Every `SubtleCrypto`
+  operation returns a promise, and WebIDL makes whatever goes wrong in
+  one a rejection of that promise. Generated glue throws
+  (`docs/dev/idl.md` already said a rejection policy had to come first).
+  `crates/tenta-js/src/subtle.rs` is a script method with one `try`,
+  built the first time a page reads `crypto.subtle` or `SubtleCrypto`,
+  as streams (ST1) and the selection (SEL1) are. What the standard does
+  in an order script can watch is done natively in that order
+  (`crates/tenta-js-v8/src/host/subtle.rs`): the algorithm converted as
+  `(object or DOMString)`, the data converted and copied, and only then
+  the object's `name` read, so a `name` getter that rewrites the data
+  changes nothing that is hashed.
+- **Budgets.** The copy of the data is charged to the page's native
+  memory ledger (`WebCrypto` component) while it is hashed. Data the
+  ledger cannot hold is refused with an `OperationError` for that call;
+  the page is not stopped, where `getRandomValues()` over its quota
+  stops it. The data is hashed a megabyte at a time with a look at the
+  page's deadline between pieces.
+- **Not there:** every other operation - `importKey()`, `generateKey()`,
+  `exportKey()`, `sign()`, `verify()`, `encrypt()`, `decrypt()`,
+  `deriveBits()`, `deriveKey()`, `wrapKey()`, `unwrapKey()` - and
+  `CryptoKey`; they are absent rather than present and failing. The
+  digest is computed during the call, not in parallel with the page.
+  `subtle` is not limited to secure contexts, which the engine does not
+  model. V8 only.
+- **Checks:** `crates/tenta-js-v8/tests/crypto_subtle.rs`, ten tests: the
+  FIPS 180-4 example under each algorithm, every spelling of a
+  `BufferSource`, a buffer of more than one piece (expected value from
+  Python's `hashlib`), twelve ways to fail that all reject and none of
+  which throws, the copy taken before a `name` getter runs, the
+  resolution coming after a microtask queued later (fails when the script
+  resolves during the call), and the budget refusal leaving the page
+  running with nothing charged. `tenta-net` has three more for the
+  digests themselves. The workspace passed 4990 of 4990 and the feature
+  set 604 of 604; fmt, both Clippy runs, `lint-deps`, `idl-manifest`
+  and `cargo deny` were clean.
+- **Measured** (release, interleaved against `ae67cf0`): building an
+  engine's preludes 1.65 ms to 1.60 ms p50 (15 runs of 70 engines each);
+  `S-js-xhr` navigation p50/p95 9.05/9.97 ms to 9.07/9.59 ms and process
+  RSS 31.5/32.0 MiB to 31.2/32.0 MiB (25 pairs); `S-dom-calls` `get`
+  82.67/85.40 ns to 82.72/87.19 ns. All inside the noise floor: no
+  difference is claimed.
+- **On the site that showed it** (release CLI over MCP, three loads of
+  each build alternating, 2026-11-19): imdb.com reported
+  `Cannot read properties of undefined (reading 'digest')` 21, 19 and 19
+  times before and not once after. Its snapshot held 121 links and
+  headings before, and 302, 729 and 725 after. What it reports now, once
+  a load: `n.deleteContents is not a function` (`Range.deleteContents()`,
+  which the engine does not have).
+- **Found on the way, not fixed: imdb.com goes on building after
+  `navigate` has returned.** With the digests working, the page that
+  `navigate` reported after 4.6 s had 11,324 elements at the first call
+  after it and 17,697 at the second, and those two calls took 3.1 s and
+  3.7 s, because a call waits for the page's script. The snapshots of
+  the three loads above waited 1.7 s, 7.3 s and 6.0 s the same way, and
+  the one that waited least is the one with 302 links. Before, the page
+  stopped at 2,354 elements and the calls took a millisecond. A fourth
+  load, taken while a build was running on the machine, stopped at 3,886
+  elements and did not grow. Which of the page's tasks the settle does
+  not count as tracked was not traced.
 
 ### `ReadableStream`, `Response.body` and `Blob.stream()` (ST1)
 

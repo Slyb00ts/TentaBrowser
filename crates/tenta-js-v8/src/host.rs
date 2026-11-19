@@ -116,6 +116,7 @@ mod message_channel;
 mod observers;
 pub(crate) mod selection;
 pub(crate) mod streams;
+pub(crate) mod subtle;
 mod window_extras;
 mod window_misc;
 guarded_callback!(guarded_location_constructor => location_constructor);
@@ -1686,6 +1687,20 @@ pub(crate) fn host_state(scope: &mut v8::PinScope) -> Option<Rc<HostState>> {
 /// and returns the timer's id.
 fn queue_task(scope: &mut v8::PinScope, task: v8::Local<v8::Function>) -> Option<u64> {
     queue_task_as(scope, task, false)
+}
+
+guarded_callback!(guarded_queue_task_function => queue_task_function);
+
+/// [`queue_task`] as a function a script prelude is handed: the function it
+/// is called with runs as a task of its own.
+fn queue_task_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if let Ok(task) = v8::Local::<v8::Function>::try_from(args.get(0)) {
+        queue_task(scope, task);
+    }
 }
 
 /// Queues `task` as [`queue_task`] does, but as page activity whatever the

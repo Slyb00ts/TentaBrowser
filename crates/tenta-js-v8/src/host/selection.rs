@@ -14,9 +14,8 @@ use tenta_js::bindings::{
 };
 
 use super::observers::{get, get_private, key, set_private};
-use super::{define, queue_task};
+use super::{define, guarded_queue_task_function};
 
-guarded_callback!(guarded_queue_task => queue_task_callback);
 guarded_callback!(guarded_window_selection => window_selection);
 guarded_callback!(guarded_document_selection => document_selection);
 
@@ -62,7 +61,7 @@ fn exports<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Obj
             .and_then(|script| script.run(tc))
             .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
             .and_then(|build| {
-                let queue = v8::Function::builder(guarded_queue_task).build(tc)?;
+                let queue = v8::Function::builder(guarded_queue_task_function).build(tc)?;
                 let receiver = v8::undefined(tc).into();
                 build.call(tc, receiver, &[queue.into()])
             })
@@ -141,16 +140,4 @@ fn document_selection<'s>(
 ) {
     let this = args.this().into();
     call_export(scope, "documentSelection", &[this], rv);
-}
-
-/// What the script queues its `selectionchange` with: the function it is
-/// given runs as a task of its own.
-fn queue_task_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if let Ok(task) = v8::Local::<v8::Function>::try_from(args.get(0)) {
-        queue_task(scope, task);
-    }
 }
