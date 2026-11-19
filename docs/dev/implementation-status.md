@@ -104,6 +104,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
 | `DOMMatrix`, `DOMMatrixReadOnly`, `DOMPoint`, `DOMPointReadOnly`, `DOMQuad` (MAT1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `new DOMMatrix(getComputedStyle(el).transform)` threw. The transform list is parsed in the script: no `calc()`, no percentages; not serializable; see the section below |
 | `SVGAnimatedString`, SVG `className` and SVG `<a>` `href` (SVG1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `x.href instanceof SVGAnimatedString` threw, and an SVG element's `className` was a string. Nothing animates; `href` on SVG `<a>` only; see the section below |
+| MCP `browser_network_requests` lists every request of the page (NETLOG1) | Implemented; focused checks passed; measured on real sites; not independently reviewed | The tool listed the document and nothing else. It reads the page's network hub now: scripts, sheets, images, `fetch`, XHR, each hop of a redirect, failures by name. Frames inside the page are not listed; see the section below |
 | An idle callback is page activity (IDLE1) | Corrected on V8; focused check passed and mutation-checked; measured, no difference outside noise | `requestIdleCallback` from tracked script was a tracked zero-delay timer and held the settle open; it is background now, as the provenance definition says; see the section below |
 | `ReadableStream`, its default reader and controller, the queuing strategies, `Response.body` and `Blob.stream()` (ST1) | Implemented on V8 as a script built at first use; focused checks passed; measured; not independently reviewed; **Streams as script rather than WebIDL is a choice the specification may record** | A page could not make or read a stream at all. Default streams only: no byte streams or BYOB readers, no `WritableStream`, `TransformStream`, `pipeTo()` or `pipeThrough()`; a body is delivered as one chunk; a stream is not accepted as a body; see the section below |
 | QuickJS classic-script mode | Corrected; QuickJS suite passed | The binding's default evaluation options force strict mode, so every page script, string timer handler and inspector evaluation ran strict on QuickJS and an undeclared assignment threw. They now evaluate as classic (sloppy) scripts; a regression test covers an implicit global, `this` of a plain call, a page script and an explicit `"use strict"` function. 314/314 `tenta-js-qjs` tests pass |
@@ -4105,6 +4106,57 @@ at `SVGAnimatedString is not defined`.
   build alternating, 2026-11-19): vuejs.org reported the `ReferenceError`
   in both loads before and nothing in either after. The snapshot is the
   same.
+
+### MCP lists every request of the page (NETLOG1)
+
+`browser_network_requests` says it is how an agent finds the API a page
+loads its data from and sees why content is missing. It listed one line:
+the document. The page reported nothing else as an event
+(`PageEvent::Request` is emitted for navigations only), while everything a
+page requests already passes through its network hub
+(`crates/tenta-page/src/network.rs`), which until now only CDP listened
+to.
+
+- **What changed:** an MCP session installs a sink on its page's hub and
+  builds the request log from it (`crates/tenta-mcp/src/session.rs`,
+  `LogSink`): the document, scripts, stylesheets, images, fonts,
+  `fetch()`, `XMLHttpRequest`, CORS preflights, each with its method, its
+  status or the `net::ERR_*` name of its failure, and its kind. A
+  redirected request has a line per hop. The log still starts over at a
+  navigation; a request is kept by the navigation it belongs to, because
+  the hub reports as it happens and the page's events arrive through a
+  queue, so the new document's own request can be seen first. The tool
+  list's schema version is 1.4.0.
+- **No body is copied for it.** A sink is handed every response body
+  (`NetworkEvent::Body`, for CDP's `Network.getResponseBody`), which
+  means a copy of every streamed body. `NetworkHub::set_body_retention`
+  turns that off, and the MCP session does.
+- **Not there:** requests of the frames inside the page (each frame has
+  a hub of its own, and the session listens to the main one); request
+  and response headers, bodies and timing, which the hub has and the
+  tool does not print.
+- **Checks:** `crates/tenta-mcp/tests/tools.rs`
+  `network_requests_list_what_the_page_and_its_script_asked_for` (a page
+  whose script makes an XHR and four fetches: a 200, a 404, a redirect
+  and one to a port the engine refuses; then a navigation);
+  `crates/tenta-browser/tests/css_loading.rs`
+  `a_sink_that_keeps_no_bodies_is_handed_none`. The workspace passed 5008
+  of 5008 and the feature set 606 of 606; fmt, both Clippy runs,
+  `lint-deps`, `idl-manifest` and `cargo deny` were clean.
+- **Measured** (release CLI over MCP against `443f06f`, seven control
+  sites, three rounds alternating, 2026-11-19): the sum of the per-site
+  median navigation times was 14.87 s before and 14.41 s after; one load
+  of one site took 2.08 s against a median of 0.98 s. No difference is
+  claimed. The in-process benchmarks do not go through MCP and the hub is
+  inactive in them, so they were not run.
+- **What it showed at once.** The sweep's most frequent error,
+  `Failed to fetch` (theguardian.com 11, github.com 1) and MDN's seven
+  Glean upload errors, are requests to `ophan.theguardian.com`,
+  `collector.github.com` and `incoming.telemetry.mozilla.org` that end
+  in `net::ERR_ACCESS_DENIED`. The workstation's DNS answers `0.0.0.0`
+  for those three hosts, and the engine refuses that as a private-network
+  destination. That is the machine the sweep runs on, not a gap of the
+  engine.
 
 ### `ReadableStream`, `Response.body` and `Blob.stream()` (ST1)
 

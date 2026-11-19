@@ -381,6 +381,61 @@ async fn stylesheets_appear_in_the_network_events_while_the_document_loads() {
     rig.finish();
 }
 
+/// What a sink is told about the bodies of a page's responses.
+#[derive(Default)]
+struct BodyCounter {
+    bodies: Mutex<Vec<usize>>,
+    finished: Mutex<usize>,
+}
+
+impl NetworkSink for BodyCounter {
+    fn event(&self, event: NetworkEvent) {
+        match event {
+            NetworkEvent::Body { body, .. } => self.bodies.lock().unwrap().push(body.len()),
+            NetworkEvent::Finished { .. } => *self.finished.lock().unwrap() += 1,
+            _ => {}
+        }
+    }
+
+    fn pause<'a>(&'a self, _request: &'a RequestInfo) -> BoxFuture<'a, Resolution> {
+        Box::pin(async { Resolution::Continue(Default::default()) })
+    }
+}
+
+/// A host that only lists requests asks for no bodies, and is handed none:
+/// every request still finishes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sink_that_keeps_no_bodies_is_handed_none() {
+    let html = page_of("<link rel=stylesheet href=a.css>", "<p>x</p>");
+    let rig = Rig::new(
+        vec![("index.html", html), ("a.css", b"p{color:red}".to_vec())],
+        &[],
+    )
+    .await;
+
+    let kept = Arc::new(BodyCounter::default());
+    let page = rig.new_page().await;
+    page.network()
+        .set_sink(Some(kept.clone() as Arc<dyn NetworkSink>));
+    page.network().set_events(true);
+    rig.go(page.clone(), "/index.html", Settle::Load).await;
+    let bodies = kept.bodies.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 2, "the document and the sheet: {bodies:?}");
+    assert!(bodies.contains(&b"p{color:red}".len()), "{bodies:?}");
+    assert_eq!(*kept.finished.lock().unwrap(), 2);
+
+    let listed = Arc::new(BodyCounter::default());
+    let page = rig.new_page().await;
+    page.network()
+        .set_sink(Some(listed.clone() as Arc<dyn NetworkSink>));
+    page.network().set_body_retention(false);
+    page.network().set_events(true);
+    rig.go(page.clone(), "/index.html", Settle::Load).await;
+    assert_eq!(*listed.bodies.lock().unwrap(), Vec::<usize>::new());
+    assert_eq!(*listed.finished.lock().unwrap(), 2);
+    rig.finish();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_import_chain_loads_before_the_link_fires_and_a_screenshot_fetches_nothing() {
     let html = page_of(

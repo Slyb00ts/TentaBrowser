@@ -9,6 +9,9 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use tenta_browser::network::{
+    BoxFuture, Modifications, NetworkEvent, NetworkSink, RequestInfo, Resolution, ResourceType,
+};
 use tenta_browser::{
     BrowserContext, ContextOptions, Engine, Page, PageEvent, PageEvents, PageOptions, RemoteValue,
     Settle, SettleState, Viewport,
@@ -214,10 +217,13 @@ pub struct ConsoleEntry {
     pub location: Option<String>,
 }
 
-/// One request the page made.
+/// One request the page made, or one hop of a request that was redirected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestEntry {
-    id: tenta_core::RequestId,
+    /// The page's number for the request, the same for every hop of it.
+    id: u64,
+    /// The navigation whose document the request belongs to.
+    loader: u64,
     pub method: String,
     pub url: String,
     pub resource_type: &'static str,
@@ -238,8 +244,49 @@ pub struct PageLog {
     pub console_dropped: u64,
     pub requests: VecDeque<RequestEntry>,
     pub requests_dropped: u64,
-    /// Events the subscription lost; they may have been of either kind.
+    /// Events the subscription lost; they were console lines or exceptions.
     pub events_lost: u64,
+    /// The navigation the log describes. A request of an earlier document
+    /// that is still being announced is not this page's.
+    loader: u64,
+}
+
+/// What the tools call a request's kind.
+fn resource_type_name(resource_type: ResourceType) -> &'static str {
+    match resource_type {
+        ResourceType::Document => "document",
+        ResourceType::Stylesheet => "stylesheet",
+        ResourceType::Script | ResourceType::BlockingScript => "script",
+        ResourceType::Font => "font",
+        ResourceType::Image => "image",
+        ResourceType::Media => "media",
+        ResourceType::Xhr => "xhr",
+        ResourceType::Fetch => "fetch",
+        ResourceType::Prefetch => "prefetch",
+        _ => "other",
+    }
+}
+
+/// The page's network hub reports into the log through this
+/// (`tenta_browser::network`). The page pushes each event from the thread
+/// that produced it, so a request is in the log before the tool that asks for
+/// it can run, and none is lost to a subscription's buffer.
+struct LogSink {
+    log: Arc<Mutex<PageLog>>,
+}
+
+impl NetworkSink for LogSink {
+    fn event(&self, event: NetworkEvent) {
+        self.log
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .record_network(event);
+    }
+
+    /// Never asked: the session does not intercept.
+    fn pause<'a>(&'a self, _request: &'a RequestInfo) -> BoxFuture<'a, Resolution> {
+        Box::pin(async { Resolution::Continue(Modifications::default()) })
+    }
 }
 
 /// An object a console call was given, the way a console prints it: its own
@@ -329,15 +376,75 @@ impl PageLog {
         self.console.push_back(entry);
     }
 
-    fn request_mut(&mut self, id: tenta_core::RequestId) -> Option<&mut RequestEntry> {
+    fn request_mut(&mut self, id: u64) -> Option<&mut RequestEntry> {
         self.requests.iter_mut().rev().find(|entry| entry.id == id)
+    }
+
+    /// Folds one step of a request's life into the log.
+    fn record_network(&mut self, event: NetworkEvent) {
+        match event {
+            NetworkEvent::Request(info) => {
+                if info.loader < self.loader {
+                    return;
+                }
+                // A hop that follows a redirect: the entry so far is the hop
+                // that answered with it, and the new URL gets a line of its
+                // own.
+                if let Some(redirect) = &info.redirect
+                    && let Some(entry) = self.request_mut(info.id)
+                {
+                    entry.status = Some(redirect.status);
+                    entry.from_cache = redirect.from_cache;
+                }
+                if self.requests.len() == REQUEST_CAP {
+                    self.requests.pop_front();
+                    self.requests_dropped += 1;
+                }
+                self.requests.push_back(RequestEntry {
+                    id: info.id,
+                    loader: info.loader,
+                    method: info.method,
+                    url: info.url.into(),
+                    resource_type: resource_type_name(info.resource_type),
+                    status: None,
+                    from_cache: false,
+                    error: None,
+                });
+            }
+            NetworkEvent::Response(info) => {
+                if let Some(entry) = self.request_mut(info.id) {
+                    entry.status = Some(info.status);
+                    entry.from_cache = info.from_cache;
+                }
+            }
+            NetworkEvent::Failed { key, error, .. } => {
+                if let Some(entry) = self.request_mut(key.id) {
+                    entry.error = Some(error);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Folds one page event into the log.
     pub fn record(&mut self, event: PageEvent, main_frame: tenta_core::FrameId) {
         match event {
-            PageEvent::NavigationStarted { frame, .. } if frame == main_frame => {
-                *self = PageLog::default();
+            PageEvent::NavigationStarted {
+                frame,
+                navigation_id,
+                ..
+            } if frame == main_frame => {
+                // The navigation's own request may have been announced before
+                // this event was read: the network reports as it happens, the
+                // page's events through a queue. What belongs to the new
+                // navigation stays.
+                let mut requests = std::mem::take(&mut self.requests);
+                requests.retain(|entry| entry.loader >= navigation_id);
+                *self = PageLog {
+                    requests,
+                    loader: navigation_id,
+                    ..PageLog::default()
+                };
             }
             PageEvent::Console(call) => {
                 let location = call
@@ -361,42 +468,6 @@ impl PageLog {
                     text: clip(format!("{} {}", details.text, details.message)),
                     location,
                 });
-            }
-            PageEvent::Request {
-                id,
-                url,
-                method,
-                resource_type,
-            } => {
-                if self.requests.len() == REQUEST_CAP {
-                    self.requests.pop_front();
-                    self.requests_dropped += 1;
-                }
-                self.requests.push_back(RequestEntry {
-                    id,
-                    method,
-                    url: url.into(),
-                    resource_type,
-                    status: None,
-                    from_cache: false,
-                    error: None,
-                });
-            }
-            PageEvent::Response {
-                id,
-                status,
-                from_cache,
-                ..
-            } => {
-                if let Some(entry) = self.request_mut(id) {
-                    entry.status = Some(status);
-                    entry.from_cache = from_cache;
-                }
-            }
-            PageEvent::RequestFailed { id, error, .. } => {
-                if let Some(entry) = self.request_mut(id) {
-                    entry.error = Some(error);
-                }
             }
             _ => {}
         }
@@ -574,6 +645,14 @@ impl BrowserSession {
         // Subscribed before the first navigation, so its requests are seen.
         self.log = Arc::default();
         tokio::spawn(pump(page.events(), self.log.clone(), page.main_frame()));
+        // Every request of the page, not only its document: the page's own
+        // observation point, with the bodies left where they are.
+        let network = page.network();
+        network.set_body_retention(false);
+        network.set_sink(Some(Arc::new(LogSink {
+            log: self.log.clone(),
+        })));
+        network.set_events(true);
         self.page = Some(page.clone());
         Ok(page)
     }

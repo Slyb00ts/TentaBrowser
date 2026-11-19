@@ -33,7 +33,7 @@ use crate::session::BrowserSession;
 /// The version of the tool list and its schemas. Bump it when a tool, a
 /// parameter or a result field changes; `tentabrowser mcp --schema-version`
 /// prints it, and the golden test fails until the golden file is blessed.
-pub const SCHEMA_VERSION: &str = "1.3.0";
+pub const SCHEMA_VERSION: &str = "1.4.0";
 
 /// What a tool returns on success.
 pub struct ToolOutput {

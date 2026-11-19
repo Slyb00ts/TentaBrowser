@@ -884,3 +884,99 @@ async fn hover_fires_the_pointer_events_a_menu_listens_for() {
     let after = client.tool("browser_snapshot", json!({})).await.text();
     assert!(after.contains("Menu content"), "{after}");
 }
+
+/// Every request of the page is listed, not only its document: what the
+/// parser asked for, what script asked for, each hop of a redirect, and what
+/// failed with the name of the failure.
+#[tokio::test(flavor = "multi_thread")]
+async fn network_requests_list_what_the_page_and_its_script_asked_for() {
+    let harness = Harness::start(Tier::Js).await;
+    let client = harness.client();
+    client.navigate(&harness.url("/network.html")).await;
+    let waited = client
+        .tool(
+            "browser_wait_for",
+            json!({"text": "200 404 200 failed", "timeout_ms": 10_000}),
+        )
+        .await;
+    waited.ok();
+
+    let all = client.tool("browser_network_requests", json!({})).await;
+    all.ok();
+    let listed: Vec<String> = all.structured()["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|request| {
+            let outcome = match (&request["error"], &request["status"]) {
+                (serde_json::Value::String(error), _) => error.clone(),
+                (_, status) => status.to_string(),
+            };
+            format!(
+                "{} {} {} {}",
+                request["method"].as_str().unwrap(),
+                outcome,
+                request["resource_type"].as_str().unwrap(),
+                request["url"]
+                    .as_str()
+                    .unwrap()
+                    .trim_start_matches(harness.url("").trim_end_matches('/')),
+            )
+        })
+        .collect();
+    for expected in [
+        "GET 200 document /network.html",
+        "GET 200 script /network.js",
+        "POST 201 xhr /api/status?code=201",
+        "GET 200 fetch /about.html",
+        "GET 404 fetch /api/status?code=404",
+        "GET 302 fetch /api/redirect?to=/about.html",
+        "GET net::ERR_UNSAFE_PORT fetch http://127.0.0.1:1/unreachable",
+    ] {
+        assert!(
+            listed.iter().any(|line| line == expected),
+            "`{expected}` is listed: {listed:#?}"
+        );
+    }
+    // The redirect's second hop is a line of its own, beside the direct
+    // request for the same page.
+    assert_eq!(
+        listed
+            .iter()
+            .filter(|line| *line == "GET 200 fetch /about.html")
+            .count(),
+        2,
+        "{listed:#?}"
+    );
+    assert_eq!(listed[0], "GET 200 document /network.html", "{listed:#?}");
+
+    let failed = client
+        .tool("browser_network_requests", json!({"failed_only": true}))
+        .await;
+    failed.ok();
+    assert_eq!(failed.structured()["returned"], 2, "{}", failed.text());
+    assert!(
+        failed.text().contains("GET 404 fetch") && failed.text().contains("net::ERR_UNSAFE_PORT"),
+        "{}",
+        failed.text()
+    );
+
+    // A navigation starts the list over, and the new document is in it.
+    client.navigate(&harness.url("/about.html")).await;
+    let after = client.tool("browser_network_requests", json!({})).await;
+    after.ok();
+    let urls: Vec<&str> = after.structured()["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|request| request["url"].as_str().unwrap())
+        .collect();
+    assert!(
+        urls.contains(&harness.url("/about.html").as_str()),
+        "{urls:?}"
+    );
+    assert!(
+        !urls.iter().any(|url| url.contains("network")),
+        "the earlier page's requests are gone: {urls:?}"
+    );
+}

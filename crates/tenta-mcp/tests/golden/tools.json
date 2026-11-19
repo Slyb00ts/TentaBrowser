@@ -811,7 +811,7 @@
       "readOnlyHint": true,
       "title": "List the page's requests"
     },
-    "description": "Returns the requests the current page made since its navigation began, oldest first: method, status (or the `net::ERR_*` name of a failure, or `pending`), resource type and URL. Use it to find the API a page loads its data from, or to see why content is missing (a blocked or failed request). The list starts over at each navigation and keeps the last 1000 requests. `failed_only` keeps failures and HTTP 4xx/5xx answers; `url_contains` keeps URLs containing a substring; `limit` returns the newest ones.",
+    "description": "Returns the requests the current page made since its navigation began, oldest first: method, status (or the `net::ERR_*` name of a failure, or `pending`), resource type (`document`, `script`, `stylesheet`, `image`, `font`, `fetch`, `xhr`, ...) and URL. Every request of the page is listed: the document, what it loads, and what its script asks for with `fetch()` and `XMLHttpRequest`; a redirected request has a line per hop. Requests of the frames inside the page are not listed. Use it to find the API a page loads its data from, or to see why content is missing (a blocked or failed request). The list starts over at each navigation and keeps the last 1000 requests. `failed_only` keeps failures and HTTP 4xx/5xx answers; `url_contains` keeps URLs containing a substring; `limit` returns the newest ones.",
     "inputSchema": {
       "additionalProperties": false,
       "examples": [

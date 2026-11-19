@@ -227,6 +227,7 @@ struct Settings {
     accept_language: Option<String>,
     cache_disabled: bool,
     offline: bool,
+    discard_bodies: bool,
 }
 
 impl Settings {
@@ -285,6 +286,13 @@ impl NetworkHub {
     /// Whether requests are announced to the sink.
     pub fn set_events(&self, on: bool) {
         self.update(|settings| settings.events = on);
+    }
+
+    /// Whether a response body is kept and handed to the sink as
+    /// [`NetworkEvent::Body`], which is the default. A host that only lists
+    /// requests turns it off, and then no body is copied for it.
+    pub fn set_body_retention(&self, retain: bool) {
+        self.update(|settings| settings.discard_bodies = !retain);
     }
 
     /// Whether every request is held for the sink's decision.
@@ -348,6 +356,7 @@ impl NetworkHub {
         apply_overrides(request, &settings);
         let sink = settings.sink.clone();
         let (events, intercept, offline) = (settings.events, settings.intercept, settings.offline);
+        let discard_bodies = settings.discard_bodies;
         drop(settings);
         let sink = sink.filter(|_| events || intercept);
         if sink.is_none() && !offline {
@@ -390,7 +399,8 @@ impl NetworkHub {
             started: Instant::now(),
             total: 0,
             parts: Vec::new(),
-            overflow: false,
+            // A body nobody asked to keep is one that has already overflowed.
+            overflow: discard_bodies,
             whole: None,
             ended: false,
         })
@@ -637,7 +647,9 @@ impl Tracked {
                 at: Instant::now(),
             });
         }
-        if body.len() <= RETAINED_BODY_LIMIT {
+        if self.overflow {
+            // Nothing is kept: the limit was passed, or the host keeps none.
+        } else if body.len() <= RETAINED_BODY_LIMIT {
             self.whole = Some(body.clone());
         } else {
             self.overflow = true;
