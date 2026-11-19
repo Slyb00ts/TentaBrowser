@@ -89,7 +89,13 @@ interface CharacterData : Node {
 };
 
 [Exposed=Window]
-interface Text : CharacterData {};
+interface Text : CharacterData {
+  // Splits the node at a UTF-16 offset: the data from there on moves to a new
+  // Text node, inserted after this one when it has a parent.
+  [NewObject, Throws] Text splitText(unsigned long offset);
+  // The data of this node and of the Text nodes contiguous with it.
+  readonly attribute DOMString wholeText;
+};
 
 // `CDATASection : Text` with no members of its own, exactly as the DOM
 // Standard declares it. It exists because `Document.createCDATASection`
@@ -578,32 +584,21 @@ interface Range : AbstractRange {
   [NewObject] Range cloneRange();
   undefined detach();
 
-  // **The five tree-surgery operations this interface does NOT declare:**
-  // `deleteContents()`, `extractContents()`, `cloneContents()`,
-  // `insertNode(node)` and `surroundContents(newParent)`. The DOM Standard
-  // declares all five here. They are absent rather than stubbed, because each
-  // one's algorithm is exact — the "contained", "partially contained" and
-  // "partially contained, first/last" classifications decide a DOM shape that
-  // `dom/ranges` compares node by node and offset by offset, 63 argument rows
-  // deep — and an implementation written to a guess would be an unverifiable
-  // member, which is the bug class slice 4a removed. Their absence costs the
-  // five files named below, whose remaining subtests fail with "is not a
-  // function" *inside* a testharness test (so the harness still reports and the
-  // numerators are comparable):
-  //
-  //   | file | rows |
-  //   |---|---|
-  //   | `Range-cloneContents.html` | 63 |
-  //   | `Range-deleteContents.html` | 63 |
-  //   | `Range-extractContents.html` | 63 |
-  //   | `Range-insertNode.html` | 63 |
-  //   | `Range-surroundContents.html` | 63 |
-  //
-  // That is 315 subtest rows, all of which need the missing `tenta-dom`
-  // primitive none of this engine's tree code has: a *split* of a `Text` node
-  // at an offset (`insertNode` step 7, `Text.splitText`) and the adjacent-`Text`
-  // merge that goes with it. `extractContents` is also the first step of
-  // `surroundContents`, so the five travel as one unit.
+  // The five operations that change the tree. Their algorithms are the DOM
+  // Standard's, implemented once in `tenta-dom`
+  // (`crates/tenta-dom/src/document/range_contents.rs`) and walked as paths
+  // rather than by recursion. `dom/ranges` has 63 argument rows for each of
+  // them, which have not been run against this implementation: its checks are
+  // trees worked out by hand from the standard.
+  [Throws] undefined deleteContents();
+  [NewObject, Throws] DocumentFragment extractContents();
+  [NewObject, Throws] DocumentFragment cloneContents();
+  [Throws] undefined insertNode(Node node);
+  [Throws] undefined surroundContents(Node newParent);
+
+  // DOM Parsing: `html` parsed as the children of the element the range
+  // starts in. A script in the result runs when the fragment is inserted.
+  [NewObject, Throws] DocumentFragment createContextualFragment(DOMString html);
 
   boolean isPointInRange(Node node, unsigned long offset);
   short comparePoint(Node node, unsigned long offset);

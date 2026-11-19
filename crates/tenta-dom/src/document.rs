@@ -27,7 +27,9 @@ use crate::text::{TextChunk, TextRope};
 
 mod child_node;
 pub use child_node::NodeOrText;
+mod range_contents;
 mod ranges;
+pub use range_contents::RangePoint;
 pub use ranges::{LiveRangeId, RangeBoundary};
 mod wrapper_claims;
 pub use wrapper_claims::WrapperClaimError;

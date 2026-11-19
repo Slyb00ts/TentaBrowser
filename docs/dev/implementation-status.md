@@ -104,6 +104,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
 | `DOMMatrix`, `DOMMatrixReadOnly`, `DOMPoint`, `DOMPointReadOnly`, `DOMQuad` (MAT1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `new DOMMatrix(getComputedStyle(el).transform)` threw. The transform list is parsed in the script: no `calc()`, no percentages; not serializable; see the section below |
 | `SVGAnimatedString`, SVG `className` and SVG `<a>` `href` (SVG1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `x.href instanceof SVGAnimatedString` threw, and an SVG element's `className` was a string. Nothing animates; `href` on SVG `<a>` only; see the section below |
+| `Range` tree operations, `createContextualFragment()`, `Text.splitText()` and `wholeText` (RNG2) | Implemented in `tenta-dom` and declared for both engines; DOM checks passed with trees worked out by hand, V8 checks passed; measured; seen to fix one error on a real page; **the `dom/ranges` WPT rows for these operations have not been run**; not independently reviewed | `deleteContents()`, `extractContents()`, `cloneContents()`, `insertNode()` and `surroundContents()` were deliberately undeclared, so the usual "empty this, put that in" sequence threw. They follow the DOM Standard's steps, walked as paths so a deep range does not recurse. A script in a contextual fragment is left unstarted but does not run when inserted, because no script a script inserts runs yet; see the section below |
 | What script does to a stylesheet reaches layout; `adoptedStyleSheets`; `CSSStyleSheet.replace()` (S1) | Implemented (`adoptedStyleSheets` on V8 and QuickJS, layout on V8 with `render`, `replace()` on V8); focused checks passed; measured; seen to change two real pages from unstyled to styled; not independently reviewed | A rule a script inserted, a property it set on a rule, `sheet.disabled` and a constructed sheet were visible to script and to nothing else: `getComputedStyle`, geometry, the snapshot and a screenshot used the element's source text. A page styled by a CSS-in-JS library was laid out unstyled. The page now reads an edited sheet from the script side when it assembles styles. An edit re-parses every sheet and restyles the tree; see the section below |
 | Every CSS rule kind in CSSOM; lists with an index iterate (CSSOM2) | Implemented on V8 and QuickJS; focused checks passed on both; measured; seen to fix one real page; not independently reviewed | `cssRules[i]` threw for every rule that was not a style rule, and `insertRule()`/`replaceSync()` refused every at-rule. Each rule is now an object of its own interface, group rules take and give up child rules, `@keyframes` exposes its keyframes, and `for…of` works on `cssRules`, `styleSheets`, a declaration and a media list. No `@import` or `@container` rule exists to read; see the section below |
 | MCP `browser_network_requests` lists every request of the page (NETLOG1) | Implemented; focused checks passed; measured on real sites; not independently reviewed | The tool listed the document and nothing else. It reads the page's network hub now: scripts, sheets, images, `fetch`, XHR, each hop of a redirect, failures by name. Frames inside the page are not listed; see the section below |
@@ -4108,6 +4109,79 @@ at `SVGAnimatedString is not defined`.
   build alternating, 2026-11-19): vuejs.org reported the `ReferenceError`
   in both loads before and nothing in either after. The snapshot is the
   same.
+
+### `Range` operations that change the tree (RNG2)
+
+`Range` had its boundary setters and comparisons and none of the five
+operations that edit the tree; they were left undeclared until they could
+be written to the standard's steps rather than to a guess. imdb.com threw
+`n.deleteContents is not a function`, and behind that
+`n.createContextualFragment is not a function`: the sequence "select the
+contents, delete them, parse markup in their place, append it".
+
+- **What is there.** `deleteContents()`, `extractContents()`,
+  `cloneContents()`, `insertNode()`, `surroundContents()`,
+  `createContextualFragment()`, `Text.splitText()` and `Text.wholeText`.
+  The algorithms are in `tenta-dom`
+  (`crates/tenta-dom/src/document/range_contents.rs`), so both engines
+  have them through the generated glue.
+- **How they are written.** The standard defines extraction and cloning
+  by recursion: the child of the common ancestor that holds the start
+  node is cloned and the algorithm runs again inside it, and the same on
+  the end side. Here each side is a path walked with a loop, so a range
+  whose ends are a hundred thousand levels apart costs heap and not
+  native stack (checked on a 512 KB stack). The order in which nodes
+  leave the tree is the standard's, because a mutation observer and
+  other live ranges see it: the start side from the bottom up, the
+  children between, the end side from the top down. The clones of the end
+  side are joined afterwards, bottom up, since joining them on the way
+  down would cost each its depth.
+- **Splitting text** has two live-range fixups an insertion and a
+  deletion do not make by themselves: a boundary in the data that moves
+  follows it into the new node, and a boundary just after the node stays
+  after the new one (`Document::move_ranges_into_split`,
+  `crates/tenta-dom/src/document/ranges.rs`).
+- **`insertNode()`** checks that the insertion is valid before it splits
+  the text, so one that is refused leaves the text whole.
+- **`createContextualFragment()`** parses in the context of the element
+  the range starts in (a `<body>` when there is none, or it is `<html>`),
+  and clears the "already started" mark the fragment parser puts on a
+  `<script>`, which is what would let it run on insertion.
+- **Not there.** A node of another document is refused
+  (`NotSupportedError`): the engine does not adopt across documents
+  anywhere yet. **No script that a script inserts runs**, whether through
+  a contextual fragment or through `appendChild(document.createElement(
+  'script'))`: only the parser's scripts execute. That is the next
+  package, and until it lands the fragment's scripts are inert. The
+  `dom/ranges` rows for the five operations (63 each) have not been run:
+  there is no WPT checkout on this workstation.
+- **Checks:** `crates/tenta-dom/tests/range_contents.rs` (19: one case
+  per shape a range has below its common ancestor, for each of clone,
+  extract and delete, with the expected trees derived by hand from the
+  standard; comments; a contained doctype; other live ranges; the split
+  and its fixups, at both ends, without a parent and across an astral
+  character; insertion into text, between children, of a fragment, of
+  the node already there, and each refusal; the contextual fragment's
+  context and its scripts; the deep range);
+  `crates/tenta-js-v8/tests/dom_range_contents.rs` (9: the fragment and
+  where the range is left, a collapsed range extended by `insertNode()`,
+  `surroundContents()` and its two refusals in their order,
+  `splitText()` with a second range, and the mutation records of an
+  extraction in order). The workspace passed 5080 of 5080 and the feature set 614 of 614; fmt, both Clippy runs, `lint-deps`,
+  `idl-manifest` and `cargo deny` were clean.
+- **Measured** (release, against `6eadff8`, interleaved, 2026-11-19).
+  Nothing on a path that existed changed outside the noise floor:
+  building an engine 2.66 ms -> 2.65 ms p50 and its preludes 1.63 ms ->
+  1.64 ms; `S-dom-calls` `has` 26.27 -> 26.83 ns and `get` 81.97 -> 83.80
+  ns, RSS 35.3 -> 35.3 MiB; `S-js-xhr` navigation 9.14/9.90 -> 9.31/9.72
+  ms p50/p95, RSS 31.8 -> 31.8 MiB. The deep-range check builds a
+  100,000-level tree in 0.13 s and runs two clones, an extraction and a
+  deletion across it in 0.63 s, unoptimized.
+- **On the page that showed it** (release CLI over MCP, three loads of
+  each build alternating, 2026-11-19): imdb.com reported `TypeError:
+  n.deleteContents is not a function` in every load before; with the five
+  operations it reported `n.createContextualFragment is not a function`
+  in every load instead, and with that one too, neither.
 
 ### What script does to a stylesheet reaches layout (S1)
 

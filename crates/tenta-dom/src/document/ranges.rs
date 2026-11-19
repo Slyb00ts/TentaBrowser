@@ -220,6 +220,73 @@ impl Document {
         Ok(())
     }
 
+    /// The live-range half of splitting the `Text` node `node` at `offset`
+    /// into itself and `new_node`, which has just been inserted after it
+    /// (`node` was the child at `index` of `parent`).
+    ///
+    /// A boundary in the part of the data that moved follows it into the new
+    /// node. A boundary in the parent that stood just after `node` stays
+    /// after the new node: the insertion moved only the boundaries past that
+    /// place, so this is the one that is still where the new node now is.
+    pub(super) fn move_ranges_into_split(
+        &mut self,
+        node: NodeId,
+        offset: u32,
+        new_node: NodeId,
+        parent: NodeId,
+        index: u32,
+    ) -> Result<()> {
+        if self.live_ranges.entries.is_empty() {
+            return Ok(());
+        }
+        let moved: Vec<_> = self
+            .live_ranges
+            .entries
+            .iter()
+            .flat_map(|(id, range)| {
+                range.points.iter().enumerate().filter_map(|(side, point)| {
+                    (point.node.id == node && point.offset > offset).then_some((*id, side))
+                })
+            })
+            .collect();
+        // Every handle on the new node is acquired before any boundary moves,
+        // so a handle-capacity error leaves the ranges as they were.
+        let mut replacements = Vec::with_capacity(moved.len());
+        for (id, side) in moved {
+            match self.handle(new_node) {
+                Ok(handle) => replacements.push((id, side, handle)),
+                Err(error) => {
+                    for (_, _, handle) in replacements {
+                        self.release(handle);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        let new_ref = self.node_ref(new_node);
+        for (id, side, handle) in replacements {
+            let range = self
+                .live_ranges
+                .entries
+                .get_mut(&id)
+                .expect("registered range");
+            range.points[side] = RangeBoundary {
+                node: new_ref,
+                offset: range.points[side].offset - offset,
+            };
+            let previous = std::mem::replace(&mut range.handles[side], handle);
+            self.release(previous);
+        }
+        for range in self.live_ranges.entries.values_mut() {
+            for point in &mut range.points {
+                if point.node.id == parent && point.offset == index + 1 {
+                    point.offset += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn adjust_ranges_for_data(
         &mut self,
         node: NodeId,

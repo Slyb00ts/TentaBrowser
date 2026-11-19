@@ -6424,7 +6424,41 @@ impl CharacterDataOps for HostObject {
     }
 }
 
-impl TextOps for HostObject {}
+impl TextOps for HostObject {
+    fn split_text(&self, offset: u32) -> Result<Handle<crate::bindings::Text>, JsError> {
+        let (doc, id) = self.anchor();
+        let mut doc = doc.borrow_mut();
+        let tail = doc
+            .split_text(id, offset)
+            .map_err(|error| mutation_error(&error))?;
+        Ok(Handle::from_bits(encode_node(
+            self.slot(),
+            doc.node_ref(tail),
+        )))
+    }
+
+    fn whole_text(&self) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        let is_text = |node: NodeId| matches!(doc.kind(node), NodeKind::Text | NodeKind::CData);
+        // The contiguous Text nodes: back to the first of the run, then forward.
+        let mut first = id;
+        loop {
+            let previous = doc.previous_sibling(first);
+            if !previous.is_some() || !is_text(previous) {
+                break;
+            }
+            first = previous;
+        }
+        let mut whole = String::new();
+        let mut node = first;
+        while node.is_some() && is_text(node) {
+            whole.push_str(doc.text_data(node).unwrap_or_default());
+            node = doc.next_sibling(node);
+        }
+        Ok(whole)
+    }
+}
 
 impl CommentOps for HostObject {}
 
@@ -9015,6 +9049,13 @@ struct ResolvedPoint {
     offset: u32,
 }
 
+impl ResolvedPoint {
+    /// The point as `tenta-dom`'s range operations take it.
+    fn pair(&self) -> (NodeId, u32) {
+        (self.node, self.offset)
+    }
+}
+
 /// A range's two endpoints, each resolved in the document its own handle names.
 struct ResolvedRange {
     /// The document the *start* endpoint resolves in. It is the one every
@@ -9366,6 +9407,85 @@ impl HostObject {
     }
 
     /// Writes both boundary points of the `Range` this host stands for.
+    /// Sets both of this range's points to `point` of the range's document,
+    /// which is where the standard leaves a range whose contents are gone.
+    fn collapse_range_to(
+        &self,
+        range: &ResolvedRange,
+        point: (NodeId, u32),
+    ) -> Result<(), JsError> {
+        let node = encode_node(range.slot, range.doc.borrow().node_ref(point.0));
+        let point = RangePoint {
+            node,
+            offset: point.1,
+        };
+        self.write_points(point, point)
+    }
+
+    /// The handle of a fragment a range operation made, with the images in
+    /// its copies told to the page as any clone's are.
+    fn range_fragment(
+        &self,
+        range: &ResolvedRange,
+        fragment: NodeId,
+    ) -> Handle<crate::bindings::DocumentFragment> {
+        self.context().note_cloned_images(fragment);
+        Handle::from_bits(encode_node(
+            range.slot,
+            range.doc.borrow().node_ref(fragment),
+        ))
+    }
+
+    /// A node argument of a range operation, which has to be of the range's
+    /// own document: this engine does not adopt nodes across documents.
+    fn range_node_argument(
+        &self,
+        range: &ResolvedRange,
+        handle: Handle<Node>,
+    ) -> Result<NodeId, JsError> {
+        let decoded = decode(handle.bits());
+        if is_attr_handle(self.context(), handle.bits()) {
+            return Err(JsError::dom_exception(
+                "HierarchyRequestError",
+                "an Attr cannot be inserted into a tree",
+            ));
+        }
+        if decoded.tag != TAG_NODE {
+            return Err(JsError::type_error("the argument is not a Node"));
+        }
+        let (doc, id) = self.anchor_of(handle.bits())?;
+        if decoded.slot != range.slot || !Rc::ptr_eq(&doc, &range.doc) {
+            return Err(JsError::dom_exception(
+                "NotSupportedError",
+                "the node belongs to another document, and this engine cannot \
+                 adopt it into this one",
+            ));
+        }
+        Ok(id)
+    }
+
+    /// `insertNode()`: the node goes in at the range's start, and a range
+    /// that was collapsed is extended over it.
+    fn insert_into_range(&self, range: &ResolvedRange, node: NodeId) -> Result<(), JsError> {
+        let collapsed = range.start.pair() == range.end.pair();
+        let after = range
+            .doc
+            .borrow_mut()
+            .insert_node_at_range(range.start.pair(), node)
+            .map_err(|error| mutation_error(&error))?;
+        if !collapsed {
+            return Ok(());
+        }
+        // The insertion moved the range's own points with every other
+        // range's; only the end is set, to just after what went in.
+        let (start, _) = self.range_record()?;
+        let end = RangePoint {
+            node: encode_node(range.slot, range.doc.borrow().node_ref(after.0)),
+            offset: after.1,
+        };
+        self.write_points(start, end)
+    }
+
     fn write_points(&self, start: RangePoint, end: RangePoint) -> Result<(), JsError> {
         let HostObject::Host { ctx, key } = self else {
             return Err(JsError::type_error("the object is not a Range"));
@@ -9598,6 +9718,122 @@ impl RangeOps for HostObject {
             range.slot,
             doc.node_ref(container),
         )))
+    }
+
+    fn delete_contents(&self) -> Result<(), JsError> {
+        let range = self.resolved_range()?;
+        let collapsed = range
+            .doc
+            .borrow_mut()
+            .delete_range_contents(range.start.pair(), range.end.pair())
+            .map_err(|error| mutation_error(&error))?;
+        self.collapse_range_to(&range, collapsed)
+    }
+
+    fn extract_contents(&self) -> Result<Handle<crate::bindings::DocumentFragment>, JsError> {
+        let range = self.resolved_range()?;
+        let (fragment, collapsed) = range
+            .doc
+            .borrow_mut()
+            .extract_range_contents(range.start.pair(), range.end.pair())
+            .map_err(|error| mutation_error(&error))?;
+        self.collapse_range_to(&range, collapsed)?;
+        Ok(self.range_fragment(&range, fragment))
+    }
+
+    fn clone_contents(&self) -> Result<Handle<crate::bindings::DocumentFragment>, JsError> {
+        let range = self.resolved_range()?;
+        let fragment = range
+            .doc
+            .borrow_mut()
+            .clone_range_contents(range.start.pair(), range.end.pair())
+            .map_err(|error| mutation_error(&error))?;
+        Ok(self.range_fragment(&range, fragment))
+    }
+
+    fn create_contextual_fragment(
+        &self,
+        html: &str,
+    ) -> Result<Handle<crate::bindings::DocumentFragment>, JsError> {
+        let range = self.resolved_range()?;
+        let fragment = range
+            .doc
+            .borrow_mut()
+            .create_contextual_fragment(range.start.node, html)
+            .map_err(|error| mutation_error(&error))?;
+        Ok(self.range_fragment(&range, fragment))
+    }
+
+    fn insert_node(&self, node: Handle<Node>) -> Result<(), JsError> {
+        let range = self.resolved_range()?;
+        let node = self.range_node_argument(&range, node)?;
+        self.insert_into_range(&range, node)
+    }
+
+    fn surround_contents(&self, new_parent: Handle<Node>) -> Result<(), JsError> {
+        let range = self.resolved_range()?;
+        let parent = self.range_node_argument(&range, new_parent)?;
+        {
+            let doc = range.doc.borrow();
+            if doc.range_splits_a_non_text_node(range.start.pair(), range.end.pair()) {
+                return Err(JsError::dom_exception(
+                    "InvalidStateError",
+                    "the range partially contains a node that is not a Text node",
+                ));
+            }
+            if matches!(
+                doc.kind(parent),
+                NodeKind::Document | NodeKind::DocType | NodeKind::Fragment | NodeKind::ShadowRoot
+            ) {
+                return Err(invalid_node_type(
+                    "a document, a doctype or a fragment cannot surround a range",
+                ));
+            }
+        }
+        let (fragment, collapsed) = range
+            .doc
+            .borrow_mut()
+            .extract_range_contents(range.start.pair(), range.end.pair())
+            .map_err(|error| mutation_error(&error))?;
+        self.collapse_range_to(&range, collapsed)?;
+        // What the new parent held goes; it is then put where the contents
+        // were, takes them, and becomes what the range selects.
+        {
+            let mut doc = range.doc.borrow_mut();
+            let children: Vec<NodeId> = doc.children(parent).collect();
+            for child in children {
+                doc.mutate(Mutation::Remove { child })
+                    .map_err(|error| mutation_error(&error))?;
+            }
+        }
+        let range = self.resolved_range()?;
+        self.insert_into_range(&range, parent)?;
+        let mut doc = range.doc.borrow_mut();
+        doc.mutate(Mutation::Append {
+            parent,
+            child: fragment,
+        })
+        .map_err(|error| mutation_error(&error))?;
+        let container = doc.parent(parent);
+        if !container.is_some() {
+            return Err(invalid_node_type("the node has no parent"));
+        }
+        let index = doc
+            .children(container)
+            .position(|child| child == parent)
+            .unwrap_or(0) as u32;
+        let container = encode_node(range.slot, doc.node_ref(container));
+        drop(doc);
+        self.write_points(
+            RangePoint {
+                node: container,
+                offset: index,
+            },
+            RangePoint {
+                node: container,
+                offset: index + 1,
+            },
+        )
     }
 
     fn set_start(&self, node: Handle<Node>, offset: u32) -> Result<(), JsError> {
