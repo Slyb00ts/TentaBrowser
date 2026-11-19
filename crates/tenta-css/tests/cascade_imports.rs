@@ -1,7 +1,7 @@
 #![cfg(feature = "stylo")]
 
 use tenta_css::CssStyleSheet;
-use tenta_css::cascade::import_urls;
+use tenta_css::cascade::{import_prologue, import_urls};
 use url::Url;
 
 fn base() -> Url {
@@ -78,4 +78,31 @@ fn an_import_in_the_text_is_inert_until_the_engine_supplies_a_loader() {
         1,
         "only the style rule survives AllowImportRules::No"
     );
+}
+
+#[test]
+fn the_prologue_is_the_text_imports_can_stand_in() {
+    for (text, prologue) in [
+        ("a { color: red }", ""),
+        ("", ""),
+        (
+            "@charset \"utf-8\"; @import url(a.css) screen; a {}",
+            "@charset \"utf-8\"; @import url(a.css) screen;",
+        ),
+        (
+            "/* c */ @layer x, y; @import 'b;c.css' layer(x);\n@media print { a {} } @import 'late.css';",
+            "/* c */ @layer x, y; @import 'b;c.css' layer(x);",
+        ),
+        ("@import 'a.css'; @layer x { a {} }", "@import 'a.css';"),
+        ("@import 'a.css';", "@import 'a.css';"),
+        ("@font-face { font-family: X } @import 'a.css';", ""),
+    ] {
+        assert_eq!(import_prologue(text), prologue, "{text:?}");
+        // What follows the prologue imports nothing.
+        assert_eq!(
+            import_urls(import_prologue(text), &base()),
+            import_urls(text, &base()),
+            "{text:?}"
+        );
+    }
 }

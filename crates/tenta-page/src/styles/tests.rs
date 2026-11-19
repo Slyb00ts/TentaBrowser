@@ -466,7 +466,7 @@ fn the_signature_tracks_exactly_what_changes_the_sheet_list() {
         id(&doc, "l"),
         id(&doc, "icon"),
     );
-    let sig = |doc: &Document| StyleSignature::of(doc, 0);
+    let sig = |doc: &Document| StyleSignature::of(doc, 0, 0);
     let initial = sig(&doc);
 
     set_attribute(&mut doc, div, atoms::CLASS, "x");
@@ -495,7 +495,16 @@ fn the_signature_tracks_exactly_what_changes_the_sheet_list() {
     set_attribute(&mut doc, added, atoms::REL, "stylesheet");
     assert_ne!(sig(&doc), before_rel, "a new stylesheet link");
 
-    assert_ne!(StyleSignature::of(&doc, 1), sig(&doc), "a completed fetch");
+    assert_ne!(
+        StyleSignature::of(&doc, 1, 0),
+        sig(&doc),
+        "a completed fetch"
+    );
+    assert_ne!(
+        StyleSignature::of(&doc, 0, 1),
+        sig(&doc),
+        "a sheet script changed"
+    );
 }
 
 fn scratch_dir(name: &str) -> std::path::PathBuf {
@@ -778,9 +787,9 @@ async fn the_byte_budget_is_charged_across_sheets() {
 #[test]
 fn the_signature_follows_the_document_encoding() {
     let mut doc = parse("<style>a{}</style>", DOC_URL);
-    let before = StyleSignature::of(&doc, 0);
+    let before = StyleSignature::of(&doc, 0, 0);
     doc.set_encoding("windows-1252");
-    assert_ne!(StyleSignature::of(&doc, 0), before);
+    assert_ne!(StyleSignature::of(&doc, 0, 0), before);
 }
 
 #[tokio::test(flavor = "current_thread")]

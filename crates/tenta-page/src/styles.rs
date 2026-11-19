@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use tenta_core::atom::atoms;
 use tenta_core::{Budgets, FsPolicy, NodeId};
-use tenta_css::cascade::{ImportedSheet, StyleSource, import_urls};
+use tenta_css::cascade::{ImportedSheet, StyleSource, import_prologue, import_urls};
 use tenta_dom::Document;
 use tenta_html::{Encoding, QuirksMode};
 use tenta_net::policy::cookies::Site;
@@ -88,7 +88,7 @@ pub(crate) struct StyleFailure {
 
 /// What a memoised signature was computed for: the document, its mutation
 /// generation, the completed fetches, and a hash of the URLs, encoding and mode.
-type SignatureKey = (u64, u64, u64, u64);
+type SignatureKey = (u64, u64, u64, u64, u64);
 
 /// A hash of everything that can change the list of sheets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,9 +105,14 @@ impl StyleSignature {
     /// `<meta charset>` restart changes how cached bodies are decoded). It
     /// deliberately ignores the document's mutation generation: most
     /// mutations cannot change a sheet.
-    pub(crate) fn of(doc: &Document, completed_fetches: u64) -> Self {
+    ///
+    /// `script` is the stamp of the document's script sheets
+    /// (`ScriptSheets::stamp`): it moves when a sheet is edited through CSSOM
+    /// or adopted, neither of which mutates the document.
+    pub(crate) fn of(doc: &Document, completed_fetches: u64, script: u64) -> Self {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         completed_fetches.hash(&mut hasher);
+        script.hash(&mut hasher);
         doc.url().map(Url::as_str).hash(&mut hasher);
         doc.base_url().map(Url::as_str).hash(&mut hasher);
         doc.encoding().hash(&mut hasher);
@@ -568,18 +573,21 @@ impl StyleState {
         doc.base_url().map(Url::as_str).hash(&mut hasher);
         doc.encoding().hash(&mut hasher);
         (doc.quirks_mode() as u8).hash(&mut hasher);
+        let script = crate::script_sheets::ScriptSheets::of(doc.document_id())
+            .map_or(0, |sheets| sheets.stamp());
         let key = (
             doc.document_id(),
             doc.mutation_generation(),
             self.completed_fetches(),
             hasher.finish(),
+            script,
         );
         if let Some((memo_key, signature)) = self.memo.get()
             && memo_key == key
         {
             return signature;
         }
-        let signature = StyleSignature::of(doc, self.completed_fetches());
+        let signature = StyleSignature::of(doc, self.completed_fetches(), script);
         self.memo.set(Some((key, signature)));
         signature
     }
@@ -616,6 +624,22 @@ impl StyleState {
     /// The sheets the cache can serve for `doc` right now. A linked sheet that
     /// is not cached, or failed, is absent; so is an import that is not.
     pub(crate) fn cached_sources(&self, doc: &Document, base_url: &Url) -> Vec<StyleSource> {
+        let script = crate::script_sheets::ScriptSheets::of(doc.document_id());
+        // What script did to the sheet of `owner`, whose source is `text`
+        // (from `href`, for a link): the text to parse in its place, and
+        // whether script turned the sheet off.
+        let edited = |owner: NodeId, href: Option<&Url>, text: &str| {
+            let edit = script.as_ref()?.element(
+                doc.node_ref(owner),
+                tenta_js::stylesheets::source_fingerprint(href, text),
+            )?;
+            // The script view of a sheet has no `@import` rules, so the ones
+            // the source began with are kept as they were written.
+            let text = edit
+                .text
+                .map(|rules| format!("{}\n{rules}", import_prologue(text)));
+            Some((text, edit.disabled))
+        };
         let mut sources = Vec::new();
         for candidate in candidates(doc, base_url) {
             match candidate {
@@ -625,6 +649,10 @@ impl StyleState {
                     text,
                     media,
                 } => {
+                    let (text, disabled) = match edited(owner, None, &text) {
+                        Some((edited, disabled)) => (edited.unwrap_or(text), disabled),
+                        None => (text, false),
+                    };
                     let imports = self.gather(&direct_imports(&text, base_url));
                     sources.push(StyleSource {
                         owner: Some(owner),
@@ -632,7 +660,7 @@ impl StyleState {
                         url: base_url.clone(),
                         text,
                         media,
-                        disabled: false,
+                        disabled,
                         imports,
                     });
                 }
@@ -659,17 +687,48 @@ impl StyleState {
                     ..
                 } => {
                     if let Some(Some(sheet)) = self.sheets.get(&url) {
+                        let (text, disabled) = match edited(owner, Some(&sheet.url), &sheet.text) {
+                            Some((edited, disabled)) => {
+                                (edited.unwrap_or_else(|| sheet.text.to_string()), disabled)
+                            }
+                            None => (sheet.text.to_string(), false),
+                        };
                         sources.push(StyleSource {
                             owner: Some(owner),
                             scope,
                             url: sheet.url.clone(),
-                            text: sheet.text.to_string(),
+                            text,
                             media,
-                            disabled: false,
+                            disabled,
                             imports: self.gather(&sheet.imports),
                         });
                     }
                 }
+            }
+        }
+        // Adopted sheets apply after the sheets of the tree they are adopted
+        // into, and trees do not order against each other, so the end of the
+        // list is after for all of them. A constructed sheet has no owner
+        // element, no `@import` and the document's base URL.
+        if let Some(script) = &script {
+            for sheet in script.adopted() {
+                let scope = match sheet.scope {
+                    Some(root) => match doc.resolve(root) {
+                        Ok(root) => Some(root),
+                        // The shadow root is gone, and its sheets with it.
+                        Err(_) => continue,
+                    },
+                    None => None,
+                };
+                sources.push(StyleSource {
+                    owner: None,
+                    scope,
+                    url: base_url.clone(),
+                    text: sheet.text,
+                    media: None,
+                    disabled: sheet.disabled,
+                    imports: Vec::new(),
+                });
             }
         }
         sources

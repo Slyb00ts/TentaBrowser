@@ -9,13 +9,12 @@
 //! stable while its text is the same (`link.sheet === document.styleSheets[0]`);
 //! when a `<style>`'s text changes it gets a new one, as HTML says.
 //!
-//! What it does not do yet is feed script's edits back to layout: a rule added
-//! with `insertRule` changes this object and not what the render session
-//! applies (S1 in `docs/dev/p3-plan.md`). An `@import` is not among a sheet's
+//! What script does to a sheet reaches layout: the sheet object is handed to
+//! the [`StyleHost`] when it is made, and the page reads its rules from it
+//! once script has changed them (S1). An `@import` is not among a sheet's
 //! `cssRules`: the sheet is parsed without a loader, which leaves it out.
 
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 
 use tenta_css::CssStyleSheet;
 use url::Url;
@@ -36,13 +35,10 @@ pub struct DocSheets {
     /// The owners last listed, with the document generation and the style
     /// host's epoch they were listed for.
     owners: Option<(OwnersKey, Rc<Vec<NodeId>>)>,
-}
-
-fn fingerprint(url: Option<&Url>, text: &str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    url.map(Url::as_str).hash(&mut hasher);
-    text.hash(&mut hasher);
-    hasher.finish()
+    /// `adoptedStyleSheets` of the document (`None`) and of each shadow root
+    /// that has any. The list is what keeps an adopted sheet alive when
+    /// script holds it nowhere else.
+    adopted: HashMap<Option<NodeRef>, Vec<Rc<CssSheetState>>>,
 }
 
 /// What an element's sheet is made of.
@@ -121,7 +117,7 @@ impl HostObject {
     fn sheet_of(&self, node: NodeId) -> Option<Handle<CSSStyleSheet>> {
         let source = self.sheet_text(node)?;
         let ctx = self.context();
-        let print = fingerprint(source.href.as_ref(), &source.text);
+        let print = crate::stylesheets::source_fingerprint(source.href.as_ref(), &source.text);
         let reference = ctx.doc.try_borrow().ok()?.node_ref(node);
         let existing = ctx
             .doc_sheets
@@ -148,11 +144,91 @@ impl HostObject {
                     sheets.entries.retain(|node, _| doc.resolve(*node).is_ok());
                 }
                 sheets.entries.insert(reference, (print, Rc::clone(&state)));
+                drop(sheets);
+                // From here on the page applies what script does to it.
+                if let Some(host) = ctx.style_host.borrow().clone() {
+                    host.element_sheet(
+                        reference,
+                        print,
+                        Rc::clone(&state) as Rc<dyn crate::stylesheets::ScriptSheet>,
+                    );
+                }
                 state
             }
         };
         let key = state.sheet_key(ctx);
         Some(Handle::from_bits(encode_host(self.slot(), key)))
+    }
+
+    /// The tree whose `adoptedStyleSheets` this object has: `None` for the
+    /// document, and the shadow root for a `ShadowRoot`.
+    fn adopting_scope(&self) -> Option<NodeRef> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        (id != doc.document_node()).then(|| doc.node_ref(id))
+    }
+
+    /// `adoptedStyleSheets` of the anchored document or shadow root.
+    pub(super) fn adopted_style_sheets(&self) -> Result<Vec<Handle<CSSStyleSheet>>, JsError> {
+        let ctx = self.context();
+        let scope = self.adopting_scope();
+        let sheets = ctx
+            .doc_sheets
+            .borrow()
+            .adopted
+            .get(&scope)
+            .cloned()
+            .unwrap_or_default();
+        Ok(sheets
+            .iter()
+            .map(|state| Handle::from_bits(encode_host(self.slot(), state.sheet_key(ctx))))
+            .collect())
+    }
+
+    /// Assigns `adoptedStyleSheets`. Nothing changes when any of the sheets
+    /// cannot be adopted here.
+    pub(super) fn set_adopted_style_sheets(
+        &self,
+        sheets: Vec<Handle<CSSStyleSheet>>,
+    ) -> Result<(), JsError> {
+        let ctx = self.context();
+        let mut adopted = Vec::with_capacity(sheets.len());
+        for handle in sheets {
+            let decoded = decode(handle.bits());
+            // A sheet is adopted by the document it was constructed in: one
+            // of another document is a record of another slot.
+            let state = (decoded.tag == TAG_HOST && decoded.slot == self.slot())
+                .then(|| match ctx.host_records.borrow().get(decoded.host_key()) {
+                    Some(HostRecord::CssSheet(state)) => Some(Rc::clone(state)),
+                    _ => None,
+                })
+                .flatten()
+                .filter(|state| state.is_constructed());
+            let Some(state) = state else {
+                return Err(JsError::dom_exception(
+                    "NotAllowedError",
+                    "Can't adopt a stylesheet that was not constructed in this document",
+                ));
+            };
+            adopted.push(state);
+        }
+        let scope = self.adopting_scope();
+        if let Some(host) = ctx.style_host.borrow().clone() {
+            host.adopted_sheets(
+                scope,
+                adopted
+                    .iter()
+                    .map(|state| Rc::clone(state) as Rc<dyn crate::stylesheets::ScriptSheet>)
+                    .collect(),
+            );
+        }
+        let mut sheets = ctx.doc_sheets.borrow_mut();
+        if adopted.is_empty() {
+            sheets.adopted.remove(&scope);
+        } else {
+            sheets.adopted.insert(scope, adopted);
+        }
+        Ok(())
     }
 
     /// `link.sheet` and `style.sheet` of the anchored element.

@@ -17,15 +17,38 @@ use url::Url;
 /// does not resolve, is skipped as a browser skips an invalid rule. The same
 /// URL may appear more than once; deduplication is the caller's.
 pub fn import_urls(text: &str, sheet_url: &Url) -> Vec<Url> {
+    let mut found = Vec::new();
+    scan_prologue(text, |target| {
+        if let Ok(url) = sheet_url.join(target) {
+            found.push(url);
+        }
+    });
+    found
+}
+
+/// The part of `text` that imports can stand in, verbatim: everything before
+/// the first style rule, other at-rule or `@layer` block.
+///
+/// A sheet that script has edited is handed to the cascade as this prologue
+/// followed by its rules as they serialize, because the script view of a
+/// sheet has no `@import` rules to serialize.
+pub fn import_prologue(text: &str) -> &str {
+    &text[..scan_prologue(text, |_| {})]
+}
+
+/// Walks the prologue, reporting each import's target, and returns how many
+/// bytes of `text` it spans.
+fn scan_prologue(text: &str, mut import: impl FnMut(&str)) -> usize {
     let mut input = ParserInput::new(text);
     let mut parser = Parser::new(&mut input);
-    let mut found = Vec::new();
+    let start = parser.position();
     loop {
+        let before = parser.position();
         let keyword = match parser.next() {
             Ok(Token::AtKeyword(keyword)) => keyword.to_ascii_lowercase(),
             Ok(Token::CDO | Token::CDC) => continue,
             // A style rule, a stray token or the end of the sheet.
-            _ => break,
+            _ => return parser.slice(start..before).len(),
         };
         match keyword.as_str() {
             "charset" => skip_statement(&mut parser),
@@ -36,10 +59,8 @@ pub fn import_urls(text: &str, sheet_url: &Url) -> Vec<Url> {
                     while p.next().is_ok() {}
                     Ok::<String, ParseError<'_, ()>>(target)
                 });
-                if let Ok(target) = target
-                    && let Ok(url) = sheet_url.join(&target)
-                {
-                    found.push(url);
+                if let Ok(target) = target {
+                    import(&target);
                 }
             }
             "layer" => {
@@ -52,13 +73,12 @@ pub fn import_urls(text: &str, sheet_url: &Url) -> Vec<Url> {
                     .is_ok()
                     && matches!(parser.next(), Ok(Token::CurlyBracketBlock));
                 if is_block {
-                    break;
+                    return parser.slice(start..before).len();
                 }
             }
-            _ => break,
+            _ => return parser.slice(start..before).len(),
         }
     }
-    found
 }
 
 fn skip_statement(parser: &mut Parser<'_, '_>) {

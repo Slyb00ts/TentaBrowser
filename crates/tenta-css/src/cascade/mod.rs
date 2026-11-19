@@ -48,7 +48,7 @@ mod ua;
 
 pub use atoms::AtomMaps;
 pub use engine::StyleEngine;
-pub use imports::import_urls;
+pub use imports::{import_prologue, import_urls};
 pub use media::{MediaQueryMatch, match_media};
 pub use pseudo::ResolveError;
 pub use types::{

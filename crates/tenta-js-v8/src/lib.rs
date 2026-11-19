@@ -2790,6 +2790,7 @@ impl Engine {
     /// `DOMQuad` (`tenta_js::matrix`), and `SVGAnimatedString` with the SVG
     /// `className` and `href` (`tenta_js::svg_animated`). Only the names are
     /// defined here; the script behind them runs when a page first uses one.
+    /// `CSSStyleSheet.prototype.replace()` is defined here too, natively.
     fn install_streams(&mut self) {
         if self.native_failure().is_some() {
             return;
@@ -2805,6 +2806,7 @@ impl Engine {
         host::subtle::install(scope, global);
         host::matrix::install(scope, global);
         host::svg_animated::install(scope, global);
+        host::sheet_replace::install(scope, global);
     }
 
     /// Installs the page's image state for the document this engine is bound

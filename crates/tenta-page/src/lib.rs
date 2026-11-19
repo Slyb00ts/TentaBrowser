@@ -31,6 +31,10 @@ mod render;
 mod script_cpu;
 #[cfg(feature = "render")]
 mod script_geometry;
+// Private: what script did to the document's stylesheets, which the style
+// collection reads (`crates/tenta-page/src/script_sheets.rs`).
+#[cfg(feature = "render")]
+mod script_sheets;
 pub mod settle;
 // Private: stylesheet collection feeds the render session and is not an API
 // (`crates/tenta-page/src/styles.rs`).

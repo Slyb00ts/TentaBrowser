@@ -1382,6 +1382,9 @@ pub struct CssStyleSheet {
     links: StdArc<SheetLinks>,
     base_url: Url,
     revision: u64,
+    /// How many of those revisions changed what the sheet's rules are, as
+    /// opposed to whether it applies.
+    content_revision: u64,
 }
 
 impl CssStyleSheet {
@@ -1423,6 +1426,7 @@ impl CssStyleSheet {
             links,
             base_url,
             revision: 0,
+            content_revision: 0,
         }
     }
 
@@ -1457,6 +1461,30 @@ impl CssStyleSheet {
         self.revision
     }
 
+    /// Counts the changes to the sheet's rules that a document would have
+    /// been told about: 0 for a sheet that is still what its text parsed to.
+    /// Turning the sheet off and on does not count.
+    pub fn content_revision(&self) -> u64 {
+        self.content_revision
+    }
+
+    /// The sheet's rules serialized one after another: text that parses back
+    /// to the same rules. `DepthLimit` when a rule nests too deeply to
+    /// serialize safely.
+    pub fn css_text(&self) -> Result<String, CssomError> {
+        let guard = self.sheet.shared_lock.read();
+        let contents = self.sheet.contents.read_with(&guard);
+        let rules = contents.rules(&guard);
+        check_rule_depth(rules, &guard)?;
+        let mut text = String::new();
+        for rule in rules {
+            rule.to_css(&guard, &mut text)
+                .expect("serializing CSS into a String cannot fail");
+            text.push('\n');
+        }
+        Ok(text)
+    }
+
     pub fn disabled(&self) -> bool {
         self.sheet.disabled()
     }
@@ -1466,7 +1494,10 @@ impl CssStyleSheet {
         if !self.sheet.set_disabled(disabled) {
             return None;
         }
-        Some(self.full_change())
+        let content = self.content_revision;
+        let change = self.full_change();
+        self.content_revision = content;
+        Some(change)
     }
 
     /// Snapshot the current top-level `cssRules`, including nested rule trees.
@@ -1909,7 +1940,7 @@ impl CssStyleSheet {
             // Rebuild conservatively until the native API carries that path.
             return Some(self.full_change());
         }
-        self.revision = self.revision.saturating_add(1);
+        self.revise();
         Some(SheetChange {
             kind: SheetChangeKind::StyleDeclarations,
             index: None,
@@ -1961,7 +1992,7 @@ impl CssStyleSheet {
                 .0
                 .insert(index, rule.clone());
         }
-        self.revision = self.revision.saturating_add(1);
+        self.revise();
         Ok(SheetChange {
             kind: SheetChangeKind::Insertion,
             index: Some(index),
@@ -2077,7 +2108,7 @@ impl CssStyleSheet {
             rules_lock.write_with(&mut guard).remove_rule(index)?;
         }
         self.links.prune_detached_insertions();
-        self.revision = self.revision.saturating_add(1);
+        self.revise();
         Ok(SheetChange {
             kind: SheetChangeKind::Removal,
             index: Some(index),
@@ -2116,8 +2147,14 @@ impl CssStyleSheet {
         Ok(self.full_change())
     }
 
-    fn full_change(&mut self) -> SheetChange {
+    /// Counts one more change to the rules.
+    fn revise(&mut self) {
         self.revision = self.revision.saturating_add(1);
+        self.content_revision = self.content_revision.saturating_add(1);
+    }
+
+    fn full_change(&mut self) -> SheetChange {
+        self.revise();
         SheetChange {
             kind: SheetChangeKind::Full,
             index: None,

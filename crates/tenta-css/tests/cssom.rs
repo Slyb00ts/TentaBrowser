@@ -728,6 +728,56 @@ fn a_media_list_is_rewritten_appended_to_and_deleted_from() {
 }
 
 #[test]
+fn a_sheet_serializes_to_text_that_parses_back_to_its_rules() {
+    let source = "@namespace svg url(http://www.w3.org/2000/svg); \
+         @layer reset, base; \
+         @media screen and (min-width: 600px) { a { color: red; & b { color: blue } } } \
+         @supports (display: grid) { a { display: grid } } \
+         @keyframes spin { from { rotate: 0turn } to { rotate: 1turn } } \
+         @font-face { font-family: \"X Y\"; src: url(\"x;y.woff2\") } \
+         @property --gap { syntax: \"<length>\"; inherits: false; initial-value: 4px } \
+         a::before { content: \"}\"; --custom: { a: b } }";
+    let mut sheet = CssStyleSheet::parse(source, base_url());
+    assert_eq!(sheet.content_revision(), 0);
+    let text = sheet.css_text().unwrap();
+    let again = CssStyleSheet::parse(&text, base_url());
+    assert_eq!(again.rule_count(), sheet.rule_count());
+    assert_eq!(again.css_text().unwrap(), text, "serialization is stable");
+    assert_eq!(again.css_rules().unwrap(), sheet.css_rules().unwrap());
+
+    // Turning the sheet off and on is not a change to its rules; an edit is.
+    sheet.set_disabled(true);
+    sheet.set_disabled(false);
+    assert_eq!(sheet.content_revision(), 0);
+    assert_eq!(sheet.revision(), 2);
+    let last = sheet.rule_count();
+    sheet.insert_rule("b { color: green }", last).unwrap();
+    let rule = sheet.rule_at(last).unwrap();
+    sheet
+        .set_rule_style_property(&rule, "color", "blue", "")
+        .unwrap();
+    sheet.delete_rule(last - 1).unwrap();
+    assert_eq!(sheet.content_revision(), 3);
+    assert!(
+        sheet
+            .css_text()
+            .unwrap()
+            .ends_with("\nb { color: blue; }\n")
+    );
+    assert!(!sheet.css_text().unwrap().contains("a::before"));
+
+    let deep = format!(
+        "{}a {{ color: red }}{}",
+        "@media all {".repeat(200),
+        "}".repeat(200)
+    );
+    assert_eq!(
+        CssStyleSheet::parse(&deep, base_url()).css_text().err(),
+        Some(CssomError::DepthLimit)
+    );
+}
+
+#[test]
 fn keyframes_are_read_found_appended_and_deleted() {
     let mut sheet = CssStyleSheet::parse(
         "@keyframes fade { from { opacity: 0 } 50%, 75% { opacity: .5 } to { opacity: 1 } } \

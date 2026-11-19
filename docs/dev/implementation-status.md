@@ -104,7 +104,8 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
 | `DOMMatrix`, `DOMMatrixReadOnly`, `DOMPoint`, `DOMPointReadOnly`, `DOMQuad` (MAT1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `new DOMMatrix(getComputedStyle(el).transform)` threw. The transform list is parsed in the script: no `calc()`, no percentages; not serializable; see the section below |
 | `SVGAnimatedString`, SVG `className` and SVG `<a>` `href` (SVG1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `x.href instanceof SVGAnimatedString` threw, and an SVG element's `className` was a string. Nothing animates; `href` on SVG `<a>` only; see the section below |
-| Every CSS rule kind in CSSOM; lists with an index iterate (CSSOM2) | Implemented on V8 and QuickJS; focused checks passed on both; measured; seen to fix one real page; not independently reviewed | `cssRules[i]` threw for every rule that was not a style rule, and `insertRule()`/`replaceSync()` refused every at-rule. Each rule is now an object of its own interface, group rules take and give up child rules, `@keyframes` exposes its keyframes, and `for…of` works on `cssRules`, `styleSheets`, a declaration and a media list. No `@import` or `@container` rule exists to read; an edit still does not reach layout; see the section below |
+| What script does to a stylesheet reaches layout; `adoptedStyleSheets`; `CSSStyleSheet.replace()` (S1) | Implemented (`adoptedStyleSheets` on V8 and QuickJS, layout on V8 with `render`, `replace()` on V8); focused checks passed; measured; seen to change two real pages from unstyled to styled; not independently reviewed | A rule a script inserted, a property it set on a rule, `sheet.disabled` and a constructed sheet were visible to script and to nothing else: `getComputedStyle`, geometry, the snapshot and a screenshot used the element's source text. A page styled by a CSS-in-JS library was laid out unstyled. The page now reads an edited sheet from the script side when it assembles styles. An edit re-parses every sheet and restyles the tree; see the section below |
+| Every CSS rule kind in CSSOM; lists with an index iterate (CSSOM2) | Implemented on V8 and QuickJS; focused checks passed on both; measured; seen to fix one real page; not independently reviewed | `cssRules[i]` threw for every rule that was not a style rule, and `insertRule()`/`replaceSync()` refused every at-rule. Each rule is now an object of its own interface, group rules take and give up child rules, `@keyframes` exposes its keyframes, and `for…of` works on `cssRules`, `styleSheets`, a declaration and a media list. No `@import` or `@container` rule exists to read; see the section below |
 | MCP `browser_network_requests` lists every request of the page (NETLOG1) | Implemented; focused checks passed; measured on real sites; not independently reviewed | The tool listed the document and nothing else. It reads the page's network hub now: scripts, sheets, images, `fetch`, XHR, each hop of a redirect, failures by name. Frames inside the page are not listed; see the section below |
 | An idle callback is page activity (IDLE1) | Corrected on V8; focused check passed and mutation-checked; measured, no difference outside noise | `requestIdleCallback` from tracked script was a tracked zero-delay timer and held the settle open; it is background now, as the provenance definition says; see the section below |
 | `ReadableStream`, its default reader and controller, the queuing strategies, `Response.body` and `Blob.stream()` (ST1) | Implemented on V8 as a script built at first use; focused checks passed; measured; not independently reviewed; **Streams as script rather than WebIDL is a choice the specification may record** | A page could not make or read a stream at all. Default streams only: no byte streams or BYOB readers, no `WritableStream`, `TransformStream`, `pipeTo()` or `pipeThrough()`; a body is delivered as one chunk; a stream is not accepted as a body; see the section below |
@@ -1796,7 +1797,7 @@ Details, files and numbers are in `docs/dev/p3-plan.md` ("As built (CSS1)").
 - **Measured** (release, `bench/css_load.py`, 20 ms RTT): 10 sheets, load + screenshot 294 -> 93 ms
   p50; `load` itself 36 -> 88 ms. WPT `css/cssom` 63.5% -> 73.9% (0 regressions), `css/cssom-view`
   28.7% (first run).
-- **Gaps:** edits to a document sheet (`insertRule`, `deleteRule`) are not applied to layout (S1);
+- **Gaps:** (edits to a document sheet now reach layout: S1 below.)
   QuickJS has neither `getComputedStyle` nor an executed arm; no scrolling model; `IntersectionObserver`
   is still the CDP shim's one-shot stub; no early fetch from the preload scanner.
 
@@ -4108,6 +4109,104 @@ at `SVGAnimatedString is not defined`.
   in both loads before and nothing in either after. The snapshot is the
   same.
 
+### What script does to a stylesheet reaches layout (S1)
+
+The render session lays out from sheet text: the text of each `<style>`
+and the body of each `<link>` (`crates/tenta-page/src/styles.rs`). Script
+changes sheets without changing either. `insertRule()` on the empty
+`<style>` a CSS-in-JS library made, a property set on a rule's `style`,
+`sheet.disabled`, a constructed sheet: all of it was readable by script
+and applied by nothing, so such a page was laid out, snapshotted and
+captured unstyled.
+
+- **How an edit gets there.** When script first has the sheet object of
+  an element, the engine hands it to the page's style host as a
+  `ScriptSheet` (`crates/tenta-js/src/stylesheets.rs`): something that
+  answers a revision, whether the sheet is off, and its rules as text
+  once script has changed them. The page keeps these per document
+  (`crates/tenta-page/src/script_sheets.rs`). Nothing is pushed per edit:
+  the revisions are part of the style signature, and the text is asked
+  for when the signature moved and the sources are assembled again. An
+  edited sheet is parsed from `CssStyleSheet::css_text()` in place of the
+  element's source, behind the `@import` prologue the source began with
+  (`tenta_css::cascade::import_prologue`), because the script view of a
+  sheet has no `@import` rules. A sheet script only read, or only turned
+  off, keeps its source. A sheet object made from text the element no
+  longer has says nothing about the element.
+- **`document.adoptedStyleSheets` and `shadowRoot.adoptedStyleSheets`**
+  exist, on both engines, and their sheets apply after the tree's own, in
+  list order, live. The list is the frozen array it was before CSSOM made
+  it observable: it is replaced by assignment, and `push()` throws rather
+  than change a copy. A sheet that was not constructed, or was constructed
+  in another document, is `NotAllowedError`.
+- **`CSSStyleSheet.replace()`** (V8) is `replaceSync()` with its outcome
+  in a promise (`crates/tenta-js-v8/src/host/sheet_replace.rs`); the rules
+  are set before it returns, not after a parse off the main thread.
+  `replaceSync()` on the sheet of an element is `NotAllowedError`, as
+  CSSOM has it.
+- **What an edit costs.** The style engine rebuilds from all its sources
+  when any of them changes, and restyles the whole tree, as it already
+  did when a `<style>`'s text changed. So an edit followed by a layout
+  question costs a parse of every sheet: with 3,000 rules in the sheet,
+  300 rounds of one `insertRule()` and one `getBoundingClientRect()` took
+  2.1 s, 7 ms a round (0.8 ms for all 300 before, when the answer did not
+  change); the same 300 rounds on a sheet that started empty took 155 ms.
+  Edits that arrive together cost one. A cache of parsed sheets by text
+  would make this proportional to the sheet that changed; it is not
+  there.
+- **Not there.** QuickJS has no layout to reach. `adoptedStyleSheets` is
+  not an `ObservableArray`: `push()` and index assignment throw. An
+  expando on an adopted sheet that script holds nowhere else is lost at a
+  collection, though the sheet is not. A media query list changed through
+  `MediaList` reaches layout as any edit does; `<link media>` and
+  `StyleSheet.media` are still the attribute's.
+- **Checks:** `crates/tenta-browser/tests/cssom_layout.rs` (insert,
+  change, delete, nested and at-rules against `getComputedStyle` and
+  `getBoundingClientRect`; a sheet that is only read or turned off keeps
+  an `@import` its script view lacks; a linked sheet's edit keeps its
+  imports; new text in a `<style>` drops the old sheet's edits; adopted
+  sheets in order, live, turned off and removed, on the document and on a
+  shadow root; what cannot be adopted; a screenshot showing an inserted
+  rule and an adopted sheet); `crates/tenta-css/tests/cssom.rs`
+  `a_sheet_serializes_to_text_that_parses_back_to_its_rules` and
+  `cascade_imports.rs` `the_prologue_is_the_text_imports_can_stand_in`;
+  `crates/tenta-js/tests/support/cssom_sheet.rs`
+  `adopted_style_sheets_is_a_frozen_list_of_constructed_sheets` (both
+  engines); `crates/tenta-js-v8/tests/cssom_sheet.rs`
+  `replace_reports_through_a_promise_what_replace_sync_does`.
+  The workspace passed 5052 of 5052 and the feature set 614 of 614; fmt, both Clippy runs, `lint-deps`, `idl-manifest` and
+  `cargo deny` were clean.
+- **Measured** (release, against `ed1ceaa`, interleaved, 2026-11-19).
+  Three thousand `insertRule()` calls into one `<style>` took 7.0 ms
+  before and 6.9 ms after, and the one layout question that follows them
+  8.2 ms (it was 0, and wrong). A page that asks layout questions and
+  edits nothing pays for the stamp of its script sheets on each question:
+  20,000 `getBoundingClientRect()` calls with 21 sheets registered took
+  28.9 ms before and 30.7 ms after (medians of five runs each, 26.9 to
+  29.8 against 29.6 to 32.1), inside the noise floor; the first version
+  of the stamp hashed with SipHash and cost 30% there, which is why it
+  mixes one word per sheet instead. Paths that do not touch a sheet did
+  not move: building an engine 2.60 ms -> 2.64 ms p50 and its preludes
+  1.61 ms -> 1.62 ms (`replace()` is defined when the engine is built);
+  `S-dom-calls` `has` 26.30 -> 26.27 ns and `get` 80.38 -> 81.02 ns, RSS
+  35.2 -> 35.4 MiB; `S-js-xhr` navigation 9.06/9.75 -> 8.88/9.42 ms
+  p50/p95, RSS 31.9 -> 32.0 MiB; `S-css-load` (ten linked sheets, then a
+  capture) load 138.5/139.7 -> 135.9/139.5 ms, capture 3.0/3.2 -> 3.0/3.4
+  ms, RSS 45.1 -> 45.6 MiB.
+- **On real pages** (release CLI over MCP, three loads of each build
+  alternating, 2026-11-19). Of the 35 sweep sites, six have styles that
+  exist only on the script side: bbc.com/news (518 rules inserted into an
+  empty `<style>`), nytimes.com (524), imdb.com (792), npmjs.com (4),
+  angular.dev (2), and github.com (one sheet adopted by the document and
+  one by each of 42 shadow roots). bbc.com/news went from an unstyled list
+  of links to its page: of the same 1,269 elements, those computed as
+  `flex` went from 1 to 90 and as `grid` from 0 to 154, and the document
+  from 12,792 px tall to 6,474, in every load. imdb.com's capture went
+  from a dark page with a few stray menu entries (a 41 KB PNG in every
+  load) to its home page (711 to 783 KB), and its document from 26,010 to
+  29,717 px tall to 11,818 to 12,002. github.com's captures differ in
+  what had loaded when they were taken, and nothing is claimed for it.
+
 ### Every CSS rule kind in CSSOM, and lists that iterate (CSSOM2)
 
 The script view of a stylesheet stopped at style rules. Reading any other
@@ -4167,11 +4266,8 @@ and `document.styleSheets` had no iterator.
   and `CSSPageRule` exist as interface objects only, and
   `CSSContainerRule` is deliberately absent. `CSSMediaRule.matches` is
   missing (it takes the page's device). `StyleSheet.media` is missing.
-  **An edit still does not reach layout**: a rule inserted by script is
-  read back by script and not applied by the render session, so a page
-  styled through `insertRule()` is unstyled in a screenshot and in
-  `getComputedStyle()`; `document.adoptedStyleSheets` does not exist.
-  That is the next package.
+  At this commit an edit did not reach layout and
+  `document.adoptedStyleSheets` did not exist; S1, above, is both.
 - **Checks:** `crates/tenta-css/tests/cssom.rs` and
   `constructed_sheet.rs` (insertion and deletion at every level, the
   attributes of each kind, media lists, keyframes, descriptors, the depth

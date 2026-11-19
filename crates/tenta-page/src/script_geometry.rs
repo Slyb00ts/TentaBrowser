@@ -195,6 +195,9 @@ pub(crate) struct PageStyleHost {
     page: PageId,
     navigation: u64,
     document: Weak<RefCell<DomDocument>>,
+    /// What script did to the document's sheets, made when script first has
+    /// a sheet to report.
+    script: std::cell::OnceCell<std::rc::Rc<crate::script_sheets::ScriptSheets>>,
 }
 
 impl PageStyleHost {
@@ -207,7 +210,21 @@ impl PageStyleHost {
             page,
             navigation,
             document,
+            script: std::cell::OnceCell::new(),
         }
+    }
+
+    /// The document's registry of script sheets. `None` while the document
+    /// cannot be read, which a caller treats as "not told".
+    fn script_sheets(&self) -> Option<&std::rc::Rc<crate::script_sheets::ScriptSheets>> {
+        if let Some(sheets) = self.script.get() {
+            return Some(sheets);
+        }
+        let id = self.document.upgrade()?.try_borrow().ok()?.document_id();
+        Some(
+            self.script
+                .get_or_init(|| crate::script_sheets::ScriptSheets::for_document(id)),
+        )
     }
 }
 
@@ -222,6 +239,27 @@ impl tenta_js::stylesheets::StyleHost for PageStyleHost {
         render::style_of(self.page, self.navigation, doc.document_id())
             .and_then(|style| style.try_borrow().ok().map(|s| s.completed_fetches() + 1))
             .unwrap_or(0)
+    }
+
+    fn element_sheet(
+        &self,
+        owner: tenta_core::NodeRef,
+        source: u64,
+        sheet: std::rc::Rc<dyn tenta_js::stylesheets::ScriptSheet>,
+    ) {
+        if let Some(sheets) = self.script_sheets() {
+            sheets.set_element(owner, source, &sheet);
+        }
+    }
+
+    fn adopted_sheets(
+        &self,
+        scope: Option<tenta_core::NodeRef>,
+        sheets: Vec<std::rc::Rc<dyn tenta_js::stylesheets::ScriptSheet>>,
+    ) {
+        if let Some(registry) = self.script_sheets() {
+            registry.set_adopted(scope, sheets);
+        }
     }
 
     fn linked_sheet(&self, node: NodeId) -> Option<tenta_js::stylesheets::LinkedSheet> {

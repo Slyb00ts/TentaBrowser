@@ -348,6 +348,12 @@ interface Document : Node {
   // CSS1: the document's style sheets, one per `<style>` and per loaded
   // `<link rel=stylesheet>`, in tree order.
   [SameObject] readonly attribute StyleSheetList styleSheets;
+  // The constructed sheets that apply to the document after its own. CSSOM
+  // has this as an ObservableArray; here it is the frozen array it was
+  // before, so a list is replaced by assignment and `push()` throws instead
+  // of changing a copy. Assigning a sheet that was not constructed, or was
+  // constructed in another document, throws NotAllowedError.
+  [Throws] attribute FrozenArray<CSSStyleSheet> adoptedStyleSheets;
 };
 
 // Phase 4d-3: `iterable<>` makes the collection usable with `for...of` and
@@ -684,6 +690,8 @@ interface ShadowRoot : DocumentFragment {
   readonly attribute boolean delegatesFocus;
   readonly attribute DOMString slotAssignment;
   attribute DOMString innerHTML;
+  // As on Document: the constructed sheets that style this shadow tree.
+  [Throws] attribute FrozenArray<CSSStyleSheet> adoptedStyleSheets;
 };
 
 dictionary AssignedNodesOptions {

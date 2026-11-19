@@ -84,6 +84,10 @@ name = "geometry_js"
 required-features = ["render", "v8"]
 
 [[test]]
+name = "cssom_layout"
+required-features = ["render", "v8"]
+
+[[test]]
 name = "css_loading"
 required-features = ["render", "v8"]
 

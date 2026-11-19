@@ -52,6 +52,12 @@ pub struct SheetOwner {
 }
 
 impl CssSheetState {
+    /// Whether script made this sheet with `new CSSStyleSheet()`, as opposed
+    /// to it being the sheet of an element.
+    pub(super) fn is_constructed(&self) -> bool {
+        self.owner.is_none()
+    }
+
     /// `SecurityError` when script may not touch this sheet's rules.
     fn check_readable(&self) -> Result<(), JsError> {
         if self.owner.as_ref().is_some_and(|owner| owner.opaque) {
@@ -103,6 +109,30 @@ impl PartOwner {
 /// A rule or keyframe is found by the address of its Stylo allocation. The
 /// table holds a handle to it beside the key, which keeps the allocation, and
 /// so the address, from being reused while the entry is there.
+impl crate::stylesheets::ScriptSheet for CssSheetState {
+    fn revision(&self) -> u64 {
+        // A sheet being changed right now is read again when that is over.
+        self.sheet
+            .try_borrow()
+            .map_or(u64::MAX, |sheet| sheet.revision())
+    }
+
+    fn text(&self) -> Option<String> {
+        let sheet = self.sheet.try_borrow().ok()?;
+        // The sheet of an element is its source until script changes a rule;
+        // a constructed sheet has nothing but its rules.
+        if self.owner.is_some() && sheet.content_revision() == 0 {
+            return None;
+        }
+        // A sheet nested too deeply to serialize keeps its source.
+        sheet.css_text().ok()
+    }
+
+    fn disabled(&self) -> bool {
+        self.sheet.try_borrow().is_ok_and(|sheet| sheet.disabled())
+    }
+}
+
 #[derive(Default)]
 struct CssKeys {
     sheet: Option<HostKey>,
@@ -688,6 +718,14 @@ impl CSSStyleSheetOps for HostObject {
     }
     fn replace_sync(&self, text: &str) -> Result<(), JsError> {
         let sheet = sheet_record(self)?;
+        // Only a sheet script constructed is replaced whole; the sheet of an
+        // element follows the element's text.
+        if !sheet.is_constructed() {
+            return Err(JsError::dom_exception(
+                "NotAllowedError",
+                "Can't call replaceSync on a stylesheet that was not constructed",
+            ));
+        }
         sheet.check_readable()?;
         sheet
             .sheet

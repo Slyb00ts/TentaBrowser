@@ -109,6 +109,16 @@ impl HostObject {
 }
 
 impl ShadowRootOps for HostObject {
+    fn adopted_style_sheets(&self) -> Result<Vec<Handle<crate::bindings::CSSStyleSheet>>, JsError> {
+        HostObject::adopted_style_sheets(self)
+    }
+    fn set_adopted_style_sheets(
+        &self,
+        value: Vec<Handle<crate::bindings::CSSStyleSheet>>,
+    ) -> Result<(), JsError> {
+        HostObject::set_adopted_style_sheets(self, value)
+    }
+
     fn mode(&self) -> Result<String, JsError> {
         let (doc, id) = self.anchor();
         Ok(match doc.borrow().shadow_root_mode(id) {

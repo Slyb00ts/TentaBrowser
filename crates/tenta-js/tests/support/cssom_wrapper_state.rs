@@ -130,6 +130,18 @@ fn held_media_list_keeps_the_rule_it_writes_to() {
 }
 
 #[test]
+fn an_adopted_sheet_is_kept_by_the_list_it_is_in() {
+    assert_retained(
+        "{const sheet=new CSSStyleSheet();sheet.replaceSync('a{color:red}');\
+         sheet.note='adopted';sheet.cssRules[0].note='rule';\
+         document.adoptedStyleSheets=[sheet];}",
+        "(()=>{const sheet=document.adoptedStyleSheets[0];\
+         return [sheet.cssRules.length,sheet.cssRules[0].cssText].join('|')})()",
+        "1|a { color: red; }",
+    );
+}
+
+#[test]
 fn held_style_keeps_parent_rule_state() {
     assert_retained(
         "globalThis.style=(()=>{const sheet=new CSSStyleSheet();\

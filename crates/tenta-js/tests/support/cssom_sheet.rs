@@ -297,6 +297,32 @@ fn a_font_face_rule_reads_its_descriptors_through_style() {
 }
 
 #[test]
+fn adopted_style_sheets_is_a_frozen_list_of_constructed_sheets() {
+    assert_eq!(
+        eval(
+            "const a=new CSSStyleSheet(),b=new CSSStyleSheet(); \
+             const empty=document.adoptedStyleSheets; \
+             document.adoptedStyleSheets=[a,b]; \
+             const list=document.adoptedStyleSheets; \
+             let pushed='ok';try{list.push(a)}catch(e){pushed=e.name} \
+             const attempt=v=>{try{document.adoptedStyleSheets=v;return 'ok'}catch(e){return e.name}}; \
+             const bad=[attempt([a,{}]),attempt(null),attempt([a,null])].join(','); \
+             const kept=document.adoptedStyleSheets.length; \
+             document.adoptedStyleSheets=new Set([b]); \
+             const fromSet=document.adoptedStyleSheets; \
+             document.adoptedStyleSheets=[]; \
+             [Array.isArray(empty),empty.length,Object.isFrozen(empty),list.length, \
+              list[0]===a,list[1]===b,Object.isFrozen(list),pushed,bad,kept, \
+              fromSet.length,fromSet[0]===b,document.adoptedStyleSheets.length, \
+              'adoptedStyleSheets' in Document.prototype, \
+              'adoptedStyleSheets' in ShadowRoot.prototype].join('|')",
+        ),
+        "true|0|true|2|true|true|true|TypeError|TypeError,TypeError,TypeError|2|\
+         1|true|0|true|true"
+    );
+}
+
+#[test]
 fn interfaces_without_rules_are_still_interface_objects() {
     assert_eq!(
         eval(

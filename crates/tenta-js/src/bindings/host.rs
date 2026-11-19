@@ -5163,6 +5163,15 @@ impl DocumentOps for HostObject {
     fn style_sheets(&self) -> Result<Handle<crate::bindings::StyleSheetList>, JsError> {
         self.document_style_sheets()
     }
+    fn adopted_style_sheets(&self) -> Result<Vec<Handle<crate::bindings::CSSStyleSheet>>, JsError> {
+        HostObject::adopted_style_sheets(self)
+    }
+    fn set_adopted_style_sheets(
+        &self,
+        value: Vec<Handle<crate::bindings::CSSStyleSheet>>,
+    ) -> Result<(), JsError> {
+        HostObject::set_adopted_style_sheets(self, value)
+    }
 
     fn child_element_count(&self) -> u32 {
         let (doc, id) = self.anchor();
@@ -8445,6 +8454,19 @@ impl HostObject {
     }
 
     fn document_style_sheets(&self) -> Result<Handle<crate::bindings::StyleSheetList>, JsError> {
+        Err(JsError::type_error("this build has no CSSOM"))
+    }
+
+    pub(super) fn adopted_style_sheets(
+        &self,
+    ) -> Result<Vec<Handle<crate::bindings::CSSStyleSheet>>, JsError> {
+        Ok(Vec::new())
+    }
+
+    pub(super) fn set_adopted_style_sheets(
+        &self,
+        _sheets: Vec<Handle<crate::bindings::CSSStyleSheet>>,
+    ) -> Result<(), JsError> {
         Err(JsError::type_error("this build has no CSSOM"))
     }
 }

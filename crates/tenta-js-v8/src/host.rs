@@ -117,6 +117,7 @@ pub(crate) mod matrix;
 mod message_channel;
 mod observers;
 pub(crate) mod selection;
+pub(crate) mod sheet_replace;
 pub(crate) mod streams;
 pub(crate) mod subtle;
 pub(crate) mod svg_animated;
