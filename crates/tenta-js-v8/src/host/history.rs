@@ -133,21 +133,14 @@ fn hash_changed<'s>(
         return;
     };
     let global = scope.get_current_context().global(scope);
-    let event_key = key(scope, "Event");
-    let Some(event) = global
-        .get(scope, event_key.into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
+    let Some(event) = super::event_interfaces::construct(
+        scope,
+        "HashChangeEvent",
+        "hashchange",
+        &[("oldURL", old), ("newURL", new)],
+    ) else {
         return;
     };
-    let kind = key(scope, "hashchange");
-    let Some(event) = event.new_instance(scope, &[kind.into()]) else {
-        return;
-    };
-    for (name, value) in [("oldURL", old), ("newURL", new)] {
-        let name = key(scope, name);
-        event.define_own_property(scope, name.into(), value, v8::PropertyAttribute::READ_ONLY);
-    }
     let Some(dispatch) = store
         .get_index(scope, DISPATCH)
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
@@ -580,24 +573,11 @@ fn traverse<'s>(
     }
 
     let global = scope.get_current_context().global(scope);
-    let event_key = key(scope, "Event");
-    let Some(event) = global
-        .get(scope, event_key.into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+    let Some(event) =
+        super::event_interfaces::construct(scope, "PopStateEvent", "popstate", &[("state", state)])
     else {
         return;
     };
-    let kind = key(scope, "popstate");
-    let Some(event) = event.new_instance(scope, &[kind.into()]) else {
-        return;
-    };
-    let state_key = key(scope, "state");
-    event.define_own_property(
-        scope,
-        state_key.into(),
-        state,
-        v8::PropertyAttribute::READ_ONLY,
-    );
     let Some(dispatch) = store
         .store
         .get_index(scope, DISPATCH)

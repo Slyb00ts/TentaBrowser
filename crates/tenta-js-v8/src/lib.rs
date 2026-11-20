@@ -2819,6 +2819,7 @@ impl Engine {
         host::selection::install(scope, global);
         host::subtle::install(scope, global);
         host::matrix::install(scope, global);
+        host::event_interfaces::install(scope, global);
         host::svg_animated::install(scope, global);
         host::sheet_replace::install(scope, global);
     }

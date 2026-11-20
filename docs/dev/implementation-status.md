@@ -104,6 +104,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
 | `DOMMatrix`, `DOMMatrixReadOnly`, `DOMPoint`, `DOMPointReadOnly`, `DOMQuad` (MAT1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `new DOMMatrix(getComputedStyle(el).transform)` threw. The transform list is parsed in the script: no `calc()`, no percentages; not serializable; see the section below |
 | `SVGAnimatedString`, SVG `className` and SVG `<a>` `href` (SVG1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `x.href instanceof SVGAnimatedString` threw, and an SVG element's `className` was a string. Nothing animates; `href` on SVG `<a>` only; see the section below |
+| Sixteen event interfaces as script (EV2) | Implemented on V8; engine checks passed; measured; not independently reviewed | `InputEvent`, `PointerEvent`, `PopStateEvent`, `HashChangeEvent`, `PageTransitionEvent`, `TransitionEvent`, `AnimationEvent`, `SubmitEvent`, `CloseEvent`, `StorageEvent`, `ClipboardEvent`, `DragEvent`, `ToggleEvent`, `FormDataEvent`, `MediaQueryListEvent` and `BeforeUnloadEvent` were `ReferenceError`s. Each is a class over the native `Event`, `UIEvent` or `MouseEvent`, defined at first use. Only `popstate` and `hashchange` are fired with theirs; see the section below |
 | Static operations, `sendBeacon`, node constructors (ST1) | Implemented; generated natives for both engines, the scripted members on V8 only; engine and page checks passed; measured; not independently reviewed | The generator could not hand a static operation its world, so none was declared. `URL.parse()`/`canParse()`, `AbortSignal.abort()`, `Response.error()`/`redirect()`, `URLSearchParams.size`, `new Text()`, `new Comment()` and `new DocumentFragment()` are generated; `AbortSignal.timeout()`/`any()`, `Response.json()` and `navigator.sendBeacon()` are a script over them; see the section below |
 | A page callback run by a binding call has a wrapper bound of its own (WL1) | Implemented on V8; engine checks passed; measured; seen to fix one error on a real page; **changes a recorded bound and needs the owner's decision entry**; not independently reviewed | A listener called by `click()` or `dispatchEvent()`, an idle callback, a port's message handler, an observer callback, a custom element reaction and a `forEach` callback all run inside a binding call, where nothing can be collected, and were refused every DOM call after 4,096 new wrappers. Each is now a frame: its calls get 4,096 each, the whole frame 262,144. QuickJS keeps its own bound; see the section below |
 | `classList` reads are linear and do not copy (TL1) | Implemented for both engines; V8 check passed; measured | Every `length`, index and `contains` built the whole ordered set as owned strings, comparing each token with every earlier one, so walking a list cost the cube of its length. `contains` now scans the attribute, a read borrows it, and a long list is parsed once; see the section below |
@@ -4113,6 +4114,54 @@ at `SVGAnimatedString is not defined`.
   build alternating, 2026-11-19): vuejs.org reported the `ReferenceError`
   in both loads before and nothing in either after. The snapshot is the
   same.
+
+### Event interfaces defined by script (EV2)
+
+The bindings declare `Event`, `CustomEvent`, `ErrorEvent`, `UIEvent`,
+`FocusEvent`, `KeyboardEvent`, `MouseEvent`, `WheelEvent`,
+`CompositionEvent` and `ProgressEvent`. Every other event interface a page
+names was a `ReferenceError`: `new PointerEvent(...)`, `new InputEvent(...)`,
+`event instanceof SubmitEvent`, `'PointerEvent' in window`.
+
+- **What they are** (`tenta_js::event_interfaces`). Sixteen interfaces
+  whose only content is attributes read from the init dictionary. Each is a
+  class that extends the native interface (`InputEvent` over `UIEvent`,
+  `PointerEvent` and `DragEvent` over `MouseEvent`, the rest over `Event`),
+  so the object is a real event to `dispatchEvent()`, with its own
+  attributes kept beside it and read through accessors that check their
+  receiver. `FormDataEvent` requires `formData`; `BeforeUnloadEvent` has no
+  constructor.
+- **When they exist** (`crates/tenta-js-v8/src/host/event_interfaces.rs`).
+  The names are lazy properties of the global, as the other scripted
+  interfaces are; the script runs when a page first reads one, or when the
+  engine first fires such an event.
+- **Fired by the engine.** `popstate` and `hashchange` were plain `Event`
+  objects with `state`, `oldURL` and `newURL` as own properties. They are
+  now a `PopStateEvent` and a `HashChangeEvent`, made with the script's own
+  constructors, so a page that replaced the globals does not change what
+  is fired.
+- **Checks:** `crates/tenta-js-v8/tests/dom_event_interfaces.rs` (7: every
+  interface's name, length, parent, tag and absence from the global's
+  enumerable keys; init members and defaults of `InputEvent` and
+  `PointerEvent` with the parents' members; the members of the other
+  thirteen; dispatch of a constructed event with `preventDefault()`;
+  receiver checks, the missing type argument, `FormDataEvent`'s required
+  member and `BeforeUnloadEvent`; a page subclass; `popstate` and
+  `hashchange` after the page deleted the globals). The existing history
+  and forms checks pass unchanged. The workspace passed 5127 of 5127 and
+  the feature set 621 of 621; fmt, both Clippy runs, `lint-deps`,
+  `idl-manifest` and `cargo deny` were clean.
+- **Measured** (release, against `728cf60`, 2026-11-20). Sixteen lazy
+  names are defined when every engine is built; the script itself runs
+  only on use. Twelve alternating runs of 70 engines each: the preludes, where the names are defined, took 1.730 ms -> 1.815 ms p50 (medians of the runs; ranges 1.635-1.880 and 1.645-1.939) and building the engine 2.594 -> 2.721 ms (ranges 2.240-2.778 and 2.316-2.818). About 85 microseconds per page for the names, under the noise floor: reported, not claimed.
+- **Gaps:** V8 only. The events the engine fires for typing, pointer
+  input, form submission, storage and page transitions are still `Event`,
+  `MouseEvent` or `UIEvent` objects, so `event.data`, `event.pointerId`
+  and `event.submitter` are undefined on them: those are fired from the
+  engine-independent dispatcher, which knows the native kinds only. No
+  `TouchEvent`, no `DataTransfer`. An init member of the wrong interface
+  is accepted. The lists of `getCoalescedEvents()`, `getPredictedEvents()`
+  and `getTargetRanges()` are empty.
 
 ### Static operations and other small members (ST1)
 

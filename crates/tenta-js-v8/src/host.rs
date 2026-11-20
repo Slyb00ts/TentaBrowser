@@ -111,6 +111,7 @@ guarded_callback!(guarded_java_enabled => java_enabled);
 
 // After `guarded_callback!`, which the module uses.
 pub(crate) mod custom_elements;
+pub(crate) mod event_interfaces;
 pub(crate) mod history;
 mod lazy;
 pub(crate) mod matrix;

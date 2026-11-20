@@ -9,6 +9,7 @@ pub mod bindings;
 pub mod conveniences;
 pub mod dom;
 pub mod engine;
+pub mod event_interfaces;
 pub mod event_loop;
 pub mod fetch;
 pub mod fonts;
