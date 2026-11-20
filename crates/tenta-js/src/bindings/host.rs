@@ -3803,15 +3803,56 @@ impl HostObject {
     fn class_tokens(&self) -> Vec<String> {
         let (doc, id) = self.anchor();
         let doc = doc.borrow();
+        let value = doc.attribute_str(id, "class").unwrap_or("");
+        if value.len() >= LONG_TOKEN_LIST {
+            return ordered_tokens(value)
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
+        }
+        // The usual handful of tokens: one pass, no intermediate list.
         let mut tokens: Vec<String> = Vec::new();
-        if let Some(value) = doc.attribute_str(id, "class") {
-            for token in value.split_ascii_whitespace() {
-                if !tokens.iter().any(|existing| existing == token) {
-                    tokens.push(token.to_owned());
-                }
+        for token in value.split_ascii_whitespace() {
+            if !tokens.iter().any(|existing| existing == token) {
+                tokens.push(token.to_owned());
             }
         }
         tokens
+    }
+
+    /// Reads the anchored element's class ordered set without copying its
+    /// tokens: what `length`, `item` and `contains` ask on every call.
+    fn with_class_tokens<R>(&self, read: impl FnOnce(&[&str]) -> R) -> R {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        let value = doc.attribute_str(id, "class").unwrap_or("");
+        if value.len() < LONG_TOKEN_LIST {
+            return read(&ordered_tokens(value));
+        }
+        // Walking a list by index reads it once per token. Parsing a long
+        // one each time made the walk quadratic with a large constant, so
+        // the last long list parsed is kept and compared instead.
+        let tokens: Vec<&str> = LONG_TOKEN_SET.with(|cached| {
+            let mut cached = cached.borrow_mut();
+            if cached.0 != value {
+                let start = value.as_ptr() as usize;
+                cached.1 = ordered_tokens(value)
+                    .iter()
+                    .map(|token| {
+                        let offset = token.as_ptr() as usize - start;
+                        (offset as u32, (offset + token.len()) as u32)
+                    })
+                    .collect();
+                cached.0.clear();
+                cached.0.push_str(value);
+            }
+            cached
+                .1
+                .iter()
+                .map(|&(start, end)| &value[start as usize..end as usize])
+                .collect()
+        });
+        read(&tokens)
     }
 
     /// Serialises an ordered set back into the `class` attribute (space-joined).
@@ -8693,6 +8734,41 @@ impl HTMLTemplateElementOps for HostObject {
     }
 }
 
+/// The length of a token list attribute from which its parse is kept between
+/// reads (`HostObject::with_class_tokens`). Shorter ones, which is nearly
+/// every one, are parsed each time: that is cheaper than keeping them.
+const LONG_TOKEN_LIST: usize = 512;
+
+thread_local! {
+    /// The last long token list parsed on this thread: the attribute value
+    /// and the byte range of each token of its ordered set.
+    static LONG_TOKEN_SET: RefCell<(String, Vec<(u32, u32)>)> =
+        const { RefCell::new((String::new(), Vec::new())) };
+}
+
+/// `value` parsed as a DOM ordered set: split on ASCII whitespace, empties
+/// dropped, the first occurrence of each token kept.
+fn ordered_tokens(value: &str) -> Vec<&str> {
+    /// Below this many tokens a search of the list is cheaper than a set.
+    const SEARCHED: usize = 16;
+    let mut tokens: Vec<&str> = Vec::new();
+    let mut seen: Option<HashSet<&str>> = None;
+    for token in value.split_ascii_whitespace() {
+        let new = if tokens.len() < SEARCHED {
+            !tokens.contains(&token)
+        } else {
+            // A list this long is not searched once per token, which made a
+            // read of an n-token list cost n squared comparisons.
+            seen.get_or_insert_with(|| tokens.iter().copied().collect())
+                .insert(token)
+        };
+        if new {
+            tokens.push(token);
+        }
+    }
+    tokens
+}
+
 impl DOMTokenListOps for HostObject {
     fn supported_property_indices(&self) -> Result<Vec<u32>, JsError> {
         Ok((0..DOMTokenListOps::length(self)).collect())
@@ -8703,15 +8779,23 @@ impl DOMTokenListOps for HostObject {
     }
 
     fn length(&self) -> u32 {
-        self.class_tokens().len() as u32
+        self.with_class_tokens(|tokens| tokens.len() as u32)
     }
 
     fn item(&self, index: u32) -> Result<Option<String>, JsError> {
-        Ok(self.class_tokens().into_iter().nth(index as usize))
+        Ok(self
+            .with_class_tokens(|tokens| tokens.get(index as usize).map(|&token| token.to_owned())))
     }
 
     fn contains(&self, token: &str) -> bool {
-        self.class_tokens().iter().any(|existing| existing == token)
+        // Membership does not need the set: a repeated token is the same one.
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        doc.attribute_str(id, "class").is_some_and(|value| {
+            value
+                .split_ascii_whitespace()
+                .any(|existing| existing == token)
+        })
     }
 
     fn add(&self, tokens: Vec<String>) -> Result<(), JsError> {

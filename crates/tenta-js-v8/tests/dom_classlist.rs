@@ -278,3 +278,34 @@ fn a_collected_token_list_wrapper_keeps_the_element_wrapper_alive() {
         "true,3,true"
     );
 }
+
+/// A long class list is still an ordered set: a token repeated anywhere in it
+/// is counted once, at its first position. Reading it is linear in its length,
+/// so walking a list of thousands of tokens ends (it took the cube of the
+/// length, and a page with a generated class list ran out of script time).
+#[test]
+fn a_long_class_list_is_an_ordered_set_that_can_be_walked() {
+    let mut engine = Engine::with_document(test_document());
+    assert_eq!(
+        engine
+            .evaluate(
+                r#"
+                const el = document.querySelector('#target');
+                const names = Array.from({ length: 3000 }, (_, i) => 'c' + i);
+                el.className = names.concat(['c2999', 'c0', 'c17', 'tail', 'c16']).join(' ');
+                const list = el.classList;
+                let walked = 0;
+                list.forEach(() => { walked++; });
+                let iterated = 0;
+                for (const token of list) iterated += token.length > 0 ? 1 : 0;
+                [
+                    list.length, walked, iterated,
+                    list[0], list[16], list[17], list[2999], list[3000], list[3001],
+                    list.contains('c17'), list.contains('missing'),
+                ].join(',');
+            "#
+            )
+            .expect("walk the long class list"),
+        "3001,3001,3001,c0,c16,c17,c2999,tail,,true,false"
+    );
+}
