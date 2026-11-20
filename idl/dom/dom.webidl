@@ -63,6 +63,11 @@ interface Node : EventTarget {
   [Throws] unsigned short compareDocumentPosition(Node other);
   [Throws] Node getRootNode(optional GetRootNodeOptions options = {});
   [Throws] undefined normalize();
+  // The namespace a prefix is bound to at this node, and the reverse, from
+  // the elements' own names and their `xmlns` attributes.
+  DOMString? lookupPrefix(DOMString? namespace);
+  DOMString? lookupNamespaceURI(DOMString? prefix);
+  boolean isDefaultNamespace(DOMString? namespace);
 
   // Phase 2a: mutation operations
   Node appendChild(Node node);
@@ -127,6 +132,12 @@ interface Element : Node {
   readonly attribute unsigned long childElementCount;
 
   [SameObject] readonly attribute HTMLCollection children;
+
+  // The element's children serialized, as `innerHTML` reads them (shadow
+  // roots are never included), and the assignment that parses without a
+  // sanitizer, which is what `innerHTML` does here.
+  [Throws] DOMString getHTML();
+  [Throws] undefined setHTMLUnsafe(DOMString html);
 
   // Phase 4c-1: classList reflects the `class` attribute as an ordered set of
   // tokens; frameworks toggle classes through it constantly.
@@ -221,6 +232,22 @@ interface Document : Node {
   // A page is always the visible, foreground document of its browser.
   readonly attribute DOMString visibilityState;
   readonly attribute boolean hidden;
+  // The root element's `dir`, as its own attribute reads it.
+  attribute DOMString dir;
+  // Nothing edits a document: `designMode` reads `off` and keeps what it is
+  // given, and the editing commands are not supported.
+  attribute DOMString designMode;
+  boolean execCommand(DOMString commandId, optional boolean showUI = false, optional DOMString value = "");
+  boolean queryCommandSupported(DOMString commandId);
+  boolean queryCommandEnabled(DOMString commandId);
+  // The time the document was made, in the user's format for the legacy
+  // attribute: `MM/DD/YYYY hh:mm:ss`.
+  readonly attribute DOMString lastModified;
+  // No element is ever fullscreen, in picture-in-picture or holding the pointer.
+  readonly attribute Element? fullscreenElement;
+  readonly attribute boolean fullscreenEnabled;
+  readonly attribute boolean pictureInPictureEnabled;
+  readonly attribute Element? pointerLockElement;
   // Snapshots of the document's forms, images, links (`a` and `area` with
   // `href`), scripts, embeds and named anchors, in tree order; not the
   // standard's live collections.
@@ -632,6 +659,27 @@ interface HTMLElement : Element {
   attribute boolean hidden;
   attribute boolean inert;
   attribute DOMString accessKey;
+
+  // Reflected attributes that have no behaviour of their own here: nothing is
+  // dragged, checked for spelling, translated or edited by a user. `draggable`
+  // is true for the keyword `true`; `spellcheck` and `translate` are true
+  // unless the keyword says otherwise. `contentEditable` is one of `true`,
+  // `false`, `plaintext-only` and `inherit` (which removes the attribute), and
+  // `isContentEditable` asks the nearest element that states it.
+  attribute boolean draggable;
+  attribute boolean spellcheck;
+  attribute boolean translate;
+  [Throws] attribute DOMString contentEditable;
+  readonly attribute boolean isContentEditable;
+  attribute DOMString inputMode;
+  attribute DOMString enterKeyHint;
+  attribute DOMString autocapitalize;
+  attribute boolean autofocus;
+  attribute DOMString nonce;
+  attribute DOMString? popover;
+  // The text as `innerText` reads it. Assigning is not declared: it replaces
+  // the element itself.
+  [Throws] readonly attribute DOMString outerText;
 
   // `innerText` reads the element's text as it is laid out in blocks, with
   // hidden content left out (the text extractor of `tenta-dom`, which judges
@@ -1074,7 +1122,6 @@ interface HTMLInputElement : HTMLElement {
   attribute boolean required;
   attribute boolean readOnly;
   attribute boolean multiple;
-  attribute boolean autofocus;
   attribute DOMString min;
   attribute DOMString max;
   attribute DOMString step;
@@ -1346,6 +1393,53 @@ dictionary FocusOptions {
 
 HTMLElement includes HTMLOrSVGElement;
 SVGElement includes HTMLOrSVGElement;
+
+// ARIA's reflection mixin: each attribute is the content attribute of the same
+// name, lower-cased with a hyphen after `aria` (`ariaLabel` is `aria-label`,
+// `role` is `role`), null when absent; assigning null removes it.
+interface mixin ARIAMixin {
+  attribute DOMString? role;
+  attribute DOMString? ariaAtomic;
+  attribute DOMString? ariaAutoComplete;
+  attribute DOMString? ariaBusy;
+  attribute DOMString? ariaChecked;
+  attribute DOMString? ariaColCount;
+  attribute DOMString? ariaColIndex;
+  attribute DOMString? ariaColSpan;
+  attribute DOMString? ariaCurrent;
+  attribute DOMString? ariaDescription;
+  attribute DOMString? ariaDisabled;
+  attribute DOMString? ariaExpanded;
+  attribute DOMString? ariaHasPopup;
+  attribute DOMString? ariaHidden;
+  attribute DOMString? ariaInvalid;
+  attribute DOMString? ariaKeyShortcuts;
+  attribute DOMString? ariaLabel;
+  attribute DOMString? ariaLevel;
+  attribute DOMString? ariaLive;
+  attribute DOMString? ariaModal;
+  attribute DOMString? ariaMultiLine;
+  attribute DOMString? ariaMultiSelectable;
+  attribute DOMString? ariaOrientation;
+  attribute DOMString? ariaPlaceholder;
+  attribute DOMString? ariaPosInSet;
+  attribute DOMString? ariaPressed;
+  attribute DOMString? ariaReadOnly;
+  attribute DOMString? ariaRequired;
+  attribute DOMString? ariaRoleDescription;
+  attribute DOMString? ariaRowCount;
+  attribute DOMString? ariaRowIndex;
+  attribute DOMString? ariaRowSpan;
+  attribute DOMString? ariaSelected;
+  attribute DOMString? ariaSetSize;
+  attribute DOMString? ariaSort;
+  attribute DOMString? ariaValueMax;
+  attribute DOMString? ariaValueMin;
+  attribute DOMString? ariaValueNow;
+  attribute DOMString? ariaValueText;
+};
+
+Element includes ARIAMixin;
 
 // HTML's GlobalEventHandlers mixin: the event handler IDL attributes every
 // HTML and SVG element and the document carry (`element.onclick = fn`). The

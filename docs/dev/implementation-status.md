@@ -104,6 +104,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
 | `DOMMatrix`, `DOMMatrixReadOnly`, `DOMPoint`, `DOMPointReadOnly`, `DOMQuad` (MAT1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `new DOMMatrix(getComputedStyle(el).transform)` threw. The transform list is parsed in the script: no `calc()`, no percentages; not serializable; see the section below |
 | `SVGAnimatedString`, SVG `className` and SVG `<a>` `href` (SVG1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `x.href instanceof SVGAnimatedString` threw, and an SVG element's `className` was a string. Nothing animates; `href` on SVG `<a>` only; see the section below |
+| Reflected element and document members, ARIA reflection, namespace lookups (EL2) | Implemented for both engines through generated bindings; engine checks passed on both; measured; not independently reviewed | Members an ordinary script reads or assigns without a guard were undefined: `draggable`, `spellcheck`, `translate`, `contentEditable`, `isContentEditable`, `inputMode`, `enterKeyHint`, `autocapitalize`, `nonce`, `popover`, `outerText`, the 39 ARIA attributes, `document.dir`, `designMode`, `execCommand()`, `lastModified`, the fullscreen members, `getHTML()`, `setHTMLUnsafe()`, `lookupPrefix()`, `lookupNamespaceURI()`, `isDefaultNamespace()`; see the section below |
 | The performance timeline: entries, `PerformanceObserver`, user timing, the navigation entry (PT1) | Implemented on V8 as script; engine checks passed; measured; seen to remove errors on two real pages; not independently reviewed | `PerformanceObserver` was a `ReferenceError` (seven per load on wikipedia.org, one on x.com) and `performance.mark()` returned plain objects. The timeline is now `PerformanceEntry` and its kinds, an observer delivered in a later task, User Timing with options, and a navigation entry that reports when `DOMContentLoaded` and `load` were fired. No `resource` or paint entries; see the section below |
 | Sixteen event interfaces as script (EV2) | Implemented on V8; engine checks passed; measured; not independently reviewed | `InputEvent`, `PointerEvent`, `PopStateEvent`, `HashChangeEvent`, `PageTransitionEvent`, `TransitionEvent`, `AnimationEvent`, `SubmitEvent`, `CloseEvent`, `StorageEvent`, `ClipboardEvent`, `DragEvent`, `ToggleEvent`, `FormDataEvent`, `MediaQueryListEvent` and `BeforeUnloadEvent` were `ReferenceError`s. Each is a class over the native `Event`, `UIEvent` or `MouseEvent`, defined at first use. Only `popstate` and `hashchange` are fired with theirs; see the section below |
 | Static operations, `sendBeacon`, node constructors (ST1) | Implemented; generated natives for both engines, the scripted members on V8 only; engine and page checks passed; measured; not independently reviewed | The generator could not hand a static operation its world, so none was declared. `URL.parse()`/`canParse()`, `AbortSignal.abort()`, `Response.error()`/`redirect()`, `URLSearchParams.size`, `new Text()`, `new Comment()` and `new DocumentFragment()` are generated; `AbortSignal.timeout()`/`any()`, `Response.json()` and `navigator.sendBeacon()` are a script over them; see the section below |
@@ -4115,6 +4116,57 @@ at `SVGAnimatedString is not defined`.
   build alternating, 2026-11-19): vuejs.org reported the `ReferenceError`
   in both loads before and nothing in either after. The snapshot is the
   same.
+
+### Reflected element and document members (EL2)
+
+The probe of ST1 listed members of every element and of the document
+that a script reads or assigns as a matter of course. Reading a missing
+one gives `undefined`, which is not `false` or `""` to the code that
+compares it, and calling a missing method throws.
+
+- **`HTMLElement`** (`idl/dom/dom.webidl`, `crates/tenta-js/src/bindings/host.rs`):
+  `draggable` (true for the keyword `true`), `spellcheck` and `translate`
+  (true unless the keyword says no), `contentEditable` (`true`, `false`,
+  `plaintext-only` or `inherit`, any other assignment a `SyntaxError`),
+  `isContentEditable` (what the nearest element that states it says),
+  `inputMode`, `enterKeyHint`, `autocapitalize`, `nonce`, `popover` and a
+  read-only `outerText`. `autofocus` moved here from `HTMLInputElement`,
+  where the standard has it, so every element has it.
+- **ARIA** (`ARIAMixin`, included by `Element`): `role` and 38 `aria*`
+  attributes as nullable strings; assigning null removes the attribute.
+- **`Document`**: `dir` (the root element's), `designMode` (kept, with no
+  effect), `execCommand()`, `queryCommandSupported()` and
+  `queryCommandEnabled()` (false: no command is supported, which is the
+  answer a page tests for), `lastModified` (the time the document was
+  made, UTC, in the legacy format), `fullscreenElement`,
+  `fullscreenEnabled`, `pictureInPictureEnabled` and `pointerLockElement`
+  (null and false).
+- **`Element`**: `getHTML()` and `setHTMLUnsafe()`, which are `innerHTML`
+  read and assigned.
+- **`Node`**: `lookupPrefix()`, `lookupNamespaceURI()` and
+  `isDefaultNamespace()`, by DOM's *locate a namespace*: the element's own
+  name, its `xmlns` attributes, then its ancestors; `xml` and `xmlns` are
+  bound as the standard binds them.
+- **Checks:** `crates/tenta-js/tests/support/element_members.rs`, run by
+  `crates/tenta-js-v8/tests/element_members.rs` and
+  `crates/tenta-js-qjs/tests/element_members.rs` (6 each: the global
+  attributes before and after assignment with the content attributes they
+  write; `contentEditable` inherited, overridden, removed and refused; ARIA
+  reflection on an HTML and an SVG element and the presence of every
+  member; the document's members; `getHTML`/`setHTMLUnsafe`; twenty-two
+  namespace lookups over HTML, SVG with `xmlns:xlink`, a prefixed element,
+  a text node, a detached node, a fragment and the document). The
+  workspace passed 5144 of 5144 and the feature set 621 of 621; fmt, both
+  Clippy runs, `lint-deps`, `idl-manifest` and `cargo deny` were clean.
+- **Measured** (release, against `5851c6f`, 2026-11-20). About sixty more
+  accessors on the `Element`, `HTMLElement`, `Node` and `Document`
+  templates of every engine. Twelve alternating runs of 70 engines each: building the engine 2.655 -> 2.634 ms p50 (medians of the runs; ranges 2.424-2.825 and 2.262-2.843) and its preludes 1.776 -> 1.758 ms. `S-dom-calls` (25 interleaved pairs): `has` 26.42/27.20 -> 27.06/29.08 ns p50/p95, `get` 86.19/91.54 -> 86.70/97.41 ns, RSS 35.4 -> 35.5 MiB. Nothing outside the noise floor, so no cost is claimed.
+- **Gaps:** nothing here has behaviour: nothing is editable, draggable or
+  fullscreen, no popover opens (`showPopover()` and its siblings are not
+  declared), and `nonce` is not hidden from the content attribute. Assigning
+  `outerText` is not declared. `lastModified` ignores the response's
+  `Last-Modified`. `checkVisibility()`, `attachInternals()`, the pointer
+  capture methods and `requestFullscreen()` are still missing.
 
 ### The performance timeline (PT1)
 

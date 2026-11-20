@@ -1795,6 +1795,9 @@ pub struct HostContext {
     /// comparable with `performance.now()`, as script assumes — and so that a
     /// virtual clock moves both together.
     pub clock: SharedClock,
+    /// What `document.designMode` was last set to. Nothing reads it but the
+    /// attribute: no document is ever edited by a user.
+    pub design_mode: Cell<bool>,
     /// Elements with a synthetic `click()` in progress, so a nested `click()`
     /// on the same element during its own dispatch is a no-op (the DOM
     /// "click in progress" flag).
@@ -1965,6 +1968,7 @@ impl HostContext {
             attr_index: RefCell::new(HashMap::new()),
             script: RefCell::new(None),
             clock,
+            design_mode: Cell::new(false),
             click_in_progress: RefCell::new(HashSet::new()),
             cookies,
             storage,
@@ -2032,6 +2036,7 @@ impl HostContext {
             attr_index: RefCell::new(HashMap::new()),
             script: RefCell::new(self.script.borrow().clone()),
             clock: self.clock.clone(),
+            design_mode: Cell::new(false),
             click_in_progress: RefCell::new(HashSet::new()),
             cookies: self.cookies.clone(),
             storage: self.storage.clone(),
@@ -2055,6 +2060,34 @@ impl HostContext {
     /// reading `performance.now()` returns.
     pub fn time_stamp(&self) -> f64 {
         self.clock.now().as_millis_f64()
+    }
+
+    /// `document.lastModified`: the time the document was made, which is all
+    /// that is known of it, as `MM/DD/YYYY hh:mm:ss` in UTC.
+    pub fn last_modified(&self) -> String {
+        let seconds = (self.clock.time_origin_ms() / 1000.0).max(0.0) as i64;
+        let (days, time) = (seconds.div_euclid(86_400), seconds.rem_euclid(86_400));
+        // The civil date of a day count from 1970-01-01 (proleptic Gregorian).
+        let shifted = days + 719_468;
+        let era = shifted.div_euclid(146_097);
+        let day_of_era = shifted.rem_euclid(146_097);
+        let year_of_era =
+            (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+        let month_index = (5 * day_of_year + 2) / 153;
+        let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+        let month = if month_index < 10 {
+            month_index + 3
+        } else {
+            month_index - 9
+        };
+        let year = year_of_era + era * 400 + i64::from(month <= 2);
+        format!(
+            "{month:02}/{day:02}/{year:04} {:02}:{:02}:{:02}",
+            time / 3600,
+            time % 3600 / 60,
+            time % 60
+        )
     }
 
     /// Reclaims a finalized host record and its weak Attr/CSS/Storage wrapper caches.
@@ -3904,7 +3937,162 @@ impl HostObject {
     }
 }
 
+/// A reflected nullable DOMString attribute: null when the attribute is
+/// absent, and assigning null removes it.
+macro_rules! reflected_nullable_strings {
+    ($($getter:ident, $setter:ident => $attribute:literal;)*) => {
+        $(
+            fn $getter(&self) -> Result<Option<String>, JsError> {
+                let (doc, id) = self.anchor();
+                Ok(doc.borrow().attribute_str(id, $attribute).map(str::to_owned))
+            }
+            fn $setter(&self, value: Option<&str>) -> Result<(), JsError> {
+                match value {
+                    Some(value) => self.reflect_attribute($attribute, value),
+                    None => self.set_reflect_bool($attribute, false),
+                }
+                Ok(())
+            }
+        )*
+    };
+}
+
+impl HostObject {
+    /// The node `lookupPrefix()` and its two siblings start from: the element
+    /// itself, a document's root element, the parent element of any other
+    /// node in a tree. `None` for a node with no element to ask (a doctype, a
+    /// fragment, an attribute, a detached text node).
+    fn namespace_scope(&self) -> Option<(SharedDocument, NodeId)> {
+        if self.is_attr() {
+            return None;
+        }
+        let (doc, id) = self.anchor();
+        let start = {
+            let document = doc.borrow();
+            match document.kind(id) {
+                NodeKind::Element => Some(id),
+                NodeKind::Document => document.document_element(),
+                NodeKind::DocType | NodeKind::Fragment | NodeKind::ShadowRoot => None,
+                _ => {
+                    let parent = document.parent(id);
+                    (parent.is_some() && document.kind(parent) == NodeKind::Element)
+                        .then_some(parent)
+                }
+            }
+        };
+        start.map(|start| (Rc::clone(doc), start))
+    }
+
+    /// DOM's *locate a namespace* for `prefix` (`None` is the default
+    /// namespace), from the scope element up through its ancestors.
+    fn locate_namespace(&self, prefix: Option<&str>) -> Option<String> {
+        match prefix {
+            Some("xml") => return Some(atoms::NS_XML.as_str().to_owned()),
+            Some("xmlns") => return Some(atoms::NS_XMLNS.as_str().to_owned()),
+            _ => {}
+        }
+        let (doc, mut element) = self.namespace_scope()?;
+        let doc = doc.borrow();
+        loop {
+            let own_prefix = doc
+                .element_prefix(element)
+                .filter(|own| *own != atoms::EMPTY)
+                .map(|own| own.as_str());
+            if let Some(namespace) = doc.namespace(element)
+                && !namespace.as_str().is_empty()
+                && own_prefix == prefix
+            {
+                return Some(namespace.as_str().to_owned());
+            }
+            // An `xmlns:prefix` attribute, or `xmlns` for the default one.
+            for (name, value) in doc.attributes(element) {
+                if name.ns != atoms::NS_XMLNS {
+                    continue;
+                }
+                let declares = match prefix {
+                    Some(prefix) => {
+                        name.prefix.is_some_and(|p| p == atoms::XMLNS)
+                            && name.local.as_str() == prefix
+                    }
+                    None => {
+                        name.prefix.is_none_or(|p| p == atoms::EMPTY) && name.local == atoms::XMLNS
+                    }
+                };
+                if declares {
+                    return (!value.is_empty()).then(|| value.to_owned());
+                }
+            }
+            let parent = doc.parent(element);
+            if !parent.is_some() || doc.kind(parent) != NodeKind::Element {
+                return None;
+            }
+            element = parent;
+        }
+    }
+
+    /// DOM's *locate a namespace prefix* for `namespace`.
+    fn locate_prefix(&self, namespace: &str) -> Option<String> {
+        let (doc, mut element) = self.namespace_scope()?;
+        let doc = doc.borrow();
+        loop {
+            if doc
+                .namespace(element)
+                .is_some_and(|own| own.as_str() == namespace)
+                && let Some(prefix) = doc
+                    .element_prefix(element)
+                    .filter(|prefix| *prefix != atoms::EMPTY)
+            {
+                return Some(prefix.as_str().to_owned());
+            }
+            for (name, value) in doc.attributes(element) {
+                if name.prefix.is_some_and(|p| p == atoms::XMLNS) && value == namespace {
+                    return Some(name.local.as_str().to_owned());
+                }
+            }
+            let parent = doc.parent(element);
+            if !parent.is_some() || doc.kind(parent) != NodeKind::Element {
+                return None;
+            }
+            element = parent;
+        }
+    }
+
+    /// Whether the element is editable: what the nearest element that states
+    /// `contenteditable` says, false when none does.
+    fn content_editable_state(&self) -> bool {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        let mut node = id;
+        while node.is_some() && doc.kind(node) == NodeKind::Element {
+            if let Some(value) = doc.attribute_str(node, "contenteditable") {
+                match value.to_ascii_lowercase().as_str() {
+                    "" | "true" | "plaintext-only" => return true,
+                    "false" => return false,
+                    _ => {}
+                }
+            }
+            node = doc.parent(node);
+        }
+        false
+    }
+}
+
 impl NodeOps for HostObject {
+    fn lookup_prefix(&self, namespace: Option<&str>) -> Result<Option<String>, JsError> {
+        Ok(namespace
+            .filter(|namespace| !namespace.is_empty())
+            .and_then(|namespace| self.locate_prefix(namespace)))
+    }
+
+    fn lookup_namespace_uri(&self, prefix: Option<&str>) -> Result<Option<String>, JsError> {
+        Ok(self.locate_namespace(prefix.filter(|prefix| !prefix.is_empty())))
+    }
+
+    fn is_default_namespace(&self, namespace: Option<&str>) -> Result<bool, JsError> {
+        let namespace = namespace.filter(|namespace| !namespace.is_empty());
+        Ok(self.locate_namespace(None).as_deref() == namespace)
+    }
+
     fn child_nodes(&self) -> Result<Handle<NodeList>, JsError> {
         if let HostObject::Host { ctx, key } = self
             && self.is_attr()
@@ -4351,6 +4539,57 @@ impl NodeOps for HostObject {
 }
 
 impl ElementOps for HostObject {
+    reflected_nullable_strings! {
+        role, set_role => "role";
+        aria_atomic, set_aria_atomic => "aria-atomic";
+        aria_auto_complete, set_aria_auto_complete => "aria-autocomplete";
+        aria_busy, set_aria_busy => "aria-busy";
+        aria_checked, set_aria_checked => "aria-checked";
+        aria_col_count, set_aria_col_count => "aria-colcount";
+        aria_col_index, set_aria_col_index => "aria-colindex";
+        aria_col_span, set_aria_col_span => "aria-colspan";
+        aria_current, set_aria_current => "aria-current";
+        aria_description, set_aria_description => "aria-description";
+        aria_disabled, set_aria_disabled => "aria-disabled";
+        aria_expanded, set_aria_expanded => "aria-expanded";
+        aria_has_popup, set_aria_has_popup => "aria-haspopup";
+        aria_hidden, set_aria_hidden => "aria-hidden";
+        aria_invalid, set_aria_invalid => "aria-invalid";
+        aria_key_shortcuts, set_aria_key_shortcuts => "aria-keyshortcuts";
+        aria_label, set_aria_label => "aria-label";
+        aria_level, set_aria_level => "aria-level";
+        aria_live, set_aria_live => "aria-live";
+        aria_modal, set_aria_modal => "aria-modal";
+        aria_multi_line, set_aria_multi_line => "aria-multiline";
+        aria_multi_selectable, set_aria_multi_selectable => "aria-multiselectable";
+        aria_orientation, set_aria_orientation => "aria-orientation";
+        aria_placeholder, set_aria_placeholder => "aria-placeholder";
+        aria_pos_in_set, set_aria_pos_in_set => "aria-posinset";
+        aria_pressed, set_aria_pressed => "aria-pressed";
+        aria_read_only, set_aria_read_only => "aria-readonly";
+        aria_required, set_aria_required => "aria-required";
+        aria_role_description, set_aria_role_description => "aria-roledescription";
+        aria_row_count, set_aria_row_count => "aria-rowcount";
+        aria_row_index, set_aria_row_index => "aria-rowindex";
+        aria_row_span, set_aria_row_span => "aria-rowspan";
+        aria_selected, set_aria_selected => "aria-selected";
+        aria_set_size, set_aria_set_size => "aria-setsize";
+        aria_sort, set_aria_sort => "aria-sort";
+        aria_value_max, set_aria_value_max => "aria-valuemax";
+        aria_value_min, set_aria_value_min => "aria-valuemin";
+        aria_value_now, set_aria_value_now => "aria-valuenow";
+        aria_value_text, set_aria_value_text => "aria-valuetext";
+    }
+
+    fn get_html(&self) -> Result<String, JsError> {
+        ElementOps::inner_html(self)
+    }
+
+    fn set_html_unsafe(&self, html: &str) -> Result<(), JsError> {
+        ElementOps::set_inner_html(self, html);
+        Ok(())
+    }
+
     fn get_bounding_client_rect(&self) -> Result<Handle<crate::bindings::DOMRect>, JsError> {
         self.geo_bounding_client_rect()
     }
@@ -5146,6 +5385,88 @@ macro_rules! global_event_handlers {
 }
 
 impl DocumentOps for HostObject {
+    fn dir(&self) -> Result<String, JsError> {
+        let (doc, _) = self.anchor();
+        let doc = doc.borrow();
+        let given = doc
+            .document_element()
+            .and_then(|root| doc.attribute_str(root, "dir"))
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        Ok(match given.as_str() {
+            "ltr" | "rtl" | "auto" => given,
+            _ => String::new(),
+        })
+    }
+
+    fn set_dir(&self, value: &str) {
+        let root = {
+            let (doc, _) = self.anchor();
+            doc.borrow().document_element()
+        };
+        if let Some(root) = root {
+            let qname = QualName::new(atoms::EMPTY, Atom::new("dir"));
+            let _ = self
+                .context()
+                .set_element_attribute(root, qname, value.to_owned());
+        }
+    }
+
+    fn design_mode(&self) -> Result<String, JsError> {
+        Ok(if self.context().design_mode.get() {
+            "on".to_owned()
+        } else {
+            "off".to_owned()
+        })
+    }
+
+    fn set_design_mode(&self, value: &str) {
+        // Only the two keywords change it; nothing becomes editable.
+        if value.eq_ignore_ascii_case("on") {
+            self.context().design_mode.set(true);
+        } else if value.eq_ignore_ascii_case("off") {
+            self.context().design_mode.set(false);
+        }
+    }
+
+    fn exec_command(
+        &self,
+        _command_id: &str,
+        _show_ui: Option<bool>,
+        _value: Option<&str>,
+    ) -> Result<bool, JsError> {
+        // No command is supported, which is the answer a page tests for.
+        Ok(false)
+    }
+
+    fn query_command_supported(&self, _command_id: &str) -> bool {
+        false
+    }
+
+    fn query_command_enabled(&self, _command_id: &str) -> bool {
+        false
+    }
+
+    fn last_modified(&self) -> Result<String, JsError> {
+        Ok(self.context().last_modified())
+    }
+
+    fn fullscreen_element(&self) -> Result<Option<Handle<Element>>, JsError> {
+        Ok(None)
+    }
+
+    fn fullscreen_enabled(&self) -> bool {
+        false
+    }
+
+    fn picture_in_picture_enabled(&self) -> bool {
+        false
+    }
+
+    fn pointer_lock_element(&self) -> Result<Option<Handle<Element>>, JsError> {
+        Ok(None)
+    }
+
     global_event_handlers!();
 
     fn visibility_state(&self) -> Result<String, JsError> {
@@ -7945,6 +8266,99 @@ impl ProgressEventOps for HostObject {
 
 impl HTMLElementOps for HostObject {
     global_event_handlers!();
+
+    fn draggable(&self) -> bool {
+        self.reflect_string("draggable")
+            .eq_ignore_ascii_case("true")
+    }
+    fn set_draggable(&self, value: bool) {
+        self.reflect_attribute("draggable", if value { "true" } else { "false" });
+    }
+    fn spellcheck(&self) -> bool {
+        !self
+            .reflect_string("spellcheck")
+            .eq_ignore_ascii_case("false")
+    }
+    fn set_spellcheck(&self, value: bool) {
+        self.reflect_attribute("spellcheck", if value { "true" } else { "false" });
+    }
+    fn translate(&self) -> bool {
+        !self.reflect_string("translate").eq_ignore_ascii_case("no")
+    }
+    fn set_translate(&self, value: bool) {
+        self.reflect_attribute("translate", if value { "yes" } else { "no" });
+    }
+    fn content_editable(&self) -> Result<String, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        Ok(match doc.attribute_str(id, "contenteditable") {
+            Some(value) => match value.to_ascii_lowercase().as_str() {
+                "" | "true" => "true",
+                "false" => "false",
+                "plaintext-only" => "plaintext-only",
+                _ => "inherit",
+            },
+            None => "inherit",
+        }
+        .to_owned())
+    }
+    fn set_content_editable(&self, value: &str) -> Result<(), JsError> {
+        let keyword = value.to_ascii_lowercase();
+        match keyword.as_str() {
+            "inherit" => self.set_reflect_bool("contenteditable", false),
+            "true" | "false" | "plaintext-only" => {
+                self.reflect_attribute("contenteditable", &keyword);
+            }
+            _ => {
+                return Err(JsError::dom_exception(
+                    "SyntaxError",
+                    &format!(
+                        "The value provided ('{value}') is not one of 'true', 'false', 'plaintext-only', or 'inherit'."
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+    fn is_content_editable(&self) -> bool {
+        self.content_editable_state()
+    }
+    fn input_mode(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("inputmode").to_ascii_lowercase())
+    }
+    fn set_input_mode(&self, value: &str) {
+        self.reflect_attribute("inputmode", value);
+    }
+    fn enter_key_hint(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("enterkeyhint").to_ascii_lowercase())
+    }
+    fn set_enter_key_hint(&self, value: &str) {
+        self.reflect_attribute("enterkeyhint", value);
+    }
+    fn autocapitalize(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("autocapitalize").to_ascii_lowercase())
+    }
+    fn set_autocapitalize(&self, value: &str) {
+        self.reflect_attribute("autocapitalize", value);
+    }
+    fn autofocus(&self) -> bool {
+        self.reflect_bool("autofocus")
+    }
+    fn set_autofocus(&self, value: bool) {
+        self.set_reflect_bool("autofocus", value);
+    }
+    fn nonce(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("nonce"))
+    }
+    fn set_nonce(&self, value: &str) {
+        self.reflect_attribute("nonce", value);
+    }
+    reflected_nullable_strings! {
+        popover, set_popover => "popover";
+    }
+    fn outer_text(&self) -> Result<String, JsError> {
+        HTMLElementOps::inner_text(self)
+    }
 
     fn title(&self) -> Result<String, JsError> {
         Ok(self.reflect_string("title"))

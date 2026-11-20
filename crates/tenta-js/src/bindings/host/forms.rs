@@ -503,7 +503,6 @@ impl HTMLInputElementOps for HostObject {
         required, set_required => "required";
         read_only, set_read_only => "readonly";
         multiple, set_multiple => "multiple";
-        autofocus, set_autofocus => "autofocus";
     }
     text_selection_members!();
 
