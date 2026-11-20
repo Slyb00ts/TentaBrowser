@@ -26,6 +26,7 @@ pub mod serialize;
 pub mod shared_sink;
 pub mod sink;
 pub mod text;
+pub mod validation;
 
 pub use arena::{DocTypeData, NodeFlags, NodeKind, PiData, WrapperSlot};
 pub use document::{

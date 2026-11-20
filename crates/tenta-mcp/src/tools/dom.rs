@@ -105,9 +105,21 @@ pub async fn resolve_ref(
 pub struct Report {
     pub navigate: Option<String>,
     pub unsupported: Option<String>,
+    /// The controls whose constraints stopped a form submission, with the
+    /// message a browser would have shown for each.
+    pub invalid: Vec<InvalidControl>,
     /// The navigation whose document the script ran in, to tell afterwards
     /// whether the page has navigated since ([`shown_document`]).
     pub document: u64,
+}
+
+/// A form control that failed its constraints when a submission was tried.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InvalidControl {
+    /// The control's `name`, else its `id`, else its tag name.
+    pub name: String,
+    /// Its `validationMessage`.
+    pub message: String,
 }
 
 /// Identifies the document the page shows: the id of the navigation that
@@ -153,6 +165,21 @@ pub async fn current_url(page: &Page) -> String {
         .unwrap_or_else(|| "about:blank".to_owned())
 }
 
+fn invalid_control(value: RemoteValue) -> Option<InvalidControl> {
+    let RemoteValue::Object(members) = value else {
+        return None;
+    };
+    let mut control = InvalidControl::default();
+    for (name, value) in members {
+        match (name.as_str(), value) {
+            ("name", RemoteValue::String(text)) => control.name = text,
+            ("message", RemoteValue::String(text)) => control.message = text,
+            _ => {}
+        }
+    }
+    Some(control)
+}
+
 fn parse_report(value: RemoteValue) -> Report {
     let mut report = Report::default();
     if let RemoteValue::Object(members) = value {
@@ -160,6 +187,9 @@ fn parse_report(value: RemoteValue) -> Report {
             match (name.as_str(), value) {
                 ("navigate", RemoteValue::String(url)) => report.navigate = Some(url),
                 ("unsupported", RemoteValue::String(what)) => report.unsupported = Some(what),
+                ("invalid", RemoteValue::Array(controls)) => {
+                    report.invalid = controls.into_iter().filter_map(invalid_control).collect();
+                }
                 _ => {}
             }
         }
@@ -215,10 +245,11 @@ pub fn script(path: &[u32], body: &str) -> String {
         "(function(){{var A=globalThis.__tentaCdp;\
          if(!A)throw new Error('the interaction script is not installed in this page');\
          var t=A.nodeAt({path});if(!t)throw new Error('the element left the page');\
-         var nav=null,uns=null;\
-         function m(r){{if(r){{if(r.navigate)nav=r.navigate;if(r.unsupported)uns=r.unsupported;}}}}\
+         var nav=null,uns=null,inv=null;\
+         function m(r){{if(r){{if(r.navigate)nav=r.navigate;if(r.unsupported)uns=r.unsupported;\
+         if(r.invalid)inv=r.invalid;}}}}\
          {body}\
-         return {{navigate:nav,unsupported:uns}};}})()"
+         return {{navigate:nav,unsupported:uns,invalid:inv}};}})()"
     )
 }
 

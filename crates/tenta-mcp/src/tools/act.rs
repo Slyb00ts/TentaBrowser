@@ -191,6 +191,8 @@ pub fn tools() -> Vec<Tool> {
 struct Outcome {
     navigation: Option<Navigation>,
     settled: Option<Settled>,
+    /// The controls that stopped a form submission the action tried.
+    invalid: Vec<dom::InvalidControl>,
 }
 
 async fn finish(
@@ -215,6 +217,7 @@ async fn finish(
     Ok(Outcome {
         navigation,
         settled,
+        invalid: report.invalid.clone(),
     })
 }
 
@@ -227,6 +230,17 @@ fn record(session: &mut BrowserSession, outcome: &Outcome) {
 
 fn tail(outcome: &Outcome) -> String {
     let mut out = String::new();
+    if !outcome.invalid.is_empty() {
+        let controls: Vec<String> = outcome
+            .invalid
+            .iter()
+            .map(|control| format!("{}: {}", control.name, control.message))
+            .collect();
+        out.push_str(&format!(
+            " The form was not submitted; the page refused it: {}.",
+            controls.join("; ")
+        ));
+    }
     if let Some(navigation) = &outcome.navigation {
         out.push_str(&format!(
             " Navigated to {} (HTTP {}).",
@@ -247,10 +261,18 @@ fn tail(outcome: &Outcome) -> String {
 }
 
 fn outcome_json(outcome: &Outcome) -> Value {
-    json!({
+    let mut out = json!({
         "navigation": outcome.navigation.as_ref().map(navigation_json),
         "settled": outcome.settled.map(Settled::to_json),
-    })
+    });
+    if !outcome.invalid.is_empty() {
+        out["invalid"] = outcome
+            .invalid
+            .iter()
+            .map(|control| json!({"name": control.name, "message": control.message}))
+            .collect();
+    }
+    out
 }
 
 fn merge(mut base: Value, outcome: &Outcome) -> Value {

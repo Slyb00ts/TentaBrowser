@@ -1079,6 +1079,37 @@ interface HTMLLabelElement : HTMLElement {
   attribute DOMString htmlFor;
 };
 
+// FV1: constraint validation (`tenta_dom::validation`). The members are the
+// ones HTML gives every submittable element; they are a mixin here so one
+// implementation serves the four. `validity` is a live view of the control,
+// the same object on every read. `checkValidity()` and `reportValidity()`
+// fire `invalid` at a control that fails; `reportValidity()` then focuses
+// the first one whose event was not cancelled, since there is no bubble to
+// show. `<fieldset>`, `<output>` and `<object>` do not have them yet.
+[Exposed=Window]
+interface ValidityState {
+  readonly attribute boolean valueMissing;
+  readonly attribute boolean typeMismatch;
+  readonly attribute boolean patternMismatch;
+  readonly attribute boolean tooLong;
+  readonly attribute boolean tooShort;
+  readonly attribute boolean rangeUnderflow;
+  readonly attribute boolean rangeOverflow;
+  readonly attribute boolean stepMismatch;
+  readonly attribute boolean badInput;
+  readonly attribute boolean customError;
+  readonly attribute boolean valid;
+};
+
+interface mixin ConstraintValidation {
+  readonly attribute boolean willValidate;
+  [SameObject] readonly attribute ValidityState validity;
+  readonly attribute DOMString validationMessage;
+  [Throws] boolean checkValidity();
+  [Throws] boolean reportValidity();
+  undefined setCustomValidity(DOMString error);
+};
+
 [Exposed=Window]
 interface HTMLFormElement : HTMLElement {
   attribute DOMString name;
@@ -1093,13 +1124,17 @@ interface HTMLFormElement : HTMLElement {
   // by `id` or `name`.
   [NewObject] readonly attribute HTMLCollection elements;
   readonly attribute unsigned long length;
-  // `submit()` navigates without firing `submit`; `requestSubmit()` fires it
-  // first and submits unless a listener cancels it. Neither validates: there
-  // is no constraint validation yet. The navigation itself is a request the
-  // page takes once the running script returns (`tenta_dom::navigation`).
+  // `submit()` navigates without firing `submit` or validating;
+  // `requestSubmit()` first validates the controls unless the form or the
+  // submitter says not to, firing `invalid` at each that fails and stopping
+  // there, then fires `submit` and submits unless a listener cancels it.
+  // The navigation itself is a request the page takes once the running
+  // script returns (`tenta_dom::navigation`).
   [Throws] undefined submit();
   [Throws] undefined requestSubmit(optional HTMLElement? submitter = null);
   undefined reset();
+  [Throws] boolean checkValidity();
+  [Throws] boolean reportValidity();
 };
 
 [Exposed=Window]
@@ -1131,6 +1166,7 @@ interface HTMLInputElement : HTMLElement {
   attribute DOMString alt;
   attribute long maxLength;
   attribute long minLength;
+  attribute boolean formNoValidate;
   readonly attribute HTMLFormElement? form;
   // The text selection of a text control, in UTF-16 code units. The getters
   // are null and the setters throw InvalidStateError for a type the selection
@@ -1149,6 +1185,7 @@ interface HTMLButtonElement : HTMLElement {
   attribute boolean disabled;
   attribute DOMString type;
   attribute DOMString value;
+  attribute boolean formNoValidate;
   readonly attribute HTMLFormElement? form;
 };
 
@@ -1186,6 +1223,7 @@ interface HTMLTextAreaElement : HTMLElement {
   attribute unsigned long rows;
   attribute unsigned long cols;
   attribute long maxLength;
+  attribute long minLength;
   readonly attribute unsigned long textLength;
   readonly attribute HTMLFormElement? form;
   [Throws] attribute unsigned long? selectionStart;
@@ -1206,6 +1244,11 @@ interface HTMLOptionElement : HTMLElement {
   readonly attribute long index;
   readonly attribute HTMLFormElement? form;
 };
+
+HTMLInputElement includes ConstraintValidation;
+HTMLButtonElement includes ConstraintValidation;
+HTMLSelectElement includes ConstraintValidation;
+HTMLTextAreaElement includes ConstraintValidation;
 
 // d-2c: the `<script>` element interface, the generated planning manifest's
 // most-accessed missing HTML interface (1089 accesses across the golden sites,

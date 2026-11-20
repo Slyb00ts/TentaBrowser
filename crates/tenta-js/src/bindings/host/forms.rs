@@ -8,22 +8,27 @@
 //! the `submit` and `reset` events and the navigation request a submission
 //! leaves for the page.
 //!
-//! Not built: constraint validation (`checkValidity`, `:invalid`; `submit()`
-//! and `requestSubmit()` never refuse), `SubmitEvent` (the event is a plain
-//! `Event` without `submitter`), the `select` event, `labels`, and live
-//! `elements`/`options` collections (they are snapshots).
+//! Constraint validation (`tenta_dom::validation`) is here as the
+//! `ValidityState` view and the `invalid` events of `checkValidity()`,
+//! `reportValidity()` and an interactive submission.
+//!
+//! Not built: the `:invalid`/`:valid` selectors, `SubmitEvent` from the
+//! engine (the event is a plain `Event` without `submitter`), the `select`
+//! event, `labels`, and live `elements`/`options` collections (they are
+//! snapshots).
 
 use tenta_core::NodeId;
 use tenta_dom::forms::{self, SelectionDirection};
+use tenta_dom::validation;
 
 use super::{
     EventKind, EventRecord, HostObject, NodeOps, TAG_STATIC_HTML_COLLECTION, dispatch, encode_node,
-    encode_snapshot, node_argument,
+    encode_snapshot, encode_validity, node_argument,
 };
 use crate::bindings::{
     HTMLButtonElementOps, HTMLCollection, HTMLElement, HTMLFormElement, HTMLFormElementOps,
     HTMLInputElementOps, HTMLOptionElementOps, HTMLSelectElementOps, HTMLTextAreaElementOps,
-    Handle, JsError,
+    Handle, JsError, ValidityState, ValidityStateOps,
 };
 
 /// A boundary for a `multipart/form-data` body, in the shape Chrome writes.
@@ -103,9 +108,15 @@ impl HostObject {
             .to_owned()
     }
 
-    /// Fires a plain event at this element and reports whether it was left
-    /// uncancelled.
+    /// Fires a plain, bubbling, cancelable event at this element and reports
+    /// whether it was left uncancelled.
     fn fire_plain_event(&self, kind: &str) -> Result<bool, JsError> {
+        self.fire_simple_event(kind, true)
+    }
+
+    /// Fires a plain cancelable event at this element and reports whether it
+    /// was left uncancelled.
+    fn fire_simple_event(&self, kind: &str, bubbles: bool) -> Result<bool, JsError> {
         let ctx = self.context();
         let (doc, id) = self.anchor();
         let target = {
@@ -116,7 +127,7 @@ impl HostObject {
             doc.node_ref(id)
         };
         let mut record = EventRecord::new(kind.to_owned(), EventKind::Plain, ctx.time_stamp());
-        record.bubbles = true;
+        record.bubbles = bubbles;
         record.cancelable = true;
         record.flags.initialized = true;
         let key = ctx.events.borrow_mut().insert(record);
@@ -144,9 +155,19 @@ impl HostObject {
         }
     }
 
-    /// `requestSubmit()` for an already checked submitter: `submit` fires at
-    /// the form, and the form is submitted unless a listener cancelled it.
+    /// `requestSubmit()` for an already checked submitter: unless the form
+    /// or the submitter turns validation off, the controls are validated
+    /// interactively and an invalid one stops the submission; then `submit`
+    /// fires at the form, and the form is submitted unless a listener
+    /// cancelled it.
     pub(super) fn request_form_submission(&self, submitter: Option<NodeId>) -> Result<(), JsError> {
+        let skips = {
+            let (doc, id) = self.anchor();
+            validation::skips_validation(&doc.borrow(), id, submitter)
+        };
+        if !skips && !self.validate_form(true)? {
+            return Ok(());
+        }
         if self.fire_plain_event("submit")? {
             self.submit_form(submitter);
         }
@@ -161,6 +182,70 @@ impl HostObject {
             forms::reset(&mut doc.borrow_mut(), id);
         }
         Ok(())
+    }
+
+    // ---- constraint validation --------------------------------------------
+
+    /// The host of another node of this host's document.
+    fn node_host(&self, node: NodeId) -> HostObject {
+        let (doc, _) = self.anchor();
+        let node = doc.borrow().node_ref(node);
+        HostObject::Node {
+            ctx: self.context().clone(),
+            node,
+        }
+    }
+
+    fn control_validity(&self) -> validation::Validity {
+        let (doc, id) = self.anchor();
+        validation::validity(&doc.borrow(), id)
+    }
+
+    /// A control's `checkValidity()`, and with `report` its
+    /// `reportValidity()`: an invalid candidate gets an `invalid` event, and
+    /// a report focuses it unless a listener cancelled the event.
+    fn check_control(&self, report: bool) -> Result<bool, JsError> {
+        let invalid = {
+            let (doc, id) = self.anchor();
+            let doc = doc.borrow();
+            validation::will_validate(&doc, id) && !validation::validity(&doc, id).valid()
+        };
+        if !invalid {
+            return Ok(true);
+        }
+        if self.fire_simple_event("invalid", false)? && report {
+            self.focus_steps(None)?;
+        }
+        Ok(false)
+    }
+
+    /// Validates this form's controls: `invalid` fires at each that fails, in
+    /// tree order. With `report`, the first whose event was not cancelled is
+    /// focused, which is all of "report the problems" a headless page has.
+    fn validate_form(&self, report: bool) -> Result<bool, JsError> {
+        let invalid = {
+            let (doc, id) = self.anchor();
+            validation::invalid_controls(&doc.borrow(), id)
+        };
+        let mut unhandled = None;
+        for control in &invalid {
+            let host = self.node_host(*control);
+            if host.fire_simple_event("invalid", false)? && unhandled.is_none() {
+                unhandled = Some(host);
+            }
+        }
+        if report && let Some(first) = unhandled {
+            // A control that a listener removed or disabled is not focused.
+            let focusable = {
+                let (doc, id) = first.anchor();
+                let doc = doc.borrow();
+                doc.is_live(id) && validation::will_validate(&doc, id)
+            };
+            if focusable {
+                first.focus_steps(None)?;
+            }
+        }
+        Ok(invalid.is_empty())
     }
 
     // ---- the text selection of an input or a textarea ---------------------
@@ -348,6 +433,35 @@ macro_rules! text_selection_members {
     };
 }
 
+/// The constraint validation members every submittable element has.
+macro_rules! constraint_validation_members {
+    () => {
+        fn will_validate(&self) -> bool {
+            let (doc, id) = self.anchor();
+            validation::will_validate(&doc.borrow(), id)
+        }
+        fn validity(&self) -> Result<Handle<ValidityState>, JsError> {
+            let (doc, id) = self.anchor();
+            let owner = doc.borrow().node_ref(id);
+            Ok(Handle::from_bits(encode_validity(self.slot(), owner)))
+        }
+        fn validation_message(&self) -> Result<String, JsError> {
+            let (doc, id) = self.anchor();
+            Ok(validation::validation_message(&doc.borrow(), id))
+        }
+        fn check_validity(&self) -> Result<bool, JsError> {
+            self.check_control(false)
+        }
+        fn report_validity(&self) -> Result<bool, JsError> {
+            self.check_control(true)
+        }
+        fn set_custom_validity(&self, error: &str) {
+            let (doc, id) = self.anchor();
+            doc.borrow_mut().set_custom_validity(id, error.to_owned());
+        }
+    };
+}
+
 /// A reflected DOMString attribute: getter and setter.
 macro_rules! reflected_strings {
     ($($getter:ident, $setter:ident => $attribute:literal;)*) => {
@@ -482,6 +596,50 @@ impl HTMLFormElementOps for HostObject {
         // exception either; the dispatch already reported it.
         let _ = self.reset_form();
     }
+
+    fn check_validity(&self) -> Result<bool, JsError> {
+        self.validate_form(false)
+    }
+
+    fn report_validity(&self) -> Result<bool, JsError> {
+        self.validate_form(true)
+    }
+}
+
+impl ValidityStateOps for HostObject {
+    fn value_missing(&self) -> bool {
+        self.control_validity().value_missing
+    }
+    fn type_mismatch(&self) -> bool {
+        self.control_validity().type_mismatch
+    }
+    fn pattern_mismatch(&self) -> bool {
+        self.control_validity().pattern_mismatch
+    }
+    fn too_long(&self) -> bool {
+        self.control_validity().too_long
+    }
+    fn too_short(&self) -> bool {
+        self.control_validity().too_short
+    }
+    fn range_underflow(&self) -> bool {
+        self.control_validity().range_underflow
+    }
+    fn range_overflow(&self) -> bool {
+        self.control_validity().range_overflow
+    }
+    fn step_mismatch(&self) -> bool {
+        self.control_validity().step_mismatch
+    }
+    fn bad_input(&self) -> bool {
+        self.control_validity().bad_input
+    }
+    fn custom_error(&self) -> bool {
+        self.control_validity().custom_error
+    }
+    fn valid(&self) -> bool {
+        self.control_validity().valid()
+    }
 }
 
 impl HTMLInputElementOps for HostObject {
@@ -503,8 +661,10 @@ impl HTMLInputElementOps for HostObject {
         required, set_required => "required";
         read_only, set_read_only => "readonly";
         multiple, set_multiple => "multiple";
+        form_no_validate, set_form_no_validate => "formnovalidate";
     }
     text_selection_members!();
+    constraint_validation_members!();
 
     fn value(&self) -> Result<String, JsError> {
         Ok(self.control_value("value"))
@@ -555,7 +715,9 @@ impl HTMLButtonElementOps for HostObject {
     }
     reflected_bools! {
         disabled, set_disabled => "disabled";
+        form_no_validate, set_form_no_validate => "formnovalidate";
     }
+    constraint_validation_members!();
 
     fn r#type(&self) -> Result<String, JsError> {
         let (doc, id) = self.anchor();
@@ -578,6 +740,7 @@ impl HTMLSelectElementOps for HostObject {
         multiple, set_multiple => "multiple";
         required, set_required => "required";
     }
+    constraint_validation_members!();
 
     fn r#type(&self) -> Result<String, JsError> {
         Ok(if self.reflect_bool("multiple") {
@@ -643,6 +806,7 @@ impl HTMLTextAreaElementOps for HostObject {
         read_only, set_read_only => "readonly";
     }
     text_selection_members!();
+    constraint_validation_members!();
 
     fn value(&self) -> Result<String, JsError> {
         let (doc, id) = self.anchor();
@@ -678,6 +842,14 @@ impl HTMLTextAreaElementOps for HostObject {
     fn set_max_length(&self, value: i32) {
         if value >= 0 {
             self.reflect_attribute("maxlength", &value.to_string());
+        }
+    }
+    fn min_length(&self) -> i32 {
+        self.reflect_length("minlength")
+    }
+    fn set_min_length(&self, value: i32) {
+        if value >= 0 {
+            self.reflect_attribute("minlength", &value.to_string());
         }
     }
     fn text_length(&self) -> u32 {

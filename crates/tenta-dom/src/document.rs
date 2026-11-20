@@ -223,6 +223,10 @@ pub struct Document {
     /// The text selection of a text control, once script or input set one; a
     /// control without an entry has its caret at the end of its value.
     text_selections: HashMap<NodeId, crate::forms::TextSelection>,
+    /// The custom validity error message `setCustomValidity()` gave a form
+    /// control; only non-empty messages are kept, so a control without an
+    /// entry has no custom error.
+    custom_validity: HashMap<NodeId, String>,
     /// The navigation this document's script asked for and the page has not
     /// taken yet; see [`crate::navigation`].
     navigation_request: Option<crate::navigation::NavigationRequest>,
@@ -320,6 +324,7 @@ impl Document {
             dirty_checkedness: HashMap::new(),
             dirty_selectedness: HashMap::new(),
             text_selections: HashMap::new(),
+            custom_validity: HashMap::new(),
             navigation_request: None,
             current_script: None,
             focused: None,
@@ -1237,6 +1242,21 @@ impl Document {
     pub fn clear_dirty_value(&mut self, id: NodeId) {
         self.dirty_values.remove(&id);
         self.text_selections.remove(&id);
+    }
+
+    /// The custom validity error message of a form control, if it has one.
+    pub fn custom_validity(&self, id: NodeId) -> Option<&str> {
+        self.custom_validity.get(&id).map(String::as_str)
+    }
+
+    /// Sets a control's custom validity error message; the empty string
+    /// clears it.
+    pub fn set_custom_validity(&mut self, id: NodeId, message: String) {
+        if message.is_empty() {
+            self.custom_validity.remove(&id);
+        } else {
+            self.custom_validity.insert(id, message);
+        }
     }
 
     /// Drops a control's dirty checkedness, as a form reset does.
@@ -2626,6 +2646,7 @@ impl Document {
                 self.dirty_checkedness.remove(node);
                 self.dirty_selectedness.remove(node);
                 self.text_selections.remove(node);
+                self.custom_validity.remove(node);
                 self.detached_roots.remove(node);
                 self.arena.free(*node);
                 stats.nodes_freed += 1;

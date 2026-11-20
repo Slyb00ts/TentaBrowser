@@ -19,6 +19,7 @@ precomputed-hash = { workspace = true }
 selectors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+regex-lite = { workspace = true }
 smallvec = { workspace = true }
 url = { workspace = true }
 

@@ -476,7 +476,8 @@ async fn the_page_side_script_keeps_the_contract_the_tools_use() {
         members,
         "focus:function,mouse:function,key:function,insertText:function,nodeAt:function"
     );
-    // `mouse` and `key` report {navigate, unsupported} and key events edit the focused field.
+    // `mouse` and `key` report {invalid, navigate, unsupported} and key events edit the
+    // focused field.
     let report = client
         .evaluate(
             "var f = document.getElementById('name'); __tentaCdp.focus(f); \
@@ -484,7 +485,10 @@ async fn the_page_side_script_keeps_the_contract_the_tools_use() {
              JSON.stringify([Object.keys(r).sort(), f.value, document.activeElement === f])",
         )
         .await;
-    assert_eq!(report, "[[\"navigate\",\"unsupported\"],\"x\",true]");
+    assert_eq!(
+        report,
+        "[[\"invalid\",\"navigate\",\"unsupported\"],\"x\",true]"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -979,4 +983,75 @@ async fn network_requests_list_what_the_page_and_its_script_asked_for() {
         !urls.iter().any(|url| url.contains("network")),
         "the earlier page's requests are gone: {urls:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invalid_form_is_not_submitted_and_the_tool_says_why() {
+    let harness = Harness::start(Tier::Js).await;
+    let client = harness.client();
+    client.navigate(&harness.url("/signup.html")).await;
+    let age = client.ref_of(&["spinbutton", "Age"]).await;
+    client
+        .tool("browser_fill", json!({"ref": age, "value": "12"}))
+        .await
+        .ok();
+    let create = client.ref_of(&["button", "Create account"]).await;
+    let clicked = client.tool("browser_click", json!({"ref": create})).await;
+    clicked.ok();
+    assert!(
+        clicked.structured()["navigation"].is_null(),
+        "{}",
+        clicked.0
+    );
+    assert_eq!(
+        clicked.structured()["invalid"],
+        json!([
+            {"name": "email", "message": "Please fill out this field."},
+            {"name": "age", "message": "Value must be greater than or equal to 18."},
+        ]),
+        "{}",
+        clicked.0
+    );
+    assert!(
+        clicked.text().contains(
+            "The form was not submitted; the page refused it: email: Please fill out this field."
+        ),
+        "{}",
+        clicked.text()
+    );
+    assert_eq!(
+        client.evaluate("document.activeElement.id").await,
+        "email",
+        "the first invalid control is focused"
+    );
+
+    // A submitter with `formnovalidate` is not stopped.
+    let draft = client.ref_of(&["button", "Save draft"]).await;
+    let saved = client.tool("browser_click", json!({"ref": draft})).await;
+    saved.ok();
+    let url = saved.structured()["navigation"]["url"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(url.contains("draft=1"), "{}", saved.0);
+
+    // Filled in, the form goes.
+    client.navigate(&harness.url("/signup.html")).await;
+    let email = client.ref_of(&["textbox", "Email"]).await;
+    client
+        .tool(
+            "browser_fill",
+            json!({"ref": email, "value": "ada@example.com"}),
+        )
+        .await
+        .ok();
+    let pressed = client
+        .tool("browser_press_key", json!({"key": "Enter", "ref": email}))
+        .await;
+    pressed.ok();
+    let url = pressed.structured()["navigation"]["url"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(url.contains("email=ada%40example.com"), "{}", pressed.0);
 }

@@ -2748,6 +2748,14 @@ pub enum HostObject {
         /// the map is.
         owner: NodeRef,
     },
+    /// A wrapper for the `ValidityState` (`validity`) of the form control
+    /// `owner`: a live view, read from the control on every access.
+    Validity {
+        /// The context the control lives in.
+        ctx: SharedContext,
+        /// A generational reference to the control.
+        owner: NodeRef,
+    },
     /// A wrapper for the live `NamedNodeMap` (`attributes`) of `owner`.
     ///
     /// It is the same shape as [`HostObject::TokenList`] — the element is the
@@ -2846,6 +2854,11 @@ impl HostObject {
     /// Builds a `DOMStringMap` host for the `dataset` of `owner` in `ctx`.
     pub fn dataset_map(ctx: SharedContext, owner: NodeRef) -> Self {
         Self::DataSet { ctx, owner }
+    }
+
+    /// Builds a `ValidityState` host for the form control `owner` in `ctx`.
+    pub fn validity_state(ctx: SharedContext, owner: NodeRef) -> Self {
+        Self::Validity { ctx, owner }
     }
 
     /// Builds a `NamedNodeMap` host for the `attributes` of `owner` in `ctx`.
@@ -3059,6 +3072,7 @@ impl HostObject {
             | HostObject::Event { ctx, .. }
             | HostObject::TokenList { ctx, .. }
             | HostObject::DataSet { ctx, .. }
+            | HostObject::Validity { ctx, .. }
             | HostObject::NamedNodeMap { ctx, .. }
             | HostObject::Style { ctx, .. }
             | HostObject::Host { ctx, .. }
@@ -3638,6 +3652,7 @@ impl HostObject {
             HostObject::Event { key, .. } => encode_event(slot, *key),
             HostObject::TokenList { owner, .. } => encode_token_list(slot, *owner),
             HostObject::DataSet { owner, .. } => encode_dataset(slot, *owner),
+            HostObject::Validity { owner, .. } => encode_validity(slot, *owner),
             HostObject::NamedNodeMap { owner, .. } => encode_named_node_map(slot, *owner),
             HostObject::Style { owner, .. } => encode_style(slot, *owner),
             HostObject::Host { key, .. } => encode_host(slot, *key),
@@ -3657,6 +3672,7 @@ impl HostObject {
             HostObject::HtmlCollection { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::TokenList { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::DataSet { ctx, owner } => (&ctx.doc, owner.id),
+            HostObject::Validity { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::NamedNodeMap { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::Style { ctx, owner } => (&ctx.doc, owner.id),
             HostObject::StaticNodeList { ctx, .. } => (&ctx.doc, NodeId::NONE),
@@ -16885,6 +16901,10 @@ pub const TAG_NAMED_NODE_MAP: u8 = 10;
 /// owning element's node like the token list, which is what makes
 /// `element.dataset === element.dataset` hold.
 pub const TAG_DATASET: u8 = 11;
+/// Handle tag for a form control's `ValidityState` (`validity`); it anchors
+/// to the control's node like the token list, which is what makes
+/// `input.validity === input.validity` hold.
+pub const TAG_VALIDITY: u8 = 12;
 
 /// The tag field's width. Every tag has to be below this, and the four bits the
 /// document slot took from the tag are why `TAG_HOST` multiplexes by record.
@@ -17012,6 +17032,15 @@ pub fn encode_token_list(slot: u16, owner: NodeRef) -> u64 {
 /// Uses the same minted-generation precondition as [`encode_node`].
 pub fn encode_dataset(slot: u16, owner: NodeRef) -> u64 {
     pack(TAG_DATASET, slot, owner)
+}
+
+/// Packs a form control's reference into a [`TAG_VALIDITY`] handle.
+///
+/// # Panics
+///
+/// Uses the same minted-generation precondition as [`encode_node`].
+pub fn encode_validity(slot: u16, owner: NodeRef) -> u64 {
+    pack(TAG_VALIDITY, slot, owner)
 }
 
 /// Packs a `NamedNodeMap` owner's reference into a [`TAG_NAMED_NODE_MAP`] handle.

@@ -419,11 +419,13 @@
     return label.querySelector('input, select, textarea, button');
   }
 
-  // What a default action asks the host to do, and what it cannot do. The
-  // exported `mouse`, `key` and `insertText` return them as
-  // `{ navigate, unsupported }` and reset them.
+  // What a default action asks the host to do, what it cannot do, and the
+  // controls that stopped a form submission. The exported `mouse`, `key`
+  // and `insertText` return them as `{ navigate, unsupported, invalid }` and
+  // reset them.
   let navigation = null;
   let unsupported = null;
+  let invalid = null;
 
   // Only http(s) documents are navigated to: a refused navigation would
   // replace the current document with an error page, and `javascript:` or
@@ -493,8 +495,8 @@
 
   // The URL of a GET submission of `form`: the action (or the submitter's
   // `formaction`) with the successful controls as its query. POST and
-  // `dialog` forms have no navigation here, there is no constraint
-  // validation, and the encoding is UTF-8 whatever `accept-charset` says.
+  // `dialog` forms have no navigation here, and the encoding is UTF-8
+  // whatever `accept-charset` says.
   function formUrl(form, submitter) {
     const own = (name) => (submitter && has(submitter, name) ? submitter.getAttribute(name) : null);
     const method = (own('formmethod') || form.getAttribute('method') || '').toLowerCase();
@@ -535,8 +537,29 @@
     return base + '?' + pairs.join('&') + (hash === -1 ? '' : action.slice(hash));
   }
 
+  // The interactive validation a browser runs before it submits: unless the
+  // form or the submitter turns it off, `invalid` fires at each control that
+  // fails, the first is focused, and the submission stops. The controls and
+  // their messages are reported, which is what the bubble would have shown.
+  function validates(form, submitter) {
+    if ((submitter && has(submitter, 'formnovalidate')) || has(form, 'novalidate')) return true;
+    if (typeof form.reportValidity !== 'function' || form.reportValidity()) return true;
+    invalid = [];
+    const controls = form.elements;
+    for (let i = 0; i < controls.length; i += 1) {
+      const control = controls[i];
+      if (!control.willValidate || control.validity.valid) continue;
+      invalid.push({
+        name: control.getAttribute('name') || control.id || control.localName,
+        message: control.validationMessage,
+      });
+    }
+    return false;
+  }
+
   function submit(form, submitter) {
     if (!form) return;
+    if (!validates(form, submitter)) return;
     // A POST has an entity body, which only the engine can send: it fires
     // `submit`, encodes the form and starts the navigation itself, and the
     // host sees a navigation in flight instead of a URL to follow.
@@ -819,10 +842,12 @@
     return function () {
       navigation = null;
       unsupported = null;
+      invalid = null;
       apply(action, null, arguments);
-      const report = { navigate: navigation, unsupported };
+      const report = { navigate: navigation, unsupported, invalid };
       navigation = null;
       unsupported = null;
+      invalid = null;
       return report;
     };
   }

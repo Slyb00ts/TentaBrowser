@@ -987,6 +987,7 @@ fn install_bindings<'js>(ctx: &Ctx<'js>, global: &Object<'js>) -> rquickjs::Resu
     install_html_collection::<HostObject>(ctx, global, registry)?;
     install_dom_token_list::<HostObject>(ctx, global, registry)?;
     install_dom_string_map::<HostObject>(ctx, global, registry)?;
+    install_validity_state::<HostObject>(ctx, global, registry)?;
     install_attr::<HostObject>(ctx, global, registry)?;
     install_named_node_map::<HostObject>(ctx, global, registry)?;
     install_style_sheet::<HostObject>(ctx, global, registry)?;

@@ -1051,6 +1051,7 @@ impl QuickJsWrapperWorld for World {
                     }
                     TAG_TOKEN_LIST => ("DOMTokenList", HostObject::token_list(owner, node)),
                     TAG_DATASET => ("DOMStringMap", HostObject::dataset_map(owner, node)),
+                    TAG_VALIDITY => ("ValidityState", HostObject::validity_state(owner, node)),
                     TAG_NAMED_NODE_MAP => ("NamedNodeMap", HostObject::named_node_map(owner, node)),
                     TAG_STYLE => ("CSSStyleProperties", HostObject::style(owner, node)),
                     TAG_NODE => {

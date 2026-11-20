@@ -104,6 +104,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
 | `DOMMatrix`, `DOMMatrixReadOnly`, `DOMPoint`, `DOMPointReadOnly`, `DOMQuad` (MAT1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `new DOMMatrix(getComputedStyle(el).transform)` threw. The transform list is parsed in the script: no `calc()`, no percentages; not serializable; see the section below |
 | `SVGAnimatedString`, SVG `className` and SVG `<a>` `href` (SVG1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `x.href instanceof SVGAnimatedString` threw, and an SVG element's `className` was a string. Nothing animates; `href` on SVG `<a>` only; see the section below |
+| Constraint validation of forms: `ValidityState`, `checkValidity()`, refusal of an invalid submission (FV1) | Implemented for both engines through generated bindings; the agent's submission path validates too; engine and MCP checks passed; measured; not independently reviewed | A form with an empty `required` field, a bad email or a number under its `min` was submitted: `requestSubmit()`, a click on a submit button and the agent's click or Enter never validated, and `validity`, `checkValidity()`, `reportValidity()`, `setCustomValidity()`, `willValidate` and `validationMessage` were undefined. Now the controls are validated by HTML's constraints, `invalid` fires, the submission stops, and an MCP action that was refused says which fields and why; see the section below |
 | Reflected element and document members, ARIA reflection, namespace lookups (EL2) | Implemented for both engines through generated bindings; engine checks passed on both; measured; not independently reviewed | Members an ordinary script reads or assigns without a guard were undefined: `draggable`, `spellcheck`, `translate`, `contentEditable`, `isContentEditable`, `inputMode`, `enterKeyHint`, `autocapitalize`, `nonce`, `popover`, `outerText`, the 39 ARIA attributes, `document.dir`, `designMode`, `execCommand()`, `lastModified`, the fullscreen members, `getHTML()`, `setHTMLUnsafe()`, `lookupPrefix()`, `lookupNamespaceURI()`, `isDefaultNamespace()`; see the section below |
 | The performance timeline: entries, `PerformanceObserver`, user timing, the navigation entry (PT1) | Implemented on V8 as script; engine checks passed; measured; seen to remove errors on two real pages; not independently reviewed | `PerformanceObserver` was a `ReferenceError` (seven per load on wikipedia.org, one on x.com) and `performance.mark()` returned plain objects. The timeline is now `PerformanceEntry` and its kinds, an observer delivered in a later task, User Timing with options, and a navigation entry that reports when `DOMContentLoaded` and `load` were fired. No `resource` or paint entries; see the section below |
 | Sixteen event interfaces as script (EV2) | Implemented on V8; engine checks passed; measured; not independently reviewed | `InputEvent`, `PointerEvent`, `PopStateEvent`, `HashChangeEvent`, `PageTransitionEvent`, `TransitionEvent`, `AnimationEvent`, `SubmitEvent`, `CloseEvent`, `StorageEvent`, `ClipboardEvent`, `DragEvent`, `ToggleEvent`, `FormDataEvent`, `MediaQueryListEvent` and `BeforeUnloadEvent` were `ReferenceError`s. Each is a class over the native `Event`, `UIEvent` or `MouseEvent`, defined at first use. Only `popstate` and `hashchange` are fired with theirs; see the section below |
@@ -4116,6 +4117,86 @@ at `SVGAnimatedString is not defined`.
   build alternating, 2026-11-19): vuejs.org reported the `ReferenceError`
   in both loads before and nothing in either after. The snapshot is the
   same.
+
+### Constraint validation of forms (FV1)
+
+Nothing validated a form. A page that relied on the browser to stop an
+empty `required` field had it submitted; a page's own check that called
+`input.checkValidity()` or read `input.validity.valid` threw on
+`undefined`; and an agent that clicked "Create account" with a field it had
+missed got a navigation to whatever the server made of the gap, not the
+message a person would have seen.
+
+- **The constraints** (`crates/tenta-dom/src/validation.rs`, engine
+  independent, next to `tenta_dom::forms`). Candidacy (`willValidate`:
+  not `hidden`, `reset` or `button`, not disabled by itself or a
+  `<fieldset>`, not read-only where `readonly` applies, not in a
+  `<datalist>`); `valueMissing` for text, a checkbox, a radio group (same
+  tree, form owner and name), a `<select>` with nothing or its placeholder
+  label option selected, a textarea and a file control; `typeMismatch` by
+  HTML's email grammar (with `multiple`) and an absolute URL; `pattern`
+  over the whole value; `tooShort`; `rangeUnderflow`/`rangeOverflow` and
+  `stepMismatch` for `number`, `date`, `month`, `week`, `time` (with a range
+  across midnight) and `datetime-local`, with the step base from `min`, then
+  `value`, and each type's default step and scale; `badInput` for a value
+  that does not parse; `customError`. `validationMessage` is Chrome's English
+  wording for the first failure, the nearest valid values of a step
+  included.
+- **Script** (`idl/dom/dom.webidl`, `crates/tenta-js/src/bindings/host/forms.rs`):
+  `ValidityState`, a live view anchored to the control by a handle tag of
+  its own (`TAG_VALIDITY`), so `input.validity === input.validity`;
+  `willValidate`, `validity`, `validationMessage`, `checkValidity()`,
+  `reportValidity()` and `setCustomValidity()` on `<input>`, `<select>`,
+  `<textarea>` and `<button>`; `checkValidity()`/`reportValidity()` on the
+  form; `formNoValidate` on inputs and buttons; `minLength` on a textarea.
+  `invalid` is fired (cancelable, not bubbling) at each control that fails,
+  in tree order; a report focuses the first whose event was not cancelled.
+- **Submission.** `requestSubmit()` and a click on a submit button validate
+  first, unless the form has `novalidate` or the submitter
+  `formnovalidate`, and an invalid form fires no `submit` and leaves no
+  navigation request. `submit()` does not validate, as the standard has it.
+- **The agent's path** (`crates/tenta-cdp/src/interaction.js`, shared by
+  the MCP and CDP hosts). The page-side script submits a GET form itself, so
+  it validates too, with `reportValidity()`, and reports the refused
+  controls; `browser_click`, `browser_press_key` and `browser_type` with
+  `submit` answer with `invalid: [{name, message}]` and "The form was not
+  submitted; the page refused it: email: Please fill out this field.".
+- **Checks:** `crates/tenta-dom/src/validation.rs` (4 unit tests: HTML's
+  float grammar, dates, months, weeks with 53-week years and times, decimal
+  steps, email grammar); `crates/tenta-js/tests/support/form_validation.rs`,
+  run by `crates/tenta-js-v8/tests/form_validation.rs` and
+  `crates/tenta-js-qjs/tests/form_validation.rs` (7 each: thirty controls,
+  one per constraint and its valid twin; a radio group inside and outside a
+  form; `tooShort` before and after a change, on an input and a textarea;
+  ten barred and candidate controls, the one live `validity` object and a
+  custom error on a barred control; the messages; `invalid` from
+  `checkValidity()`, `reportValidity()` and the form's, with a cancelled
+  event and the focus it leaves; `requestSubmit()` and a click refused,
+  then `formnovalidate`, `novalidate`, `submit()` and a corrected value
+  submitted); `crates/tenta-mcp/tests/tools.rs`
+  `an_invalid_form_is_not_submitted_and_the_tool_says_why` (a click refused
+  with two messages and the focus moved, a `formnovalidate` draft
+  submitted, then Enter after filling). The contract test of the page-side
+  script now expects the `invalid` key. The workspace passed 5162 of 5162
+  and the feature set 622 of 622 (the first run had `settle_js a_runaway_lifecycle_handler_does_not_hang_the_navigation` failing at 1.5 s against its 100 ms evaluation budget under the load of the run; it passed 10 of 10 alone and the whole feature set passed on a rerun); fmt, both Clippy runs, `lint-deps`,
+  `idl-manifest` and `cargo deny` were clean.
+- **New dependency:** `regex-lite` 0.1 in `tenta-dom`, for `pattern`: no
+  Unicode tables, and `\d`/`\w` are ASCII as they are in a JavaScript
+  pattern; the lockfile adds that package only, and the Temporal lock
+  validator still verifies 7 packages.
+- **Measured** (release, against `7a3f8e0`, 2026-11-20). One more interface
+  template (`ValidityState`, eleven accessors) and twenty-nine more members
+  on the templates of the form and its four kinds of control. Building an engine took 2.847 ms against 2.721 ms (p50 of 12 alternating runs, +4.6%, under the noise floor), its preludes 1.811 ms against 1.808 ms, and the maximum RSS was 23.6 MiB for both; `S-dom-calls` (25 interleaved runs) moved +1.3% for `has` and +0.9% for `get`, also noise. A submission now walks the form's controls once more, and each radio button the document again to find its group; no form benchmark exists to put a number on it.
+- **Gaps:** `tooShort` is reported for any dirty value, including one a
+  script assigned, because the agent's typing and a script's assignment are
+  not told apart; `tooLong` is never reported. A `pattern` that
+  `regex-lite` cannot compile (lookaround, backreferences, `\p{..}`) is
+  ignored. Values are not sanitized when set, so an assigned `number`
+  value that does not parse is `badInput` rather than empty. A required file
+  control is always missing its value. No `:invalid`, `:valid`,
+  `:user-invalid` selectors; `<fieldset>`, `<output>` and `<object>` have no
+  validation members; the engine's own dispatcher fires a plain `submit`
+  without `submitter`.
 
 ### Reflected element and document members (EL2)
 

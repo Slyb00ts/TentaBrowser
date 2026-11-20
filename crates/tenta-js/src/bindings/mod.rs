@@ -80,6 +80,7 @@ include!(concat!(env!("OUT_DIR"), "/named_node_map_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/attr_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/dom_token_list_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/dom_string_map_ops.rs"));
+include!(concat!(env!("OUT_DIR"), "/validity_state_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/style_sheet_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_style_sheet_ops.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_rule_ops.rs"));
@@ -246,6 +247,7 @@ include!(concat!(env!("OUT_DIR"), "/named_node_map_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/attr_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/dom_token_list_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/dom_string_map_register.rs"));
+include!(concat!(env!("OUT_DIR"), "/validity_state_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/style_sheet_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_style_sheet_register.rs"));
 include!(concat!(env!("OUT_DIR"), "/css_rule_register.rs"));
@@ -515,6 +517,8 @@ include!(concat!(env!("OUT_DIR"), "/attr_v8.rs"));
 include!(concat!(env!("OUT_DIR"), "/dom_token_list_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/dom_string_map_v8.rs"));
+#[cfg(feature = "v8")]
+include!(concat!(env!("OUT_DIR"), "/validity_state_v8.rs"));
 #[cfg(feature = "v8")]
 include!(concat!(env!("OUT_DIR"), "/style_sheet_v8.rs"));
 #[cfg(feature = "v8")]
@@ -843,6 +847,7 @@ pub mod quickjs {
     include!(concat!(env!("OUT_DIR"), "/dom_token_list_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/dom_string_map_qjs.rs"));
+    include!(concat!(env!("OUT_DIR"), "/validity_state_qjs.rs"));
     #[cfg(feature = "quickjs")]
     include!(concat!(env!("OUT_DIR"), "/style_sheet_qjs.rs"));
     #[cfg(feature = "quickjs")]

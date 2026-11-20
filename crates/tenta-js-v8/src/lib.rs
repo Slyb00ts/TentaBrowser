@@ -1331,6 +1331,12 @@ impl Engine {
                 &mut registry,
             )
             .expect("install the DOMStringMap interface");
+            tenta_js::bindings::install_validity_state::<HostObject>(
+                scope,
+                interface_sink,
+                &mut registry,
+            )
+            .expect("install the ValidityState interface");
             // `Attr : Node` requires Node's template to be installed first.
             // `NamedNodeMap` is independent and resolves Attr wrappers through
             // the isolate's template cache when its members run.
