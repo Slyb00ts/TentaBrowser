@@ -1,7 +1,8 @@
 //! Static members that are a few lines over interfaces the bindings already
 //! have, as a script the engine runs before any page script:
-//! `AbortSignal.timeout()`, `AbortSignal.any()`, `Response.json()` and
-//! `navigator.sendBeacon()`.
+//! `AbortSignal.timeout()`, `AbortSignal.any()`, `Response.json()`,
+//! `navigator.sendBeacon()`, the legacy factory functions `Option` and
+//! `Audio`, and `HTMLSelectElement.prototype.remove(index)`.
 //!
 //! They are a script because each is what a page would write itself.
 //! `timeout` is a controller aborted by a timer, and the timer is the page's
@@ -9,15 +10,21 @@
 //! is a controller aborted by the first of its sources, through an `abort`
 //! listener on each. `json` serializes with `JSON.stringify`, which may run
 //! the page's `toJSON`, and hands the text to the `Response` constructor.
-//! `sendBeacon` is a `fetch()` whose answer nobody reads.
+//! `sendBeacon` is a `fetch()` whose answer nobody reads. `Option` and
+//! `Audio` are `createElement` and the attributes their arguments name, and
+//! share the prototype of their interface, as the standard has them (the
+//! generator does not emit `[LegacyFactoryFunction]`). The select's
+//! `remove(index)` overloads `ChildNode.remove()`, which the generated glue
+//! cannot tell apart from it, so it is defined over it here.
 //! The natives they use are taken before page script could replace them.
 //!
 //! What is left out: a signal `any()` returned stays reachable from its
 //! sources for as long as they live (the standard holds it weakly), and the
 //! timer of `timeout()` keeps its signal until it fires.
 
-/// Defines `AbortSignal.timeout`, `AbortSignal.any`, `Response.json` and
-/// `navigator.sendBeacon`.
+/// Defines `AbortSignal.timeout`, `AbortSignal.any`, `Response.json`,
+/// `navigator.sendBeacon`, `Option`, `Audio` and the select's
+/// `remove(index)`.
 /// Run once when a page's engine is built; a member whose interface the
 /// realm lacks is not defined.
 pub const CONVENIENCES_PRELUDE_SOURCE: &str = r#"(function () {
@@ -168,6 +175,64 @@ pub const CONVENIENCES_PRELUDE_SOURCE: &str = r#"(function () {
         status: options.status, statusText: options.statusText, headers: headers
       });
     });
+  }
+
+  var doc = globalThis.document, DocumentCtor = globalThis.Document;
+  var ElementCtor = globalThis.Element, NodeCtor = globalThis.Node;
+  if (doc && typeof DocumentCtor === 'function' && typeof ElementCtor === 'function' &&
+      typeof NodeCtor === 'function') {
+    var create = DocumentCtor.prototype.createElement;
+    var setAttribute = ElementCtor.prototype.setAttribute;
+    var setText = describe(NodeCtor.prototype, 'textContent').set;
+    var toText = String;
+    // A legacy factory function: a constructor, under its own name, whose
+    // `prototype` is the interface's.
+    var factory = function (name, interfaceName, length, build) {
+      var Interface = globalThis[interfaceName];
+      if (typeof Interface !== 'function') return;
+      var fn = function () {
+        if (new.target === undefined) {
+          throw new TypeErr("Failed to construct '" + name + "': Please use the 'new' " +
+            "operator, this DOM object constructor cannot be called as a function.");
+        }
+        return build(arguments);
+      };
+      define(fn, 'name', { value: name, configurable: true });
+      define(fn, 'length', { value: length, configurable: true });
+      define(fn, 'prototype', { value: Interface.prototype, writable: false,
+        enumerable: false, configurable: false });
+      define(globalThis, name, { value: fn, writable: true, enumerable: false,
+        configurable: true });
+    };
+    factory('Option', 'HTMLOptionElement', 0, function (args) {
+      var option = apply(create, doc, ['option']);
+      if (args[0] !== undefined) {
+        var text = toText(args[0]);
+        if (text !== '') apply(setText, option, [text]);
+      }
+      if (args[1] !== undefined) apply(setAttribute, option, ['value', toText(args[1])]);
+      if (args[2]) apply(setAttribute, option, ['selected', '']);
+      if (args[3]) option.selected = true;
+      return option;
+    });
+    factory('Audio', 'HTMLAudioElement', 0, function (args) {
+      var audio = apply(create, doc, ['audio']);
+      apply(setAttribute, audio, ['preload', 'auto']);
+      if (args[0] !== undefined) apply(setAttribute, audio, ['src', toText(args[0])]);
+      return audio;
+    });
+
+    var SelectCtor = globalThis.HTMLSelectElement;
+    var childRemove = ElementCtor.prototype.remove;
+    var optionsOf = SelectCtor && getter(SelectCtor.prototype, 'options');
+    if (typeof childRemove === 'function' && optionsOf) {
+      method(SelectCtor.prototype, 'remove', 0, function () {
+        var options = apply(optionsOf, this, []);
+        if (arguments.length === 0) return apply(childRemove, this, []);
+        var option = options[toNumber(arguments[0]) | 0];
+        if (option !== undefined) apply(childRemove, option, []);
+      });
+    }
   }
 })();
 "#;

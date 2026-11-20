@@ -32,6 +32,7 @@ mod media;
 mod mutation_observer;
 mod request;
 mod shadow;
+mod tables;
 pub use element_interface::html_element_interface;
 pub use request::{RequestParts, RequestRecord, RequestSignal, request_parts};
 pub mod storage;
@@ -81,24 +82,23 @@ use super::{
     FileConstructor, FileOps, FileOrUsvString, FilePropertyBag, FocusEventConstructor,
     FocusEventInit, FocusEventOps, FocusOptions, FormDataConstructor, FormDataOps,
     HTMLAnchorElementOps, HTMLCollection, HTMLCollectionOps, HTMLDivElementOps, HTMLElement,
-    HTMLElementOps, HTMLFormElement, HTMLIFrameElementOps, HTMLImageElementOps,
-    HTMLLabelElementOps, HTMLLinkElementOps, HTMLParagraphElementOps, HTMLScriptElementOps,
-    HTMLSpanElementOps, HTMLStyleElementOps, HTMLTemplateElementOps, Handle, Headers,
-    HeadersConstructor, HeadersInit, HeadersOps, IterableEntries, JsError,
-    KeyboardEventConstructor, KeyboardEventInit, KeyboardEventOps, MouseEventConstructor,
-    MouseEventInit, MouseEventOps, NamedNodeMap, NamedNodeMapOps, Node, NodeList, NodeListOps,
-    NodeOps, NodeOrDomString, ProcessingInstruction, ProcessingInstructionOps,
-    ProgressEventConstructor, ProgressEventInit, ProgressEventOps, Promise, Range,
-    RangeConstructor, RangeOps, Realm, ReferrerPolicy, Request, RequestCache, RequestConstructor,
-    RequestCredentials, RequestDestination, RequestDuplex, RequestInfo, RequestInit, RequestMode,
-    RequestOps, RequestRedirect, Response, ResponseConstructor, ResponseInit, ResponseOps,
-    ResponseType, SVGElementOps, StaticRangeConstructor, StaticRangeInit, StaticRangeOps, Text,
-    TextDecodeOptions, TextDecoderConstructor, TextDecoderOps, TextDecoderOptions,
-    TextEncoderConstructor, TextEncoderOps, TextOps, UIEventConstructor, UIEventInit, UIEventOps,
-    URLConstructor, URLOps, URLSearchParams, URLSearchParamsConstructor, URLSearchParamsOps,
-    WheelEventConstructor, WheelEventInit, WheelEventOps, Window, WindowProxy,
-    XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps, XMLHttpRequestOps,
-    XMLHttpRequestResponseType, XMLSerializerConstructor, XMLSerializerOps,
+    HTMLElementOps, HTMLFormElement, HTMLIFrameElementOps, HTMLImageElementOps, HTMLLinkElementOps,
+    HTMLParagraphElementOps, HTMLScriptElementOps, HTMLSpanElementOps, HTMLStyleElementOps,
+    HTMLTemplateElementOps, Handle, Headers, HeadersConstructor, HeadersInit, HeadersOps,
+    IterableEntries, JsError, KeyboardEventConstructor, KeyboardEventInit, KeyboardEventOps,
+    MouseEventConstructor, MouseEventInit, MouseEventOps, NamedNodeMap, NamedNodeMapOps, Node,
+    NodeList, NodeListOps, NodeOps, NodeOrDomString, ProcessingInstruction,
+    ProcessingInstructionOps, ProgressEventConstructor, ProgressEventInit, ProgressEventOps,
+    Promise, Range, RangeConstructor, RangeOps, Realm, ReferrerPolicy, Request, RequestCache,
+    RequestConstructor, RequestCredentials, RequestDestination, RequestDuplex, RequestInfo,
+    RequestInit, RequestMode, RequestOps, RequestRedirect, Response, ResponseConstructor,
+    ResponseInit, ResponseOps, ResponseType, SVGElementOps, StaticRangeConstructor,
+    StaticRangeInit, StaticRangeOps, Text, TextDecodeOptions, TextDecoderConstructor,
+    TextDecoderOps, TextDecoderOptions, TextEncoderConstructor, TextEncoderOps, TextOps,
+    UIEventConstructor, UIEventInit, UIEventOps, URLConstructor, URLOps, URLSearchParams,
+    URLSearchParamsConstructor, URLSearchParamsOps, WheelEventConstructor, WheelEventInit,
+    WheelEventOps, Window, WindowProxy, XMLHttpRequestConstructor, XMLHttpRequestEventTargetOps,
+    XMLHttpRequestOps, XMLHttpRequestResponseType, XMLSerializerConstructor, XMLSerializerOps,
 };
 #[cfg(any(feature = "v8", feature = "quickjs"))]
 use super::{CSSOps, CSSStyleDeclarationOps};
@@ -8682,20 +8682,12 @@ macro_rules! hyperlink_utils {
 impl super::HTMLAreaElementOps for HostObject {
     hyperlink_utils!();
 }
-impl super::HTMLTableElementOps for HostObject {}
 impl super::HTMLTableCaptionElementOps for HostObject {}
 impl super::HTMLTableColElementOps for HostObject {}
-impl super::HTMLTableSectionElementOps for HostObject {}
-impl super::HTMLTableRowElementOps for HostObject {}
-impl super::HTMLTableCellElementOps for HostObject {}
 impl super::HTMLFieldSetElementOps for HostObject {}
 impl super::HTMLLegendElementOps for HostObject {}
 impl super::HTMLOptGroupElementOps for HostObject {}
 impl super::HTMLDataListElementOps for HostObject {}
-impl super::HTMLOutputElementOps for HostObject {}
-impl super::HTMLProgressElementOps for HostObject {}
-impl super::HTMLMeterElementOps for HostObject {}
-impl super::HTMLDetailsElementOps for HostObject {}
 impl super::HTMLParamElementOps for HostObject {}
 impl super::HTMLFontElementOps for HostObject {}
 impl super::HTMLDirectoryElementOps for HostObject {}
@@ -8885,15 +8877,6 @@ impl HostObject {
             return value;
         }
         natural(&self.image_snapshot())
-    }
-}
-
-impl HTMLLabelElementOps for HostObject {
-    fn html_for(&self) -> Result<String, JsError> {
-        Ok(self.reflect_string("for"))
-    }
-    fn set_html_for(&self, value: &str) {
-        self.reflect_attribute("for", value);
     }
 }
 

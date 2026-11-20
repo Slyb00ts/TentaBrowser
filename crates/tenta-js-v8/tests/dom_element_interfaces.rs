@@ -303,7 +303,9 @@ fn the_interfaces_cannot_be_constructed_and_have_no_members_of_their_own() {
             [
                 attempt(() => new HTMLBodyElement()), attempt(() => new HTMLTableElement()),
                 attempt(() => HTMLHeadingElement()),
-                Object.keys(HTMLTableElement.prototype).length,
+                // `HTMLTableElement` has had members since FM2; its caption's
+                // interface is still a shell.
+                Object.keys(HTMLTableCaptionElement.prototype).length,
                 Object.keys(HTMLLIElement.prototype).length,
                 HTMLUListElement.name, HTMLUnknownElement.length,
             ].join('|');

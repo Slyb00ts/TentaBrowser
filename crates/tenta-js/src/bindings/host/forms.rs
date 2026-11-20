@@ -21,14 +21,18 @@ use tenta_core::NodeId;
 use tenta_dom::forms::{self, SelectionDirection};
 use tenta_dom::validation;
 
+use tenta_core::atom::atoms;
+
 use super::{
-    EventKind, EventRecord, HostObject, NodeOps, TAG_STATIC_HTML_COLLECTION, dispatch, encode_node,
-    encode_snapshot, encode_validity, node_argument,
+    EventKind, EventRecord, HostObject, NodeOps, TAG_STATIC_HTML_COLLECTION, TAG_STATIC_NODE_LIST,
+    dispatch, encode_node, encode_snapshot, encode_validity, node_argument,
 };
 use crate::bindings::{
-    HTMLButtonElementOps, HTMLCollection, HTMLElement, HTMLFormElement, HTMLFormElementOps,
-    HTMLInputElementOps, HTMLOptionElementOps, HTMLSelectElementOps, HTMLTextAreaElementOps,
-    Handle, JsError, ValidityState, ValidityStateOps,
+    HTMLButtonElementOps, HTMLCollection, HTMLDetailsElementOps, HTMLElement, HTMLElementOrLong,
+    HTMLFormElement, HTMLFormElementOps, HTMLInputElementOps, HTMLLabelElementOps,
+    HTMLMeterElementOps, HTMLOptionElement, HTMLOptionElementOps, HTMLOutputElementOps,
+    HTMLProgressElementOps, HTMLSelectElementOps, HTMLTextAreaElementOps, Handle, JsError,
+    NodeList, ValidityState, ValidityStateOps,
 };
 
 /// A boundary for a `multipart/form-data` body, in the shape Chrome writes.
@@ -47,18 +51,60 @@ pub(super) fn multipart_boundary() -> String {
 
 impl HostObject {
     /// A snapshot `HTMLCollection` of `nodes`.
-    fn collection_of(&self, nodes: Vec<NodeId>) -> Result<Handle<HTMLCollection>, JsError> {
+    pub(super) fn collection_of(
+        &self,
+        nodes: Vec<NodeId>,
+    ) -> Result<Handle<HTMLCollection>, JsError> {
+        Ok(Handle::from_bits(
+            self.snapshot_bits(nodes, TAG_STATIC_HTML_COLLECTION)?,
+        ))
+    }
+
+    /// A snapshot `NodeList` of `nodes`.
+    fn node_list_of(&self, nodes: Vec<NodeId>) -> Result<Handle<NodeList>, JsError> {
+        Ok(Handle::from_bits(
+            self.snapshot_bits(nodes, TAG_STATIC_NODE_LIST)?,
+        ))
+    }
+
+    fn snapshot_bits(&self, nodes: Vec<NodeId>, tag: u8) -> Result<u64, JsError> {
         let (doc, _) = self.anchor();
         let refs = {
             let doc = doc.borrow();
             nodes.into_iter().map(|node| doc.node_ref(node)).collect()
         };
         let key = self.context().snapshots.borrow_mut().insert(refs)?;
-        Ok(Handle::from_bits(encode_snapshot(
-            self.slot(),
-            TAG_STATIC_HTML_COLLECTION,
-            key,
-        )))
+        Ok(encode_snapshot(self.slot(), tag, key))
+    }
+
+    /// The `<label>` elements whose labeled control is this element, in
+    /// tree order.
+    fn labels_of_control(&self) -> Result<Handle<NodeList>, JsError> {
+        let labels = {
+            let (doc, id) = self.anchor();
+            let doc = doc.borrow();
+            let root = doc.root_of(id);
+            doc.descendants(root)
+                .filter(|node| {
+                    doc.tag(*node) == Some(atoms::LABEL)
+                        && forms::label_control(&doc, *node) == Some(id)
+                })
+                .collect()
+        };
+        self.node_list_of(labels)
+    }
+
+    /// A reflected `double` attribute, `None` when it is missing or not a
+    /// valid floating-point number.
+    fn reflect_double(&self, name: &str) -> Option<f64> {
+        let (doc, id) = self.anchor();
+        doc.borrow()
+            .attribute_str(id, name)
+            .and_then(|value| validation::parse_float(value.trim()))
+    }
+
+    fn set_reflect_double(&self, name: &str, value: f64) {
+        self.reflect_attribute(name, &format!("{value}"));
     }
 
     /// The control's form owner as a handle.
@@ -96,7 +142,12 @@ impl HostObject {
 
     /// A reflected enumerated attribute limited to `known` keywords, read in
     /// lower case; `missing` when it is absent or names none of them.
-    fn reflect_keyword(&self, name: &str, known: &[&'static str], missing: &'static str) -> String {
+    pub(super) fn reflect_keyword(
+        &self,
+        name: &str,
+        known: &[&'static str],
+        missing: &'static str,
+    ) -> String {
         let (doc, id) = self.anchor();
         let given = doc
             .borrow()
@@ -187,7 +238,7 @@ impl HostObject {
     // ---- constraint validation --------------------------------------------
 
     /// The host of another node of this host's document.
-    fn node_host(&self, node: NodeId) -> HostObject {
+    pub(super) fn node_host(&self, node: NodeId) -> HostObject {
         let (doc, _) = self.anchor();
         let node = doc.borrow().node_ref(node);
         HostObject::Node {
@@ -706,6 +757,68 @@ impl HTMLInputElementOps for HostObject {
     fn form(&self) -> Result<Option<Handle<HTMLFormElement>>, JsError> {
         Ok(self.form_handle())
     }
+    fn value_as_number(&self) -> Result<f64, JsError> {
+        let (doc, id) = self.anchor();
+        Ok(validation::value_as_number(&doc.borrow(), id))
+    }
+    fn set_value_as_number(&self, value: f64) -> Result<(), JsError> {
+        if value.is_infinite() {
+            return Err(JsError::type_error(
+                "Failed to set the 'valueAsNumber' property on 'HTMLInputElement': The value provided is infinite.",
+            ));
+        }
+        let written = {
+            let (doc, id) = self.anchor();
+            validation::number_to_value(&doc.borrow(), id, value)
+        };
+        match written {
+            Some(written) => {
+                self.set_control_value(&written);
+                Ok(())
+            }
+            None => Err(JsError::dom_exception(
+                "InvalidStateError",
+                "This input element does not support Number values.",
+            )),
+        }
+    }
+    fn step_up(&self, n: Option<i32>) -> Result<(), JsError> {
+        self.step_by(n.unwrap_or(1))
+    }
+    fn step_down(&self, n: Option<i32>) -> Result<(), JsError> {
+        self.step_by(-n.unwrap_or(1))
+    }
+    fn indeterminate(&self) -> bool {
+        let (doc, id) = self.anchor();
+        doc.borrow().is_indeterminate(id)
+    }
+    fn set_indeterminate(&self, value: bool) {
+        let (doc, id) = self.anchor();
+        doc.borrow_mut().set_indeterminate(id, value);
+    }
+    fn labels(&self) -> Result<Handle<NodeList>, JsError> {
+        self.labels_of_control()
+    }
+}
+
+impl HostObject {
+    fn step_by(&self, n: i32) -> Result<(), JsError> {
+        let stepped = {
+            let (doc, id) = self.anchor();
+            validation::stepped_value(&doc.borrow(), id, n)
+        };
+        match stepped {
+            Ok(Some(value)) => {
+                self.set_control_value(&value);
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            Err(validation::StepError::NotApplicable) => Err(JsError::dom_exception(
+                "InvalidStateError",
+                "This form element does not have an allowed value step.",
+            )),
+        }
+    }
 }
 
 impl HTMLButtonElementOps for HostObject {
@@ -792,6 +905,91 @@ impl HTMLSelectElementOps for HostObject {
     fn set_value(&self, value: &str) {
         let (doc, id) = self.anchor();
         forms::set_select_value(&mut doc.borrow_mut(), id, value);
+    }
+    fn add(
+        &self,
+        element: Handle<HTMLElement>,
+        before: Option<Option<HTMLElementOrLong>>,
+    ) -> Result<(), JsError> {
+        let element = node_argument(Handle::from_bits(element.bits()))?;
+        let (doc, select) = self.anchor();
+        {
+            let doc = doc.borrow();
+            if !matches!(doc.tag(element), Some(tag) if tag == atoms::OPTION || tag == atoms::OPTGROUP)
+            {
+                return Err(JsError::type_error(
+                    "Failed to execute 'add' on 'HTMLSelectElement': The provided value is not of type '(HTMLOptGroupElement or HTMLOptionElement)'.",
+                ));
+            }
+            if doc.ancestors(select).any(|ancestor| ancestor == element) || element == select {
+                return Err(JsError::dom_exception(
+                    "HierarchyRequestError",
+                    "The new child element contains the parent.",
+                ));
+            }
+        }
+        let reference = match before.flatten() {
+            Some(HTMLElementOrLong::HTMLElement(handle)) => {
+                let reference = node_argument(Handle::from_bits(handle.bits()))?;
+                if !doc
+                    .borrow()
+                    .ancestors(reference)
+                    .any(|ancestor| ancestor == select)
+                {
+                    return Err(JsError::dom_exception(
+                        "NotFoundError",
+                        "The node before which the new node is to be inserted is not a child of this node.",
+                    ));
+                }
+                Some(reference)
+            }
+            Some(HTMLElementOrLong::Long(index)) => usize::try_from(index).ok().and_then(|index| {
+                forms::select_options(&doc.borrow(), select)
+                    .get(index)
+                    .copied()
+            }),
+            None => None,
+        };
+        let (parent, before) = match reference {
+            Some(reference) => (doc.borrow().parent(reference), reference),
+            None => (select, NodeId::NONE),
+        };
+        let mutation = if before == NodeId::NONE {
+            tenta_dom::Mutation::Append {
+                parent,
+                child: element,
+            }
+        } else {
+            tenta_dom::Mutation::InsertBefore {
+                parent,
+                child: element,
+                before,
+            }
+        };
+        doc.borrow_mut()
+            .mutate(mutation)
+            .map_err(|error| super::mutation_error(&error))
+    }
+    fn item(&self, index: u32) -> Result<Option<Handle<HTMLOptionElement>>, JsError> {
+        let (doc, select) = self.anchor();
+        let doc = doc.borrow();
+        Ok(forms::select_options(&doc, select)
+            .get(index as usize)
+            .map(|option| Handle::from_bits(encode_node(self.slot(), doc.node_ref(*option)))))
+    }
+    fn named_item(&self, name: &str) -> Result<Option<Handle<HTMLOptionElement>>, JsError> {
+        let (doc, select) = self.anchor();
+        let doc = doc.borrow();
+        Ok(forms::select_options(&doc, select)
+            .into_iter()
+            .find(|option| {
+                doc.attribute_str(*option, "id") == Some(name)
+                    || doc.attribute_str(*option, "name") == Some(name)
+            })
+            .map(|option| Handle::from_bits(encode_node(self.slot(), doc.node_ref(option)))))
+    }
+    fn labels(&self) -> Result<Handle<NodeList>, JsError> {
+        self.labels_of_control()
     }
 }
 
@@ -920,5 +1118,145 @@ impl HTMLOptionElementOps for HostObject {
         Ok(forms::option_select(&doc, id)
             .and_then(|select| forms::form_owner(&doc, select))
             .map(|form| Handle::from_bits(encode_node(self.slot(), doc.node_ref(form)))))
+    }
+}
+
+impl HTMLLabelElementOps for HostObject {
+    fn html_for(&self) -> Result<String, JsError> {
+        Ok(self.reflect_string("for"))
+    }
+    fn set_html_for(&self, value: &str) {
+        self.reflect_attribute("for", value);
+    }
+    fn control(&self) -> Result<Option<Handle<HTMLElement>>, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        Ok(forms::label_control(&doc, id)
+            .map(|control| Handle::from_bits(encode_node(self.slot(), doc.node_ref(control)))))
+    }
+    fn form(&self) -> Result<Option<Handle<HTMLFormElement>>, JsError> {
+        let (doc, id) = self.anchor();
+        let doc = doc.borrow();
+        Ok(forms::label_control(&doc, id)
+            .and_then(|control| forms::form_owner(&doc, control))
+            .map(|form| Handle::from_bits(encode_node(self.slot(), doc.node_ref(form)))))
+    }
+}
+
+impl HTMLOutputElementOps for HostObject {
+    reflected_strings! {
+        name, set_name => "name";
+    }
+    fn r#type(&self) -> Result<String, JsError> {
+        Ok("output".to_owned())
+    }
+    fn value(&self) -> Result<String, JsError> {
+        Ok(<Self as NodeOps>::text_content(self)?.unwrap_or_default())
+    }
+    fn set_value(&self, value: &str) {
+        let _ = <Self as NodeOps>::set_text_content(self, Some(value));
+    }
+    fn default_value(&self) -> Result<String, JsError> {
+        Ok(<Self as NodeOps>::text_content(self)?.unwrap_or_default())
+    }
+    fn set_default_value(&self, value: &str) {
+        let _ = <Self as NodeOps>::set_text_content(self, Some(value));
+    }
+    fn form(&self) -> Result<Option<Handle<HTMLFormElement>>, JsError> {
+        Ok(self.form_handle())
+    }
+}
+
+impl HTMLProgressElementOps for HostObject {
+    fn value(&self) -> f64 {
+        let max = <Self as HTMLProgressElementOps>::max(self);
+        self.reflect_double("value")
+            .filter(|value| *value >= 0.0)
+            .map_or(0.0, |value| value.min(max))
+    }
+    fn set_value(&self, value: f64) {
+        self.set_reflect_double("value", value);
+    }
+    fn max(&self) -> f64 {
+        self.reflect_double("max")
+            .filter(|max| *max > 0.0)
+            .unwrap_or(1.0)
+    }
+    fn set_max(&self, value: f64) {
+        if value > 0.0 {
+            self.set_reflect_double("max", value);
+        }
+    }
+    fn position(&self) -> f64 {
+        // Without a valid `value` the bar is indeterminate.
+        if self.reflect_double("value").is_none() {
+            return -1.0;
+        }
+        <Self as HTMLProgressElementOps>::value(self) / <Self as HTMLProgressElementOps>::max(self)
+    }
+}
+
+impl HostObject {
+    /// The meter's minimum, maximum, value, low, high and optimum, each
+    /// clamped by the standard's rules.
+    fn meter_points(&self) -> [f64; 6] {
+        let min = self.reflect_double("min").unwrap_or(0.0);
+        let max = self.reflect_double("max").unwrap_or(1.0).max(min);
+        let value = self.reflect_double("value").unwrap_or(0.0).clamp(min, max);
+        let low = self.reflect_double("low").unwrap_or(min).clamp(min, max);
+        let high = self.reflect_double("high").unwrap_or(max).clamp(low, max);
+        let optimum = self
+            .reflect_double("optimum")
+            .unwrap_or((min + max) / 2.0)
+            .clamp(min, max);
+        [min, max, value, low, high, optimum]
+    }
+}
+
+impl HTMLMeterElementOps for HostObject {
+    fn value(&self) -> f64 {
+        self.meter_points()[2]
+    }
+    fn set_value(&self, value: f64) {
+        self.set_reflect_double("value", value);
+    }
+    fn min(&self) -> f64 {
+        self.meter_points()[0]
+    }
+    fn set_min(&self, value: f64) {
+        self.set_reflect_double("min", value);
+    }
+    fn max(&self) -> f64 {
+        self.meter_points()[1]
+    }
+    fn set_max(&self, value: f64) {
+        self.set_reflect_double("max", value);
+    }
+    fn low(&self) -> f64 {
+        self.meter_points()[3]
+    }
+    fn set_low(&self, value: f64) {
+        self.set_reflect_double("low", value);
+    }
+    fn high(&self) -> f64 {
+        self.meter_points()[4]
+    }
+    fn set_high(&self, value: f64) {
+        self.set_reflect_double("high", value);
+    }
+    fn optimum(&self) -> f64 {
+        self.meter_points()[5]
+    }
+    fn set_optimum(&self, value: f64) {
+        self.set_reflect_double("optimum", value);
+    }
+}
+
+impl HTMLDetailsElementOps for HostObject {
+    reflected_strings! {
+        name, set_name => "name";
+    }
+    reflected_bools! {
+        open, set_open => "open";
     }
 }

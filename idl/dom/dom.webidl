@@ -873,8 +873,27 @@ interface HTMLMapElement : HTMLElement {};
 interface HTMLAreaElement : HTMLElement {};
 HTMLAreaElement includes HTMLHyperlinkElementUtils;
 
+// FM2: the table model's members. `caption`, `tHead` and `tFoot` are the
+// first child of their kind and are read-only here (the standard lets them
+// be assigned). `rows`, `tBodies` and `cells` are snapshots, as `elements`
+// is, not live collections.
 [Exposed=Window]
-interface HTMLTableElement : HTMLElement {};
+interface HTMLTableElement : HTMLElement {
+  readonly attribute HTMLTableCaptionElement? caption;
+  HTMLTableCaptionElement createCaption();
+  undefined deleteCaption();
+  readonly attribute HTMLTableSectionElement? tHead;
+  HTMLTableSectionElement createTHead();
+  undefined deleteTHead();
+  readonly attribute HTMLTableSectionElement? tFoot;
+  HTMLTableSectionElement createTFoot();
+  undefined deleteTFoot();
+  [NewObject] readonly attribute HTMLCollection tBodies;
+  HTMLTableSectionElement createTBody();
+  [NewObject] readonly attribute HTMLCollection rows;
+  [Throws] HTMLTableRowElement insertRow(optional long index = -1);
+  [Throws] undefined deleteRow(long index);
+};
 
 [Exposed=Window]
 interface HTMLTableCaptionElement : HTMLElement {};
@@ -883,13 +902,30 @@ interface HTMLTableCaptionElement : HTMLElement {};
 interface HTMLTableColElement : HTMLElement {};
 
 [Exposed=Window]
-interface HTMLTableSectionElement : HTMLElement {};
+interface HTMLTableSectionElement : HTMLElement {
+  [NewObject] readonly attribute HTMLCollection rows;
+  [Throws] HTMLTableRowElement insertRow(optional long index = -1);
+  [Throws] undefined deleteRow(long index);
+};
 
 [Exposed=Window]
-interface HTMLTableRowElement : HTMLElement {};
+interface HTMLTableRowElement : HTMLElement {
+  readonly attribute long rowIndex;
+  readonly attribute long sectionRowIndex;
+  [NewObject] readonly attribute HTMLCollection cells;
+  [Throws] HTMLTableCellElement insertCell(optional long index = -1);
+  [Throws] undefined deleteCell(long index);
+};
 
 [Exposed=Window]
-interface HTMLTableCellElement : HTMLElement {};
+interface HTMLTableCellElement : HTMLElement {
+  attribute unsigned long colSpan;
+  attribute unsigned long rowSpan;
+  attribute DOMString headers;
+  readonly attribute long cellIndex;
+  attribute DOMString scope;
+  attribute DOMString abbr;
+};
 
 [Exposed=Window]
 interface HTMLFieldSetElement : HTMLElement {};
@@ -903,17 +939,39 @@ interface HTMLOptGroupElement : HTMLElement {};
 [Exposed=Window]
 interface HTMLDataListElement : HTMLElement {};
 
+// An output's value is its text; its default value is not kept apart.
 [Exposed=Window]
-interface HTMLOutputElement : HTMLElement {};
+interface HTMLOutputElement : HTMLElement {
+  attribute DOMString name;
+  readonly attribute DOMString type;
+  attribute DOMString value;
+  attribute DOMString defaultValue;
+  readonly attribute HTMLFormElement? form;
+};
 
 [Exposed=Window]
-interface HTMLProgressElement : HTMLElement {};
+interface HTMLProgressElement : HTMLElement {
+  attribute double value;
+  attribute double max;
+  readonly attribute double position;
+};
 
 [Exposed=Window]
-interface HTMLMeterElement : HTMLElement {};
+interface HTMLMeterElement : HTMLElement {
+  attribute double value;
+  attribute double min;
+  attribute double max;
+  attribute double low;
+  attribute double high;
+  attribute double optimum;
+};
 
+// `toggle` is not fired when `open` changes.
 [Exposed=Window]
-interface HTMLDetailsElement : HTMLElement {};
+interface HTMLDetailsElement : HTMLElement {
+  attribute boolean open;
+  attribute DOMString name;
+};
 
 [Exposed=Window]
 interface HTMLParamElement : HTMLElement {};
@@ -1077,6 +1135,8 @@ interface HTMLImageElement : HTMLElement {
 [Exposed=Window]
 interface HTMLLabelElement : HTMLElement {
   attribute DOMString htmlFor;
+  readonly attribute HTMLElement? control;
+  readonly attribute HTMLFormElement? form;
 };
 
 // FV1: constraint validation (`tenta_dom::validation`). The members are the
@@ -1168,6 +1228,16 @@ interface HTMLInputElement : HTMLElement {
   attribute long minLength;
   attribute boolean formNoValidate;
   readonly attribute HTMLFormElement? form;
+  // FM2: the value as a number for the types that have one (a date as its
+  // milliseconds), NaN for the others; the setter throws InvalidStateError
+  // for a type without one. `stepUp()`/`stepDown()` follow the step and
+  // clamp to `min`/`max`. `indeterminate` is a flag script sets, as in a
+  // browser. `valueAsDate` is not declared.
+  [Throws] attribute unrestricted double valueAsNumber;
+  [Throws] undefined stepUp(optional long n = 1);
+  [Throws] undefined stepDown(optional long n = 1);
+  attribute boolean indeterminate;
+  [NewObject] readonly attribute NodeList labels;
   // The text selection of a text control, in UTF-16 code units. The getters
   // are null and the setters throw InvalidStateError for a type the selection
   // does not apply to (anything but text, search, url, tel and password). No
@@ -1206,6 +1276,14 @@ interface HTMLSelectElement : HTMLElement {
   readonly attribute unsigned long length;
   attribute long selectedIndex;
   attribute DOMString value;
+  // FM2: `add()` inserts before an element or the option at an index, and
+  // appends otherwise. `remove(index)` is a script over `ChildNode.remove()`
+  // (`tenta_js::conveniences`, V8 only): declared here, its trait method
+  // would share a name with `ElementOps::remove` in the generated glue.
+  [Throws] undefined add(HTMLElement element, optional (HTMLElement or long)? before = null);
+  HTMLOptionElement? item(unsigned long index);
+  HTMLOptionElement? namedItem(DOMString name);
+  [NewObject] readonly attribute NodeList labels;
 };
 
 [Exposed=Window]

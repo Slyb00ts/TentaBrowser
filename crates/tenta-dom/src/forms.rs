@@ -134,6 +134,36 @@ pub fn form_controls(doc: &Document, form: NodeId) -> Vec<NodeId> {
         .collect()
 }
 
+/// Whether the element is labelable: a `<label>` can name it as its
+/// control.
+pub fn is_labelable(doc: &Document, node: NodeId) -> bool {
+    match doc.tag(node) {
+        Some(tag) if tag == atoms::INPUT => input_type(doc, node) != "hidden",
+        Some(tag) => {
+            tag == atoms::BUTTON
+                || tag == atoms::METER
+                || tag == atoms::OUTPUT
+                || tag == atoms::PROGRESS
+                || tag == atoms::SELECT
+                || tag == atoms::TEXTAREA
+        }
+        None => false,
+    }
+}
+
+/// A label's labeled control: the element its `for` attribute names when
+/// that is labelable, or without `for` its first labelable descendant.
+pub fn label_control(doc: &Document, label: NodeId) -> Option<NodeId> {
+    if let Some(id) = doc.attribute_str(label, "for") {
+        return doc
+            .get_element_by_id(id)
+            .filter(|control| doc.root_of(*control) == doc.root_of(label))
+            .filter(|control| is_labelable(doc, *control));
+    }
+    doc.descendants(label)
+        .find(|node| *node != label && is_labelable(doc, *node))
+}
+
 // ---- values ---------------------------------------------------------------
 
 /// The current value of an `<input>` or a `<textarea>`: the dirty value once

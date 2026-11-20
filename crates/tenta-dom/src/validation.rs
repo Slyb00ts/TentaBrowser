@@ -581,6 +581,156 @@ fn on_step(value: f64, base: f64, step: f64) -> bool {
     (steps - steps.round()).abs() <= 1e-7 * steps.abs().max(1.0)
 }
 
+// ---- the value as a number -------------------------------------------------
+
+/// Civil date of a day count since 1970-01-01 (Hinnant's `civil_from_days`).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let mp = (5 * day_of_year + 2) / 153;
+    let day = (day_of_year - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
+fn format_date(days: i64) -> String {
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// A time of day in its shortest valid form: seconds and milliseconds only
+/// when they are not zero.
+fn format_time(ms: f64) -> String {
+    let ms = ms.rem_euclid(DAY_MS).round() as i64;
+    let (hours, minutes) = (ms / 3_600_000, ms / 60_000 % 60);
+    let (seconds, millis) = (ms / 1000 % 60, ms % 1000);
+    let mut out = format!("{hours:02}:{minutes:02}");
+    if seconds != 0 || millis != 0 {
+        out.push_str(&format!(":{seconds:02}"));
+        if millis != 0 {
+            out.push_str(&format!(".{millis:03}"));
+        }
+    }
+    out
+}
+
+impl Numeric {
+    /// The value string a number stands for, as the standard serializes it.
+    fn format(self, number: f64) -> Option<String> {
+        if !number.is_finite() {
+            return None;
+        }
+        Some(match self {
+            Self::Number => shortest(number),
+            Self::Date => format_date((number / DAY_MS).floor() as i64),
+            Self::Month => {
+                let months = number.floor() as i64;
+                format!(
+                    "{:04}-{:02}",
+                    1970 + months.div_euclid(12),
+                    months.rem_euclid(12) + 1
+                )
+            }
+            Self::Week => {
+                let days = (number / DAY_MS).floor() as i64;
+                // The week's Thursday names its year.
+                let thursday = days - (days + 3).rem_euclid(7) + 3;
+                let (year, _, _) = civil_from_days(thursday);
+                let week = (thursday - days_from_civil(year, 1, 1)) / 7 + 1;
+                format!("{year:04}-W{week:02}")
+            }
+            Self::Time => format_time(number),
+            Self::DateTimeLocal => {
+                let days = (number / DAY_MS).floor() as i64;
+                format!(
+                    "{}T{}",
+                    format_date(days),
+                    format_time(number - days as f64 * DAY_MS)
+                )
+            }
+        })
+    }
+}
+
+/// Whether the input's type has a value as a number (`valueAsNumber`).
+pub fn has_numeric_value(doc: &Document, input: NodeId) -> bool {
+    Numeric::of(forms::input_type(doc, input)).is_some()
+}
+
+/// `valueAsNumber`: the value as a number (a date as milliseconds since
+/// the epoch, a month as months since 1970), NaN when it has none.
+pub fn value_as_number(doc: &Document, input: NodeId) -> f64 {
+    Numeric::of(forms::input_type(doc, input))
+        .and_then(|numeric| numeric.parse(&forms::control_value(doc, input)))
+        .unwrap_or(f64::NAN)
+}
+
+/// The value string `valueAsNumber = number` writes: empty for NaN,
+/// `None` when the type has no value as a number.
+pub fn number_to_value(doc: &Document, input: NodeId, number: f64) -> Option<String> {
+    let numeric = Numeric::of(forms::input_type(doc, input))?;
+    Some(if number.is_nan() {
+        String::new()
+    } else {
+        numeric.format(number).unwrap_or_default()
+    })
+}
+
+/// Why `stepUp()` or `stepDown()` cannot step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepError {
+    /// The type has no value as a number, or the step is `any`.
+    NotApplicable,
+}
+
+/// `stepUp(n)` (or `stepDown` with a negative `n`): the value string the
+/// control steps to, `Ok(None)` when it stays as it is.
+pub fn stepped_value(doc: &Document, input: NodeId, n: i32) -> Result<Option<String>, StepError> {
+    let numeric = Numeric::of(forms::input_type(doc, input)).ok_or(StepError::NotApplicable)?;
+    let step = allowed_step(doc, input, numeric).ok_or(StepError::NotApplicable)?;
+    let min = doc
+        .attribute_str(input, "min")
+        .and_then(|min| numeric.parse(min));
+    let max = doc
+        .attribute_str(input, "max")
+        .and_then(|max| numeric.parse(max));
+    if let (Some(min), Some(max)) = (min, max)
+        && min > max
+    {
+        return Ok(None);
+    }
+    let base = step_base(doc, input, numeric);
+    let before = numeric
+        .parse(&forms::control_value(doc, input))
+        .unwrap_or(0.0);
+    let mut value = if on_step(before, base, step) {
+        before + step * f64::from(n)
+    } else if n < 0 {
+        base + ((before - base) / step).floor() * step
+    } else {
+        base + ((before - base) / step).ceil() * step
+    };
+    if let Some(min) = min
+        && value < min
+    {
+        value = base + ((min - base) / step).ceil() * step;
+    }
+    if let Some(max) = max
+        && value > max
+    {
+        value = base + ((max - base) / step).floor() * step;
+    }
+    if (n < 0 && value > before) || (n > 0 && value < before) {
+        return Ok(None);
+    }
+    Ok(numeric.format(value))
+}
+
 // ---- messages -------------------------------------------------------------
 
 /// `validationMessage`: what a browser would show for the first failure,
@@ -740,6 +890,27 @@ mod tests {
         assert!(parse_week("2020-W53").is_some());
         assert!(parse_week("2021-W53").is_none());
         assert_eq!(parse_week("1970-W01"), Some(-3.0 * DAY_MS));
+    }
+
+    #[test]
+    fn numbers_format_back_to_value_strings() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(19_782), (2024, 2, 29));
+        assert_eq!(
+            Numeric::Date.format(19_782.0 * DAY_MS).unwrap(),
+            "2024-02-29"
+        );
+        assert_eq!(Numeric::Month.format(-1.0).unwrap(), "1969-12");
+        let week = parse_week("2020-W53").unwrap();
+        assert_eq!(Numeric::Week.format(week).unwrap(), "2020-W53");
+        assert_eq!(Numeric::Week.format(-3.0 * DAY_MS).unwrap(), "1970-W01");
+        assert_eq!(Numeric::Time.format(3_723_400.0).unwrap(), "01:02:03.400");
+        assert_eq!(Numeric::Time.format(60_000.0).unwrap(), "00:01");
+        assert_eq!(
+            Numeric::DateTimeLocal.format(DAY_MS + 90_000.0).unwrap(),
+            "1970-01-02T00:01:30"
+        );
+        assert_eq!(Numeric::Number.format(0.1 + 0.2).unwrap(), "0.3");
     }
 
     #[test]

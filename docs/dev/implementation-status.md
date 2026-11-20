@@ -104,6 +104,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
 | `DOMMatrix`, `DOMMatrixReadOnly`, `DOMPoint`, `DOMPointReadOnly`, `DOMQuad` (MAT1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `new DOMMatrix(getComputedStyle(el).transform)` threw. The transform list is parsed in the script: no `calc()`, no percentages; not serializable; see the section below |
 | `SVGAnimatedString`, SVG `className` and SVG `<a>` `href` (SVG1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `x.href instanceof SVGAnimatedString` threw, and an SVG element's `className` was a string. Nothing animates; `href` on SVG `<a>` only; see the section below |
+| Table, select, input and small form element members; `Option` and `Audio` (FM2) | Implemented; generated natives for both engines, `Option`, `Audio` and `select.remove(index)` as script on V8 only; engine checks passed; measured; not independently reviewed | The table interfaces were empty shells (`rows`, `insertRow()`, `cells`, `insertCell()`, `tBodies`, `createTHead()` undefined), `new Option()` and `new Audio()` were `ReferenceError`s, `select.add()` was undefined and `select.remove(0)` removed the whole select, and `valueAsNumber`, `stepUp()`, `indeterminate`, `labels`, `label.control`, `details.open`, `progress.value` and `meter.value` were undefined; see the section below |
 | Constraint validation of forms: `ValidityState`, `checkValidity()`, refusal of an invalid submission (FV1) | Implemented for both engines through generated bindings; the agent's submission path validates too; engine and MCP checks passed; measured; not independently reviewed | A form with an empty `required` field, a bad email or a number under its `min` was submitted: `requestSubmit()`, a click on a submit button and the agent's click or Enter never validated, and `validity`, `checkValidity()`, `reportValidity()`, `setCustomValidity()`, `willValidate` and `validationMessage` were undefined. Now the controls are validated by HTML's constraints, `invalid` fires, the submission stops, and an MCP action that was refused says which fields and why; see the section below |
 | Reflected element and document members, ARIA reflection, namespace lookups (EL2) | Implemented for both engines through generated bindings; engine checks passed on both; measured; not independently reviewed | Members an ordinary script reads or assigns without a guard were undefined: `draggable`, `spellcheck`, `translate`, `contentEditable`, `isContentEditable`, `inputMode`, `enterKeyHint`, `autocapitalize`, `nonce`, `popover`, `outerText`, the 39 ARIA attributes, `document.dir`, `designMode`, `execCommand()`, `lastModified`, the fullscreen members, `getHTML()`, `setHTMLUnsafe()`, `lookupPrefix()`, `lookupNamespaceURI()`, `isDefaultNamespace()`; see the section below |
 | The performance timeline: entries, `PerformanceObserver`, user timing, the navigation entry (PT1) | Implemented on V8 as script; engine checks passed; measured; seen to remove errors on two real pages; not independently reviewed | `PerformanceObserver` was a `ReferenceError` (seven per load on wikipedia.org, one on x.com) and `performance.mark()` returned plain objects. The timeline is now `PerformanceEntry` and its kinds, an observer delivered in a later task, User Timing with options, and a navigation entry that reports when `DOMContentLoaded` and `load` were fired. No `resource` or paint entries; see the section below |
@@ -4117,6 +4118,80 @@ at `SVGAnimatedString is not defined`.
   build alternating, 2026-11-19): vuejs.org reported the `ReferenceError`
   in both loads before and nothing in either after. The snapshot is the
   same.
+
+### Table, select and input members, `Option` and `Audio` (FM2)
+
+The probe of ST1 listed members of tables and form controls that pages
+build and read with: a table script calls `insertRow()` and `insertCell()`,
+a dropdown script `new Option(text, value)` and `select.add()`, a number
+field `valueAsNumber` and `stepUp()`. The table interfaces had no members at
+all, and `select.remove(0)`, which is meant to drop an option, reached
+`ChildNode.remove()` and removed the select.
+
+- **Tables** (`crates/tenta-js/src/bindings/host/tables.rs`):
+  `HTMLTableElement` `caption`, `tHead`, `tFoot` (the first child of the
+  kind), `createCaption()`, `createTHead()` (before the first child that is
+  not a caption or a colgroup), `createTFoot()`, `createTBody()` (after the
+  last body), the three `delete*()`, `tBodies`, `rows` (the head's rows, the
+  bodies' and the table's own in tree order, then the foot's), `insertRow()`
+  (a body made for an empty table, otherwise into the parent of the row at
+  the index or of the last row) and `deleteRow()`;
+  `HTMLTableSectionElement` `rows`, `insertRow()`, `deleteRow()`;
+  `HTMLTableRowElement` `rowIndex`, `sectionRowIndex`, `cells`,
+  `insertCell()`, `deleteCell()`; `HTMLTableCellElement` `colSpan` (1 to
+  1000), `rowSpan` (0 to 65534), `headers`, `cellIndex`, `scope`, `abbr`. An
+  index out of range is an `IndexSizeError`.
+- **Selects and inputs** (`crates/tenta-js/src/bindings/host/forms.rs`):
+  `select.add(element, before)` with an element or an index, refusing what
+  is not an option or optgroup and a reference outside the select;
+  `item()`, `namedItem()` and `labels`. `input.valueAsNumber` (a date as
+  milliseconds, a month as months since 1970; the value strings written
+  back as the standard serializes them, `tenta_dom::validation`),
+  `stepUp()`/`stepDown()` by the step and its base, clamped to `min` and
+  `max`, `indeterminate` (a flag, not an attribute) and `labels`.
+- **Labels and the rest:** `label.control` (the labelable element `for`
+  names in the same tree, or the first labelable descendant) and
+  `label.form`; `output` `name`, `type`, `value`, `defaultValue`, `form`;
+  `progress` `value`, `max`, `position` (-1 when indeterminate); `meter`
+  `value`, `min`, `max`, `low`, `high`, `optimum`, each clamped as the
+  standard has it; `details` `open` and `name`.
+- **A script, V8 only** (`tenta_js::conveniences`): `Option(text, value,
+  defaultSelected, selected)` and `Audio(src)` are constructors whose
+  `prototype` is `HTMLOptionElement.prototype` and
+  `HTMLAudioElement.prototype`; the generator parses
+  `[LegacyFactoryFunction]` but does not emit it. `select.remove(index)`
+  removes the option at the index and `remove()` the select, defined over
+  `ChildNode.remove()`: declared in IDL, its trait method would share the
+  name of `ElementOps::remove` in the generated glue, which calls it
+  unqualified.
+- **Checks:** `crates/tenta-dom/src/validation.rs` (one more unit test: day
+  counts, dates, months, weeks, times and date-times formatted back);
+  `crates/tenta-js/tests/support/form_members.rs`, run by
+  `crates/tenta-js-v8/tests/form_members.rs` and
+  `crates/tenta-js-qjs/tests/form_members.rs` (6 each: a table's rows in
+  head, body, foot order with row and cell indexes, rows inserted at the
+  ends, at 0 and into a body, the three refusals and a deletion, cells
+  inserted and deleted; an empty table growing its caption, head, body,
+  second body and foot in their places; spans clamped and reflected; a
+  select's `add()` at an index, before an option in an optgroup and past the
+  end, its refusals, `item`, `namedItem` and `labels`; `valueAsNumber` of a
+  number, a date, a text and a time field, stepping up, clamping, stepping
+  down, writing a date, the four refusals and NaN; `indeterminate`,
+  `labels` and `control`; output, progress, meter and details). The V8 file
+  runs the preludes and adds 2 (`Option` and `Audio` with their arguments,
+  prototypes, name, length, non-enumerability and the call without `new`;
+  `select.remove()` at an index, out of range, without an argument and on a
+  wrong receiver). The workspace passed 5176 of 5177, the one failure `dom_element_interfaces` `the_interfaces_cannot_be_constructed_and_have_no_members_of_their_own`, which pinned `HTMLTableElement.prototype` as empty and now pins `HTMLTableCaptionElement.prototype` (13 of 13 when its file was rerun) and the feature set
+  622 of 622; fmt, both Clippy runs, `lint-deps`, `idl-manifest` and
+  `cargo deny` were clean.
+- **Measured** (release, against `3d9c80a`, 2026-11-20). Building an engine took 3.240 to 3.270 ms against 2.632 to 2.807 ms in three sets of 12 alternating runs (p50 +16% to +24%, over the noise floor), its preludes 1.89 ms against 1.70 to 1.79 ms (+6%), and the maximum RSS was 24.2 to 24.4 MiB against 23.7 to 24.0 MiB. `S-dom-calls` (25 interleaved runs) moved +1.2% for `has` and +2.0% for `get`. The cost is the members on the global's interface templates: eight interfaces went from an empty prototype to a full one, and V8 builds every interface object and its prototype when the global is made. It is not accepted as it stands: the next package makes the interface objects lazy.
+- **Gaps:** `caption`, `tHead` and `tFoot` cannot be assigned; `rows`,
+  `tBodies`, `cells` and `options` are snapshots, not live collections;
+  `valueAsDate` is not declared; `stepUp()` uses binary arithmetic, so a
+  long run of decimal steps can drift where a browser's decimal arithmetic
+  would not; `details` fires no `toggle` and `name` does not close the other
+  details of its group; `Option`, `Audio` and `select.remove(index)` are
+  missing on QuickJS, where `select.remove(0)` still removes the select.
 
 ### Constraint validation of forms (FV1)
 

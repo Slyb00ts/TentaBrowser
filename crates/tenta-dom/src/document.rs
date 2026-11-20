@@ -227,6 +227,8 @@ pub struct Document {
     /// control; only non-empty messages are kept, so a control without an
     /// entry has no custom error.
     custom_validity: HashMap<NodeId, String>,
+    /// The checkboxes script marked `indeterminate`.
+    indeterminate: HashSet<NodeId>,
     /// The navigation this document's script asked for and the page has not
     /// taken yet; see [`crate::navigation`].
     navigation_request: Option<crate::navigation::NavigationRequest>,
@@ -325,6 +327,7 @@ impl Document {
             dirty_selectedness: HashMap::new(),
             text_selections: HashMap::new(),
             custom_validity: HashMap::new(),
+            indeterminate: HashSet::new(),
             navigation_request: None,
             current_script: None,
             focused: None,
@@ -1256,6 +1259,20 @@ impl Document {
             self.custom_validity.remove(&id);
         } else {
             self.custom_validity.insert(id, message);
+        }
+    }
+
+    /// Whether script marked the control `indeterminate`.
+    pub fn is_indeterminate(&self, id: NodeId) -> bool {
+        self.indeterminate.contains(&id)
+    }
+
+    /// Sets or clears a control's `indeterminate` flag.
+    pub fn set_indeterminate(&mut self, id: NodeId, value: bool) {
+        if value {
+            self.indeterminate.insert(id);
+        } else {
+            self.indeterminate.remove(&id);
         }
     }
 
@@ -2647,6 +2664,7 @@ impl Document {
                 self.dirty_selectedness.remove(node);
                 self.text_selections.remove(node);
                 self.custom_validity.remove(node);
+                self.indeterminate.remove(node);
                 self.detached_roots.remove(node);
                 self.arena.free(*node);
                 stats.nodes_freed += 1;
