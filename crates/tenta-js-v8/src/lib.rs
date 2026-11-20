@@ -1683,9 +1683,6 @@ impl Engine {
                 .install_constructors(inner, local)
                 .expect("define the interface objects on the global");
             host::install(inner, local, host.scheduler.clock().time_origin_ms());
-            registry
-                .link_constructor_prototypes(inner)
-                .expect("link interface constructors in the real context");
             // The window is an `EventTarget`, so its prototype chain has to
             // reach that interface's prototype — the one fact about the window
             // the generated glue cannot express, since the window is the global

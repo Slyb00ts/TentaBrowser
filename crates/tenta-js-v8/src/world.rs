@@ -1056,6 +1056,7 @@ impl WrapperWorld for V8World {
                 || host.is_standalone_event_target();
             // The template must already be installed for this interface.
             let template = cached_template(scope, interface_name)?;
+            ensure_interface_linked(scope, interface_name);
             let instance = template.instance_template(scope).new_instance(scope)?;
             if interface_name == "CSSStyleProperties" {
                 tenta_js::bindings::style_properties::ensure_v8::<HostObject>(scope, instance)
@@ -1505,37 +1506,48 @@ pub struct SkeletonRegistry {
 }
 
 impl SkeletonRegistry {
-    /// Defines every registered interface object on the global of `context`,
-    /// as the non-enumerable data property Web IDL gives an interface object,
-    /// in registration order. This is the installation the generated
-    /// installers would do through the global object template; doing it after
-    /// the context exists is what keeps it out of V8's bootstrap, where it is
-    /// several times more expensive (`Engine::install_dom`).
+    /// Defines every registered interface object on the global of `context`
+    /// as a lazy data property, non-enumerable as Web IDL has an interface
+    /// object, and keeps the interfaces' parents for [`ensure_interface`].
+    ///
+    /// Nothing is instantiated here. Getting a function from its template
+    /// builds the function and its prototype with every member, which for
+    /// two hundred interfaces was a third of building an engine, and a page
+    /// reaches a few dozen of them. An interface object is built when the
+    /// page first reads its name, or when the first wrapper of the interface
+    /// is made ([`ensure_interface_linked`]); either way its constructor is
+    /// then linked to its parent's, as the eager installation did for all.
     pub fn install_constructors(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
         context: v8::Local<v8::Context>,
     ) -> Result<(), JsError> {
         let global = context.global(scope);
+        let mut links = InterfaceLinks::default();
         for descriptor in &self.descriptors {
             // A namespace object was put on the global template by its
             // installer; only interfaces have a constructor to define.
             if descriptor.kind != tenta_js::bindings::DefinitionKind::Interface {
                 continue;
             }
-            let template = cached_template(scope, descriptor.name).ok_or_else(|| {
-                JsError::type_error(format!("{} template is missing", descriptor.name))
-            })?;
-            let constructor = template
-                .get_function(scope)
-                .ok_or_else(tenta_js::bindings::v8_pending_exception_error)?;
+            if cached_template(scope, descriptor.name).is_none() {
+                return Err(JsError::type_error(format!(
+                    "{} template is missing",
+                    descriptor.name
+                )));
+            }
+            links.parents.insert(descriptor.name, descriptor.parent);
             let name = v8::String::new(scope, descriptor.name)
                 .ok_or_else(|| JsError::range_error("Invalid string length"))?;
-            match global.define_own_property(
+            let undefined = v8::undefined(scope);
+            match global.set_lazy_data_property_with_data(
                 scope,
                 name.into(),
-                constructor.into(),
+                lazy_interface_object,
+                undefined.into(),
                 v8::PropertyAttribute::DONT_ENUM,
+                v8::SideEffectType::HasSideEffect,
+                v8::SideEffectType::HasSideEffect,
             ) {
                 Some(true) => {}
                 Some(false) => {
@@ -1547,50 +1559,82 @@ impl SkeletonRegistry {
                 None => return Err(tenta_js::bindings::v8_pending_exception_error()),
             }
         }
+        scope.set_slot(links);
         Ok(())
     }
+}
 
-    /// FunctionTemplate inheritance establishes instance chains, but Web IDL
-    /// also links the constructor functions in each realm. Templates were
-    /// installed under a bootstrap context; resolve them again only after the
-    /// real page context exists, before any page script can change globals.
-    pub fn link_constructor_prototypes(
-        &self,
-        scope: &mut v8::PinScope<'_, '_>,
-    ) -> Result<(), JsError> {
-        for descriptor in &self.descriptors {
-            let Some(parent_name) = descriptor.parent else {
-                continue;
-            };
-            let child_template = cached_template(scope, descriptor.name).ok_or_else(|| {
-                JsError::type_error(format!("{} template is missing", descriptor.name))
-            })?;
-            let parent_template = cached_template(scope, parent_name)
-                .ok_or_else(|| JsError::type_error(format!("{parent_name} template is missing")))?;
-            let child = child_template
-                .get_function(scope)
-                .ok_or_else(tenta_js::bindings::v8_pending_exception_error)?;
-            let parent = parent_template
-                .get_function(scope)
-                .ok_or_else(tenta_js::bindings::v8_pending_exception_error)?;
-            let child: v8::Local<v8::Value> = child.into();
-            let child = child
-                .to_object(scope)
-                .ok_or_else(tenta_js::bindings::v8_pending_exception_error)?;
-            let parent: v8::Local<v8::Value> = parent.into();
-            match child.set_prototype(scope, parent) {
-                Some(true) => {}
-                Some(false) => {
-                    return Err(JsError::type_error(format!(
-                        "{} constructor prototype could not be linked",
-                        descriptor.name
-                    )));
-                }
-                None => return Err(tenta_js::bindings::v8_pending_exception_error()),
-            }
+/// The parent of each registered interface, and the interfaces whose
+/// constructor has been linked to its parent's in the page context.
+#[derive(Default)]
+struct InterfaceLinks {
+    parents: HashMap<&'static str, Option<&'static str>>,
+    linked: std::collections::HashSet<&'static str>,
+}
+
+/// The interface object of `name` in the current context, its constructor
+/// linked to its parent's (and that one to its own) on the first call.
+/// `None` for a name the registry does not know, or a pending exception.
+pub fn ensure_interface<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    name: &str,
+) -> Option<v8::Local<'s, v8::Function>> {
+    let template = cached_template(scope, name)?;
+    let function = template.get_function(scope)?;
+    let (key, parent) = {
+        let links = scope.get_slot::<InterfaceLinks>()?;
+        let (key, parent) = links.parents.get_key_value(name)?;
+        if links.linked.contains(key) {
+            return Some(function);
         }
-        Ok(())
+        (*key, *parent)
+    };
+    if let Some(links) = scope.get_slot_mut::<InterfaceLinks>() {
+        links.linked.insert(key);
     }
+    if let Some(parent) = parent {
+        let parent = ensure_interface(scope, parent)?;
+        let child: v8::Local<v8::Object> = function.into();
+        child.set_prototype(scope, parent.into())?;
+    }
+    Some(function)
+}
+
+/// Links the constructor of `name` before the first wrapper of the
+/// interface is made: making an instance builds the interface object, and
+/// `instance.constructor` has to be linked as if the page had read it from
+/// the global.
+fn ensure_interface_linked(scope: &mut v8::PinScope<'_, '_>, name: &str) {
+    let linked = scope
+        .get_slot::<InterfaceLinks>()
+        .is_none_or(|links| links.linked.contains(name));
+    if !linked {
+        let _ = ensure_interface(scope, name);
+    }
+}
+
+/// The getter of a lazy interface object on the global.
+fn lazy_interface_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    name: v8::Local<'s, v8::Name>,
+    _args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let call = |scope: &mut v8::PinScope<'s, '_>| {
+        let name = name.to_rust_string_lossy(scope);
+        if let Some(function) = ensure_interface(scope, &name) {
+            rv.set(function.into());
+        }
+    };
+    // SAFETY: a registered V8 property callback, where allocation is allowed.
+    unsafe {
+        tenta_js::bindings::v8_registered_slow_callback_boundary(
+            scope,
+            "lazy_interface_object",
+            (),
+            call,
+        )
+    };
 }
 
 impl InterfaceRegistry for SkeletonRegistry {

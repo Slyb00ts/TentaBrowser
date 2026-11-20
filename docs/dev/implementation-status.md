@@ -104,6 +104,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
 | `DOMMatrix`, `DOMMatrixReadOnly`, `DOMPoint`, `DOMPointReadOnly`, `DOMQuad` (MAT1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `new DOMMatrix(getComputedStyle(el).transform)` threw. The transform list is parsed in the script: no `calc()`, no percentages; not serializable; see the section below |
 | `SVGAnimatedString`, SVG `className` and SVG `<a>` `href` (SVG1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `x.href instanceof SVGAnimatedString` threw, and an SVG element's `className` was a string. Nothing animates; `href` on SVG `<a>` only; see the section below |
+| Interface objects built on first use (LI1) | Implemented on V8; engine checks passed; measured; not independently reviewed | Every interface object and its prototype was built when an engine was, two hundred of them, of which a page reaches a few dozen; FM2 made it 0.45 to 0.6 ms dearer. They are now lazy data properties of the global, built on first read or with the first wrapper of the interface; see the section below |
 | Table, select, input and small form element members; `Option` and `Audio` (FM2) | Implemented; generated natives for both engines, `Option`, `Audio` and `select.remove(index)` as script on V8 only; engine checks passed; measured; not independently reviewed | The table interfaces were empty shells (`rows`, `insertRow()`, `cells`, `insertCell()`, `tBodies`, `createTHead()` undefined), `new Option()` and `new Audio()` were `ReferenceError`s, `select.add()` was undefined and `select.remove(0)` removed the whole select, and `valueAsNumber`, `stepUp()`, `indeterminate`, `labels`, `label.control`, `details.open`, `progress.value` and `meter.value` were undefined; see the section below |
 | Constraint validation of forms: `ValidityState`, `checkValidity()`, refusal of an invalid submission (FV1) | Implemented for both engines through generated bindings; the agent's submission path validates too; engine and MCP checks passed; measured; not independently reviewed | A form with an empty `required` field, a bad email or a number under its `min` was submitted: `requestSubmit()`, a click on a submit button and the agent's click or Enter never validated, and `validity`, `checkValidity()`, `reportValidity()`, `setCustomValidity()`, `willValidate` and `validationMessage` were undefined. Now the controls are validated by HTML's constraints, `invalid` fires, the submission stops, and an MCP action that was refused says which fields and why; see the section below |
 | Reflected element and document members, ARIA reflection, namespace lookups (EL2) | Implemented for both engines through generated bindings; engine checks passed on both; measured; not independently reviewed | Members an ordinary script reads or assigns without a guard were undefined: `draggable`, `spellcheck`, `translate`, `contentEditable`, `isContentEditable`, `inputMode`, `enterKeyHint`, `autocapitalize`, `nonce`, `popover`, `outerText`, the 39 ARIA attributes, `document.dir`, `designMode`, `execCommand()`, `lastModified`, the fullscreen members, `getHTML()`, `setHTMLUnsafe()`, `lookupPrefix()`, `lookupNamespaceURI()`, `isDefaultNamespace()`; see the section below |
@@ -4118,6 +4119,44 @@ at `SVGAnimatedString is not defined`.
   build alternating, 2026-11-19): vuejs.org reported the `ReferenceError`
   in both loads before and nothing in either after. The snapshot is the
   same.
+
+### Interface objects built on first use (LI1)
+
+The V8 engine defined every generated interface object on the global as
+soon as the page context existed (`SkeletonRegistry::install_constructors`),
+and then linked each constructor to its parent's
+(`link_constructor_prototypes`). Getting a function from its template
+builds the function and its prototype with all their members, so the cost
+of an engine grew with every member declared anywhere, used or not: timed
+inside one engine build, the constructors took 500 µs and the links 54 µs
+of the 3.27 ms FM2 left it at.
+
+- **What changed** (`crates/tenta-js-v8/src/world.rs`). Each registered
+  interface is a lazy data property of the global (non-enumerable, writable
+  and configurable, as an interface object is). Its getter,
+  `ensure_interface`, gets the function from the template and links its
+  constructor to its parent's, and the parent's to its own, once per
+  interface. A wrapper can be made of an interface the page never named, and
+  `wrapper.constructor` is then that interface object, so the wrapper path
+  calls `ensure_interface_linked` before it makes the instance: a set lookup
+  once the interface is linked. `link_constructor_prototypes` is gone.
+- **What a page sees:** the same objects. The descriptor is a data property
+  the first time it is read; `Object.getPrototypeOf(HTMLTableElement) ===
+  HTMLElement` holds whether the page reads the name or makes a `<tr>`
+  first; a page that assigns or deletes the name before reading it gets what
+  it asked for, and its elements still have their constructor.
+- **Checks:** `crates/tenta-js-v8/tests/lazy_interfaces.rs` (3: the
+  descriptor, `in`, `Object.keys` and the constructor chain from the global
+  down to `EventTarget`; a wrapper made before the name is read, with its
+  constructor's chain and identity; a name replaced and one deleted before
+  use). All 1433 earlier `tenta-js-v8` checks pass unchanged. The workspace
+  passed 5180 of 5180 and the feature set 622 of 622; fmt, both Clippy runs,
+  `lint-deps`, `idl-manifest` and `cargo deny` were clean.
+- **Measured** (release, against `ce9f7a4`, 2026-11-21). Building an engine took 2.479 to 2.484 ms against 3.149 to 3.314 ms (p50 of three sets of 12 alternating runs, -21% to -25%), below the 2.63 to 2.81 ms of the build before FM2; its preludes 1.85 to 1.87 ms against 1.84 to 1.93 ms, which now pay for the interfaces they touch; the maximum RSS 23.1 to 23.5 MiB against 24.1 to 24.3 MiB. Timed inside one build, defining the interface objects took 60 µs instead of 500 µs and the links nothing instead of 54 µs. `S-dom-calls` (25 interleaved runs) moved -0.6% for `has` and +0.5% for `get`, its RSS 37.2 to 35.5 MiB. Making 20,000 element wrappers of five interfaces, a scratch probe, cost 2.09 to 2.24 µs each against 2.11 to 2.32 µs in six alternating pairs of 15 runs: the link check on the wrapper path is not measurable.
+- **Gaps:** QuickJS still builds every interface when its engine is built.
+  The templates themselves are still all made for each engine (332 to
+  485 µs in the timed builds); sharing them between engines of one isolate,
+  or a snapshot, is not attempted.
 
 ### Table, select and input members, `Option` and `Audio` (FM2)
 
