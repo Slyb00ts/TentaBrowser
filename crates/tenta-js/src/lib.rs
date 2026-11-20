@@ -20,6 +20,7 @@ pub mod inspect;
 pub mod location;
 pub mod matrix;
 pub mod modules;
+pub mod performance_timeline;
 pub mod rejection;
 pub mod scripts;
 pub mod selection;

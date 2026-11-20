@@ -104,6 +104,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
 | `DOMMatrix`, `DOMMatrixReadOnly`, `DOMPoint`, `DOMPointReadOnly`, `DOMQuad` (MAT1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `new DOMMatrix(getComputedStyle(el).transform)` threw. The transform list is parsed in the script: no `calc()`, no percentages; not serializable; see the section below |
 | `SVGAnimatedString`, SVG `className` and SVG `<a>` `href` (SVG1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `x.href instanceof SVGAnimatedString` threw, and an SVG element's `className` was a string. Nothing animates; `href` on SVG `<a>` only; see the section below |
+| The performance timeline: entries, `PerformanceObserver`, user timing, the navigation entry (PT1) | Implemented on V8 as script; engine checks passed; measured; seen to remove errors on two real pages; not independently reviewed | `PerformanceObserver` was a `ReferenceError` (seven per load on wikipedia.org, one on x.com) and `performance.mark()` returned plain objects. The timeline is now `PerformanceEntry` and its kinds, an observer delivered in a later task, User Timing with options, and a navigation entry that reports when `DOMContentLoaded` and `load` were fired. No `resource` or paint entries; see the section below |
 | Sixteen event interfaces as script (EV2) | Implemented on V8; engine checks passed; measured; not independently reviewed | `InputEvent`, `PointerEvent`, `PopStateEvent`, `HashChangeEvent`, `PageTransitionEvent`, `TransitionEvent`, `AnimationEvent`, `SubmitEvent`, `CloseEvent`, `StorageEvent`, `ClipboardEvent`, `DragEvent`, `ToggleEvent`, `FormDataEvent`, `MediaQueryListEvent` and `BeforeUnloadEvent` were `ReferenceError`s. Each is a class over the native `Event`, `UIEvent` or `MouseEvent`, defined at first use. Only `popstate` and `hashchange` are fired with theirs; see the section below |
 | Static operations, `sendBeacon`, node constructors (ST1) | Implemented; generated natives for both engines, the scripted members on V8 only; engine and page checks passed; measured; not independently reviewed | The generator could not hand a static operation its world, so none was declared. `URL.parse()`/`canParse()`, `AbortSignal.abort()`, `Response.error()`/`redirect()`, `URLSearchParams.size`, `new Text()`, `new Comment()` and `new DocumentFragment()` are generated; `AbortSignal.timeout()`/`any()`, `Response.json()` and `navigator.sendBeacon()` are a script over them; see the section below |
 | A page callback run by a binding call has a wrapper bound of its own (WL1) | Implemented on V8; engine checks passed; measured; seen to fix one error on a real page; **changes a recorded bound and needs the owner's decision entry**; not independently reviewed | A listener called by `click()` or `dispatchEvent()`, an idle callback, a port's message handler, an observer callback, a custom element reaction and a `forEach` callback all run inside a binding call, where nothing can be collected, and were refused every DOM call after 4,096 new wrappers. Each is now a frame: its calls get 4,096 each, the whole frame 262,144. QuickJS keeps its own bound; see the section below |
@@ -4114,6 +4115,70 @@ at `SVGAnimatedString is not defined`.
   build alternating, 2026-11-19): vuejs.org reported the `ReferenceError`
   in both loads before and nothing in either after. The snapshot is the
   same.
+
+### The performance timeline (PT1)
+
+`performance` had `now()`, `timeOrigin`, the legacy `timing` object, and
+`mark()`/`measure()` that kept plain objects. `PerformanceObserver` did
+not exist, and a page's measuring code starts with it, usually unguarded:
+wikipedia.org logged the `ReferenceError` seven times in every load and
+x.com once.
+
+- **What it is** (`tenta_js::performance_timeline`). `PerformanceEntry`,
+  `PerformanceMark` (constructible), `PerformanceMeasure`,
+  `PerformanceResourceTiming` and `PerformanceNavigationTiming`, with
+  accessors that check their receiver and `toJSON()`;
+  `PerformanceObserver` with `observe({entryTypes})`, `observe({type,
+  buffered})`, `disconnect()`, `takeRecords()` and `supportedEntryTypes`,
+  whose callback gets a `PerformanceObserverEntryList` in a later task;
+  and the members of `performance` that keep and read entries. User Timing
+  follows level 3: `mark(name, {startTime, detail})`, `measure(name,
+  start, end)` and `measure(name, {start, end, duration, detail})`, with a
+  mark name, a number or a `performance.timing` milestone for each bound,
+  and the standard's refusals.
+- **The navigation entry** is the document's: its URL, type `navigate`,
+  and the times `DOMContentLoaded` and `load` began and were done, which
+  the engine now records where it fires them (`HostState::lifecycle_times`,
+  set in `Engine::dispatch_lifecycle`). They are read when the entry is,
+  so an entry taken early fills in. `domInteractive` is the start of
+  `DOMContentLoaded` and `domComplete` the start of `load`.
+- **How it is installed** (`crates/tenta-js-v8/src/host/performance_timeline.rs`).
+  Seven interface names on the global and nine members of `performance`
+  are lazy properties; the script runs when a page first reads one, and is
+  handed the engine's clock and lifecycle times, not what the page may
+  have put at `performance.now`. The native `mark`/`measure` code in
+  `window_misc.rs` is gone.
+- **Checks:** `crates/tenta-js-v8/tests/dom_performance_timeline.rs` (5:
+  the interfaces, what can be constructed, a mark's members and JSON, the
+  refused names and times; every form of `measure()` and its six
+  refusals, entries in start order; an observer told once, in a later
+  task, with `takeRecords()` and `disconnect()`; a buffered observer over
+  marks and the navigation entry, an unsupported type, and the seven
+  refusals; the navigation entry before and after the two lifecycle
+  events, read inside their listeners). `dom_window_misc.rs`
+  `marks_and_measures_are_recorded` passes with one expectation changed:
+  the navigation entry is now one of the entries. The workspace passed
+  5132 of 5132 and the feature set 621 of 621; fmt, both Clippy runs,
+  `lint-deps`, `idl-manifest` and `cargo deny` were clean.
+- **Measured** (release, against `015abed`, 2026-11-20). Sixteen more
+  lazy names when an engine is built, seven native functions fewer.
+  Twelve alternating runs of 70 engines each: the preludes took 1.813 ms -> 1.788 ms p50 (medians of the runs; ranges 1.680-1.905 and 1.683-1.912) and building the engine 2.726 -> 2.676 ms (ranges 2.403-2.810 and 2.492-2.792). No difference outside the noise floor, so none is claimed.
+- **On real pages** (release CLI over MCP, 2026-11-20; the old build once
+  and the new one twice, alternating). wikipedia.org: seven
+  `PerformanceObserver is not defined` before, none in either load after,
+  and the navigation entry reports a `loadEventEnd` above 0. x.com: one
+  before, none after. cloudflare.com lost its `Illegal constructor` with
+  ST1's node constructors; its two remaining errors are a canvas context.
+- **Gaps:** V8 only. The navigation entry's network milestones
+  (`fetchStart` to `responseEnd`, sizes, protocol) are 0 and its status is
+  always 200: the script world is not told them. There are no `resource`
+  entries although the page keeps a request log, and no `paint`,
+  `largest-contentful-paint`, `layout-shift`, `longtask`, `event` or
+  `first-input` entries; `supportedEntryTypes` lists `mark`, `measure` and
+  `navigation` only. The legacy `performance.timing` still reports the
+  origin for every milestone. There is no `Performance` interface object,
+  `performance.toJSON()`, `eventCounts` or `memory`. Entries are never
+  dropped, so a page that marks without clearing grows the list.
 
 ### Event interfaces defined by script (EV2)
 

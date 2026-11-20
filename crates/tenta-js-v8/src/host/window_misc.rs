@@ -9,13 +9,13 @@
 //!   (`[alert] ...`), where a host reads it.
 //! - **`screen`.** The screen is the viewport: its size, 24-bit colour, no
 //!   reserved areas.
-//! - **`performance`.** `mark`, `measure`, `getEntries*` and the `clear*`
-//!   methods keep plain entry objects (not `PerformanceEntry` instances) in
-//!   the realm. The legacy `timing` object reports the time origin for every
-//!   milestone: the page does not record them individually.
+//! - **`performance`.** The legacy `timing` object reports the time origin
+//!   for every milestone: the page does not record them individually. The
+//!   timeline members (`mark`, `measure`, `getEntries*`, `clear*`) are a
+//!   script, named here (`super::performance_timeline`).
 
 use tenta_js::bindings::{
-    JsError, string_from_v8, throw_js_error, throw_type_error, v8_begin_stored_value_lease,
+    string_from_v8, throw_js_error, throw_type_error, v8_begin_stored_value_lease,
     v8_end_stored_value_lease, v8_registered_slow_callback_boundary,
 };
 use tenta_js::location::LocationPart;
@@ -32,13 +32,6 @@ guarded_callback!(guarded_is_secure_context => is_secure_context);
 guarded_callback!(guarded_screen_metric => screen_metric);
 guarded_callback!(guarded_document_location => document_location);
 guarded_callback!(guarded_set_document_location => set_document_location);
-guarded_callback!(guarded_mark => mark);
-guarded_callback!(guarded_measure => measure);
-guarded_callback!(guarded_get_entries => get_entries);
-guarded_callback!(guarded_get_entries_by_name => get_entries_by_name);
-guarded_callback!(guarded_get_entries_by_type => get_entries_by_type);
-guarded_callback!(guarded_clear_marks => clear_marks);
-guarded_callback!(guarded_clear_measures => clear_measures);
 
 fn key<'s>(scope: &mut v8::PinScope<'s, '_>, name: &str) -> v8::Local<'s, v8::String> {
     v8::String::new(scope, name).expect("a member name fits V8")
@@ -68,9 +61,6 @@ const TIMING_MILESTONES: [&str; 21] = [
     "loadEventStart",
     "loadEventEnd",
 ];
-
-/// The private property of `performance` that holds its entries.
-const ENTRIES: &str = "tenta:Performance#entries";
 
 /// Installs the members of this module. `document`'s interface must already
 /// be defined; `performance` must already be on `global`.
@@ -384,27 +374,9 @@ fn install_performance(
     let performance_key = key(scope, "performance");
     let performance = global.get(scope, performance_key.into())?;
     let performance = v8::Local::<v8::Object>::try_from(performance).ok()?;
-    let entries = v8::Array::new(scope, 0);
-    let entries_name = key(scope, ENTRIES);
-    let entries_key = v8::Private::for_api(scope, Some(entries_name));
-    performance.set_private(scope, entries_key, entries.into());
-    define(scope, performance, "mark", guarded_mark);
-    define(scope, performance, "measure", guarded_measure);
-    define(scope, performance, "getEntries", guarded_get_entries);
-    define(
-        scope,
-        performance,
-        "getEntriesByName",
-        guarded_get_entries_by_name,
-    );
-    define(
-        scope,
-        performance,
-        "getEntriesByType",
-        guarded_get_entries_by_type,
-    );
-    define(scope, performance, "clearMarks", guarded_clear_marks);
-    define(scope, performance, "clearMeasures", guarded_clear_measures);
+    // `mark`, `measure`, the entry readers and the `clear*` methods are the
+    // timeline script's, defined by name here and built at first use.
+    super::performance_timeline::install_methods(scope, performance);
 
     // The legacy timing object: every milestone is the time origin.
     let timing = v8::Object::new(scope);
@@ -420,279 +392,4 @@ fn install_performance(
     let navigation_key = key(scope, "navigation");
     performance.set(scope, navigation_key.into(), navigation.into());
     Some(())
-}
-
-/// The entry list of the realm's `performance` object.
-fn entries<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Array>> {
-    let global = scope.get_current_context().global(scope);
-    let performance_key = key(scope, "performance");
-    let performance = global.get(scope, performance_key.into())?;
-    let performance = v8::Local::<v8::Object>::try_from(performance).ok()?;
-    let entries_name = key(scope, ENTRIES);
-    let entries_key = v8::Private::for_api(scope, Some(entries_name));
-    let entries = performance.get_private(scope, entries_key)?;
-    v8::Local::<v8::Array>::try_from(entries).ok()
-}
-
-fn now(scope: &mut v8::PinScope) -> f64 {
-    host_state(scope).map_or(0.0, |state| state.scheduler.now().as_millis_f64())
-}
-
-fn entry<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    name: v8::Local<'s, v8::Value>,
-    kind: &str,
-    start: f64,
-    duration: f64,
-) -> v8::Local<'s, v8::Object> {
-    let entry = v8::Object::new(scope);
-    let name_key = key(scope, "name");
-    entry.set(scope, name_key.into(), name);
-    let type_key = key(scope, "entryType");
-    let kind = key(scope, kind);
-    entry.set(scope, type_key.into(), kind.into());
-    set_number(scope, entry, "startTime", start);
-    set_number(scope, entry, "duration", duration);
-    entry
-}
-
-fn required_name<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    method: &str,
-) -> Option<v8::Local<'s, v8::String>> {
-    if args.length() == 0 {
-        throw_type_error(
-            scope,
-            &format!(
-                "Failed to execute '{method}' on 'Performance': 1 argument required, but only 0 present."
-            ),
-        );
-        return None;
-    }
-    let name = args.get(0).to_string(scope);
-    if name.is_none() {
-        throw_js_error(
-            scope,
-            &JsError::type_error("the name cannot be converted to a string"),
-        );
-    }
-    name
-}
-
-fn mark<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Some(name) = required_name(scope, &args, "mark") else {
-        return;
-    };
-    let start = now(scope);
-    let created = entry(scope, name.into(), "mark", start, 0.0);
-    if let Some(list) = entries(scope) {
-        let length = list.length();
-        list.set_index(scope, length, created.into());
-    }
-    rv.set(created.into());
-}
-
-/// The start time of the newest mark named `name`.
-fn mark_time<'s>(scope: &mut v8::PinScope<'s, '_>, name: v8::Local<'s, v8::Value>) -> Option<f64> {
-    let list = entries(scope)?;
-    let name_key = key(scope, "name");
-    let type_key = key(scope, "entryType");
-    let start_key = key(scope, "startTime");
-    let mark = key(scope, "mark");
-    for index in (0..list.length()).rev() {
-        let Some(candidate) = list
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        else {
-            continue;
-        };
-        let is_mark = candidate
-            .get(scope, type_key.into())
-            .is_some_and(|kind| kind.strict_equals(mark.into()));
-        let same_name = candidate
-            .get(scope, name_key.into())
-            .is_some_and(|candidate_name| candidate_name.strict_equals(name));
-        if is_mark && same_name {
-            return candidate.get(scope, start_key.into())?.number_value(scope);
-        }
-    }
-    None
-}
-
-/// `measure(name, startMark?, endMark?)`: from a mark (or the time origin) to
-/// a mark (or now). A name that is no mark is a `SyntaxError`. The options
-/// object form is read as having neither mark.
-fn measure<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Some(name) = required_name(scope, &args, "measure") else {
-        return;
-    };
-    let bound = |scope: &mut v8::PinScope<'s, '_>, index: i32, default: f64| -> Option<f64> {
-        let mark = args.get(index);
-        if !mark.is_string() {
-            return Some(default);
-        }
-        // User Timing lets a measure name a milestone of `performance.timing`
-        // instead of a mark; every one of them is the time origin here.
-        let text = mark.to_rust_string_lossy(scope);
-        let found = mark_time(scope, mark)
-            .or_else(|| TIMING_MILESTONES.contains(&text.as_str()).then_some(0.0));
-        if found.is_none() {
-            throw_js_error(
-                scope,
-                &JsError::dom_exception(
-                    "SyntaxError",
-                    &format!("The mark '{text}' does not exist."),
-                ),
-            );
-        }
-        found
-    };
-    let Some(start) = bound(scope, 1, 0.0) else {
-        return;
-    };
-    let current = now(scope);
-    let Some(end) = bound(scope, 2, current) else {
-        return;
-    };
-    let created = entry(scope, name.into(), "measure", start, end - start);
-    if let Some(list) = entries(scope) {
-        let length = list.length();
-        list.set_index(scope, length, created.into());
-    }
-    rv.set(created.into());
-}
-
-/// The entries whose `field` is strictly `value` (all of them without a
-/// field), as a new array.
-fn select<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    filters: &[(&str, v8::Local<'s, v8::Value>)],
-) -> v8::Local<'s, v8::Array> {
-    let selected = v8::Array::new(scope, 0);
-    let Some(list) = entries(scope) else {
-        return selected;
-    };
-    for index in 0..list.length() {
-        let Some(candidate) = list
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        else {
-            continue;
-        };
-        let mut keep = true;
-        for (field, value) in filters {
-            let field = key(scope, field);
-            keep &= candidate
-                .get(scope, field.into())
-                .is_some_and(|found| found.strict_equals(*value));
-        }
-        if keep {
-            let length = selected.length();
-            selected.set_index(scope, length, candidate.into());
-        }
-    }
-    selected
-}
-
-fn get_entries<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let selected = select(scope, &[]);
-    rv.set(selected.into());
-}
-
-fn get_entries_by_name<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Some(name) = required_name(scope, &args, "getEntriesByName") else {
-        return;
-    };
-    let mut filters: Vec<(&str, v8::Local<v8::Value>)> = vec![("name", name.into())];
-    if args.get(1).is_string() {
-        filters.push(("entryType", args.get(1)));
-    }
-    let selected = select(scope, &filters);
-    rv.set(selected.into());
-}
-
-fn get_entries_by_type<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Some(kind) = required_name(scope, &args, "getEntriesByType") else {
-        return;
-    };
-    let selected = select(scope, &[("entryType", kind.into())]);
-    rv.set(selected.into());
-}
-
-/// Removes the entries of `kind`, all of them or those named by the first
-/// argument.
-fn clear<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    kind: &str,
-) {
-    let Some(list) = entries(scope) else {
-        return;
-    };
-    let name = args.get(0);
-    let name_key = key(scope, "name");
-    let type_key = key(scope, "entryType");
-    let kind = key(scope, kind);
-    let mut kept: Vec<v8::Local<v8::Value>> = Vec::new();
-    for index in 0..list.length() {
-        let Some(value) = list.get_index(scope, index) else {
-            continue;
-        };
-        let Ok(candidate) = v8::Local::<v8::Object>::try_from(value) else {
-            continue;
-        };
-        let of_kind = candidate
-            .get(scope, type_key.into())
-            .is_some_and(|found| found.strict_equals(kind.into()));
-        let named = name.is_undefined()
-            || candidate
-                .get(scope, name_key.into())
-                .is_some_and(|found| found.strict_equals(name));
-        if !(of_kind && named) {
-            kept.push(value);
-        }
-    }
-    let zero = v8::Integer::new(scope, 0);
-    let length_key = key(scope, "length");
-    list.set(scope, length_key.into(), zero.into());
-    for (index, value) in kept.into_iter().enumerate() {
-        list.set_index(scope, index as u32, value);
-    }
-}
-
-fn clear_marks<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    clear(scope, &args, "mark");
-}
-
-fn clear_measures<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    clear(scope, &args, "measure");
 }

@@ -117,6 +117,7 @@ mod lazy;
 pub(crate) mod matrix;
 mod message_channel;
 mod observers;
+pub(crate) mod performance_timeline;
 pub(crate) mod scripts;
 pub(crate) mod selection;
 pub(crate) mod sheet_replace;
@@ -185,6 +186,11 @@ pub struct HostState {
     /// `element.click()` outside script) may. The event dispatcher checks this
     /// to decide (`docs/spec/05-javascript.md` §5).
     pub script_depth: std::cell::Cell<u32>,
+    /// When the document's lifecycle events were fired, in the clock's
+    /// milliseconds: `DOMContentLoaded` begun and done, `load` begun and
+    /// done; 0 for what has not happened. The navigation entry of the
+    /// performance timeline reports them.
+    pub lifecycle_times: std::cell::Cell<[f64; 4]>,
     /// Set whenever script is entered, cleared by a microtask checkpoint.
     ///
     /// V8's microtask queue is not introspectable, so this is how the driver
@@ -280,6 +286,7 @@ impl HostState {
             ready: Rc::new(RefCell::new(VecDeque::new())),
             ready_frames: Rc::new(RefCell::new(VecDeque::new())),
             script_depth: std::cell::Cell::new(0),
+            lifecycle_times: std::cell::Cell::new([0.0; 4]),
             microtasks_pending: std::cell::Cell::new(false),
             microtask_origin: std::cell::Cell::new(Origin::Background),
             last_graph_collection: std::cell::Cell::new(None),

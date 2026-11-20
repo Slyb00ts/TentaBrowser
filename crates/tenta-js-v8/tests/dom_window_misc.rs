@@ -134,7 +134,9 @@ fn marks_and_measures_are_recorded() {
               between.entryType, between.duration >= 0, sinceOrigin.startTime, missing, counts, \
               afterNamed, performance.getEntries().length].join('|')",
         ),
-        "start|mark|0|number|measure|true|0|SyntaxError|4,2,2,1,0,0|1|0"
+        // The document's navigation entry is always there: one of the five
+        // entries, and the one that is left when the rest are cleared.
+        "start|mark|0|number|measure|true|0|SyntaxError|5,2,2,1,0,1|1|1"
     );
     assert_eq!(
         eval(

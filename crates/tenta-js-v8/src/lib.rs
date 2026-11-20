@@ -2820,6 +2820,7 @@ impl Engine {
         host::subtle::install(scope, global);
         host::matrix::install(scope, global);
         host::event_interfaces::install(scope, global);
+        host::performance_timeline::install(scope, global);
         host::svg_animated::install(scope, global);
         host::sheet_replace::install(scope, global);
     }
@@ -2975,9 +2976,24 @@ impl Engine {
         // entry rather than one statement of it. The guard restores whatever it
         // found on the way out — or on unwind.
         let _native = self.host.enter_native_dispatch();
+        // The navigation entry of the performance timeline reports when each
+        // event began and was done. The first firing is the document's.
+        let milestone = match event {
+            LifecycleEvent::DomContentLoaded => 0,
+            _ => 2,
+        };
+        let note = |index: usize| {
+            let mut times = self.host.lifecycle_times.get();
+            if times[index] == 0.0 {
+                times[index] = self.host.scheduler.now().as_millis_f64();
+                self.host.lifecycle_times.set(times);
+            }
+        };
+        note(milestone);
         // `trusted` is true: the user agent fired this, not script. It is what
         // makes `event.isTrusted` report true to the listener.
         let _ = dispatch_at(&dom.ctx, target, event_key, true);
+        note(milestone + 1);
         if matches!(event, LifecycleEvent::DomContentLoaded) {
             // The document is parsed and its deferred scripts have run: the
             // first focusable `autofocus` element takes focus.
