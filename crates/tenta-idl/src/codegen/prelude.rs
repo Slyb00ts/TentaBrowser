@@ -870,6 +870,15 @@ pub trait V8CallbackAdmission: 'static {
     /// Release values if conversion or the host operation returned early.
     fn end_stored_value_lease(&self, isolate: &v8::Isolate);
     fn exit(&self);
+    /// Opens a frame for a page callback that native code is about to call
+    /// from inside a binding call (a listener, an observer or idle callback,
+    /// a `forEach` callback), and reports whether it did. A world that bounds
+    /// what a binding call may publish counts such a callback apart from the
+    /// call that runs it. Paired with [`Self::exit_page_callback`] through
+    /// [`v8_page_callback_frame`].
+    fn enter_page_callback(&self) -> bool { false }
+    /// Closes the frame [`Self::enter_page_callback`] opened.
+    fn exit_page_callback(&self) {}
     /// Runs after a callback frame has been released and its result checked,
     /// still inside the callback's scope. A world uses it to act on native
     /// state the callback left behind, such as queueing a microtask that must
@@ -1009,6 +1018,32 @@ pub fn v8_before_constructor_host(
 
 #[cfg(feature = "v8")]
 struct V8CallbackAdmissionSlot(std::rc::Rc<dyn V8CallbackAdmission>);
+
+/// The frame of a page callback, open until it is dropped.
+#[cfg(feature = "v8")]
+pub struct V8PageCallbackFrame(Option<std::rc::Rc<dyn V8CallbackAdmission>>);
+
+#[cfg(feature = "v8")]
+impl Drop for V8PageCallbackFrame {
+    fn drop(&mut self) {
+        if let Some(admission) = &self.0 {
+            admission.exit_page_callback();
+        }
+    }
+}
+
+/// Opens the frame of a page callback that native code is about to call:
+/// hold the result across the call. See
+/// [`V8CallbackAdmission::enter_page_callback`].
+#[cfg(feature = "v8")]
+pub fn v8_page_callback_frame(isolate: &v8::Isolate) -> V8PageCallbackFrame {
+    V8PageCallbackFrame(
+        isolate
+            .get_slot::<V8CallbackAdmissionSlot>()
+            .map(|slot| std::rc::Rc::clone(&slot.0))
+            .filter(|admission| admission.enter_page_callback()),
+    )
+}
 
 #[cfg(feature = "v8")]
 pub fn install_v8_callback_admission(
@@ -2093,6 +2128,7 @@ pub fn call_js_function<'s>(
     receiver: v8::Local<'s, v8::Value>,
     arguments: &[v8::Local<'s, v8::Value>],
 ) -> Result<v8::Local<'s, v8::Value>, JsError> {
+    let _frame = v8_page_callback_frame(scope);
     v8::tc_scope!(let tc, scope);
     match function.call(tc, receiver, arguments) {
         Some(value) => Ok(value),

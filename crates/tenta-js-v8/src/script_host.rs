@@ -272,6 +272,10 @@ impl ScriptHost for V8ScriptHost {
         // *before* the listener is entered, because entering it makes the depth
         // non-zero either way.
         let native = self.host.script_depth.get() == 0;
+        // A listener a binding call runs is a frame of its own for the wrapper
+        // bound: what it publishes cannot be collected until that call returns
+        // (`CALLBACK_WRAPPER_MATERIALIZATIONS`).
+        let framed = self.state.borrow_mut().enter_page_callback();
 
         // The context entry is `with_context`'s, not a second copy of it: the
         // engine's native drain reaches this same method with no V8 callback on
@@ -330,6 +334,9 @@ impl ScriptHost for V8ScriptHost {
             // never cancels either.
             result.is_some_and(|value| value.is_false())
         });
+        if framed {
+            self.state.borrow_mut().exit_page_callback();
+        }
 
         // A microtask checkpoint runs only for a dispatch that did not originate
         // in running script (the engine's XHR drain, a native `element.click()`).
@@ -352,7 +359,8 @@ impl ScriptHost for V8ScriptHost {
         _event: u64,
         error: &ErrorReport<'_>,
     ) -> bool {
-        self.with_context(|scope| {
+        let framed = self.state.borrow_mut().enter_page_callback();
+        let cancelled = self.with_context(|scope| {
             let Ok(this) = handle_to_v8::<EventTarget>(scope, Handle::from_bits(current_target))
             else {
                 return false;
@@ -399,7 +407,11 @@ impl ScriptHost for V8ScriptHost {
             self.host.exit_script();
             // This handler cancels by returning exactly `true`.
             result.is_some_and(|value| value.is_true())
-        })
+        });
+        if framed {
+            self.state.borrow_mut().exit_page_callback();
+        }
+        cancelled
     }
 
     fn invoke_mutation_callback(

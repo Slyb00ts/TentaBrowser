@@ -411,6 +411,7 @@ fn run_idle_callback<'s>(
     define(scope, deadline, "timeRemaining", guarded_time_remaining);
     let undefined = v8::undefined(scope);
     // An exception the callback throws is reported by the timer that runs it.
+    let _frame = tenta_js::bindings::v8_page_callback_frame(scope);
     let _ = callback.call(scope, undefined.into(), &[deadline.into()]);
 }
 

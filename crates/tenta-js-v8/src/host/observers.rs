@@ -571,5 +571,6 @@ fn deliver<'s>(
     }
     let entries = v8::Array::new_with_elements(scope, &entries);
     // An exception the callback throws is reported by the task that runs it.
+    let _frame = tenta_js::bindings::v8_page_callback_frame(scope);
     let _ = callback.call(scope, observer.into(), &[entries.into(), observer.into()]);
 }

@@ -677,6 +677,7 @@ fn port_handler<'s>(
         .get_index(scope, PORT_ONMESSAGE)
         .and_then(|handler| v8::Local::<v8::Function>::try_from(handler).ok())
     {
+        let _frame = tenta_js::bindings::v8_page_callback_frame(scope);
         let _ = handler.call(scope, port.into(), &[args.get(0)]);
     }
 }

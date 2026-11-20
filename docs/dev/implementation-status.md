@@ -104,6 +104,8 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
 | `DOMMatrix`, `DOMMatrixReadOnly`, `DOMPoint`, `DOMPointReadOnly`, `DOMQuad` (MAT1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `new DOMMatrix(getComputedStyle(el).transform)` threw. The transform list is parsed in the script: no `calc()`, no percentages; not serializable; see the section below |
 | `SVGAnimatedString`, SVG `className` and SVG `<a>` `href` (SVG1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `x.href instanceof SVGAnimatedString` threw, and an SVG element's `className` was a string. Nothing animates; `href` on SVG `<a>` only; see the section below |
+| A page callback run by a binding call has a wrapper bound of its own (WL1) | Implemented on V8; engine checks passed; measured; seen to fix one error on a real page; **changes a recorded bound and needs the owner's decision entry**; not independently reviewed | A listener called by `click()` or `dispatchEvent()`, an idle callback, a port's message handler, an observer callback, a custom element reaction and a `forEach` callback all run inside a binding call, where nothing can be collected, and were refused every DOM call after 4,096 new wrappers. Each is now a frame: its calls get 4,096 each, the whole frame 262,144. QuickJS keeps its own bound; see the section below |
+| `classList` reads are linear and do not copy (TL1) | Implemented for both engines; V8 check passed; measured | Every `length`, index and `contains` built the whole ordered set as owned strings, comparing each token with every earlier one, so walking a list cost the cube of its length. `contains` now scans the attribute, a read borrows it, and a long list is parsed once; see the section below |
 | Scripts that script inserts run; script elements are told `load` and `error` (DS1) | Implemented on V8; DOM, engine and page checks passed; measured; seen to change real pages; not independently reviewed | **Only the parser's scripts ran.** `document.createElement('script')` followed by `appendChild` did nothing: no inline script executed, no `src` was fetched, no `onload` fired. That is how a bundler loads its chunks, how JSONP works and how most widgets arrive. HTML's "prepare the script element" now runs when an element becomes connected, or, connected, gets a child or a `src`. QuickJS does not have it; see the section below |
 | `Range` tree operations, `createContextualFragment()`, `Text.splitText()` and `wholeText` (RNG2) | Implemented in `tenta-dom` and declared for both engines; DOM checks passed with trees worked out by hand, V8 checks passed; measured; seen to fix one error on a real page; **the `dom/ranges` WPT rows for these operations have not been run**; not independently reviewed | `deleteContents()`, `extractContents()`, `cloneContents()`, `insertNode()` and `surroundContents()` were deliberately undeclared, so the usual "empty this, put that in" sequence threw. They follow the DOM Standard's steps, walked as paths so a deep range does not recurse. A script in a contextual fragment runs when the fragment is inserted (DS1); see the section below |
 | What script does to a stylesheet reaches layout; `adoptedStyleSheets`; `CSSStyleSheet.replace()` (S1) | Implemented (`adoptedStyleSheets` on V8 and QuickJS, layout on V8 with `render`, `replace()` on V8); focused checks passed; measured; seen to change two real pages from unstyled to styled; not independently reviewed | A rule a script inserted, a property it set on a rule, `sheet.disabled` and a constructed sheet were visible to script and to nothing else: `getComputedStyle`, geometry, the snapshot and a screenshot used the element's source text. A page styled by a CSS-in-JS library was laid out unstyled. The page now reads an edited sheet from the script side when it assembles styles. An edit re-parses every sheet and restyles the tree; see the section below |
@@ -4111,6 +4113,115 @@ at `SVGAnimatedString is not defined`.
   in both loads before and nothing in either after. The snapshot is the
   same.
 
+### A wrapper bound for page callbacks (WL1)
+
+The V8 world counts the wrappers it publishes between two collections of
+the wrapper graph and refuses the next one at 4,096
+(`HARD_WRAPPER_MATERIALIZATIONS`). Only the outermost binding call may
+collect, because a nested one runs while an outer native operation may
+still own document borrows or raw results. So script that native code
+calls from inside a binding call could touch four thousand nodes and then
+had every DOM call answered with `RangeError: native wrapper allocation
+limit exceeded`, however ordinary the work. DS1 made pages run more code
+and wp.pl started to report it.
+
+Which script that is turned out to be wider than the listeners of
+`dispatchEvent()` and `click()` the DS1 section named. The task of
+`requestIdleCallback`, of a message port and of an intersection or resize
+observer is a native function, so the page callback it calls is nested
+too; so are a custom element's constructor and reactions when the element
+is made inside a call, and the callback of a generated `forEach`
+(`FormData`, `Headers`, `URLSearchParams`). wp.pl's consent panel is built
+in an idle callback.
+
+- **The rule** (`crates/tenta-js-v8/src/world.rs`, `CallbackFrame`). A page
+  callback that native code runs from inside a binding call is a frame.
+  Each binding call the callback makes itself may publish 4,096 wrappers,
+  as a call from the top may. What the frame publishes is not charged to
+  the call that ran it. Everything published before that outermost call
+  returns is bounded by `CALLBACK_WRAPPER_MATERIALIZATIONS`, 262,144. The
+  next call from the top collects, as before.
+- **What did not change.** One binding call still publishes at most 4,096
+  wrappers, in a frame or out of one: `composedPath()` over 4,300
+  ancestors is refused inside a listener as it was. Script run by an
+  argument conversion (a dictionary getter, `toString`) shares the limit
+  of the call it converts for, in a frame or out of one, so the checks
+  that pin refusal before any native record is published are untouched.
+  A callback the engine runs with no call under it (a timer, a parser
+  script, `DOMContentLoaded`) was never bounded this way and is not a
+  frame.
+- **Where a frame opens.** `V8ScriptHost::invoke_listener` and
+  `invoke_error_handler`; the generated `call_js_function`, which is how
+  generated code calls a page callback; and, by
+  `tenta_js::bindings::v8_page_callback_frame`, the idle task, the port
+  handler, the observer delivery and the custom element constructor and
+  reactions. `V8CallbackAdmission` gained `enter_page_callback` and
+  `exit_page_callback` for it.
+- **Checks:** `crates/tenta-js-v8/tests/wrapper_pressure.rs`:
+  `a_listener_called_from_script_may_touch_many_nodes` (20,000 nodes in a
+  dispatched listener, in a second listener of the same dispatch, in a
+  click handler, in a listener dispatched by a listener and after it, and
+  from the top afterwards);
+  `callbacks_called_by_native_tasks_may_touch_many_nodes` (idle callback,
+  port `onmessage`, port listener, a custom element made inside a
+  listener, `FormData.forEach`);
+  `a_conversion_inside_a_listener_keeps_the_bound_of_its_call`;
+  `a_listener_that_never_stops_is_still_refused` (refused above 4,096 and
+  at or below 262,144, and the next task allocates). The six existing
+  checks that pin 4,096 in a nested call pass unchanged. The workspace
+  passed 5101 of 5101 and the feature set 620 of 620; fmt, both Clippy
+  runs, `lint-deps`, `idl-manifest` and `cargo deny` were clean.
+- **Measured** (release, against `f2f3a21`, 25 interleaved pairs,
+  2026-11-20). Every binding call now writes its depth into the world
+  state on entry and on exit. `S-dom-calls`: `has` 26.36/28.19 ->
+  26.02/27.53 ns p50/p95, `get` 85.16/88.36 -> 86.61/91.17 ns, RSS 35.3 ->
+  35.2 MiB. `S-dom-mutation` (V8): detached 47.39/48.97 -> 43.98/45.61 ms,
+  connected 45.03/45.47 -> 41.78/42.45 ms, peak RSS 35.2 -> 35.1 MiB. All
+  inside the noise floor: no cost is claimed and none is ruled out.
+  **What the higher bound costs when it is reached** (a listener that
+  creates elements until it is refused, local page, release CLI over MCP):
+  refused after 262,142 elements instead of 4,094, 1.15 s instead of
+  63 ms, peak RSS 407 MB for the process instead of 149 MB. That memory is
+  returned at the next call from the top.
+- **On the site that showed it** (release CLI over MCP, two loads of each
+  build alternating, 2026-11-20): wp.pl reported the `RangeError` in both
+  loads before and in neither after.
+- **Gaps:** QuickJS has its own bound (`WRAPPER_DEFERRED_LIMIT`) and no
+  frames. A callback is still not a point where the graph can be
+  collected, so a single task that touches more than 262,144 nodes inside
+  one native call is refused; making a callback boundary a safe point for
+  a collection would remove the bound and is not attempted here. The
+  bound is a recorded one, so this needs a decision entry from the owner.
+
+### `classList` reads (TL1)
+
+Found while probing the bound above: a page whose element had 1,000
+class names and walked `classList` spent 2.7 s on it, and one with 3,000
+ran out of its script time. Every `length`, every index and every
+`contains` built the ordered set as a list of owned strings, comparing
+each token with every earlier one, and walking a list asks once per token.
+
+- **Now** (`crates/tenta-js/src/bindings/host.rs`): `contains` scans the
+  attribute and builds nothing; `length` and an index borrow the tokens;
+  a list of 16 tokens or more is deduplicated through a set; and the
+  parse of the last long attribute (512 bytes or more) is kept on the
+  thread and reused while the attribute's text is the same. The mutating
+  members are as they were.
+- **Check:** `crates/tenta-js-v8/tests/dom_classlist.rs`
+  `a_long_class_list_is_an_ordered_set_that_can_be_walked` (3,000 names
+  and five repeats: length, `forEach`, iteration, indices on both sides
+  of the 16-token switch, `contains`). In the test profile it took 21 s
+  with the set alone and takes 0.8 s with the kept parse.
+- **Measured** (release CLI over MCP, against `f2f3a21`, builds
+  alternating twice, median/maximum of 15 runs in the page, 2026-11-20).
+  An element with three classes: 100,000 `contains` 5.9-6.0 -> 3.4-3.6 ms
+  (60 -> 35 ns each); 50,000 `length` and index reads 10.1-10.7 ->
+  7.9-8.6 ms; 50,000 `add` then `remove` 51.3-52.6 -> 51.6-52.1 ms
+  (unchanged, as meant). Walking 1,000 classes with `forEach`:
+  2,611-2,713 ms -> 3.0-3.1 ms.
+- **Gaps:** the other token lists (`relList`, `part`, `sandbox`) do not
+  exist yet. A walk is still one read of the attribute per token.
+
 ### Scripts that script inserts (DS1)
 
 The page ran the scripts its parser met and no others. A script element
@@ -4213,7 +4324,8 @@ snippet arrives, and what `createContextualFragment()` relies on.
   level touches 20,000 nodes without it, which is a check above) and it
   is open: a listener called from `dispatchEvent()` or `click()` that
   touches more than 4,096 nodes gets it, with this change and without,
-  because no collector checkpoint can run inside a nested binding call.
+  because no collector checkpoint can run inside a nested binding call. WL1,
+  above, closed it.
 
 ### `Range` operations that change the tree (RNG2)
 

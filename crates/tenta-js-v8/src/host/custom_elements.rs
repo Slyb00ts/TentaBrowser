@@ -758,6 +758,7 @@ fn react(
     let Ok(callback) = v8::Local::<v8::Function>::try_from(callback) else {
         return;
     };
+    let _frame = tenta_js::bindings::v8_page_callback_frame(scope);
     v8::tc_scope!(let tc, scope);
     host.enter_script();
     if callback.call(tc, element.into(), arguments).is_none() {
@@ -811,6 +812,7 @@ fn upgrade(
             element: Some(v8::Global::new(scope, element)),
         });
     let constructed = {
+        let _frame = tenta_js::bindings::v8_page_callback_frame(scope);
         v8::tc_scope!(let tc, scope);
         host.enter_script();
         let result = constructor.new_instance(tc, &[]);

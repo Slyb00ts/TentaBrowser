@@ -42,6 +42,35 @@ pub(crate) mod cycles;
 /// bound work between collector checkpoints, not the total native arena size.
 pub(crate) const SOFT_WRAPPER_MATERIALIZATIONS: usize = 1024;
 pub(crate) const HARD_WRAPPER_MATERIALIZATIONS: usize = 4096;
+/// The bound on everything the page callbacks of one binding call publish
+/// before that call returns to the top.
+///
+/// A callback that native code calls for the page runs inside a binding
+/// call: a listener called by `dispatchEvent()` or `click()`, the callback of
+/// an idle task, an observer or a message port, a `forEach` callback. Only
+/// the outermost binding call may collect, so nothing such a callback
+/// publishes can be collected until that call returns. Held to
+/// [`HARD_WRAPPER_MATERIALIZATIONS`], a click handler or an idle task that
+/// renders a long list had every DOM call refused after four thousand nodes,
+/// and that is an ordinary page, not a runaway. A page callback is therefore
+/// a frame of its own: each binding call it makes may publish
+/// [`HARD_WRAPPER_MATERIALIZATIONS`] wrappers, as a call from the top may,
+/// and what the frame publishes is not charged to the call that ran it. This
+/// is the bound that is left on the total. It counts wrappers, each a few
+/// hundred bytes of native bookkeeping beside its object in the script heap,
+/// whose own limit still applies.
+pub(crate) const CALLBACK_WRAPPER_MATERIALIZATIONS: usize = 1 << 18;
+
+/// A page callback that a binding call is running, see
+/// [`CALLBACK_WRAPPER_MATERIALIZATIONS`].
+struct CallbackFrame {
+    /// The binding-call depth the callback's own calls are entered at.
+    depth: usize,
+    /// The limit of the call that runs it, restored when the callback ends.
+    outer_limit: Option<usize>,
+    /// The wrapper debt when the callback began.
+    debt: usize,
+}
 
 /// One entry in the value slab: a stored JS value with a reference count and,
 /// for objects, the identity hash it was interned under (so it can leave the
@@ -102,6 +131,13 @@ pub struct WorldState {
     /// checkpoint, including Event, Host and snapshot wrappers with no
     /// provisional graph root. Cached live-wrapper lookups do not count.
     new_wrapper_materializations: usize,
+    /// The debt at which the next wrapper is refused, when it is not
+    /// [`HARD_WRAPPER_MATERIALIZATIONS`]: set while a callback frame is open
+    /// and until the binding call that opened it returns to the top.
+    wrapper_limit: Option<usize>,
+    /// How many binding calls are on the stack, as the admission counts them.
+    binding_depth: usize,
+    callback_frames: Vec<CallbackFrame>,
     /// Each Window owns its two Storage objects, including their ordinary JS
     /// properties. Replacing an area's wrapper releases its previous root;
     /// script references can independently keep the old wrapper alive.
@@ -145,6 +181,84 @@ impl WorldState {
     /// Wrappers published since the last collection of the wrapper graph.
     pub(crate) fn wrapper_debt(&self) -> usize {
         self.new_wrapper_materializations
+    }
+
+    /// Whether no further wrapper may be published before a checkpoint.
+    pub(crate) fn at_wrapper_limit(&self) -> bool {
+        self.new_wrapper_materializations
+            >= self.wrapper_limit.unwrap_or(HARD_WRAPPER_MATERIALIZATIONS)
+    }
+
+    /// The limit of a frame that starts now: one binding call's worth above
+    /// the present debt, under the bound on the whole dispatch.
+    fn frame_limit(&self) -> usize {
+        self.new_wrapper_materializations
+            .saturating_add(HARD_WRAPPER_MATERIALIZATIONS)
+            .min(CALLBACK_WRAPPER_MATERIALIZATIONS)
+    }
+
+    /// Admits a binding call entered at `depth` and reports whether it may
+    /// run. A call a page callback makes itself gets a limit of its own; a call
+    /// nested in another shares that one's limit, which is what keeps an
+    /// argument conversion from spending more than its call may.
+    pub(crate) fn enter_binding_call(&mut self, depth: usize) -> bool {
+        if self
+            .callback_frames
+            .last()
+            .is_some_and(|frame| frame.depth == depth)
+        {
+            self.wrapper_limit = Some(self.frame_limit());
+        }
+        if self.at_wrapper_limit() {
+            return false;
+        }
+        self.binding_depth = depth + 1;
+        true
+    }
+
+    /// Records that the binding call entered at `depth` returned.
+    pub(crate) fn exit_binding_call(&mut self, depth: usize) {
+        self.binding_depth = depth;
+        if depth == 0 {
+            // Back at the top, where the next call may collect.
+            self.wrapper_limit = None;
+            self.callback_frames.clear();
+        }
+    }
+
+    /// Opens a frame for a page callback a binding call is about to run, and
+    /// reports whether it did: a callback the engine runs from outside script
+    /// has no call under it, so the calls it makes are outermost and collect.
+    pub(crate) fn enter_page_callback(&mut self) -> bool {
+        if self.binding_depth == 0 {
+            return false;
+        }
+        self.callback_frames.push(CallbackFrame {
+            depth: self.binding_depth,
+            outer_limit: self.wrapper_limit,
+            debt: self.new_wrapper_materializations,
+        });
+        // The wrappers of the callback's arguments are published for it,
+        // before its first call.
+        self.wrapper_limit = Some(self.frame_limit());
+        true
+    }
+
+    /// Closes the frame [`Self::enter_page_callback`] opened. The call that
+    /// ran the callback gets its limit back, moved by what the callback
+    /// published.
+    pub(crate) fn exit_page_callback(&mut self) {
+        let Some(frame) = self.callback_frames.pop() else {
+            return;
+        };
+        let spent = self.new_wrapper_materializations.saturating_sub(frame.debt);
+        self.wrapper_limit = Some(
+            frame
+                .outer_limit
+                .unwrap_or(HARD_WRAPPER_MATERIALIZATIONS)
+                .saturating_add(spent)
+                .min(CALLBACK_WRAPPER_MATERIALIZATIONS),
+        );
     }
 
     /// Captures the native ArrayBuffer resizable accessor before page script.
@@ -773,7 +887,7 @@ impl WrapperWorld for V8World {
             // that materializes several wrappers.
             if decode(handle).tag != TAG_WINDOW
                 && !is_record_wrapper
-                && self.state.borrow().new_wrapper_materializations >= HARD_WRAPPER_MATERIALIZATIONS
+                && self.state.borrow().at_wrapper_limit()
             {
                 refused.set(true);
                 return None;
@@ -1229,7 +1343,7 @@ impl WrapperWorld for V8World {
         let graph_root = decoded.node_anchor().is_some() || host_graph_root;
 
         let result = (|| -> Result<(), JsError> {
-            if self.state.borrow().new_wrapper_materializations >= HARD_WRAPPER_MATERIALIZATIONS {
+            if self.state.borrow().at_wrapper_limit() {
                 return Err(JsError::range_error(
                     "native wrapper allocation limit exceeded",
                 ));

@@ -7,7 +7,7 @@ use std::rc::Rc;
 use tenta_js::bindings::host::SharedContext;
 use tenta_js::dom::events::cycles::Plan;
 
-use super::{HARD_WRAPPER_MATERIALIZATIONS, SOFT_WRAPPER_MATERIALIZATIONS, WorldState};
+use super::{SOFT_WRAPPER_MATERIALIZATIONS, WorldState};
 use crate::termination::TerminationGate;
 
 /// Tracks the complete slow-callback frame, including outgoing conversion.
@@ -109,7 +109,7 @@ impl tenta_js::bindings::V8CallbackAdmission for Admission {
                 return Err(tenta_js::bindings::V8AdmissionError::Terminated);
             }
         }
-        if self.state.borrow().new_wrapper_materializations >= HARD_WRAPPER_MATERIALIZATIONS {
+        if !self.state.borrow_mut().enter_binding_call(self.depth.get()) {
             return Err(tenta_js::bindings::V8AdmissionError::Throw(
                 tenta_js::bindings::JsError::range_error(
                     "native wrapper allocation limit exceeded",
@@ -118,6 +118,14 @@ impl tenta_js::bindings::V8CallbackAdmission for Admission {
         }
         self.depth.set(self.depth.get() + 1);
         Ok(())
+    }
+
+    fn enter_page_callback(&self) -> bool {
+        self.state.borrow_mut().enter_page_callback()
+    }
+
+    fn exit_page_callback(&self) {
+        self.state.borrow_mut().exit_page_callback();
     }
 
     fn after_callback(&self, scope: &mut v8::PinScope<'_, '_>) {
@@ -154,7 +162,7 @@ impl tenta_js::bindings::V8CallbackAdmission for Admission {
             scope.terminate_execution();
             return Err(tenta_js::bindings::V8AdmissionError::Terminated);
         }
-        if self.state.borrow().new_wrapper_materializations >= HARD_WRAPPER_MATERIALIZATIONS {
+        if self.state.borrow().at_wrapper_limit() {
             return Err(tenta_js::bindings::V8AdmissionError::Throw(
                 tenta_js::bindings::JsError::range_error(
                     "native wrapper allocation limit exceeded",
@@ -304,6 +312,11 @@ impl tenta_js::bindings::V8CallbackAdmission for Admission {
             }
         }
         self.depth.set(depth - 1);
+        // Unwinding through a borrow of the state is the poisoned path, whose
+        // engine admits nothing further.
+        if let Ok(mut state) = self.state.try_borrow_mut() {
+            state.exit_binding_call(depth - 1);
+        }
     }
 }
 
