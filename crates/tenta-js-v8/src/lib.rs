@@ -2776,7 +2776,9 @@ impl Engine {
     /// the traversal interfaces (`TreeWalker`, `NodeIterator`, `NodeFilter`),
     /// whose algorithms call back into the page at every step; and
     /// `document.fonts` with `FontFaceSet` and `FontFace`, which have no
-    /// engine state behind them. `PromiseRejectionEvent` and the dispatch
+    /// engine state behind them; and `AbortSignal.timeout()`,
+    /// `AbortSignal.any()` and `Response.json()`, which are a few lines over
+    /// their interfaces. `PromiseRejectionEvent` and the dispatch
     /// of `unhandledrejection` are installed with them, and so are
     /// `ReadableStream` and the body streams built on it, and `Selection`.
     /// A failure is not an error of the host; the members are then absent.
@@ -2785,6 +2787,7 @@ impl Engine {
             tenta_js::geometry::GEOMETRY_PRELUDE_SOURCE,
             tenta_js::traversal::TRAVERSAL_PRELUDE_SOURCE,
             tenta_js::fonts::FONTS_PRELUDE_SOURCE,
+            tenta_js::conveniences::CONVENIENCES_PRELUDE_SOURCE,
         ] {
             if self.native_failure().is_none() {
                 let _ = self.run_inner(source, None);

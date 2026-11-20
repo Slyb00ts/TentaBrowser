@@ -90,6 +90,9 @@ interface CharacterData : Node {
 
 [Exposed=Window]
 interface Text : CharacterData {
+  // A node of the window's document, as `document.createTextNode()` makes.
+  constructor(optional DOMString data = "");
+
   // Splits the node at a UTF-16 offset: the data from there on moves to a new
   // Text node, inserted after this one when it has a parent.
   [NewObject, Throws] Text splitText(unsigned long offset);
@@ -106,7 +109,9 @@ interface Text : CharacterData {
 interface CDATASection : Text {};
 
 [Exposed=Window]
-interface Comment : CharacterData {};
+interface Comment : CharacterData {
+  constructor(optional DOMString data = "");
+};
 
 [Exposed=Window]
 interface Element : Node {
@@ -657,6 +662,8 @@ interface SVGElement : Element {};
 // a fragment moves its children into the target and empties the fragment.
 [Exposed=Window]
 interface DocumentFragment : Node {
+  constructor();
+
   // The query half of ParentNode and NonElementParentNode, which a fragment
   // has like an element and a document.
   readonly attribute Element? firstElementChild;

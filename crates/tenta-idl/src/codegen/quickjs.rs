@@ -279,7 +279,11 @@ fn method_property(
     out.push_str("    }) })?).writable().configurable().enumerable())?;\n");
 }
 fn operation(op: &Operation, instance: bool, transfers_stored_values: bool, out: &mut String) {
-    let passes = arguments(&op.arguments, op.buffer_references(), out);
+    let mut passes = arguments(&op.arguments, op.buffer_references(), out);
+    if !instance {
+        // The realm is what a static operation reaches its world through.
+        passes.insert(0, "&world_realm_quickjs(&ctx)?".to_owned());
+    }
     // The host is behind an `Rc`, so the receiver is dereferenced: an
     // operation named `clone` would otherwise be `Rc::clone`.
     let receiver = if instance { "(*host)." } else { "T::" };

@@ -22,6 +22,8 @@
 interface URLSearchParams {
   constructor(optional (sequence<sequence<USVString>> or record<USVString, USVString> or USVString) init);
 
+  [Throws] readonly attribute unsigned long size;
+
   undefined append(USVString name, USVString value);
   undefined delete(USVString name, optional USVString value);
   USVString? get(USVString name);

@@ -184,7 +184,14 @@ fn body_call_abort_signal_abort<'s, T: AbortSignalOps + EventTargetOps + EventTa
     } else {
         None
     };
-    let value: Handle<AbortSignal> = match T::abort(reason) {
+    let realm = match world_realm(scope) {
+        Ok(realm) => realm,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let value: Handle<AbortSignal> = match T::abort(&realm, reason) {
         Ok(value) => value,
         Err(error) => {
             throw_js_error(scope, &error);
@@ -232,7 +239,14 @@ fn body_call_abort_signal_timeout<'s, T: AbortSignalOps + EventTargetOps + Event
             }
         }
     };
-    let value: Handle<AbortSignal> = match T::timeout(milliseconds) {
+    let realm = match world_realm(scope) {
+        Ok(realm) => realm,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let value: Handle<AbortSignal> = match T::timeout(&realm, milliseconds) {
         Ok(value) => value,
         Err(error) => {
             throw_js_error(scope, &error);
@@ -280,7 +294,14 @@ fn body_call_abort_signal_any<'s, T: AbortSignalOps + EventTargetOps + EventTarg
             }
         }
     };
-    let value: Handle<AbortSignal> = match T::any(signals) {
+    let realm = match world_realm(scope) {
+        Ok(realm) => realm,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let value: Handle<AbortSignal> = match T::any(&realm, signals) {
         Ok(value) => value,
         Err(error) => {
             throw_js_error(scope, &error);

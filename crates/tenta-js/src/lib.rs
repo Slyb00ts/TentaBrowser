@@ -6,6 +6,7 @@
 
 pub mod base64;
 pub mod bindings;
+pub mod conveniences;
 pub mod dom;
 pub mod engine;
 pub mod event_loop;

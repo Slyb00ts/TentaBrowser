@@ -79,6 +79,9 @@ interface mixin Body {
 interface Response {
   constructor(optional BodyInit? body = null, optional ResponseInit init = {});
 
+  [NewObject] static Response error();
+  [NewObject] static Response redirect(USVString url, optional unsigned short status = 302);
+
   readonly attribute ResponseType type;
   readonly attribute USVString url;
   readonly attribute boolean redirected;

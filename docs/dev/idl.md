@@ -89,7 +89,10 @@ generated enum, named after its members (`NodeOrDomString`).
 `Interface::property_enumeration_order` returns the WebIDL order: constants
 first, then the non-static attributes and operations in definition order, then
 `Symbol.toStringTag`. Statics live on the interface object, not the prototype,
-so they are not part of it. The same list is emitted into the generated
+so they are not part of it. A static operation, and a namespace's, has no
+object to reach its world through, so its trait method takes `realm: &Realm`
+first, as a constructor does (`URL.parse`, `AbortSignal.abort`,
+`Response.redirect`, `CSS.supports`). The same list is emitted into the generated
 registry descriptor, which is how a runtime can assert the order without
 re-parsing IDL.
 
@@ -1699,7 +1702,9 @@ generated code:
   `clone()` a copy of the bytes where the standard tees a stream. `blob()`'s
   type is the first `Content-Type` value that parses, lower-cased and
   otherwise as the header spelled it, where the standard re-serializes the
-  MIME type. The static `error()`, `redirect()` and `json()` are absent.
+  MIME type. The static `error()` and `redirect()` are declared; `json()`
+  is a script over the constructor (`tenta_js::conveniences`, V8 only). The
+  headers of `Response.error()` are not immutable.
 - `XMLHttpRequest` is declared down to the whole of its state machine
   (`UNSENT`, `OPENED`, `HEADERS_RECEIVED`, `LOADING`, `DONE`), the request
   attributes `open()` sets up, and the response the machine stores with its

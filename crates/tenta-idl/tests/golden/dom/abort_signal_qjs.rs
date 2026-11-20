@@ -22,21 +22,21 @@ pub fn install_abort_signal<'js, T: AbortSignalOps + 'static>(ctx: &rquickjs::Ct
     constructor.prop("abort", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "abort", || {
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let reason: Option<AnyValue> = if __raw_value.is_undefined() { None } else { Some(<AnyValue as rquickjs::FromJs>::from_js(&ctx, __raw_value)?) };
-        let result = T::abort(reason).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = T::abort(&world_realm_quickjs(&ctx)?, reason).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     constructor.prop("timeout", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "timeout", || {
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let milliseconds: u64 = rquickjs::Coerced::<f64>::from_js(&ctx, __raw_value).and_then(|v| enforce_unsigned_long_long(v.0).map_err(|e| throw_quickjs_error(&ctx, &e)))?;
-        let result = T::timeout(milliseconds).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = T::timeout(&world_realm_quickjs(&ctx)?, milliseconds).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     constructor.prop("any", rquickjs::object::Property::from(rquickjs::Function::new(ctx.clone(), |ctx: rquickjs::Ctx<'js>, args: rquickjs::function::Rest<rquickjs::Value<'js>>| -> rquickjs::Result<rquickjs::Value<'js>> { quickjs_callback_boundary(&ctx, "any", || {
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let signals: Vec<Handle<AbortSignal>> = quickjs_sequence(&ctx, __raw_value, |item| <Handle<AbortSignal> as rquickjs::FromJs>::from_js(&ctx, item))?;
-        let result = T::any(signals).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = T::any(&world_realm_quickjs(&ctx)?, signals).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
     quickjs_cache_prototype(ctx, "AbortSignal", prototype, &["AbortSignal", "EventTarget"])?;

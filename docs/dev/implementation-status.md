@@ -104,6 +104,7 @@ are authorized, with prerequisite gates still tracked explicitly.
 | `crypto.subtle` and `SubtleCrypto.digest()` (SUB1) | Implemented on V8 as a script built at first use over BoringSSL's digests; focused checks passed; measured; seen to fix one real page; not independently reviewed | `crypto.subtle` was `undefined`, so a page that hashed threw. SHA-1, SHA-256, SHA-384 and SHA-512 only; no keys and no other operation; see the section below |
 | `DOMMatrix`, `DOMMatrixReadOnly`, `DOMPoint`, `DOMPointReadOnly`, `DOMQuad` (MAT1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `new DOMMatrix(getComputedStyle(el).transform)` threw. The transform list is parsed in the script: no `calc()`, no percentages; not serializable; see the section below |
 | `SVGAnimatedString`, SVG `className` and SVG `<a>` `href` (SVG1) | Implemented on V8 as a script built at first use; focused checks passed; measured; seen to fix one real page; not independently reviewed | `x.href instanceof SVGAnimatedString` threw, and an SVG element's `className` was a string. Nothing animates; `href` on SVG `<a>` only; see the section below |
+| Static operations, `sendBeacon`, node constructors (ST1) | Implemented; generated natives for both engines, the scripted members on V8 only; engine and page checks passed; measured; not independently reviewed | The generator could not hand a static operation its world, so none was declared. `URL.parse()`/`canParse()`, `AbortSignal.abort()`, `Response.error()`/`redirect()`, `URLSearchParams.size`, `new Text()`, `new Comment()` and `new DocumentFragment()` are generated; `AbortSignal.timeout()`/`any()`, `Response.json()` and `navigator.sendBeacon()` are a script over them; see the section below |
 | A page callback run by a binding call has a wrapper bound of its own (WL1) | Implemented on V8; engine checks passed; measured; seen to fix one error on a real page; **changes a recorded bound and needs the owner's decision entry**; not independently reviewed | A listener called by `click()` or `dispatchEvent()`, an idle callback, a port's message handler, an observer callback, a custom element reaction and a `forEach` callback all run inside a binding call, where nothing can be collected, and were refused every DOM call after 4,096 new wrappers. Each is now a frame: its calls get 4,096 each, the whole frame 262,144. QuickJS keeps its own bound; see the section below |
 | `classList` reads are linear and do not copy (TL1) | Implemented for both engines; V8 check passed; measured | Every `length`, index and `contains` built the whole ordered set as owned strings, comparing each token with every earlier one, so walking a list cost the cube of its length. `contains` now scans the attribute, a read borrows it, and a long list is parsed once; see the section below |
 | Scripts that script inserts run; script elements are told `load` and `error` (DS1) | Implemented on V8; DOM, engine and page checks passed; measured; seen to change real pages; not independently reviewed | **Only the parser's scripts ran.** `document.createElement('script')` followed by `appendChild` did nothing: no inline script executed, no `src` was fetched, no `onload` fired. That is how a bundler loads its chunks, how JSONP works and how most widgets arrive. HTML's "prepare the script element" now runs when an element becomes connected, or, connected, gets a child or a `src`. QuickJS does not have it; see the section below |
@@ -4112,6 +4113,68 @@ at `SVGAnimatedString is not defined`.
   build alternating, 2026-11-19): vuejs.org reported the `ReferenceError`
   in both loads before and nothing in either after. The snapshot is the
   same.
+
+### Static operations and other small members (ST1)
+
+A probe of what an ordinary page reaches for (constructors, globals and
+members evaluated on a blank page, 2026-11-20) listed, among much else,
+members whose absence is a thrown `TypeError` in code that has no reason
+to guard: `AbortSignal.timeout()` in a `fetch()` call, `navigator.sendBeacon()`
+in every analytics snippet, `URL.canParse()`, `Response.json()`,
+`new Text()`. bing.com and the cloudflare.com home page each log one of
+that kind.
+
+- **The generator** (`crates/tenta-idl/src/codegen/{ops,v8,quickjs}.rs`).
+  A static operation was emitted as a bare associated function with no way
+  to reach the host context, which is why none was declared. It now takes
+  `realm: &Realm` first, as a constructor does. A namespace's operations
+  are static too, so `CSS.supports()` and `CSS.escape()` take it and ignore
+  it.
+- **Generated, both engines** (`crates/tenta-js/src/bindings/host.rs`):
+  `URL.parse()` and `URL.canParse()` (one parser shared with the
+  constructor); `AbortSignal.abort(reason)` (a signal with no controller,
+  aborted from the start, the default reason an `AbortError`);
+  `Response.error()` and `Response.redirect(url, status)` (the URL parsed
+  against the document's base, only the five redirect statuses);
+  `URLSearchParams.size`; and the constructors of `Text`, `Comment` and
+  `DocumentFragment`, which make a node of the window's document that a
+  subclass can extend.
+- **A script over them, V8 only** (`tenta_js::conveniences`, run with the
+  other preludes): `AbortSignal.timeout(ms)` is a controller aborted with a
+  `TimeoutError` by a timer of the page; `AbortSignal.any(signals)` a
+  controller aborted by the first source, already aborted or later;
+  `Response.json(data, init)` is `JSON.stringify` and the constructor;
+  `navigator.sendBeacon(url, data)` a `POST` by `fetch()` whose answer
+  nobody reads, `no-cors` unless the body is a `Blob` of a type a form
+  could not send.
+- **Checks:** `crates/tenta-js/tests/support/static_operations.rs`, run by
+  `crates/tenta-js-v8/tests/static_operations.rs` and
+  `crates/tenta-js-qjs/tests/static_operations.rs` (8 each: `canParse`,
+  `parse`, `size`, `abort`, `error`, `redirect`, the `CSS` namespace, the
+  three node constructors with a subclass and identity in the tree); the
+  V8 file adds 3 for the scripted members (`timeout` before and after its
+  timer, `any` over later and earlier aborts and non-signals, `json` with
+  `toJSON`, init and what cannot be serialized);
+  `crates/tenta-browser/tests/cors_js.rs`
+  `a_timeout_signal_ends_a_request_and_a_beacon_is_sent` (a `fetch()`
+  ended by `timeout()` and by `any()` against a 15 s endpoint, three
+  beacons, one to another origin without a preflight, and the three
+  refusals). `the_deferred_members_are_absent` in `dom_abort.rs` pinned
+  `AbortSignal.abort` as missing and now pins it as present. The
+  workspace passed 5120 of 5120 and the feature set 621 of 621 (the
+  workspace run had the one pin above failing before it was updated; it was
+  rerun alone); fmt, both Clippy runs, `lint-deps`, `idl-manifest` and
+  `cargo deny` were clean.
+- **Measured** (release, against `4e42d94`, 2026-11-20). The script runs
+  when every page's engine is built. Twelve alternating runs of 70 engines each: the preludes took 1.716 ms -> 1.779 ms p50 (medians of the runs; ranges 1.571-1.790 and 1.647-1.901) and building the engine 2.764 -> 2.668 ms. That is about 60 microseconds more per page, under the noise floor, so it is reported and not claimed. `S-dom-calls` (25 interleaved pairs): `has` 26.13 -> 26.29 ns, `get` 86.70 -> 86.98 ns, RSS 35.1 -> 35.3 MiB.
+- **Gaps:** `AbortSignal.timeout()` holds its signal until the timer
+  fires and `any()` holds its result while a source lives (the standard
+  holds both weakly). `Response.error()`'s headers accept writes.
+  `sendBeacon()` has no size limit and reports `true` for a request that
+  later fails. `URL.createObjectURL()` is still missing: there is no blob
+  URL store. QuickJS has none of the scripted members, and its generated
+  functions report a `length` of 0. The probe's list is long; what it
+  still shows is in the next packages, not here.
 
 ### A wrapper bound for page callbacks (WL1)
 

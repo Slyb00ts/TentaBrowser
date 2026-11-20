@@ -12,17 +12,17 @@ pub trait CSSOps {
     /// Overload 1 of 2 for `supports`.
     ///
     /// V8 fast API: the operation is not eligible (static members have no receiver).
-    fn supports_2(property: &str, value: &str) -> Result<bool, JsError>;
+    fn supports_2(realm: &Realm, property: &str, value: &str) -> Result<bool, JsError>;
 
     /// `boolean supports(DOMString conditionText);`
     ///
     /// Overload 2 of 2 for `supports`.
     ///
     /// V8 fast API: the operation is not eligible (static members have no receiver).
-    fn supports_1(condition_text: &str) -> Result<bool, JsError>;
+    fn supports_1(realm: &Realm, condition_text: &str) -> Result<bool, JsError>;
 
     /// `DOMString escape(DOMString ident);`
     ///
     /// V8 fast API: the operation is not eligible (static members have no receiver).
-    fn escape(ident: &str) -> Result<String, JsError>;
+    fn escape(realm: &Realm, ident: &str) -> Result<String, JsError>;
 }

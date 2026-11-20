@@ -259,11 +259,14 @@ fn write_origin(out: &mut String, attribute: &Attribute) {
 }
 
 fn operation_item(group: &OperationGroup, operation: &Operation, out: &mut String) {
-    let receiver = if group.is_static { "" } else { "&self" };
-    let mut parameters: Vec<String> = Vec::new();
-    if !receiver.is_empty() {
-        parameters.push(receiver.to_string());
-    }
+    // A static operation has no object to reach its world through, so it is
+    // handed the realm, as a constructor is.
+    let receiver = if group.is_static {
+        "realm: &Realm"
+    } else {
+        "&self"
+    };
+    let mut parameters: Vec<String> = vec![receiver.to_string()];
     for argument in &operation.arguments {
         parameters.push(format!(
             "{}: {}",

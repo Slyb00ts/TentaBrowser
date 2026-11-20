@@ -6,7 +6,7 @@ pub fn install_css<'js, T: CSSOps + 'static>(ctx: &rquickjs::Ctx<'js>, global: &
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let condition_text: String = rquickjs::Coerced::<rquickjs::String>::from_js(&ctx, __raw_value).and_then(|v| v.0.to_string_lossy())?;
-        let result = T::supports_1(&condition_text).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = T::supports_1(&world_realm_quickjs(&ctx)?, &condition_text).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
         })(); }
         if matches!(args.0.len(), 2..) { return (|| {
@@ -15,7 +15,7 @@ pub fn install_css<'js, T: CSSOps + 'static>(ctx: &rquickjs::Ctx<'js>, global: &
         let property: String = rquickjs::Coerced::<rquickjs::String>::from_js(&ctx, __raw_value).and_then(|v| v.0.to_string_lossy())?;
         let __raw_value = args.0.get(1).cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let value: String = rquickjs::Coerced::<rquickjs::String>::from_js(&ctx, __raw_value).and_then(|v| v.0.to_string_lossy())?;
-        let result = T::supports_2(&property, &value).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = T::supports_2(&world_realm_quickjs(&ctx)?, &property, &value).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
         })(); }
         Err(rquickjs::Exception::throw_type(&ctx, "no matching overload"))
@@ -24,7 +24,7 @@ pub fn install_css<'js, T: CSSOps + 'static>(ctx: &rquickjs::Ctx<'js>, global: &
         if args.0.is_empty() { return Err(rquickjs::Exception::throw_type(&ctx, "missing required argument")); }
         let __raw_value = args.0.first().cloned().unwrap_or_else(|| rquickjs::Value::new_undefined(ctx.clone()));
         let ident: String = rquickjs::Coerced::<rquickjs::String>::from_js(&ctx, __raw_value).and_then(|v| v.0.to_string_lossy())?;
-        let result = T::escape(&ident).map_err(|e| throw_quickjs_error(&ctx, &e))?;
+        let result = T::escape(&world_realm_quickjs(&ctx)?, &ident).map_err(|e| throw_quickjs_error(&ctx, &e))?;
         rquickjs::IntoJs::into_js(result, &ctx)
     }) })?).writable().configurable().enumerable())?;
  global.set("CSS", namespace)?; register_css(registry); Ok(())

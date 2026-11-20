@@ -992,8 +992,18 @@ fn operation_callback(
         operation_argument_binding(argument, index, "    ", buffer_references, out);
         passes.push(pass_expr(argument));
     }
-    let receiver = if group.is_static { "T::" } else { "host." };
-    let call = format!("{receiver}{}({})", operation.rust_name, passes.join(", "));
+    let call = if group.is_static {
+        // The realm is what a static operation reaches its world through.
+        out.push_str(
+            "    let realm = match world_realm(scope) {\n        \
+             Ok(realm) => realm,\n        \
+             Err(error) => {\n            throw_js_error(scope, &error);\n            return;\n        }\n    };\n",
+        );
+        passes.insert(0, "&realm".to_owned());
+        format!("T::{}({})", operation.rust_name, passes.join(", "))
+    } else {
+        format!("host.{}({})", operation.rust_name, passes.join(", "))
+    };
     match operation.fast {
         FastApi::Eligible if operation.return_type == Type::Undefined => {
             let _ = write!(out, "    {call};\n    rv.set_undefined();\n}}\n");

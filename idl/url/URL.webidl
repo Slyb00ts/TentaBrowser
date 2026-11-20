@@ -8,9 +8,12 @@
 // already-obtained `URLSearchParams`. The host implements that with a shared
 // record pair rather than a copy (see `crates/tenta-js/src/bindings/host.rs`).
 //
-// Deferred, and not declared here: `static URL? parse()` and `static boolean
-// canParse()` (the generator has no static-operation installation path yet),
-// `USVString toJSON()` (identical to `href`), and the `[LegacyWindowAlias=
+// A static operation is handed the realm, as the constructor is, which is how
+// `parse()` makes its record. `createObjectURL()` and `revokeObjectURL()` are
+// not declared: there is no blob URL store yet.
+//
+// Deferred, and not declared here: `USVString toJSON()` (identical to `href`),
+// and the `[LegacyWindowAlias=
 // webkitURL]` window alias, which no installer emits. `[Exposed=*]` is spelled
 // as the realms the tracer actually saw (`idl/MANIFEST.toml`).
 
@@ -23,6 +26,9 @@
 [Exposed=(Window,Worker,ServiceWorker)]
 interface URL {
   constructor(USVString url, optional USVString base);
+
+  [NewObject] static URL? parse(USVString url, optional USVString base);
+  static boolean canParse(USVString url, optional USVString base);
 
   [Throws] stringifier attribute USVString href;
   readonly attribute USVString origin;

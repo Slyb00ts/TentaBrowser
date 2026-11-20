@@ -339,3 +339,46 @@ async fn a_no_cors_request_gets_an_opaque_response() {
         "the opaque request reached the other origin; the PUT was never sent"
     );
 }
+
+/// `AbortSignal.timeout()` and `AbortSignal.any()` end a request as a
+/// controller's signal does, and `navigator.sendBeacon()` makes its request
+/// and reports only that it was accepted: a form-typed body goes out without
+/// a preflight, to another origin too, and the page does not see the answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_timeout_signal_ends_a_request_and_a_beacon_is_sent() {
+    let run = run("var out = [];\
+         try { await fetch('/api/slow?ms=15000', {signal: AbortSignal.timeout(50)}); out.push('resolved'); }\
+         catch (e) { out.push(e.name); }\
+         var manual = new AbortController();\
+         var any = AbortSignal.any([manual.signal, AbortSignal.timeout(50)]);\
+         try { await fetch('/api/slow?ms=15000', {signal: any}); out.push('resolved'); }\
+         catch (e) { out.push(e.name + ':' + (e === any.reason)); }\
+         try { await fetch('/api/echo', {signal: AbortSignal.abort()}); out.push('resolved'); }\
+         catch (e) { out.push(e.name); }\
+         out.push(typeof navigator.sendBeacon);\
+         out.push(navigator.sendBeacon('/api/echo', 'a=1'));\
+         out.push(navigator.sendBeacon(api + '/plain.json', new URLSearchParams({b: '2'})));\
+         out.push(navigator.sendBeacon('/api/echo'));\
+         try { navigator.sendBeacon('http://['); out.push('sent'); } catch (e) { out.push(e.name); }\
+         try { navigator.sendBeacon('ftp://example.com/'); out.push('sent'); } catch (e) { out.push(e.name); }\
+         try { navigator.sendBeacon(); out.push('sent'); } catch (e) { out.push(e.name); }\
+         return out.join('|');")
+    .await;
+    assert_eq!(
+        run.result,
+        "TimeoutError|TimeoutError:true|AbortError|function|true|true|true|TypeError|TypeError|TypeError"
+    );
+    assert!(
+        run.elapsed < Duration::from_secs(10),
+        "the timed-out requests did not hold the page for their 15 s answers: {:?}",
+        run.elapsed
+    );
+    assert_eq!(
+        run.api_requests, 1,
+        "the beacon reached the other origin, once and without a preflight"
+    );
+    assert!(
+        run.page_requests >= 3,
+        "the document and the two same-origin beacons"
+    );
+}

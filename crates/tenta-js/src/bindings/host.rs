@@ -9761,6 +9761,39 @@ impl StaticRangeOps for HostObject {}
 
 impl CDATASectionOps for HostObject {}
 
+/// A node the constructor of its interface makes: one of the window's
+/// document, detached, as the document's own `create*` method makes it.
+fn construct_node(
+    realm: &Realm,
+    create: impl FnOnce(&mut Document) -> NodeId,
+) -> Result<HostObject, JsError> {
+    let ctx = realm_context(realm)?;
+    let node = {
+        let mut doc = ctx.doc.borrow_mut();
+        let id = create(&mut doc);
+        doc.node_ref(id)
+    };
+    Ok(HostObject::node(ctx, node))
+}
+
+impl super::TextConstructor for HostObject {
+    fn construct(realm: &Realm, data: Option<&str>) -> Result<Self, JsError> {
+        construct_node(realm, |doc| doc.create_text(data.unwrap_or("")))
+    }
+}
+
+impl super::CommentConstructor for HostObject {
+    fn construct(realm: &Realm, data: Option<&str>) -> Result<Self, JsError> {
+        construct_node(realm, |doc| doc.create_comment(data.unwrap_or("")))
+    }
+}
+
+impl super::DocumentFragmentConstructor for HostObject {
+    fn construct(realm: &Realm) -> Result<Self, JsError> {
+        construct_node(realm, Document::create_fragment)
+    }
+}
+
 impl DocumentConstructor for HostObject {
     /// `new Document()`: "a new `Document`, whose content type is
     /// `application/xml`, URL is `about:blank`, and origin is the current global
@@ -10294,15 +10327,15 @@ impl StaticRangeConstructor for HostObject {
 
 #[cfg(any(feature = "v8", feature = "quickjs"))]
 impl CSSOps for HostObject {
-    fn escape(ident: &str) -> Result<String, JsError> {
+    fn escape(_realm: &Realm, ident: &str) -> Result<String, JsError> {
         Ok(tenta_css::escape_identifier(ident))
     }
 
-    fn supports_1(condition_text: &str) -> Result<bool, JsError> {
+    fn supports_1(_realm: &Realm, condition_text: &str) -> Result<bool, JsError> {
         Ok(supports_condition(condition_text, &about_blank()))
     }
 
-    fn supports_2(property: &str, value: &str) -> Result<bool, JsError> {
+    fn supports_2(_realm: &Realm, property: &str, value: &str) -> Result<bool, JsError> {
         Ok(supports_property(property, value, &about_blank()))
     }
 }
@@ -11037,6 +11070,24 @@ pub fn reclaim_host_record(slab: &mut HostSlab, key: HostKey) -> ReclaimedHost {
 }
 
 impl URLOps for HostObject {
+    fn parse(
+        realm: &Realm,
+        url: &str,
+        base: Option<&str>,
+    ) -> Result<Option<Handle<super::URL>>, JsError> {
+        // What the constructor throws for, this answers with null.
+        let Some(parsed) = parse_api_url(url, base) else {
+            return Ok(None);
+        };
+        let ctx = realm_context(realm)?;
+        let key = insert_url(&ctx, parsed);
+        Ok(Some(Handle::from_bits(encode_host(ctx.slot, key))))
+    }
+
+    fn can_parse(_realm: &Realm, url: &str, base: Option<&str>) -> Result<bool, JsError> {
+        Ok(parse_api_url(url, base).is_some())
+    }
+
     fn href(&self) -> Result<String, JsError> {
         Ok(self.with_url(String::new(), |url| url.as_str().to_owned()))
     }
@@ -11216,34 +11267,44 @@ fn parse_port(value: &str) -> Option<Option<u16>> {
     digits.parse::<u16>().ok().map(Some)
 }
 
+/// The URL Standard's *API URL parser* as `new URL()`, `URL.parse()` and
+/// `URL.canParse()` share it: `url` against `base` when one is given.
+///
+/// A relative URL is resolved against the parsed base, so a base that does
+/// not itself parse fails. With no base the URL has to be absolute.
+fn parse_api_url(url: &str, base: Option<&str>) -> Option<url::Url> {
+    match base {
+        Some(base) => url::Url::parse(base).and_then(|base| base.join(url)).ok(),
+        None => url::Url::parse(url).ok(),
+    }
+}
+
+/// Makes the record of a `URL` object for `url`.
+fn insert_url(ctx: &SharedContext, url: url::Url) -> HostKey {
+    ctx.host_records
+        .borrow_mut()
+        .insert(HostRecord::Url(UrlRecord {
+            url,
+            params: None,
+            has_wrapper: false,
+        }))
+}
+
 impl URLConstructor for HostObject {
     fn construct(realm: &Realm, url: &str, base: Option<&str>) -> Result<Self, JsError> {
-        let invalid = || JsError::type_error("Failed to construct 'URL': Invalid URL");
-        let parsed = match base {
-            // A relative URL is resolved against the parsed base, so a base that
-            // does not itself parse fails the construction. The spec resolves
-            // against the *API base URL* — the document's — which is not
-            // modelled yet, so a relative URL with no base is the same failure
-            // here as an unparseable one.
-            Some(base) => url::Url::parse(base)
-                .and_then(|base| base.join(url))
-                .map_err(|_| invalid())?,
-            None => url::Url::parse(url).map_err(|_| invalid())?,
-        };
+        let parsed = parse_api_url(url, base)
+            .ok_or_else(|| JsError::type_error("Failed to construct 'URL': Invalid URL"))?;
         let ctx = realm_context(realm)?;
-        let key = ctx
-            .host_records
-            .borrow_mut()
-            .insert(HostRecord::Url(UrlRecord {
-                url: parsed,
-                params: None,
-                has_wrapper: false,
-            }));
+        let key = insert_url(&ctx, parsed);
         Ok(HostObject::host_record(ctx, key))
     }
 }
 
 impl URLSearchParamsOps for HostObject {
+    fn size(&self) -> Result<u32, JsError> {
+        Ok(self.with_params(0, |list| list.len() as u32))
+    }
+
     fn append(&self, name: &str, value: &str) -> Result<(), JsError> {
         self.with_params_mut(|list| list.push((name.to_owned(), value.to_owned())));
         Ok(())
@@ -11881,6 +11942,39 @@ impl AbortControllerOps for HostObject {
 }
 
 impl AbortSignalOps for HostObject {
+    fn abort(realm: &Realm, reason: Option<AnyValue>) -> Result<Handle<AbortSignal>, JsError> {
+        let ctx = realm_context(realm)?;
+        // "Set signal's abort reason to reason if it is given; otherwise to a
+        // new `AbortError` `DOMException`", as `AbortController.abort()` does.
+        // A reason the page passed arrived stored, and the record takes that
+        // reference over.
+        let reason = match reason {
+            Some(value) => value.0,
+            None => ctx
+                .script
+                .borrow()
+                .as_ref()
+                .and_then(|script| {
+                    script.build_value(HostValue::DomException {
+                        name: SignalRecord::DEFAULT_REASON_NAME,
+                        message: SignalRecord::DEFAULT_REASON_MESSAGE,
+                    })
+                })
+                .unwrap_or(AnyValue::NULL.0),
+        };
+        // The signal has no controller, so nothing can abort it again and no
+        // event is owed: it was never not aborted.
+        let key = ctx
+            .host_records
+            .borrow_mut()
+            .insert(HostRecord::Signal(SignalRecord {
+                reason: Some(reason),
+                controller: None,
+                has_wrapper: false,
+            }));
+        Ok(Handle::from_bits(encode_host(ctx.slot, key)))
+    }
+
     fn aborted(&self) -> bool {
         // "An `AbortSignal` object is aborted when its abort reason is not
         // `undefined`" — so this and `reason` read one field and cannot
@@ -12551,6 +12645,63 @@ impl HostObject {
 }
 
 impl ResponseOps for HostObject {
+    fn error(realm: &Realm) -> Result<Handle<Response>, JsError> {
+        // A *network error*: type `"error"`, status 0, no headers, no body.
+        let ctx = realm_context(realm)?;
+        let key = insert_response(
+            &ctx,
+            Vec::new(),
+            NewResponse {
+                status: 0,
+                status_text: Vec::new(),
+                url: None,
+                response_type: ResponseType::Error,
+                redirected: false,
+                body: None,
+            },
+        );
+        Ok(Handle::from_bits(encode_host(ctx.slot, key)))
+    }
+
+    fn redirect(
+        realm: &Realm,
+        url: &str,
+        status: Option<u16>,
+    ) -> Result<Handle<Response>, JsError> {
+        let context = "Failed to execute 'redirect' on 'Response'";
+        let ctx = realm_context(realm)?;
+        // Step 1: parse `url` against the API base URL, the document's.
+        let parsed = {
+            let doc = ctx.doc.borrow();
+            match doc.base_url().or_else(|| doc.url()) {
+                Some(base) => base.join(url).ok(),
+                None => url::Url::parse(url).ok(),
+            }
+        }
+        .ok_or_else(|| JsError::type_error(format!("{context}: Invalid URL")))?;
+        // Step 3: only a redirect status.
+        let status = status.unwrap_or(302);
+        if !matches!(status, 301 | 302 | 303 | 307 | 308) {
+            return Err(JsError::range_error(format!(
+                "{context}: Invalid status code {status}"
+            )));
+        }
+        // Steps 4 to 7: the status and a `Location` naming the serialized URL.
+        let key = insert_response(
+            &ctx,
+            vec![(b"location".to_vec(), parsed.as_str().as_bytes().to_vec())],
+            NewResponse {
+                status,
+                status_text: Vec::new(),
+                url: None,
+                response_type: ResponseType::Default,
+                redirected: false,
+                body: None,
+            },
+        );
+        Ok(Handle::from_bits(encode_host(ctx.slot, key)))
+    }
+
     fn r#type(&self) -> Result<ResponseType, JsError> {
         Ok(self.with_response(ResponseType::Default, |record| record.response_type))
     }

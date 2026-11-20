@@ -12,17 +12,17 @@ pub trait AbortSignalOps: EventTargetOps {
     /// `[NewObject] AbortSignal abort(optional any reason);`
     ///
     /// V8 fast API: the operation is not eligible (static members have no receiver).
-    fn abort(reason: Option<AnyValue>) -> Result<Handle<AbortSignal>, JsError>;
+    fn abort(realm: &Realm, reason: Option<AnyValue>) -> Result<Handle<AbortSignal>, JsError>;
 
     /// `[Exposed=(Window,Worker), NewObject] AbortSignal timeout([EnforceRange] unsigned long long milliseconds);`
     ///
     /// V8 fast API: the operation is not eligible (static members have no receiver).
-    fn timeout(milliseconds: u64) -> Result<Handle<AbortSignal>, JsError>;
+    fn timeout(realm: &Realm, milliseconds: u64) -> Result<Handle<AbortSignal>, JsError>;
 
     /// `[NewObject] AbortSignal any(sequence<AbortSignal> signals);`
     ///
     /// V8 fast API: the operation is not eligible (static members have no receiver).
-    fn any(signals: Vec<Handle<AbortSignal>>) -> Result<Handle<AbortSignal>, JsError>;
+    fn any(realm: &Realm, signals: Vec<Handle<AbortSignal>>) -> Result<Handle<AbortSignal>, JsError>;
 
     /// `readonly attribute boolean aborted;`
     ///

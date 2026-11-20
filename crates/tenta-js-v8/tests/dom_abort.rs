@@ -397,9 +397,11 @@ fn a_listener_on_a_signal_is_not_a_listener_on_the_window() {
 // What is deliberately not implemented
 // ---------------------------------------------------------------------------
 
-/// The members this slice defers, pinned so the gap is visible rather than
-/// silently assumed. Each is a separate decision recorded in the WebIDL
-/// provenance headers (`idl/dom/AbortSignal.webidl`).
+/// The members the bindings do not declare, pinned so the gap is visible
+/// rather than silently assumed (`idl/dom/AbortSignal.webidl`). `abort()` is
+/// declared. `timeout()` and `any()` are a script a page's engine runs
+/// (`tenta_js::conveniences`), so a bare engine such as this one has neither;
+/// `tests/static_operations.rs` covers all three.
 #[test]
 fn the_deferred_members_are_absent() {
     assert_eq!(
@@ -414,7 +416,7 @@ fn the_deferred_members_are_absent() {
             ].join('|');
         "#
         ),
-        "undefined|undefined|undefined|undefined"
+        "function|undefined|undefined|undefined"
     );
 }
 

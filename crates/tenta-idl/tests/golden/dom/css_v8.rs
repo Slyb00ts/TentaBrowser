@@ -148,7 +148,14 @@ fn body_call_css_supports_2<'s, T: CSSOps + 'static>(
             }
         }
     };
-    let value: bool = match T::supports_2(&property, &value) {
+    let realm = match world_realm(scope) {
+        Ok(realm) => realm,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let value: bool = match T::supports_2(&realm, &property, &value) {
         Ok(value) => value,
         Err(error) => {
             throw_js_error(scope, &error);
@@ -196,7 +203,14 @@ fn body_call_css_supports_1<'s, T: CSSOps + 'static>(
             }
         }
     };
-    let value: bool = match T::supports_1(&condition_text) {
+    let realm = match world_realm(scope) {
+        Ok(realm) => realm,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let value: bool = match T::supports_1(&realm, &condition_text) {
         Ok(value) => value,
         Err(error) => {
             throw_js_error(scope, &error);
@@ -244,7 +258,14 @@ fn body_call_css_escape<'s, T: CSSOps + 'static>(
             }
         }
     };
-    let value: String = match T::escape(&ident) {
+    let realm = match world_realm(scope) {
+        Ok(realm) => realm,
+        Err(error) => {
+            throw_js_error(scope, &error);
+            return;
+        }
+    };
+    let value: String = match T::escape(&realm, &ident) {
         Ok(value) => value,
         Err(error) => {
             throw_js_error(scope, &error);

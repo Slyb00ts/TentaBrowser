@@ -22,18 +22,12 @@
 //    implemented anywhere in this codebase, so the generator would emit a
 //    member with no host behind it. `addEventListener('abort', …)` is the path
 //    that matters and it works.
-//  - `static AbortSignal abort(optional any reason)`, `timeout(milliseconds)`
-//    and `any(signals)`. The generated glue for a static operation calls it as
-//    a bare associated function — `T::abort(reason)` (`codegen/v8.rs`, the
-//    `receiver` for a static group) — and the trait method that resolves to has
-//    no receiver and no realm parameter, so the host has no way to reach its
-//    `HostContext` and create the record. The constructor path does get one
-//    (`fn construct(realm: &Realm, …)`, built from `world_realm(scope)`), so the
-//    fix is to hand a static operation the same realm; that is a `tenta-idl`
-//    codegen change, and this slice makes none. `timeout` additionally needs a
-//    tracked one-shot timer, and a tracked timer is a deferral of the load chain
-//    that keeps a page's settle window open — a provenance decision. `any` needs
-//    the dependent-signal list.
+//  - `static AbortSignal timeout(milliseconds)` and `any(signals)` are not
+//    declared here. They are defined by a script over `AbortController`
+//    (`crates/tenta-js/src/conveniences.rs`), on the V8 host only: `timeout`
+//    is a timer the page owns and `any` a set of `abort` listeners, and both
+//    are what a page would write itself. `abort(reason)` is native: a static
+//    operation is handed the realm, as a constructor is.
 //  - `AddEventListenerOptions.signal`, which would let one signal abort a
 //    listener; it belongs with the fetch work that first needs it.
 //
@@ -42,6 +36,8 @@
 
 [Exposed=Window]
 interface AbortSignal : EventTarget {
+  [NewObject] static AbortSignal abort(optional any reason);
+
   readonly attribute boolean aborted;
   readonly attribute any reason;
   [Throws] undefined throwIfAborted();
